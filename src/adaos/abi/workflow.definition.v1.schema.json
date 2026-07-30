@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.definition.v1",
+  "title": "AdaOS Governed Workflow Definition",
+  "type": "object",
+  "required": [
+    "schema",
+    "workflow_type",
+    "definition_version",
+    "aggregate_type",
+    "initial_state",
+    "states",
+    "commands",
+    "transitions"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.definition.v1" },
+    "workflow_type": { "$ref": "#/$defs/id" },
+    "definition_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$" },
+    "aggregate_type": { "$ref": "#/$defs/id" },
+    "initial_state": { "$ref": "#/$defs/id" },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "terminal"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "terminal": { "type": "boolean" },
+          "description": { "type": ["string", "null"], "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "commands": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "input_schema"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "input_schema": { "type": "object" },
+          "description": { "type": ["string", "null"], "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object" }
+    },
+    "subworkflows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["workflow_type", "join_policy"],
+        "properties": {
+          "workflow_type": { "$ref": "#/$defs/id" },
+          "join_policy": { "enum": ["all", "any", "quorum", "collect", "detached"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metadata": { "type": "object" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    }
+  },
+  "additionalProperties": false
+}

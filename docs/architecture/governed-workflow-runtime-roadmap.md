@@ -146,21 +146,26 @@ produce stable fresh interaction descriptors from the resulting state.
   `WorkflowEvent`.
 - [ ] `[must]` `GWR1-02` Add typed refs for principal, aggregate, task,
   artifact, evidence, interaction, command context, and reply route.
-- [ ] `[must]` `GWR1-03` Implement a pure transition resolver that consumes a
+- [x] `[must]` `GWR1-03` Implement a pure transition resolver that consumes a
   definition, snapshot, and command and returns an accepted transition or a
-  typed rejection without side effects.
+  typed rejection without side effects. `governed_workflow.WorkflowResolver`
+  now returns immutable before/after snapshots plus activity/event intents;
+  it performs no persistence, projection, or activity execution.
 - [ ] `[must]` `GWR1-04` Implement definition validation for reachability,
   terminals, registered guards/activities, competing transitions, risk,
   retries, failure outcomes, and waiting-state explanation.
-- [ ] `[must]` `GWR1-05` Require monotonic generation and
-  `expected_generation` for state-changing commands.
+- [x] `[must]` `GWR1-05` Require monotonic generation and
+  `expected_generation` for state-changing commands. The first resolver slice
+  rejects missing/stale generations and binds duplicate detection to command
+  input through a payload digest.
 - [ ] `[must]` `GWR1-06` Define pure guards and invariants with typed reason
   codes instead of boolean-only results.
 - [ ] `[must]` `GWR1-07` Define effect/activity metadata for idempotency,
   side-effect class, timeout, heartbeat, cancellation, compensation, and
   unknown outcome.
-- [ ] `[must]` `GWR1-08` Generate `allowed_actions` and rejection explanations
-  from the same guards used to admit commands.
+- [x] `[must]` `GWR1-08` Generate `allowed_actions` and rejection explanations
+  from the same guards used to admit commands. `describe(...)` and `apply(...)`
+  share the same authority and registered-guard evaluation paths.
 - [ ] `[should]` `GWR1-09` Add model-based tests proving state snapshots and
   projections can be rebuilt from canonical workflow events.
 - [ ] `[should]` `GWR1-10` Add schema compatibility tests and a definition
