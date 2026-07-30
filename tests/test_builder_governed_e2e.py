@@ -243,6 +243,18 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
         "accept_trial",
         "publish_compatibility",
     ]
+    evidence_refs = {
+        ref
+        for run in published["change"]["runs"]
+        for ref in run.get("evidence_refs") or []
+    }
+    assert {
+        "review:layout-approved",
+        "test:automation-passed",
+        "git:checkpoint",
+        "trial:activated",
+        "registry:published",
+    } <= evidence_refs
 
 
 def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path: Path) -> None:

@@ -1067,9 +1067,11 @@ Autonomy, evidence, and acceptance:
   functional parity, and wide/compact browser acceptance. Workspace Builder
   remains unchanged until the DEV candidate is explicitly trialed and
   accepted.
-- [ ] `[must]` Add Builder interaction conformance for Web rich controls,
+- [x] `[must]` Add Builder interaction conformance for Web rich controls,
   Telegram limits, numbered text, required-capability failure, and deep-link
-  handoff with identical command/risk/confirmation semantics.
+  handoff with identical command/risk/confirmation semantics. Shared
+  presentation fixtures plus the governed Builder E2E proof preserve command,
+  target, risk, confirmation, and generation across Web, Telegram, and text.
 - [ ] `[must]` Add asynchronous restart evidence: accepted command, progress,
   input-required or terminal result, failed first delivery, and successful
   redelivery without repeating LLM/Codex/Trial/Publication mutation.
@@ -1172,6 +1174,14 @@ Autonomy, evidence, and acceptance:
   The manifest declares only `en` and `ru`; no Ukrainian-specific locale text
   was found. UTF-8 JSON-file/tool ingress remains mandatory for non-ASCII
   automation.
+- [x] Commit `7717319d` adds the governed semantic acceptance proof on a fresh
+  empty scenario. It exercises request/Issue/Change, Prototype approval,
+  Automation, verification, exact-digest Trial, and Publication; asserts the
+  dependent Process and `proto:`/`active:`/`public:` projections; proves
+  Web/Telegram/text command equivalence; prevents a background result from
+  inheriting the current UI focus; and detects an indirect shared-skill
+  conflict. The focused workflow, Project, Review/context, interaction, and
+  intent suites pass 79/79 locally.
 - [x] Before the accepted 2026-07-30 Publication, the installed Workspace
   Builder remained the earlier published
   `0.2.40 / UI 053`; the new `0.2.53 / UI 058` candidate exists only in DEV.

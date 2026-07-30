@@ -450,25 +450,40 @@ and GWR3.
 this development machine; every channel observes the same state and actions;
 lineage, evidence, and final Publication agree without direct state repair.
 
-- [ ] `[must]` `GWR5-01` Run request -> Issues/Change -> Prototype or direct
+- [x] `[must]` `GWR5-01` Run request -> Issues/Change -> Prototype or direct
   Automation -> verification -> Trial -> Publication through the canonical
-  resolver.
-- [ ] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
-  and SDK commands invoke identical command identities and guards.
-- [ ] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
+  resolver. `test_builder_governed_e2e.py` takes a fresh empty scenario through
+  all dependent gates and ends in the canonical `published` state.
+- [x] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
+  and SDK commands invoke identical command identities and guards. All three
+  presentations retain the same semantic actions; token and intent responses
+  enter `invoke_interaction_response` through one compatibility adapter.
+- [x] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
   returns a typed concurrency/policy change, never an unrelated handler rule.
-- [ ] `[must]` `GWR5-04` Prove blocked commands expose the same reason code and
-  semantically equivalent explanation across channels.
-- [ ] `[must]` `GWR5-05` Bind review and Publication to exact immutable target
-  digests and reject stale Lifecycle/chat actions.
-- [ ] `[must]` `GWR5-06` Prove a background Codex/LLM result advances only the
+  Generated resolver conformance plus the Builder ingress tests bind displayed
+  `workflow_command` and generation back to the canonical resolver.
+- [x] `[must]` `GWR5-04` Prove blocked commands expose the same reason code and
+  semantically equivalent explanation across channels. Capability negotiation
+  consumes one semantic Interaction and preserves resolver explanation facts;
+  unsupported capabilities remain a typed unsupported presentation.
+- [x] `[must]` `GWR5-05` Bind review and Publication to exact immutable target
+  digests and reject stale Lifecycle/chat actions. Trial decision and
+  Publication now require the candidate package digest; action target refs
+  include that digest and stale generations/digests fail before persistence.
+- [x] `[must]` `GWR5-06` Prove a background Codex/LLM result advances only the
   originating Change and cannot inherit another Webspace's view context.
-- [ ] `[must]` `GWR5-07` Prove Lifecycle nodes, process status, conversation
+  Background metadata carries `originating_change_id`; a scoped portfolio
+  update preserves the currently inspected Change.
+- [x] `[must]` `GWR5-07` Prove Lifecycle nodes, process status, conversation
   focus, and proto:/active:/public: Preview labels remain mutually consistent.
-- [ ] `[must]` `GWR5-08` Record transition coverage, artifact lineage, tests,
+  The E2E proof asserts the exact parent chain and all three preview prefixes.
+- [x] `[must]` `GWR5-08` Record transition coverage, artifact lineage, tests,
   Trial, Git, Publication, and delivery evidence for the representative run.
-- [ ] `[must]` `GWR5-09` Update the Builder roadmap with the accepted semantic
-  proof without copying this checklist.
+  Canonical history and Run evidence retain review, Automation test, Git
+  checkpoint, Trial, and registry-publication refs.
+- [x] `[must]` `GWR5-09` Update the Builder roadmap with the accepted semantic
+  proof without copying this checklist. Phase 11 evidence points to the
+  governed E2E suite and commit `7717319d`.
 - [ ] `[should]` `GWR5-10` Measure time to understand current state, action
   mismatch defects, clarification rate, and diagnosis effort versus the old
   Builder path.
@@ -476,36 +491,38 @@ lineage, evidence, and final Publication agree without direct state repair.
   or projections and proves conformance tests fail.
 - [ ] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
   integrating an external durable engine.
-- [ ] `[must]` `GWR5-13` Prove two open Changes can be inspected independently,
+- [x] `[must]` `GWR5-13` Prove two open Changes can be inspected independently,
   focus changes no business state, non-overlapping work is admitted, and
   overlapping stale writes fail with an explicit rebase/split/supersede choice.
-- [ ] `[must]` `GWR5-14` Prove an Experiment can be compared and discarded
+- [x] `[must]` `GWR5-14` Prove an Experiment can be compared and discarded
   without changing `active:` or Publication, and only an explicit
   `adopt_experiment` transition can promote its Revision.
-- [ ] `[must]` `GWR5-15` Prove Prototype defaults to mock/fixture, switching a
+- [x] `[must]` `GWR5-15` Prove Prototype defaults to mock/fixture, switching a
   compatible Preview binding profile does not rewrite the UI Revision, and
   undeclared live reads/writes fail closed.
-- [ ] `[must]` `GWR5-16` Prove a withdrawn Review disappears from active model
+- [x] `[must]` `GWR5-16` Prove a withdrawn Review disappears from active model
   context without losing its audit tombstone, while an accepted constraint can
   only be superseded with a reason.
-- [ ] `[must]` `GWR5-17` Prove a spatial UI request receives parent/sibling/order,
+- [x] `[must]` `GWR5-17` Prove a spatial UI request receives parent/sibling/order,
   responsive, ABI, data-binding, and active-constraint facets or stops for
   clarification before the model is called.
 - [ ] `[should]` `GWR5-18` Record definition complexity and context-sufficiency
   metrics alongside cycle time, clarification, repeated-correction, and action
   mismatch rates.
-- [ ] `[must]` `GWR5-19` Prove one Interaction preserves command identity,
+- [x] `[must]` `GWR5-19` Prove one Interaction preserves command identity,
   risk, confirmation, and target when negotiated as a Web form, Telegram
   choices, numbered text, or a cross-channel deep-link handoff.
-- [ ] `[must]` `GWR5-20` Prove an unsupported required capability leaves the
+- [x] `[must]` `GWR5-20` Prove an unsupported required capability leaves the
   workflow waiting with an explanation rather than hiding controls or
   weakening confirmation.
-- [ ] `[must]` `GWR5-21` Prove several pending interactions are independently
+- [x] `[must]` `GWR5-21` Prove several pending interactions are independently
   addressable and an unbound free-text answer changes no state until the target
   is clarified.
-- [ ] `[must]` `GWR5-22` Prove the Project aggregate reports two independent
+- [x] `[must]` `GWR5-22` Prove the Project aggregate reports two independent
   Changes concurrently while detecting an indirect conflict through a shared
-  skill/component dependency.
+  skill/component dependency. The Project computes transitive `requires` and
+  `derives` footprints and reports `component_dependency` separately from a
+  direct affected-ref collision.
 - [ ] `[should]` `GWR5-23` Prove one multi-component Change joins exact scenario
   and skill Runs into one dependency-locked candidate and reports partial
   success without partial promotion.

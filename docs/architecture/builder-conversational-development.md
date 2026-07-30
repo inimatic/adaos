@@ -767,6 +767,25 @@ The refactoring is additive and compatibility-preserving:
 10. make the Workbench conversation-first while retaining feature-parity gates;
 11. migrate durable state before removing compatibility fields or tools.
 
+The migration boundary is explicit rather than inferred from whichever UI is
+currently visible:
+
+| Existing surface | Disposition | Canonical owner |
+|---|---|---|
+| `prompt_state.json.workflow` | Adapt, then retire as authority | Project/Change instances plus event journal |
+| `change_set` / `change_set_id` | Retain as a bounded compatibility alias | `Change` / `change_id` |
+| Per-turn development records | Adapt as evidence only | Immutable `Run` linked to one Change |
+| Lifecycle stage buckets | Retain as read-only compatibility data | Dependent Process projection from Change and artifact lineage |
+| Builder Interaction Frame | Retain as domain snapshot; adapt all input | Shared ConversationInteraction/InteractionResponse ingress |
+| Pending Actions | Adapt through one bounded bridge, then retire duplicate lifecycle | ConversationInteraction plus protected confirmation policy |
+| UI selection and Preview target | Retain as disposable view context | Scoped command-context/view refs |
+| Browser-local Review drafts | Retain only while unsent | Durable submitted Review and acceptance constraints |
+| Direct handler transition rules | Retire after adapter coverage | Pure governed resolver and registered activities |
+
+Compatibility code may translate names and payloads, but it may not decide
+legality, infer a different target, weaken risk, or manufacture a second
+generation. Every retained adapter has tests and a named retirement owner.
+
 The old functional Builder revision remains an acceptance reference during the
 migration. Self-hosting is allowed only after deterministic parity, contract,
 scenario, SDK, and browser tests prove that the current DEV Builder can recover

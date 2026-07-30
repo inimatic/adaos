@@ -2013,7 +2013,18 @@ class BuilderWorkflowService:
             for item in (previous or {}).get("runs") or []
             if isinstance(item, Mapping)
         ]
-        run_id = str(metadata.get("run_id") or metadata.get("task_id") or "").strip()
+        run_id = str(metadata.get("run_id") or "").strip()
+        if not run_id and action in {
+            "automation_started",
+            "handoff_to_automation",
+            "automation_iteration_started",
+            "automation_completed",
+            "automation_failed",
+            "request_return_to_prototype",
+            "return_to_prototype",
+            "return_to_prototype_failed",
+        }:
+            run_id = str(metadata.get("task_id") or "").strip()
         if not run_id:
             run_id = f"{change_id}:run:{int(workflow.get('generation') or 0):04d}"
         failure = action.endswith("_failed") or action in {"candidate_rejected"}
