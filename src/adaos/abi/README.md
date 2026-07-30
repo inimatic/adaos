@@ -26,6 +26,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   one Builder command risk class
 - `builder.interaction_frame.v1.schema.json` - chat-first message, context,
   risk-aware actions, and rich-view projection
+- `builder.process_projection.v1.schema.json` - dependent Change -> Prototype
+  -> Automation -> Trial -> Publication lineage and exact Preview choices
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review

@@ -298,6 +298,7 @@ def interaction_from_workflow_description(
     thread_id: str | None = None,
     task_ref: Mapping[str, Any] | None = None,
     workflow_ref: Mapping[str, Any] | None = None,
+    command_context_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
     now: str | None = None,
@@ -337,7 +338,7 @@ def interaction_from_workflow_description(
                 "target_ref": copy.deepcopy(command.get("target_ref") or snapshot.get("target")),
                 "expected_generation": generation,
                 "principal_scope": [str(item) for item in authority.get("actors") or ["user"]],
-                "command_context_ref": copy.deepcopy(workflow_ref),
+                "command_context_ref": copy.deepcopy(command_context_ref),
             }
         )
     if "numbered_text" not in fallbacks:

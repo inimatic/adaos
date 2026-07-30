@@ -23,7 +23,9 @@
           "expected_generation": { "type": "integer", "minimum": 0 },
           "target_ref": { "type": ["string", "null"], "maxLength": 300 },
           "presentation": { "type": ["string", "null"], "maxLength": 80 },
-          "fallback": { "type": ["string", "null"], "maxLength": 80 }
+          "fallback": { "type": ["string", "null"], "maxLength": 80 },
+          "workflow_command": { "type": ["string", "null"], "maxLength": 160 },
+          "workflow_generation": { "type": ["integer", "null"], "minimum": 0 }
         },
         "additionalProperties": false
       }

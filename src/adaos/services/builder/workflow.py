@@ -15,6 +15,12 @@ import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.action_contracts import build_builder_action
+from adaos.services.builder.governed import (
+    admit_legacy_transition,
+    governed_instance,
+    workflow_description,
+)
+from adaos.services.conversation_interactions import interaction_from_workflow_description
 from adaos.services.runtime_paths import current_state_dir
 
 
@@ -684,7 +690,7 @@ class BuilderWorkflowService:
         delivery.setdefault("replaces_candidate_id", None)
         delivery.setdefault("rebase_plan", None)
 
-        return {
+        normalized = {
             "schema": BUILDER_WORKFLOW_SCHEMA,
             "generation": max(0, int(raw.get("generation") or 0)),
             "active_phase": active_phase,
@@ -717,6 +723,11 @@ class BuilderWorkflowService:
             ][-_MAX_HISTORY:],
             "updated_at": str(raw.get("updated_at") or state.get("updated_at") or "").strip() or None,
         }
+        normalized["governed"] = governed_instance(
+            {**normalized, "governed": raw.get("governed")},
+            project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+        )
+        return normalized
 
     @staticmethod
     def _capabilities(workflow: Mapping[str, Any], *, archived: bool, object_type: str) -> dict[str, bool]:
@@ -763,12 +774,123 @@ class BuilderWorkflowService:
         with _LOCK:
             state = self._read_state(kind, project_id)
             workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
-        return {
+        projection = {
             **copy.deepcopy(workflow),
             "object_type": kind,
             "object_id": project_id,
             "archived": bool(state.get("archived")),
             "capabilities": self._capabilities(workflow, archived=bool(state.get("archived")), object_type=kind),
+        }
+        projection["workflow_description"] = workflow_description(
+            workflow,
+            project_ref=f"{kind}:{project_id}",
+        )
+        projection["process"] = self._process_projection(projection)
+        return projection
+
+    @staticmethod
+    def _process_projection(workflow: Mapping[str, Any]) -> dict[str, Any]:
+        """Build one dependent lineage tree from canonical state and exact refs."""
+
+        object_type = str(workflow.get("object_type") or "scenario")
+        object_id = str(workflow.get("object_id") or "")
+        project_ref = f"{object_type}:{object_id}"
+        change = _normalize_change(workflow.get("change") or workflow.get("change_set"))
+        prototype = _mapping(workflow.get("prototype"))
+        automation = _mapping(workflow.get("automation"))
+        delivery = _mapping(workflow.get("delivery"))
+        publication = _mapping(workflow.get("publication"))
+        description = _mapping(workflow.get("workflow_description"))
+        state = str(description.get("state") or _mapping(workflow.get("governed")).get("state") or "ready")
+        nodes: list[dict[str, Any]] = []
+        if change:
+            change_ref = f"change:{change['change_id']}"
+            nodes.append(
+                {
+                    "ref": change_ref,
+                    "kind": "change",
+                    "parent_ref": project_ref,
+                    "label": str(change.get("request") or change["change_id"]),
+                    "status": str(change.get("status") or state),
+                    "workflow_state": state,
+                }
+            )
+            parent_ref = change_ref
+        else:
+            parent_ref = project_ref
+        prototype_revision = str(prototype.get("head_revision") or "").strip()
+        prototype_ref = f"prototype:{object_id}:{prototype_revision or 'current'}"
+        if object_type == "scenario":
+            nodes.append(
+                {
+                    "ref": prototype_ref,
+                    "kind": "prototype",
+                    "parent_ref": parent_ref,
+                    "label": f"Prototype {prototype_revision or 'current'}",
+                    "status": str(prototype.get("status") or "working"),
+                    "preview": f"proto:{object_id}:{prototype_revision or 'current'}",
+                }
+            )
+            parent_ref = prototype_ref
+        automation_status = str(automation.get("status") or "not_started")
+        automation_ref = f"automation:{object_id}:{automation.get('snapshot_task_id') or automation.get('head_task_id') or 'current'}"
+        if automation_status != "not_started" or str(change.get("route") if change else "") in {"automation_direct", "implementation_direct"}:
+            nodes.append(
+                {
+                    "ref": automation_ref,
+                    "kind": "automation",
+                    "parent_ref": parent_ref,
+                    "label": f"Automation {automation.get('result_version') or automation.get('iteration') or 'current'}",
+                    "status": automation_status,
+                    "source_ref": prototype_ref if object_type == "scenario" else None,
+                    "preview": f"active:{object_id}:current" if automation_status in {"completed", "frozen", "adapting"} else None,
+                }
+            )
+            parent_ref = automation_ref
+        delivery_status = str(delivery.get("status") or "idle")
+        if delivery_status not in {"idle", "stale"}:
+            trial_ref = f"trial:{delivery.get('candidate_id') or object_id}"
+            nodes.append(
+                {
+                    "ref": trial_ref,
+                    "kind": "trial",
+                    "parent_ref": parent_ref,
+                    "label": f"Trial {delivery.get('candidate_id') or ''}".strip(),
+                    "status": delivery_status,
+                    "candidate_digest": delivery.get("package_digest") or delivery.get("release_digest"),
+                }
+            )
+            parent_ref = trial_ref
+        if str(publication.get("status") or "") == "published":
+            version = str(publication.get("current_version") or "current")
+            nodes.append(
+                {
+                    "ref": f"publication:{object_id}:{version}",
+                    "kind": "publication",
+                    "parent_ref": parent_ref,
+                    "label": f"Publication {version}",
+                    "status": "published",
+                    "preview": f"public:{object_id}:{version}",
+                }
+            )
+        interaction = _mapping(workflow.get("interaction"))
+        preview_options = [
+            {"kind": item["kind"], "ref": item["ref"], "label": item["preview"]}
+            for item in nodes
+            if item.get("preview")
+        ]
+        return {
+            "schema": "adaos.builder.process_projection.v1",
+            "project_ref": project_ref,
+            "workflow_state": state,
+            "generation": int(description.get("generation") or _mapping(workflow.get("governed")).get("generation") or 0),
+            "nodes": nodes,
+            "conversation_focus": interaction.get("conversation_focus"),
+            "inspected_ref": interaction.get("inspected_ref"),
+            "preview_target": interaction.get("preview_target"),
+            "preview_options": preview_options,
+            "allowed_commands": copy.deepcopy(description.get("allowed_commands") or []),
+            "blockers": copy.deepcopy(description.get("blockers") or []),
         }
 
     def interaction_frame(self, object_type: str, object_id: str) -> dict[str, Any]:
@@ -785,6 +907,13 @@ class BuilderWorkflowService:
         automation_status = str(
             _mapping(projection.get("automation")).get("status") or "not_started"
         )
+        workflow_explanation = _mapping(projection.get("workflow_description"))
+        canonical_generation = int(workflow_explanation.get("generation") or 0)
+        canonical_actions = {
+            str(item.get("command") or ""): dict(item)
+            for item in workflow_explanation.get("allowed_commands") or []
+            if isinstance(item, Mapping) and str(item.get("command") or "").strip()
+        }
 
         actions: list[dict[str, Any]] = []
 
@@ -796,16 +925,23 @@ class BuilderWorkflowService:
             target_ref: str | None = None,
             presentation: str = "button",
             fallback: str = "compact_action",
+            workflow_command: str | None = None,
         ) -> None:
+            if workflow_command and workflow_command not in canonical_actions:
+                return
+            canonical = canonical_actions.get(str(workflow_command or ""))
+            canonical_risk = str(_mapping((canonical or {}).get("risk")).get("class") or risk)
             actions.append(
                 build_builder_action(
                     command,
                     label,
-                    risk,
+                    canonical_risk,
                     expected_generation=generation,
                     target_ref=target_ref,
                     presentation=presentation,
                     fallback=fallback,
+                    workflow_command=workflow_command,
+                    workflow_generation=canonical_generation if workflow_command else None,
                 )
             )
 
@@ -833,12 +969,14 @@ class BuilderWorkflowService:
                     "Refine prototype",
                     "local_reversible",
                     target_ref=change_ref,
+                    workflow_command="record_prototype_revision",
                 )
                 add_action(
                     "builder.prototype.approve",
                     "Approve prototype",
                     "isolated_write",
                     target_ref=change_ref,
+                    workflow_command="accept_prototype",
                 )
             if active_phase == "prototype" and gate == "automation":
                 add_action(
@@ -846,6 +984,7 @@ class BuilderWorkflowService:
                     "Start implementation",
                     "isolated_write",
                     target_ref=change_ref,
+                    workflow_command="start_automation",
                 )
             if active_phase == "automation" and automation_status in {"completed", "failed"}:
                 add_action(
@@ -853,6 +992,7 @@ class BuilderWorkflowService:
                     "Continue implementation",
                     "isolated_write",
                     target_ref=change_ref,
+                    workflow_command="retry_automation",
                 )
             if capabilities.get("can_return_to_prototype"):
                 add_action(
@@ -860,6 +1000,7 @@ class BuilderWorkflowService:
                     "Return result to prototype",
                     "isolated_write",
                     target_ref=change_ref,
+                    workflow_command="request_prototype_derivation",
                 )
             if capabilities.get("can_prepare_candidate"):
                 add_action(
@@ -867,6 +1008,7 @@ class BuilderWorkflowService:
                     "Prepare trial",
                     "trial_activation",
                     target_ref=change_ref,
+                    workflow_command="prepare_trial_compatibility",
                 )
             if capabilities.get("can_decide_candidate"):
                 candidate_id = str(_mapping(projection.get("delivery")).get("candidate_id") or "").strip()
@@ -876,12 +1018,14 @@ class BuilderWorkflowService:
                     "Accept trial",
                     "workspace_activation",
                     target_ref=candidate_ref,
+                    workflow_command="accept_trial",
                 )
                 add_action(
                     "builder.trial.reject",
                     "Request changes",
                     "local_reversible",
                     target_ref=candidate_ref,
+                    workflow_command="reject_trial",
                 )
             if capabilities.get("can_publish"):
                 add_action(
@@ -889,6 +1033,7 @@ class BuilderWorkflowService:
                     "Publish",
                     "publication",
                     target_ref=change_ref,
+                    workflow_command="publish_compatibility",
                 )
 
         if capabilities.get("can_preview_prototype"):
@@ -941,6 +1086,45 @@ class BuilderWorkflowService:
             "views": views,
             "generation": generation,
         }
+
+    def conversation_interaction(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        conversation_id: str,
+        principal_id: str,
+        command_context_id: str,
+    ) -> dict[str, Any]:
+        """Project the same canonical commands into the shared interaction protocol."""
+
+        projection = self.describe(object_type, object_id)
+        interaction = interaction_from_workflow_description(
+            _mapping(projection.get("workflow_description")),
+            conversation_id=conversation_id,
+            owner=principal_id,
+            thread_id=command_context_id,
+            workflow_ref={
+                "schema": "adaos.workflow.ref.v1",
+                "kind": "workflow",
+                "id": str(_mapping(projection.get("governed")).get("instance_id") or ""),
+                "version": str(_mapping(projection.get("governed")).get("definition_version") or ""),
+                "generation": int(_mapping(projection.get("governed")).get("generation") or 0),
+            },
+            command_context_ref={
+                "schema": "adaos.workflow.ref.v1",
+                "kind": "view",
+                "id": command_context_id,
+            },
+            prompt=self.interaction_frame(object_type, object_id)["message"],
+        )
+        interaction["metadata"] = {
+            **_mapping(interaction.get("metadata")),
+            "domain": "builder",
+            "project_ref": f"{projection['object_type']}:{projection['object_id']}",
+            "process_generation": _mapping(projection.get("process")).get("generation"),
+        }
+        return interaction
 
     def update_interaction_context(
         self,
@@ -1024,7 +1208,26 @@ class BuilderWorkflowService:
                 "change_set_status": (workflow.get("change_set") or {}).get("status"),
                 "change_set_gate": (workflow.get("change_set") or {}).get("gate"),
             }
+            governed_decision = None
+            if action_token == "plan_change_set" or workflow.get("change") or workflow.get("change_set"):
+                governed_decision = admit_legacy_transition(
+                    workflow,
+                    action_token,
+                    details,
+                    project_ref=f"{kind}:{project_id}",
+                    actor=str(actor or "builder"),
+                    idempotency_key=str(details.get("idempotency_key") or "").strip()
+                    or f"legacy:{kind}:{project_id}:{int(workflow.get('generation') or 0)}:{action_token}",
+                    now=changed_at,
+                )
+                if governed_decision is not None and not bool(governed_decision.get("accepted")):
+                    raise BuilderWorkflowError(
+                        "canonical Builder transition rejected: "
+                        f"{governed_decision.get('reason_code') or 'transition_not_allowed'}"
+                    )
             self._apply_transition(workflow, action_token, details, changed_at=changed_at)
+            if governed_decision is not None:
+                workflow["governed"] = copy.deepcopy(governed_decision["after"])
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
             workflow["updated_at"] = changed_at
             self._record_transition_run(
@@ -1055,6 +1258,13 @@ class BuilderWorkflowService:
                     "before": before,
                     "after": after,
                     "metadata": details,
+                    "canonical": {
+                        "command": governed_decision.get("command"),
+                        "transition_id": governed_decision.get("transition_id"),
+                        "generation": _mapping(governed_decision.get("after")).get("generation"),
+                    }
+                    if governed_decision is not None
+                    else None,
                 }
             )
             workflow["history"] = history[-_MAX_HISTORY:]
@@ -1070,6 +1280,11 @@ class BuilderWorkflowService:
             "archived": False,
             "capabilities": self._capabilities(workflow, archived=False, object_type=kind),
         }
+        projection["workflow_description"] = workflow_description(
+            workflow,
+            project_ref=f"{kind}:{project_id}",
+        )
+        projection["process"] = self._process_projection(projection)
         if callable(self.event_sink):
             self.event_sink(projection)
         return {"ok": True, "action": action_token, "workflow": projection}

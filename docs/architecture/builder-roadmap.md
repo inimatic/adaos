@@ -941,7 +941,10 @@ Commands, projections, and Workbench:
 - [ ] `[must]` Adapt Builder Interaction Frames to the shared
   ConversationInteraction/InteractionResponse registry. Consume negotiated
   Web/Telegram/text presentations and one canonical action ingress rather than
-  maintaining Builder-specific token, fallback, or response lifecycles.
+  maintaining Builder-specific token, fallback, or response lifecycles. The
+  core adapter now projects a Builder `explain()` result into the shared
+  registry and binds compatibility Web actions to exact workflow commands and
+  generations; migrating every Builder-skill caller remains open.
 - [ ] `[must]` Return accepted/progress/input-required/terminal
   ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
   terminal result once and retry ReplyRoute DeliveryAttempts independently;

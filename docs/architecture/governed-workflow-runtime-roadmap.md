@@ -236,8 +236,12 @@ blocked.
   generated conformance cases cover every state and transition edge.
 - [x] `[must]` `GWR2-05` Define stable reason codes and localization keys for
   admitted, blocked, stale, ambiguous, and policy-denied commands.
-- [ ] `[must]` `GWR2-06` Adapt Builder Lifecycle, process summary, and Preview
+- [x] `[must]` `GWR2-06` Adapt Builder Lifecycle, process summary, and Preview
   target to canonical projections rather than independently inferred stages.
+  `adaos.builder.process_projection.v1` now derives the dependent lineage,
+  blockers, available commands, and exact `proto:`/`active:`/`public:` choices
+  from the pinned Builder Change snapshot. View selection remains a separate
+  non-business generation.
 - [x] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
   the same semantic interaction and canonical invocation ingress.
   Web actions, Telegram inline callbacks, and numbered text now originate from
@@ -333,28 +337,40 @@ required transitions.
 domain meaning, guard, effect/evidence contract, and explanation; generated
 tests cover all legal and representative illegal paths.
 
-- [ ] `[must]` `GWR4-01` Encode the normative Builder Change statechart and
+- [x] `[must]` `GWR4-01` Encode the normative Builder Change statechart and
   transition catalogue from
   [Builder Conversational Development](builder-conversational-development.md#builder-change-statechart),
   explicitly separating it from artifact lineage and task execution state.
+  `builder.governed` compiles 15 states and the complete first compatibility
+  transition catalogue through the shared compiler; Run and view state are
+  not copied into the Change state enum.
 - [ ] `[must]` `GWR4-02` Key the workflow instance by canonical `change_id` and
   retain exact project, base release, artifact, and command-context refs.
-- [ ] `[must]` `GWR4-03` Model Prototype -> Automation -> Publication as
+- [x] `[must]` `GWR4-03` Model Prototype -> Automation -> Publication as
   derivation and promotion, not three mutually independent mutable stages.
-- [ ] `[must]` `GWR4-04` Define direct Automation, prototype-first, revise,
+  The compatibility buckets remain readable, but the canonical state and
+  Process projection bind Automation to its source Prototype and Trial /
+  Publication beneath that Automation lineage.
+- [x] `[must]` `GWR4-04` Define direct Automation, prototype-first, revise,
   cancel, failure, retry-as-new-Run, Trial reject/accept, and Publication paths.
 - [ ] `[must]` `GWR4-05` Define invariants: one focused Change per command
   context but multiple open Changes per project; one admitted overlapping
   mutation per base generation; immutable accepted revisions; exact source
   Prototype for Automation; and exact candidate digest for Publication.
-- [ ] `[must]` `GWR4-06` Define LLM, Codex, validation, Git checkpoint, Trial,
+- [x] `[must]` `GWR4-06` Define LLM, Codex, validation, Git checkpoint, Trial,
   Publication, and notification as registered effects/activities rather than
-  implicit phase code.
-- [ ] `[must]` `GWR4-07` Generate Lifecycle hierarchy, process summary,
+  implicit phase code. The definition declares activity, retry,
+  reconciliation, compensation, outbox, and asynchronous-reply policy; the
+  legacy executor is currently its bounded activity adapter.
+- [x] `[must]` `GWR4-07` Generate Lifecycle hierarchy, process summary,
   available controls, conversation focus, and Preview target from the same
-  snapshot and lineage refs.
-- [ ] `[must]` `GWR4-08` Keep Lifecycle selection and Preview selection as view
-  context; neither changes the workflow without an explicit command.
+  snapshot and lineage refs. Compatibility `builder.*` actions now carry the
+  exact admitted workflow command and canonical generation, while the shared
+  ConversationInteraction projection consumes the same `explain()` result.
+- [x] `[must]` `GWR4-08` Keep Lifecycle selection and Preview selection as view
+  context; neither changes the workflow without an explicit command. Tests
+  prove an inspection/Preview update leaves canonical Change state and
+  generation unchanged.
 - [ ] `[must]` `GWR4-09` Map current Builder JSON, sessions, Pending Actions,
   and UI handlers to canonical concepts with retain/adapt/retire disposition.
 - [ ] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a

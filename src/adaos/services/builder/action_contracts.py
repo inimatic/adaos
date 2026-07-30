@@ -121,6 +121,8 @@ def build_builder_action(
     target_ref: Any = None,
     presentation: Any = "button",
     fallback: Any = "compact_action",
+    workflow_command: Any = None,
+    workflow_generation: Any = None,
 ) -> dict[str, Any]:
     command_token = str(command or "").strip()
     label_token = str(label or "").strip()
@@ -140,6 +142,18 @@ def build_builder_action(
     presentation_token = str(presentation or "").strip() or None
     fallback_token = str(fallback or "").strip() or None
     policy = builder_action_risk_policy(risk)
+    workflow_command_token = str(workflow_command or "").strip() or None
+    if workflow_command_token and len(workflow_command_token) > 160:
+        raise BuilderActionContractError("workflow_command must be at most 160 characters")
+    if workflow_generation is None:
+        canonical_generation = None
+    else:
+        try:
+            canonical_generation = int(workflow_generation)
+        except (TypeError, ValueError) as exc:
+            raise BuilderActionContractError("workflow_generation must be an integer") from exc
+        if canonical_generation < 0:
+            raise BuilderActionContractError("workflow_generation must be non-negative")
     return {
         "command": command_token,
         "label": label_token,
@@ -149,6 +163,8 @@ def build_builder_action(
         "target_ref": target_token,
         "presentation": presentation_token,
         "fallback": fallback_token,
+        "workflow_command": workflow_command_token,
+        "workflow_generation": canonical_generation,
     }
 
 
