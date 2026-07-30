@@ -1285,6 +1285,13 @@ async def _is_port_open(host: str, port: int) -> bool:
 
 async def probe_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float = 2.0) -> bool:
     try:
+        if _find_realtime_listener_pid(host, port):
+            return True
+    except Exception:
+        pass
+    if not _truthy(os.getenv("ADAOS_REALTIME_READY_PROBE_CONNECT"), default=False):
+        return False
+    try:
         return bool(await asyncio.wait_for(_is_port_open(host, port), timeout=max(0.1, float(timeout_s))))
     except Exception:
         return False

@@ -1298,6 +1298,22 @@ def _should_quarantine_nats_candidate(candidate: str | None, *, local_sidecar_ur
     return True
 
 
+def _hub_nats_sidecar_failover_on_transient() -> bool:
+    return _env_truthy(os.getenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT"), default=True)
+
+
+def _hub_nats_sidecar_quarantine_s() -> float:
+    try:
+        value = float(os.getenv("HUB_NATS_SIDECAR_QUARANTINE_S", "300") or "300")
+    except Exception:
+        value = 300.0
+    if value < 5.0:
+        return 5.0
+    if value > 3600.0:
+        return 3600.0
+    return value
+
+
 def _resolve_nats_log_server(
     *,
     server: str | None = None,
@@ -10766,6 +10782,24 @@ class BootstrapService:
                                         _rl_log(
                                             "nats.supervisor.quarantine.skip",
                                             f"[hub-io] nats supervisor: skip quarantine for local sidecar={nats_last_server} (ran_for={ran_for_s:.1f}s)",
+                                            every_s=1.0,
+                                        )
+                            except Exception:
+                                pass
+
+                            try:
+                                if is_transient and using_sidecar and _hub_nats_sidecar_failover_on_transient():
+                                    local_sidecar_url = realtime_sidecar_local_url()
+                                    if isinstance(local_sidecar_url, str) and local_sidecar_url:
+                                        q_seconds = _hub_nats_sidecar_quarantine_s()
+                                        nats_server_quarantine_until[local_sidecar_url] = time.monotonic() + q_seconds
+                                        _rl_log(
+                                            "nats.supervisor.sidecar_quarantine",
+                                            (
+                                                f"[hub-io] nats supervisor: sidecar failover quarantine "
+                                                f"server={local_sidecar_url} for {q_seconds:.0f}s "
+                                                f"(ran_for={ran_for_s:.1f}s transient={is_transient})"
+                                            ),
                                             every_s=1.0,
                                         )
                             except Exception:
