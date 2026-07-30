@@ -33,6 +33,8 @@ Current target-state control-plane extensions are documented in:
 
 - [Governed Evolution](governed-evolution.md): cross-domain target model from human signal and durable issue through Builder, publication, runtime evidence, and repair
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): major product and architecture milestones, proof gates, and references to the roadmaps that own implementation detail
+- [Governed Workflow and Interaction Runtime](governed-workflow-runtime.md): system boundary for explainable statecharts, conversational intent mediation, deterministic interactions, durable execution providers, activities, recovery, and cross-channel delivery
+- [Governed Workflow Runtime Roadmap](governed-workflow-runtime-roadmap.md): MoSCoW implementation and evidence sequence from canonical contracts through the Builder proof, provider evaluation, and single-user hardening
 - [AdaOS Product Terminology](product-terminology.md): product-facing terms and compatibility rules for Assistant, Webspace, Application, Device, Agent, Skill, Widget/Panel, Interface, and Catalog
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
