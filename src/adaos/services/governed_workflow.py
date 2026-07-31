@@ -23,6 +23,10 @@ WORKFLOW_DEFINITION_MIGRATION_SCHEMA = "adaos.workflow.definition_migration.v1"
 WORKFLOW_COMPOSITION_SCHEMA = "adaos.workflow.composition.v1"
 WORKFLOW_DECISION_SCHEMA = "adaos.workflow.decision.v1"
 WORKFLOW_VALIDATION_REPORT_SCHEMA = "adaos.workflow.validation_report.v1"
+WORKFLOW_ADAPTER_CONTRACT_SCHEMA = "adaos.workflow.adapter_contract.v1"
+WORKFLOW_REGISTRY_ENTRY_SCHEMA = "adaos.workflow.registry_entry.v1"
+WORKFLOW_BINDING_SCHEMA = "adaos.workflow.binding.v1"
+WORKFLOW_PRINCIPAL_SCHEMA = "adaos.workflow.principal.v1"
 _MAX_LEDGER = 200
 
 
@@ -408,9 +412,69 @@ DEFAULT_GUARDS: dict[str, Guard] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedWorkflowPrincipal:
+    actor_id: str
+    issuer: str
+    subject: str
+    authentication: str
+    roles: tuple[str, ...]
+    permissions: tuple[str, ...]
+    claims_digest: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": WORKFLOW_PRINCIPAL_SCHEMA,
+            "actor_id": self.actor_id,
+            "issuer": self.issuer,
+            "subject": self.subject,
+            "authentication": self.authentication,
+            "roles": list(self.roles),
+            "permissions": list(self.permissions),
+            "claims_digest": self.claims_digest,
+        }
+
+
+def verified_workflow_principal(
+    actor_id: str,
+    *,
+    authenticated: bool,
+    issuer: str,
+    subject: str | None = None,
+    permissions: Sequence[str] = (),
+) -> VerifiedWorkflowPrincipal:
+    """Derive coarse workflow roles from trusted authentication, never caller input."""
+
+    actor = str(actor_id or "").strip()
+    issuer_token = str(issuer or "").strip()
+    subject_token = str(subject or actor).strip()
+    if not actor or not issuer_token or not subject_token:
+        raise WorkflowResolutionError("verified workflow principal identity is incomplete")
+    claims = {
+        "actor_id": actor,
+        "issuer": issuer_token,
+        "subject": subject_token,
+        "authentication": "verified" if authenticated else "anonymous",
+        "roles": ["registered" if authenticated else "guest"],
+        "permissions": sorted({str(item) for item in permissions if str(item).strip()}),
+    }
+    principal = VerifiedWorkflowPrincipal(
+        actor_id=actor,
+        issuer=issuer_token,
+        subject=subject_token,
+        authentication=str(claims["authentication"]),
+        roles=tuple(claims["roles"]),
+        permissions=tuple(claims["permissions"]),
+        claims_digest=_digest(claims),
+    )
+    _validate(WORKFLOW_PRINCIPAL_SCHEMA, principal.to_dict())
+    return principal
+
+
 @dataclass(slots=True)
 class WorkflowResolver:
     guards: Mapping[str, Guard] | None = None
+    require_verified_principal: bool = False
 
     def __post_init__(self) -> None:
         self.guards = {**DEFAULT_GUARDS, **dict(self.guards or {})}
@@ -456,6 +520,36 @@ class WorkflowResolver:
                 return False, reason or str(descriptor["reason_code"])
         return True, None
 
+    def _principal_result(
+        self,
+        *,
+        actor: str,
+        permissions: tuple[str, ...],
+        roles: tuple[str, ...],
+        principal: VerifiedWorkflowPrincipal | None,
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...], str | None]:
+        if principal is None:
+            if self.require_verified_principal:
+                return actor, (), (), "unverified_principal"
+            return actor, permissions, roles, None
+        try:
+            _validate(WORKFLOW_PRINCIPAL_SCHEMA, principal.to_dict())
+        except (AttributeError, WorkflowDefinitionError):
+            return actor, (), (), "invalid_principal_claims"
+        unsigned = principal.to_dict()
+        supplied_digest = str(unsigned.pop("claims_digest"))
+        unsigned.pop("schema", None)
+        if supplied_digest != _digest(unsigned):
+            return actor, (), (), "invalid_principal_claims"
+        if principal.actor_id != actor:
+            return actor, (), (), "principal_actor_mismatch"
+        return (
+            principal.actor_id,
+            tuple(principal.permissions),
+            tuple(principal.roles),
+            None,
+        )
+
     @staticmethod
     def _authority_result(
         transition: CompiledTransition,
@@ -483,21 +577,30 @@ class WorkflowResolver:
         actor: str,
         permissions: tuple[str, ...] | list[str] = (),
         roles: tuple[str, ...] | list[str] = (),
+        principal: VerifiedWorkflowPrincipal | None = None,
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         compiled = self._compiled(definition)
         current = self._instance(compiled, instance)
         runtime_context = dict(context or {})
+        resolved_actor, resolved_permissions, resolved_roles, principal_reason = (
+            self._principal_result(
+                actor=actor,
+                permissions=tuple(permissions),
+                roles=tuple(roles),
+                principal=principal,
+            )
+        )
         allowed: list[dict[str, Any]] = []
         blocked: list[dict[str, Any]] = []
         for transition in compiled.transitions:
             if current["state"] not in transition.sources:
                 continue
-            accepted, reason = self._authority_result(
+            accepted, reason = (False, principal_reason) if principal_reason else self._authority_result(
                 transition,
-                actor=actor,
-                permissions=tuple(permissions),
-                roles=tuple(roles),
+                actor=resolved_actor,
+                permissions=resolved_permissions,
+                roles=resolved_roles,
             )
             if accepted:
                 accepted, reason = self._guard_result(transition, current, {}, runtime_context)
@@ -563,6 +666,7 @@ class WorkflowResolver:
         actor: str,
         permissions: tuple[str, ...] | list[str] = (),
         roles: tuple[str, ...] | list[str] = (),
+        principal: VerifiedWorkflowPrincipal | None = None,
         expected_generation: int | None = None,
         idempotency_key: str | None = None,
         context: Mapping[str, Any] | None = None,
@@ -621,11 +725,21 @@ class WorkflowResolver:
         if concurrency["idempotency"] == "required" and not key:
             return self._rejection(current, command_token, "idempotency_key_required", timestamp)
 
+        resolved_actor, resolved_permissions, resolved_roles, principal_reason = (
+            self._principal_result(
+                actor=actor,
+                permissions=tuple(permissions),
+                roles=tuple(roles),
+                principal=principal,
+            )
+        )
+        if principal_reason:
+            return self._rejection(current, command_token, principal_reason, timestamp)
         accepted, reason = self._authority_result(
             transition,
-            actor=actor,
-            permissions=tuple(permissions),
-            roles=tuple(roles),
+            actor=resolved_actor,
+            permissions=resolved_permissions,
+            roles=resolved_roles,
         )
         if not accepted:
             return self._rejection(current, command_token, reason or "not_authorized", timestamp)
@@ -648,7 +762,7 @@ class WorkflowResolver:
             "generation": updated["generation"],
             "command": command_token,
             "transition_id": transition.transition_id,
-            "actor": actor,
+            "actor": resolved_actor,
             "from": current["state"],
             "to": transition.target,
             "input_digest": _digest(payload),
@@ -685,7 +799,7 @@ class WorkflowResolver:
             "generation": int(updated["generation"]),
             "transition_id": transition.transition_id,
             "command_id": command_token,
-            "actor_ref": workflow_ref("principal", actor),
+            "actor_ref": workflow_ref("principal", resolved_actor),
             "before_state": str(current["state"]),
             "after_state": transition.target,
             "idempotency_key": key,
@@ -755,6 +869,7 @@ def apply_workflow_command(
     resolver: WorkflowResolver | None = None,
     permissions: tuple[str, ...] | list[str] = (),
     roles: tuple[str, ...] | list[str] = (),
+    principal: VerifiedWorkflowPrincipal | None = None,
     context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = validate_workflow_record(WORKFLOW_COMMAND_SCHEMA, command)
@@ -774,6 +889,7 @@ def apply_workflow_command(
         actor=str(record["actor_ref"]["id"]),
         permissions=permissions,
         roles=roles,
+        principal=principal,
         expected_generation=int(record["expected_generation"]),
         idempotency_key=str(record["idempotency_key"]),
         context=context,
@@ -790,6 +906,8 @@ def migrate_workflow_instance(
     actor: str,
     permissions: tuple[str, ...] | list[str] = (),
     roles: tuple[str, ...] | list[str] = (),
+    principal: VerifiedWorkflowPrincipal | None = None,
+    require_verified_principal: bool = False,
     expected_generation: int,
     idempotency_key: str,
     now: str | None = None,
@@ -830,14 +948,24 @@ def migrate_workflow_instance(
         raise WorkflowDefinitionError(
             "definition migration maps to unknown target states: " + ", ".join(unknown_targets)
         )
+    resolved_actor, resolved_permissions, resolved_roles, principal_reason = WorkflowResolver(
+        require_verified_principal=require_verified_principal
+    )._principal_result(
+        actor=actor,
+        permissions=tuple(permissions),
+        roles=tuple(roles),
+        principal=principal,
+    )
+    if principal_reason:
+        raise WorkflowResolutionError(principal_reason)
     authority = dict(record["authority"])
-    if not _actor_matches(tuple(authority["actors"]), actor):
+    if not _actor_matches(tuple(authority["actors"]), resolved_actor):
         raise WorkflowResolutionError("actor_not_authorized")
-    missing_permissions = sorted(set(authority["permissions"]) - set(permissions))
+    missing_permissions = sorted(set(authority["permissions"]) - set(resolved_permissions))
     if missing_permissions:
         raise WorkflowResolutionError(f"missing_permission:{missing_permissions[0]}")
     admitted_roles = tuple(str(item) for item in authority.get("roles") or ())
-    if admitted_roles and not set(admitted_roles).intersection(roles):
+    if admitted_roles and not set(admitted_roles).intersection(resolved_roles):
         raise WorkflowResolutionError(f"role_not_authorized:{admitted_roles[0]}")
 
     updated = copy.deepcopy(current)
@@ -862,7 +990,7 @@ def migrate_workflow_instance(
         "generation": updated["generation"],
         "command": "migrate_definition",
         "transition_id": transition_id,
-        "actor": actor,
+        "actor": resolved_actor,
         "from": current["state"],
         "to": updated["state"],
         "input_digest": _digest(input_value),
@@ -897,7 +1025,7 @@ def migrate_workflow_instance(
         "generation": int(updated["generation"]),
         "transition_id": transition_id,
         "command_id": "migrate_definition",
-        "actor_ref": workflow_ref("principal", actor),
+        "actor_ref": workflow_ref("principal", resolved_actor),
         "before_state": str(current["state"]),
         "after_state": str(updated["state"]),
         "idempotency_key": key,
@@ -1324,6 +1452,10 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "WorkflowComposition": WORKFLOW_COMPOSITION_SCHEMA,
             "WorkflowDecision": WORKFLOW_DECISION_SCHEMA,
             "WorkflowValidationReport": WORKFLOW_VALIDATION_REPORT_SCHEMA,
+            "WorkflowAdapterContract": WORKFLOW_ADAPTER_CONTRACT_SCHEMA,
+            "WorkflowRegistryEntry": WORKFLOW_REGISTRY_ENTRY_SCHEMA,
+            "WorkflowBinding": WORKFLOW_BINDING_SCHEMA,
+            "WorkflowPrincipal": WORKFLOW_PRINCIPAL_SCHEMA,
         },
         "invariants": {
             "resolver": "pure",

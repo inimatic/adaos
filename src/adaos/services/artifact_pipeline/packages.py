@@ -21,6 +21,7 @@ from adaos.domain.artifact_release import (
     ArtifactPackageRef,
     ArtifactReleaseContractError,
     ArtifactSourceRef,
+    WorkflowAdapterLock,
     canonical_json_bytes,
     canonical_payload_digest,
     sha256_digest,
@@ -31,6 +32,11 @@ from adaos.services.workflow_artifacts import (
     load_manifest_bound_workflow,
     validate_workflow_definition_bytes,
     workflow_manifest_reference,
+)
+from adaos.services.workflow_registry import (
+    WorkflowAdapterRegistry,
+    WorkflowAdapterRegistryError,
+    platform_workflow_adapter_registry,
 )
 
 
@@ -330,6 +336,7 @@ def build_artifact_package(
     kind: ArtifactKind,
     source_ref: ArtifactSourceRef,
     limits: PackageLimits | None = None,
+    workflow_registry: WorkflowAdapterRegistry | None = None,
 ) -> BuiltArtifactPackage:
     limits = limits or PackageLimits()
     root = Path(artifact_dir).expanduser().resolve()
@@ -374,6 +381,27 @@ def build_artifact_package(
         if workflow is not None
         else None
     )
+    workflow_binding = None
+    workflow_validation_lock = None
+    workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
+    if workflow is not None:
+        try:
+            workflow_binding = (workflow_registry or platform_workflow_adapter_registry()).bind(
+                workflow.compiled
+            )
+        except WorkflowAdapterRegistryError as exc:
+            raise PackageBuildError(f"workflow adapter binding failed: {exc}") from exc
+        workflow_validation_lock = ArtifactContractLock(
+            lock_id=(
+                f"workflow-validation:{workflow.compiled.workflow_type}@"
+                f"{workflow.compiled.definition_version}"
+            ),
+            digest=canonical_payload_digest(workflow.validation_report),
+        )
+        workflow_adapter_locks = tuple(
+            WorkflowAdapterLock.from_mapping(item)
+            for item in workflow_binding["adapters"]
+        )
     materialization_path = (
         f"skills/{artifact_id}" if kind == "skill" else f"scenarios/{artifact_id}"
     )
@@ -391,6 +419,11 @@ def build_artifact_package(
     }
     if workflow_lock is not None:
         package_manifest["workflow_lock"] = workflow_lock.to_dict()
+        package_manifest["workflow_validation_lock"] = workflow_validation_lock.to_dict()
+        package_manifest["workflow_adapter_locks"] = [
+            item.to_dict() for item in workflow_adapter_locks
+        ]
+        package_manifest["workflow_binding_digest"] = workflow_binding["binding_digest"]
     manifest_bytes = canonical_json_bytes(package_manifest)
     manifest_digest = sha256_digest(manifest_bytes)
 
@@ -432,6 +465,13 @@ def build_artifact_package(
             materialization_path=materialization_path,
             schema_locks=schema_locks,
             workflow_lock=workflow_lock,
+            workflow_validation_lock=workflow_validation_lock,
+            workflow_adapter_locks=workflow_adapter_locks,
+            workflow_binding_digest=(
+                str(workflow_binding["binding_digest"])
+                if workflow_binding is not None
+                else None
+            ),
         )
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
@@ -463,7 +503,12 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         "materialization_path",
         "schema_locks",
     }
-    optional_fields = {"workflow_lock"}
+    optional_fields = {
+        "workflow_lock",
+        "workflow_validation_lock",
+        "workflow_adapter_locks",
+        "workflow_binding_digest",
+    }
     unknown = sorted(set(value) - core_fields - attestation_fields - optional_fields)
     if unknown:
         raise PackageVerificationError(
@@ -594,12 +639,33 @@ def _verify_artifact_package(
             raise PackageVerificationError("package manifest source_ref must be an object")
         raw_schema_locks = package_manifest.get("schema_locks") or []
         raw_workflow_lock = package_manifest.get("workflow_lock")
+        raw_workflow_validation_lock = package_manifest.get("workflow_validation_lock")
+        raw_workflow_adapter_locks = package_manifest.get("workflow_adapter_locks") or []
+        raw_workflow_binding_digest = package_manifest.get("workflow_binding_digest")
         if not isinstance(raw_schema_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_schema_locks
         ):
             raise PackageVerificationError("schema_locks must be a list of objects")
         if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
             raise PackageVerificationError("workflow_lock must be an object")
+        binding_fields = {
+            "workflow_validation_lock",
+            "workflow_adapter_locks",
+            "workflow_binding_digest",
+        }
+        present_binding_fields = binding_fields.intersection(package_manifest)
+        if present_binding_fields and present_binding_fields != binding_fields:
+            raise PackageVerificationError(
+                "workflow binding fields must be supplied together"
+            )
+        if raw_workflow_validation_lock is not None and not isinstance(
+            raw_workflow_validation_lock, Mapping
+        ):
+            raise PackageVerificationError("workflow_validation_lock must be an object")
+        if not isinstance(raw_workflow_adapter_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_workflow_adapter_locks
+        ):
+            raise PackageVerificationError("workflow_adapter_locks must be a list of objects")
         manifest_name = _MANIFEST_BY_KIND.get(package_manifest.get("kind"))
         if manifest_name is None:
             raise PackageVerificationError("package kind must be skill or scenario")
@@ -637,6 +703,48 @@ def _verify_artifact_package(
             raise PackageVerificationError(
                 "package workflow_lock does not match packaged workflow definition"
             )
+        expected_workflow_validation_lock = None
+        expected_workflow_binding = None
+        expected_workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
+        if present_binding_fields:
+            if expected_workflow_lock is None:
+                raise PackageVerificationError(
+                    "workflow binding exists without a packaged workflow definition"
+                )
+            expected_workflow_validation_lock = ArtifactContractLock(
+                lock_id=(
+                    f"workflow-validation:{workflow_payload.compiled.workflow_type}@"
+                    f"{workflow_payload.compiled.definition_version}"
+                ),
+                digest=canonical_payload_digest(workflow_payload.validation_report),
+            )
+            try:
+                expected_workflow_binding = platform_workflow_adapter_registry().bind(
+                    workflow_payload.compiled,
+                    expected_locks=raw_workflow_adapter_locks,
+                )
+                expected_workflow_adapter_locks = tuple(
+                    WorkflowAdapterLock.from_mapping(item)
+                    for item in expected_workflow_binding["adapters"]
+                )
+            except (ArtifactReleaseContractError, WorkflowAdapterRegistryError) as exc:
+                raise PackageVerificationError(
+                    f"workflow adapter binding failed: {exc}"
+                ) from exc
+            if raw_workflow_validation_lock != expected_workflow_validation_lock.to_dict():
+                raise PackageVerificationError(
+                    "workflow_validation_lock does not match the validation report"
+                )
+            if raw_workflow_adapter_locks != [
+                item.to_dict() for item in expected_workflow_adapter_locks
+            ]:
+                raise PackageVerificationError(
+                    "workflow_adapter_locks do not match the active registry"
+                )
+            if raw_workflow_binding_digest != expected_workflow_binding["binding_digest"]:
+                raise PackageVerificationError(
+                    "workflow_binding_digest does not match the resolved adapter registry"
+                )
         try:
             ref = ArtifactPackageRef(
                 kind=package_manifest.get("kind"),
@@ -652,6 +760,13 @@ def _verify_artifact_package(
                     ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
                 ),
                 workflow_lock=expected_workflow_lock,
+                workflow_validation_lock=expected_workflow_validation_lock,
+                workflow_adapter_locks=expected_workflow_adapter_locks,
+                workflow_binding_digest=(
+                    str(expected_workflow_binding["binding_digest"])
+                    if expected_workflow_binding is not None
+                    else None
+                ),
             )
         except ArtifactReleaseContractError as exc:
             raise PackageVerificationError(str(exc)) from exc

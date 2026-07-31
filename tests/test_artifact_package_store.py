@@ -123,7 +123,24 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
 
     assert built.ref.workflow_lock is not None
     assert built.ref.workflow_lock.lock_id == "workflow:builder.change@1.0.0"
+    assert built.ref.workflow_validation_lock is not None
+    assert built.ref.workflow_binding_digest is not None
+    assert {item.adapter_id for item in built.ref.workflow_adapter_locks} == {
+        "always",
+        "builder.codex.run",
+        "builder.codex.run.compensate",
+        "builder.prototype.derive",
+        "builder.prototype.derive.compensate",
+        "builder.trial.activate",
+        "builder.publication.publish",
+    }
     assert built.package_manifest["workflow_lock"] == built.ref.workflow_lock.to_dict()
+    assert built.package_manifest["workflow_validation_lock"] == (
+        built.ref.workflow_validation_lock.to_dict()
+    )
+    assert built.package_manifest["workflow_binding_digest"] == (
+        built.ref.workflow_binding_digest
+    )
     assert verified.ref == built.ref
 
     release = ProjectRelease(
@@ -134,6 +151,9 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
     ).seal()
     restored_release = ProjectRelease.from_mapping(release.to_dict())
     assert restored_release.components[0].workflow_lock == built.ref.workflow_lock
+    assert restored_release.components[0].workflow_binding_digest == (
+        built.ref.workflow_binding_digest
+    )
 
     workspace_lock = WorkspaceLock(
         lock_revision=1,
@@ -142,6 +162,9 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
     )
     restored_lock = WorkspaceLock.from_mapping(workspace_lock.to_dict())
     assert restored_lock.components[0].workflow_lock == built.ref.workflow_lock
+    assert restored_lock.components[0].workflow_adapter_locks == (
+        built.ref.workflow_adapter_locks
+    )
 
 
 def test_package_verifier_rejects_bound_workflow_without_exact_lock() -> None:

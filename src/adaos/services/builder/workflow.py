@@ -46,6 +46,7 @@ from adaos.services.conversation_interactions import interaction_from_workflow_d
 from adaos.services.governed_workflow import CompiledWorkflowDefinition
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
+from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
 BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
@@ -114,6 +115,7 @@ def _load_builder_skill_definition(
         raise WorkflowArtifactError("builder_skill must reference workflow.json")
     if artifact.compiled.workflow_type != "builder.change":
         raise WorkflowArtifactError("builder_skill workflow_type must be builder.change")
+    platform_workflow_adapter_registry().bind(artifact.compiled)
     return artifact.compiled
 
 

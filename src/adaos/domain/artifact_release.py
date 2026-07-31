@@ -226,6 +226,77 @@ class ArtifactContractLock:
         return cls(lock_id=value.get("lock_id"), digest=value.get("digest"))
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowAdapterLock:
+    adapter_id: str
+    kind: str
+    contract_digest: str
+    owner_scope: str
+    owner_package: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "adapter_id", _text(self.adapter_id, field="adapter_id"))
+        if self.kind not in {"guard", "activity", "compensation"}:
+            raise ArtifactReleaseContractError("workflow adapter kind is invalid")
+        object.__setattr__(
+            self,
+            "contract_digest",
+            _digest(self.contract_digest, field="workflow_adapter.contract_digest"),
+        )
+        if self.owner_scope not in {"platform", "package", "dependency"}:
+            raise ArtifactReleaseContractError("workflow adapter owner scope is invalid")
+        if self.owner_scope == "platform":
+            if self.owner_package is not None:
+                raise ArtifactReleaseContractError(
+                    "platform workflow adapter must not name an owner package"
+                )
+        else:
+            object.__setattr__(
+                self,
+                "owner_package",
+                _text(self.owner_package, field="workflow_adapter.owner_package"),
+            )
+
+    @property
+    def key(self) -> str:
+        return f"{self.kind}:{self.adapter_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "adapter_id": self.adapter_id,
+            "kind": self.kind,
+            "contract_digest": self.contract_digest,
+            "owner": {"scope": self.owner_scope, "package": self.owner_package},
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "WorkflowAdapterLock":
+        _require_mapping_contract(
+            value,
+            schema=None,
+            allowed={"adapter_id", "kind", "contract_digest", "owner"},
+            required={"adapter_id", "kind", "contract_digest", "owner"},
+            field="WorkflowAdapterLock",
+        )
+        owner = value.get("owner")
+        if not isinstance(owner, Mapping):
+            raise ArtifactReleaseContractError("workflow adapter owner must be an object")
+        _require_mapping_contract(
+            owner,
+            schema=None,
+            allowed={"scope", "package"},
+            required={"scope", "package"},
+            field="WorkflowAdapterLock.owner",
+        )
+        return cls(
+            adapter_id=value.get("adapter_id"),
+            kind=value.get("kind"),
+            contract_digest=value.get("contract_digest"),
+            owner_scope=owner.get("scope"),
+            owner_package=owner.get("package"),
+        )
+
+
 def _unique_locks(
     values: Iterable[ArtifactContractLock],
     *,
@@ -251,6 +322,9 @@ class ArtifactPackageRef:
     materialization_path: str | None = None
     schema_locks: tuple[ArtifactContractLock, ...] = ()
     workflow_lock: ArtifactContractLock | None = None
+    workflow_validation_lock: ArtifactContractLock | None = None
+    workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
+    workflow_binding_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"skill", "scenario"}:
@@ -296,6 +370,41 @@ class ArtifactPackageRef:
                 raise ArtifactReleaseContractError("workflow_lock must be an ArtifactContractLock")
             if not self.workflow_lock.lock_id.startswith("workflow:"):
                 raise ArtifactReleaseContractError("workflow_lock id must start with workflow:")
+        binding_present = (
+            self.workflow_validation_lock is not None
+            or bool(self.workflow_adapter_locks)
+            or self.workflow_binding_digest is not None
+        )
+        if binding_present and self.workflow_lock is None:
+            raise ArtifactReleaseContractError("workflow binding requires workflow_lock")
+        if binding_present and (
+            self.workflow_validation_lock is None or self.workflow_binding_digest is None
+        ):
+            raise ArtifactReleaseContractError(
+                "workflow validation lock and binding digest must be supplied together"
+            )
+        if self.workflow_validation_lock is not None:
+            if not self.workflow_validation_lock.lock_id.startswith("workflow-validation:"):
+                raise ArtifactReleaseContractError(
+                    "workflow_validation_lock id must start with workflow-validation:"
+                )
+            object.__setattr__(
+                self,
+                "workflow_binding_digest",
+                _digest(self.workflow_binding_digest, field="workflow_binding_digest"),
+            )
+        if any(not isinstance(item, WorkflowAdapterLock) for item in self.workflow_adapter_locks):
+            raise ArtifactReleaseContractError(
+                "workflow_adapter_locks must contain WorkflowAdapterLock values"
+            )
+        adapter_keys = [item.key for item in self.workflow_adapter_locks]
+        if len(adapter_keys) != len(set(adapter_keys)):
+            raise ArtifactReleaseContractError("workflow adapter lock identities must be unique")
+        object.__setattr__(
+            self,
+            "workflow_adapter_locks",
+            tuple(sorted(self.workflow_adapter_locks, key=lambda item: item.key)),
+        )
 
     @property
     def key(self) -> str:
@@ -322,6 +431,12 @@ class ArtifactPackageRef:
             )
         if self.workflow_lock is not None:
             payload["workflow_lock"] = self.workflow_lock.to_dict()
+        if self.workflow_validation_lock is not None:
+            payload["workflow_validation_lock"] = self.workflow_validation_lock.to_dict()
+            payload["workflow_adapter_locks"] = [
+                item.to_dict() for item in self.workflow_adapter_locks
+            ]
+            payload["workflow_binding_digest"] = self.workflow_binding_digest
         return payload
 
     @classmethod
@@ -342,6 +457,9 @@ class ArtifactPackageRef:
                 "materialization_path",
                 "schema_locks",
                 "workflow_lock",
+                "workflow_validation_lock",
+                "workflow_adapter_locks",
+                "workflow_binding_digest",
             },
             required={
                 "schema",
@@ -370,12 +488,22 @@ class ArtifactPackageRef:
             )
         raw_schema_locks = value.get("schema_locks") or []
         raw_workflow_lock = value.get("workflow_lock")
+        raw_workflow_validation_lock = value.get("workflow_validation_lock")
+        raw_workflow_adapter_locks = value.get("workflow_adapter_locks") or []
         if not isinstance(raw_schema_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_schema_locks
         ):
             raise ArtifactReleaseContractError("schema_locks must be a list of objects")
         if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
             raise ArtifactReleaseContractError("workflow_lock must be an object")
+        if raw_workflow_validation_lock is not None and not isinstance(
+            raw_workflow_validation_lock, Mapping
+        ):
+            raise ArtifactReleaseContractError("workflow_validation_lock must be an object")
+        if not isinstance(raw_workflow_adapter_locks, list) or any(
+            not isinstance(item, Mapping) for item in raw_workflow_adapter_locks
+        ):
+            raise ArtifactReleaseContractError("workflow_adapter_locks must be a list of objects")
         return cls(
             kind=value.get("kind"),
             artifact_id=value.get("artifact_id"),
@@ -394,6 +522,16 @@ class ArtifactPackageRef:
                 if isinstance(raw_workflow_lock, Mapping)
                 else None
             ),
+            workflow_validation_lock=(
+                ArtifactContractLock.from_mapping(raw_workflow_validation_lock)
+                if isinstance(raw_workflow_validation_lock, Mapping)
+                else None
+            ),
+            workflow_adapter_locks=tuple(
+                WorkflowAdapterLock.from_mapping(item)
+                for item in raw_workflow_adapter_locks
+            ),
+            workflow_binding_digest=value.get("workflow_binding_digest"),
         )
 
 
@@ -1010,6 +1148,7 @@ __all__ = [
     "WORKSPACE_LOCK_SCHEMA",
     "WorkspaceLock",
     "WorkspaceSlot",
+    "WorkflowAdapterLock",
     "canonical_json_bytes",
     "canonical_payload_digest",
     "sha256_digest",

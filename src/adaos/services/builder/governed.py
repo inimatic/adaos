@@ -13,7 +13,9 @@ from adaos.services.governed_workflow import (
     compile_definition,
     new_instance,
     workflow_definition_digest,
+    verified_workflow_principal,
 )
+from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
 BUILDER_CHANGE_WORKFLOW_TYPE = "builder.change"
@@ -30,7 +32,9 @@ def builder_change_definition() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def compiled_builder_change_definition() -> CompiledWorkflowDefinition:
-    return compile_definition(builder_change_definition())
+    compiled = compile_definition(builder_change_definition())
+    platform_workflow_adapter_registry().bind(compiled)
+    return compiled
 
 
 def legacy_state(workflow: Mapping[str, Any]) -> str:
@@ -232,13 +236,18 @@ def admit_legacy_transition(
         "evidence_refs": [str(item) for item in metadata.get("evidence_refs") or [] if str(item).strip()][:100],
         "legacy_action": str(action),
     }
-    decision = WorkflowResolver().apply(
+    principal = verified_workflow_principal(
+        str(actor or "builder"),
+        authenticated=True,
+        issuer="adaos.builder.compatibility",
+    )
+    decision = WorkflowResolver(require_verified_principal=True).apply(
         definition,
         instance,
         command,
         input_value=input_value,
         actor=str(actor or "builder"),
-        roles=("registered",),
+        principal=principal,
         expected_generation=int(instance["generation"]),
         idempotency_key=idempotency_key,
         now=now,
@@ -252,12 +261,17 @@ def workflow_description(
     project_ref: str,
     actor: str = "user:local",
     definition: CompiledWorkflowDefinition | None = None,
-    roles: tuple[str, ...] | list[str] = ("registered",),
+    authenticated: bool = True,
 ) -> dict[str, Any]:
     definition = definition or compiled_builder_change_definition()
-    return WorkflowResolver().describe(
+    principal = verified_workflow_principal(
+        actor,
+        authenticated=authenticated,
+        issuer="adaos.builder.projection",
+    )
+    return WorkflowResolver(require_verified_principal=True).describe(
         definition,
         governed_instance(workflow, project_ref=project_ref, definition=definition),
         actor=actor,
-        roles=roles,
+        principal=principal,
     )

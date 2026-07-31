@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from adaos.services.governed_workflow import (
     workflow_command,
     workflow_contract_snapshot,
     workflow_ref,
+    verified_workflow_principal,
 )
 
 
@@ -176,6 +178,66 @@ def test_transition_roles_are_declared_and_enforced() -> None:
     assert guest["allowed_commands"] == []
     assert guest["blocked_commands"][0]["reason_code"] == "role_not_authorized:registered"
     assert registered["allowed_commands"][0]["command"] == "approve"
+
+
+def test_verified_role_claims_are_derived_and_forged_roles_fail_closed() -> None:
+    definition = _definition()
+    definition["transitions"][0]["authority"]["roles"] = ["registered"]
+    compiled = compile_definition(definition)
+    instance = new_instance(compiled, "change:verified-roles")
+    resolver = WorkflowResolver(require_verified_principal=True)
+
+    forged = resolver.describe(
+        compiled,
+        instance,
+        actor="user:forged",
+        permissions=("builder.change",),
+        roles=("registered",),
+    )
+    assert forged["allowed_commands"] == []
+    assert forged["blocked_commands"][0]["reason_code"] == "unverified_principal"
+
+    guest_principal = verified_workflow_principal(
+        "user:guest",
+        authenticated=False,
+        issuer="test.identity",
+        permissions=("builder.change",),
+    )
+    guest = resolver.describe(
+        compiled,
+        instance,
+        actor="user:guest",
+        principal=guest_principal,
+    )
+    assert guest["allowed_commands"] == []
+    assert guest["blocked_commands"][0]["reason_code"] == "role_not_authorized:registered"
+
+    principal = verified_workflow_principal(
+        "user:registered",
+        authenticated=True,
+        issuer="test.identity",
+        permissions=("builder.change",),
+    )
+    registered = resolver.describe(
+        compiled,
+        instance,
+        actor="user:registered",
+        principal=principal,
+    )
+    assert registered["allowed_commands"][0]["command"] == "approve"
+
+    tampered = replace(principal, roles=("guest", "registered"))
+    rejected = resolver.apply(
+        compiled,
+        instance,
+        "approve",
+        actor="user:registered",
+        principal=tampered,
+        expected_generation=0,
+        idempotency_key="forged:claims",
+    )
+    assert rejected["accepted"] is False
+    assert rejected["reason_code"] == "invalid_principal_claims"
 
 
 def test_instance_is_pinned_to_definition_digest_not_only_version() -> None:
