@@ -68,13 +68,13 @@ The current repository has useful but fragmented foundations:
 | Persistent node data | SQLite stores, conversation ledger, idempotent ingress records | implemented fragments; no shared workflow journal |
 | Human decisions | Pending Actions and several domain-specific confirmations | implemented compatibility path; no canonical interaction registry |
 | Web actions | structured chat actions and page action runtime | partial projection; transport and authorization contracts differ |
-| Telegram actions | callback normalization, canonical keyboard projection, opaque token ingress, and idempotent response persistence | locally validated; live bot delivery/receipt acceptance remains open |
+| Telegram actions | callback normalization, canonical keyboard projection, opaque token ingress, and idempotent response persistence | live read-only Builder turn with five inline actions validated 2026-07-31; mutating callbacks and provider receipts remain open |
 | Capability negotiation | renderer hints and channel-specific limits | no versioned effective profile or auditable presentation plan |
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
-| NATS | Core NATS transport and sidecar routing | at-most-once transport path; not a workflow journal |
+| NATS | Core NATS transport and sidecar routing, bounded reconnect cleanup | at-most-once transport path; target-zone publish is not durable hub acceptance or a workflow journal |
 | Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow lock | validated-local artifact foundation; registry trust, complete adapter binding, and activation admission remain open |
 | External durable engine | none | optional later evaluation, not the objective |
 
@@ -326,7 +326,10 @@ blocked.
   now uses this path for its bounded inspect/intake/Preview controls. Completion
   still requires registered activity adapters and live Web/Telegram acceptance
   for every mutating Builder control; unavailable executors are deliberately
-  not projected.
+  not projected. A live Telegram turn on 2026-07-31 proved webhook ingress,
+  Builder materialization, root relay, and five inline actions for the read-only
+  current-project interaction. This is evidence for the channel adapter, not
+  completion evidence for executor-backed mutating controls.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
@@ -578,7 +581,9 @@ lineage, evidence, and final Publication agree without direct state repair.
   presentations retain the same semantic actions; token and intent responses
   enter `invoke_interaction_response` through one compatibility adapter. The
   deterministic control path is locally covered; repeat it through the live
-  Web client and Telegram bot for each executor-backed mutating class.
+  Web client and Telegram bot for each executor-backed mutating class. The
+  2026-07-31 live read-only control establishes the Telegram baseline; it does
+  not replace the required mutating command/guard matrix.
 - [ ] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
   returns a typed concurrency/policy change, never an unrelated handler rule.
   Generated resolver conformance plus the Builder ingress tests bind displayed
@@ -742,6 +747,16 @@ is warranted.
   policy, quiet periods/preferences, alternate authorized routes, delivery
   receipts, and operator inspection without coupling delivery to business
   completion.
+- [ ] `[must]` `GWR6-16` Establish an end-to-end Telegram ingress acceptance
+  boundary. The public webhook may acknowledge an update only after the target
+  zone has durably accepted it for the addressed hub. A successful core NATS
+  publish is not that receipt because an offline hub-root subscriber loses the
+  event. Persist an idempotent per-hub inbox keyed by Telegram `update_id`,
+  redeliver after reconnect, expose pending/terminal ingress status, and keep
+  root-to-zone retry distinct from zone-to-hub delivery. The 2026-07-31 outage
+  proved both failure classes: root relay timeout now returns retryable `503`,
+  and bounded hub-root cleanup prevents an indefinitely trapped reconnect; the
+  durable zone-to-hub receipt remains open.
 
 ## GWR7. Optional External Durable Adapter
 

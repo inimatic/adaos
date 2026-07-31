@@ -263,6 +263,33 @@ without invoking the skill, LLM, Codex, or workflow command again. Progress is
 sequenced and may be coalesced; `input_required`, cancellation, expiry, and
 undeliverable results remain queryable after restart.
 
+### Telegram ingress acceptance boundary
+
+Telegram's successful webhook response is a delivery acknowledgement and must
+not be emitted merely because an in-memory transport accepted `publish()`.
+Ingress has two independently observable handoffs:
+
+1. the public/root webhook forwards the update to the selected zone and
+   propagates a retryable failure instead of acknowledging it;
+2. the zone durably records it in the addressed hub inbox before asynchronous
+   delivery to the hub-root subscriber.
+
+Both handoffs use Telegram `update_id` as an idempotency identity. Root relay
+failure is retryable and returns a non-2xx response so Telegram can redeliver.
+The target zone then owns redelivery across hub disconnects and reconnects; a
+core NATS publish is only a transport attempt, not an acceptance receipt. A hub
+must be able to query the pending inbox after reconnect, and operators must be
+able to distinguish `root_to_zone_pending`, `zone_accepted`, `hub_delivered`,
+and terminal rejection without inspecting raw logs.
+
+The 2026-07-31 recovery validated retry propagation at the first handoff and
+exposed the missing durability at the second: root-to-zone timeout had been
+acknowledged as success, while a later zone NATS publish was lost during a
+stuck hub-root reconnect. The root relay now fails retryably and partial
+connection cleanup is bounded. Durable zone inbox and hub delivery receipts
+remain required work under `GWR6-16`; until then Telegram ingress is
+operational but not lossless during a target-hub disconnect.
+
 ## Vocabulary
 
 ### Transport
