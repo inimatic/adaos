@@ -123,7 +123,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated compatibility slice: canonical Change/Run projection, shared Prototype/Automation context capsule, risk-aware interaction actions, reversible semantic UI operation, on-demand Process view, chat-first Workbench, neutral Web/Telegram text routing, and one non-Builder request-to-Workspace slice. The canonical shared statechart/resolver and interaction protocol migrations are not yet implemented. | Open: Project aggregate/portfolio, scoped multi-Change focus/conflicts, Run purposes, context-sufficiency gate, capability negotiation, async reply/delivery, data modes, submitted Review lifecycle, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: workflow composition, additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -953,7 +953,9 @@ Commands, projections, and Workbench:
   maintaining Builder-specific token, fallback, or response lifecycles. The
   core adapter now projects a Builder `explain()` result into the shared
   registry and binds compatibility Web actions to exact workflow commands and
-  generations; migrating every Builder-skill caller remains open.
+  generations. The current-project answer now negotiates one bounded action
+  set for Web/Telegram and returns callbacks through one response event;
+  migrating every Builder-skill caller remains open.
 - [ ] `[must]` Return accepted/progress/input-required/terminal
   ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
   terminal result once and retry ReplyRoute DeliveryAttempts independently;
@@ -998,6 +1000,12 @@ Commands, projections, and Workbench:
   delivery receipts. Inline callback rendering, opaque action-token ingress,
   generation checks, and idempotent response persistence are implemented;
   per-attempt outbound delivery receipts remain open.
+- [ ] `[must]` Project a mutating control only when its declared effect/activity
+  executor is registered and ready. The current-project migration exposes only
+  inspect, intake, and Preview commands and withholds unadapted
+  Codex/Trial/Publication transitions; move this rule into the shared resolver
+  as `executor_unavailable`, then add exact executor adapters and negative
+  conformance cases.
 - [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
   for claimed-but-not-dispatched turns. Recovery must issue a new explicit
   operation instead of replaying the original mutation.

@@ -145,6 +145,50 @@ def request(
         expires_at=str(specification.get("expires_at") or expires_at or "").strip() or None,
         metadata={**dict(specification.get("metadata") or {}), **dict(meta or {})},
     )
+    return present(
+        created,
+        conversation_id=conversation_id,
+        owner=owner,
+        webspace_id=webspace_id,
+        channel_id=channel_id,
+        route_id=route_id,
+        thread_id=thread_id,
+        capability_profile=capability_profile,
+        deep_link_base=deep_link_base,
+        actor_id=actor_id,
+        actor_label=actor_label,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+        meta=meta,
+        bus=bus,
+    )
+
+
+def present(
+    interaction: Mapping[str, Any],
+    *,
+    conversation_id: str,
+    owner: str,
+    webspace_id: str | None = None,
+    channel_id: str = "general",
+    route_id: str = "dialog",
+    thread_id: str | None = None,
+    capability_profile: Mapping[str, Any] | None = None,
+    deep_link_base: str | None = None,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    request_id: str | None = None,
+    turn_trace_id: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+    bus: Any | None = None,
+) -> dict[str, Any]:
+    """Negotiate and materialize an already persisted semantic interaction."""
+
+    created = dict(interaction or {})
+    if str(created.get("conversation_id") or "").strip() != str(conversation_id or "").strip():
+        raise ValueError("interaction conversation does not match the requested conversation")
+    if str(created.get("owner") or "").strip() != str(owner or "").strip():
+        raise ValueError("interaction owner does not match the requested owner")
     transport = str(dict(meta or {}).get("io_type") or ("telegram" if route_id == "telegram" else "web")).strip()
     profile = dict(capability_profile) if isinstance(capability_profile, Mapping) else conversation_interactions.standard_capability_profile(
         transport,

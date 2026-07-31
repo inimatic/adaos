@@ -3908,3 +3908,55 @@ async def test_io_out_chat_append_writes_node_scoped_history_without_crashing(mo
 
     assert doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]["text"] == "hello"
     assert float(doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["last_refresh_ts"]) > 0
+
+
+async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(monkeypatch) -> None:
+    bus = LocalEventBus()
+    outputs: list[Event] = []
+    monkeypatch.setenv("HUB_TG_REPLY_VIA_ROOT_HTTP", "1")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn-test")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
+
+    bus.publish(
+        Event(
+            type="io.out.chat.append",
+            source="test",
+            ts=1.0,
+            payload={
+                "id": "interaction-message-1",
+                "from": "hub",
+                "text": "Строитель: выбран проект test05_recipes.",
+                "actions": [
+                    {
+                        "label": "Показать процесс",
+                        "token": "ia:0:builder-process",
+                    }
+                ],
+                "_meta": {
+                    "io_type": "telegram",
+                    "route_id": "telegram",
+                    "bot_id": "main-bot",
+                    "hub_id": "sn-test",
+                    "chat_id": "42",
+                    "reply_to": 55,
+                    "skip_voice_chat": True,
+                },
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"][0]["keyboard"]["inline_keyboard"] == [
+        [{"text": "Показать процесс", "callback_data": "ia:0:builder-process"}]
+    ]

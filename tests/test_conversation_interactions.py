@@ -6,7 +6,7 @@ from adaos.domain import Event
 from adaos.sdk import chat
 from adaos.services import conversation_interactions, conversation_store
 from adaos.services.eventbus import LocalEventBus
-from adaos.services.router.service import _telegram_output_projection
+from adaos.services.router.service import _compact_voice_chat_stream_message, _telegram_output_projection
 
 
 def _choice_interaction(conversation_id: str = "conv.builder") -> dict[str, object]:
@@ -199,6 +199,26 @@ def test_telegram_projection_converts_negotiated_actions_to_inline_keyboard() ->
     assert keyboard[0][0] == {"text": "Prototype first", "callback_data": "ia:0:abc"}
 
 
+def test_web_voice_projection_preserves_interaction_action_token() -> None:
+    compact = _compact_voice_chat_stream_message(
+        {
+            "id": "message.interaction",
+            "from": "hub",
+            "text": "Choose",
+            "actions": [
+                {
+                    "action_id": "inspect",
+                    "label": "Show process",
+                    "command": "builder.process.inspect",
+                    "token": "ia:0:abc",
+                }
+            ],
+        }
+    )
+
+    assert compact["actions"][0]["token"] == "ia:0:abc"
+
+
 def test_response_rejects_payload_reuse_and_stale_action() -> None:
     interaction = conversation_interactions.create_interaction(
         conversation_id="conv.conflict",
@@ -234,6 +254,31 @@ def test_response_rejects_payload_reuse_and_stale_action() -> None:
             expected_generation=0,
             idempotency_key="click:new",
             action_token=second_token,
+        )
+
+
+def test_action_token_rejects_actor_outside_principal_scope() -> None:
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.principal",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec=_choice_interaction()["input_spec"],
+        actions=_choice_interaction()["actions"],
+        interaction_id="interaction.principal",
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("web"),
+    )
+
+    with pytest.raises(
+        conversation_interactions.ConversationInteractionError,
+        match="principal is not authorized",
+    ):
+        conversation_interactions.submit_action_token(
+            presentation["actions"][0]["token"],
+            actor_id="agent:untrusted",
+            idempotency_key="click:wrong-principal",
         )
 
 

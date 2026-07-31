@@ -289,7 +289,7 @@ def _truncate_voice_chat_stream_text(value: Any, *, max_chars: int = VOICE_CHAT_
 
 def _compact_voice_chat_stream_action(action: Mapping[str, Any]) -> dict[str, Any]:
     compact: dict[str, Any] = {}
-    for key in ("id", "label", "title", "icon", "fill", "command"):
+    for key in ("id", "label", "title", "icon", "fill", "command", "token"):
         value = action.get(key)
         if value is not None and value != "":
             compact[key] = value
@@ -4965,65 +4965,15 @@ class RouterService:
                 except Exception:
                     pass
                 return
-            if isinstance(meta, dict) and meta.get("skip_voice_chat") is True:
-                return
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
 
-            # Optional request/response Telegram delivery via Root HTTP (/io/tg/send).
-            #
-            # Disabled by default because `tg.output.*` is already bridged to Root via NATS (see bootstrap),
-            # and enabling both produces duplicate Telegram messages.
             try:
-                if self._tg_reply_via_root_http and str((meta or {}).get("io_type") or "").lower() == "telegram":
-                    chat_id = (meta or {}).get("chat_id")
-                    if isinstance(chat_id, str) and chat_id.strip():
-                        bot_id = (meta or {}).get("bot_id")
-                        if not isinstance(bot_id, str) or not bot_id.strip():
-                            bot_id = "main-bot"
-                        hub_id = (meta or {}).get("hub_id")
-                        if not isinstance(hub_id, str) or not hub_id.strip():
-                            hub_id = get_ctx().config.subnet_id
-                        ctx = get_ctx()
-                        api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
-                        url = f"{api_base.rstrip('/')}/io/tg/send"
-                        body = {"hub_id": hub_id, "bot_id": bot_id, "chat_id": chat_id.strip(), "text": text.strip()}
-                        if (meta or {}).get("reply_to"):
-                            body["reply_to"] = (meta or {}).get("reply_to")
-                        try:
-                            r = await asyncio.to_thread(
-                                requests.post,
-                                url,
-                                json=body,
-                                headers={"Content-Type": "application/json"},
-                                timeout=3.0,
-                            )
-                            if not (200 <= int(r.status_code) < 300):
-                                logging.getLogger("adaos.router").warning(
-                                    "router: telegram send failed (chat reply)",
-                                    extra={
-                                        "hub_id": hub_id,
-                                        "chat_id": chat_id.strip(),
-                                        "status": r.status_code,
-                                        "body": (r.text or "")[:300],
-                                    },
-                                )
-                            else:
-                                logging.getLogger("adaos.router").info(
-                                    "router: telegram sent (chat reply)",
-                                    extra={"hub_id": hub_id, "chat_id": chat_id.strip(), "status": r.status_code},
-                                )
-                        except Exception as pe:
-                            logging.getLogger("adaos.router").warning(
-                                "router: telegram request failed (chat reply)",
-                                extra={"hub_id": hub_id, "chat_id": chat_id.strip(), "error": str(pe)},
-                            )
-                        return
-            except Exception:
-                pass
-
-            try:
+                # All dialog replies use the canonical tg.output transport.  The
+                # former Root HTTP shortcut discarded interaction actions and
+                # returned before local materialization, so a turn could be
+                # reported as successful without a Telegram-visible result.
                 projection = _telegram_output_projection(payload, meta)
                 if projection is not None:
                     subject, out_payload = projection
@@ -5040,6 +4990,9 @@ class RouterService:
                     "router: telegram dialog projection failed",
                     exc_info=True,
                 )
+
+            if isinstance(meta, dict) and meta.get("skip_voice_chat") is True:
+                return
 
             msg = {
                 "id": str(payload.get("id") or _make_id("m")),
@@ -5999,14 +5952,20 @@ class RouterService:
                 ),
             }
             if materialized_payload is not None:
-                trace_status = "materialized"
+                external_transport = str(action_meta.get("io_type") or "").strip().lower()
+                trace_status = "delivery_pending" if external_transport == "telegram" else "materialized"
                 trace_renderer = {
-                    "receiver": "voice_chat.messages",
+                    "receiver": "telegram.transport" if external_transport == "telegram" else "voice_chat.messages",
                     "projection": "skill_emitted_message" if result_message else "response_envelope",
                     "message_id": materialized_payload.get("id"),
                 }
-                trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
-                trace_policy["materialization_status"] = "materialized"
+                if external_transport == "telegram":
+                    trace_summary = f"{skill}.{tool} returned ok; Telegram delivery was projected and awaits transport acknowledgement"
+                    trace_policy["materialization_status"] = "local_materialized"
+                    trace_policy["delivery_status"] = "pending_acknowledgement"
+                else:
+                    trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
+                    trace_policy["materialization_status"] = "materialized"
             elif result_message and suppress_visible_result_message:
                 trace_renderer = {
                     "receiver": "skill_runtime",

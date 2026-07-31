@@ -3348,6 +3348,52 @@ def test_process_events_command_responds_pending_action_directly(monkeypatch) ->
     assert responses[-1]["data"] == {"response": {"response_action_id": "refuse"}, "terminal": True}
 
 
+def test_process_events_command_submits_conversation_interaction_token(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    published: list[tuple[str, dict[str, object] | None]] = []
+    calls: list[dict[str, object]] = []
+
+    from adaos.services import conversation_interactions
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_make_publish_bus",
+        lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))),
+    )
+
+    def _submit_action_token(token, **kwargs):
+        calls.append({"token": token, **kwargs})
+        return {"interaction": {"interaction_id": "interaction.web"}, "response": {"status": "answered"}, "duplicate": False}
+
+    monkeypatch.setattr(conversation_interactions, "submit_action_token", _submit_action_token)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="conversation.interaction.respond.request",
+            cmd_id="cmd-interaction-1",
+            payload={
+                "webspace_id": "dev1-dev",
+                "action_token": "ia:0:abc",
+                "idempotency_key": "web:m1:ia:0:abc",
+                "source_message_id": "m1",
+                "_meta": {"route_id": "voice_chat"},
+            },
+            device_id="dev-1",
+            webspace_id="dev1-dev",
+            send_response=_send_response,
+        )
+    )
+
+    assert calls[0]["token"] == "ia:0:abc"
+    assert calls[0]["idempotency_key"] == "web:m1:ia:0:abc"
+    assert calls[0]["metadata"]["webspace_id"] == "dev1-dev"
+    assert published[0][0] == "conversation.interaction.responded"
+    assert responses[-1]["ok"] is True
+
+
 def test_process_events_command_requires_scenario_id_for_set_home(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []

@@ -1624,10 +1624,20 @@ class BuilderWorkflowService:
         conversation_id: str,
         principal_id: str,
         command_context_id: str,
+        prompt: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Project the same canonical commands into the shared interaction protocol."""
 
         projection = self.describe(object_type, object_id)
+        frame = self.interaction_frame(object_type, object_id)
+        action_labels = {
+            str(item.get("workflow_command") or ""): str(item.get("label") or "")
+            for item in frame.get("actions") or []
+            if isinstance(item, Mapping)
+            and str(item.get("workflow_command") or "").strip()
+            and str(item.get("label") or "").strip()
+        }
         interaction = interaction_from_workflow_description(
             _mapping(projection.get("workflow_description")),
             conversation_id=conversation_id,
@@ -1645,14 +1655,15 @@ class BuilderWorkflowService:
                 "kind": "view",
                 "id": command_context_id,
             },
-            prompt=self.interaction_frame(object_type, object_id)["message"],
+            prompt=prompt or frame["message"],
+            action_labels=action_labels,
+            metadata={
+                "domain": "builder",
+                "project_ref": f"{projection['object_type']}:{projection['object_id']}",
+                "process_generation": _mapping(projection.get("process")).get("generation"),
+                **copy.deepcopy(dict(metadata or {})),
+            },
         )
-        interaction["metadata"] = {
-            **_mapping(interaction.get("metadata")),
-            "domain": "builder",
-            "project_ref": f"{projection['object_type']}:{projection['object_id']}",
-            "process_generation": _mapping(projection.get("process")).get("generation"),
-        }
         return interaction
 
     def invoke_interaction_response(

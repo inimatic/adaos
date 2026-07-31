@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from adaos.domain import Event
 from adaos.sdk import chat
-from adaos.services import conversation_response, conversation_store
+from adaos.services import conversation_interactions, conversation_response, conversation_store
 from adaos.services.eventbus import LocalEventBus
 
 
@@ -149,6 +149,42 @@ def test_tool_result_receipt_only_message_is_not_materialized() -> None:
     assert seen == []
     conversation_store.ensure_schema()
     assert conversation_store.list_projection("conv.receipt.only")["messages"] == []
+
+
+def test_present_negotiates_an_existing_interaction_without_creating_a_duplicate() -> None:
+    bus = LocalEventBus()
+    seen: list[Event] = []
+    bus.subscribe("io.out.chat.append", lambda event: seen.append(event))
+    interaction = conversation_interactions.create_interaction(
+        interaction_id="interaction.sdk.present",
+        conversation_id="conversation.sdk.present",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec={"kind": "choice", "required_fields": [], "choices": [{"value": "inspect", "label": "Inspect"}], "sensitive": False},
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "command": "builder.process.inspect",
+                "value": "inspect",
+                "risk": "read",
+                "confirmation_required": False,
+            }
+        ],
+    )
+
+    result = chat.present(
+        interaction,
+        conversation_id="conversation.sdk.present",
+        owner="skill:test",
+        webspace_id="desktop",
+        channel_id="builder",
+        bus=bus,
+    )
+
+    assert result["presentation"]["mode"] == "buttons"
+    assert seen[0].payload["actions"][0]["token"].startswith("ia:0:")
+    assert conversation_store.get_interaction("interaction.sdk.present")["status"] == "awaiting_input"
 
 
 def test_response_planner_infers_structured_targets() -> None:

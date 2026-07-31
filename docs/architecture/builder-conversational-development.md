@@ -659,6 +659,14 @@ Workspace activation, Publication, and destructive operations require the rich
 review path. Web and Telegram therefore consume one decision contract instead
 of maintaining separate button allowlists.
 
+Risk admission does not by itself make a control executable. A mutating
+command is projected only when its declared effect/activity has a registered
+adapter that can durably start or queue the exact Codex, Trial, Workspace, or
+Publication operation and report its outcome. If that adapter is unavailable,
+the shared explanation returns `executor_unavailable`; no channel may expose a
+button that only advances Builder state. During migration, withholding such a
+control is the required fail-closed behavior.
+
 ## Execution, Evidence, And Provenance
 
 The orchestration brain and execution hands are separate:

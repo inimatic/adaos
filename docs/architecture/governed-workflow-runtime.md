@@ -355,6 +355,15 @@ commands. An affordance is a presentation of one available command as a Web
 button, Telegram option, chat suggestion, CLI command, or rich view. It never
 defines legality independently.
 
+Availability includes execution readiness. A command that names an external
+activity is not presentable merely because its state edge is legal: the
+runtime must have a registered invocation adapter capable of atomically
+recording or enqueuing that activity with the declared idempotency, recovery,
+and reply contracts. If the adapter is absent or unhealthy, `explain()`
+returns a typed `executor_unavailable` blocker. A channel must withhold the
+control and show that blocker; it must never advance only the state-machine
+record and pretend that Codex, Trial, Publication, or another effect ran.
+
 ## Definition, Instance, and Projection Flow
 
 ```text
@@ -797,7 +806,9 @@ channel projection, but they do not become a second transition definition.
 
 Runtime validation repeats target-, permission-, generation-, and
 evidence-dependent checks. Static validation never substitutes for commit-time
-policy.
+policy. Executor readiness and the exact activity adapter are checked again at
+admission. This makes “shown and accepted” mean “the declared effect can be
+started or durably queued,” not only “the destination state exists.”
 
 ## Definition Completeness And Complexity Control
 

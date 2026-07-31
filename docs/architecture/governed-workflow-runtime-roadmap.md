@@ -68,7 +68,7 @@ The current repository has useful but fragmented foundations:
 | Persistent node data | SQLite stores, conversation ledger, idempotent ingress records | implemented fragments; no shared workflow journal |
 | Human decisions | Pending Actions and several domain-specific confirmations | implemented compatibility path; no canonical interaction registry |
 | Web actions | structured chat actions and page action runtime | partial projection; transport and authorization contracts differ |
-| Telegram actions | callback normalization and backend keyboard support | partial plumbing; canonical outbound/inbound bridge incomplete |
+| Telegram actions | callback normalization, canonical keyboard projection, opaque token ingress, and idempotent response persistence | locally validated; live bot delivery/receipt acceptance remains open |
 | Capability negotiation | renderer hints and channel-specific limits | no versioned effective profile or auditable presentation plan |
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
@@ -247,11 +247,15 @@ blocked.
   blockers, available commands, and exact `proto:`/`active:`/`public:` choices
   from the pinned Builder Change snapshot. View selection remains a separate
   non-business generation.
-- [x] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
+- [ ] `[must]` `GWR2-07` Adapt Web chat, Telegram controls, and text fallback to
   the same semantic interaction and canonical invocation ingress.
   Web actions, Telegram inline callbacks, and numbered text now originate from
   one InteractionPresentation; callbacks enter the shared response service
-  without NLU or direct Builder invocation.
+  without NLU or direct Builder invocation. Builder's current-project answer
+  now uses this path for its bounded inspect/intake/Preview controls. Completion
+  still requires registered activity adapters and live Web/Telegram acceptance
+  for every mutating Builder control; unavailable executors are deliberately
+  not projected.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
@@ -292,6 +296,12 @@ blocked.
   whose capability limits cannot represent the requested interaction. The
   local suite covers native buttons, numbered fallback, action limits,
   sensitive rejection, and profile-version renegotiation.
+- [ ] `[must]` `GWR2-18` Bind every presentable mutating command to a registered
+  effect/activity executor and expose `executor_unavailable` from the same
+  explanation resolver when it cannot be started or durably queued. The first
+  Builder chat migration fails closed by filtering unadapted Codex, Trial, and
+  Publication controls; replace that bounded migration filter with the shared
+  executor-readiness guard before claiming full affordance equivalence.
 
 ## GWR3. NLU Mediation and Informal Responses
 
@@ -467,14 +477,19 @@ lineage, evidence, and final Publication agree without direct state repair.
   Automation -> verification -> Trial -> Publication through the canonical
   resolver. `test_builder_governed_e2e.py` takes a fresh empty scenario through
   all dependent gates and ends in the canonical `published` state.
-- [x] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
+- [ ] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
   and SDK commands invoke identical command identities and guards. All three
   presentations retain the same semantic actions; token and intent responses
-  enter `invoke_interaction_response` through one compatibility adapter.
-- [x] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
+  enter `invoke_interaction_response` through one compatibility adapter. The
+  deterministic control path is locally covered; repeat it through the live
+  Web client and Telegram bot for each executor-backed mutating class.
+- [ ] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
   returns a typed concurrency/policy change, never an unrelated handler rule.
   Generated resolver conformance plus the Builder ingress tests bind displayed
-  `workflow_command` and generation back to the canonical resolver.
+  `workflow_command` and generation back to the canonical resolver. The live
+  defect showed that transition admission alone is insufficient when an
+  external activity executor is absent; GWR2-18 and negative executor tests
+  must close that gap.
 - [x] `[must]` `GWR5-04` Prove blocked commands expose the same reason code and
   semantically equivalent explanation across channels. Capability negotiation
   consumes one semantic Interaction and preserves resolver explanation facts;

@@ -20,6 +20,48 @@ def get_interaction_frame(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().interaction_frame(object_type, object_id))
 
 
+def create_conversation_interaction(
+    object_type: str,
+    object_id: str,
+    *,
+    conversation_id: str,
+    principal_id: str,
+    command_context_id: str,
+    prompt: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().conversation_interaction(
+            object_type,
+            object_id,
+            conversation_id=conversation_id,
+            principal_id=principal_id,
+            command_context_id=command_context_id,
+            prompt=prompt,
+            metadata=metadata,
+        )
+    )
+
+
+def invoke_interaction_response(
+    object_type: str,
+    object_id: str,
+    response: Mapping[str, Any],
+    *,
+    actor: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().invoke_interaction_response(
+            object_type,
+            object_id,
+            response,
+            actor=actor,
+            metadata=metadata,
+        )
+    )
+
+
 def transition(
     object_type: str,
     object_id: str,
@@ -91,8 +133,10 @@ def update_interaction_context(
 
 __all__ = [
     "build_context_packet",
+    "create_conversation_interaction",
     "get_interaction_frame",
     "get_state",
+    "invoke_interaction_response",
     "transition",
     "update_interaction_context",
 ]

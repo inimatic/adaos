@@ -301,6 +301,8 @@ def interaction_from_workflow_description(
     command_context_ref: Mapping[str, Any] | None = None,
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    action_labels: Mapping[str, str] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     snapshot = copy.deepcopy(dict(description or {}))
@@ -314,6 +316,7 @@ def interaction_from_workflow_description(
     optional: list[str] = []
     fallbacks: list[str] = []
     actions: list[dict[str, Any]] = []
+    labels = {str(key): str(value) for key, value in dict(action_labels or {}).items() if str(value).strip()}
     for command in commands:
         capabilities = dict(command.get("capability_requirements") or {})
         for capability in capabilities.get("required") or []:
@@ -330,7 +333,10 @@ def interaction_from_workflow_description(
         actions.append(
             {
                 "action_id": str(command["transition_id"]),
-                "label": str(command.get("explanation") or command["command"]),
+                "label": labels.get(
+                    str(command["command"]),
+                    str(command.get("explanation") or command["command"]),
+                ),
                 "command": str(command["command"]),
                 "value": str(command["command"]),
                 "risk": str(risk.get("class") or "read"),
@@ -373,6 +379,7 @@ def interaction_from_workflow_description(
             "workflow_type": snapshot.get("workflow_type"),
             "definition_version": snapshot.get("definition_version"),
             "state": snapshot.get("state"),
+            **copy.deepcopy(dict(metadata or {})),
         },
         now=now,
     )
@@ -521,6 +528,15 @@ def _validate_response_values(
     return True, [], None
 
 
+def _principal_in_scope(actor_id: str, principal_scope: Sequence[str]) -> bool:
+    actor = str(actor_id or "").strip()
+    scopes = {str(item or "").strip() for item in principal_scope if str(item or "").strip()}
+    if not actor or not scopes:
+        return False
+    namespace = actor.split(":", 1)[0]
+    return "*" in scopes or actor in scopes or namespace in scopes
+
+
 def submit_response(
     interaction_id: str,
     *,
@@ -608,6 +624,8 @@ def submit_response(
         action = next((item for item in semantic["actions"] if item["action_id"] == action_id), None)
         if action is None:
             raise ConversationInteractionError("invalid interaction action token")
+        if not _principal_in_scope(actor_id, action.get("principal_scope") or []):
+            raise ConversationInteractionError("interaction action principal is not authorized")
         resolved_action = dict(action)
         response_values.update(
             {
@@ -633,6 +651,8 @@ def submit_response(
         )
         if action is None:
             raise ConversationInteractionError("intent proposal action is no longer allowed")
+        if not _principal_in_scope(actor_id, action.get("principal_scope") or []):
+            raise ConversationInteractionError("interaction action principal is not authorized")
         resolved_action = dict(action)
         response_values.update(
             {

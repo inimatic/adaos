@@ -8951,6 +8951,36 @@ async def process_events_command(
             await _ack(False, error=f"{type(exc).__name__}: {exc}")
         return None
 
+    if kind == "conversation.interaction.respond.request":
+        event_payload = dict(payload or {})
+        meta = event_payload.pop("_meta", None)
+        meta = dict(meta) if isinstance(meta, Mapping) else {}
+        action_token = str(event_payload.get("action_token") or "").strip()
+        idempotency_key = str(event_payload.get("idempotency_key") or "").strip()
+        if not idempotency_key and action_token:
+            idempotency_key = f"web:{str(event_payload.get('source_message_id') or 'message')}:{action_token}"
+        try:
+            from adaos.services import conversation_interactions
+
+            result = conversation_interactions.submit_action_token(
+                action_token,
+                actor_id=str(meta.get("user_id") or "user:local").strip() or "user:local",
+                idempotency_key=idempotency_key,
+                metadata={
+                    **meta,
+                    "io_type": "web",
+                    "webspace_id": str(
+                        event_payload.get("webspace_id") or meta.get("webspace_id") or ""
+                    ).strip(),
+                },
+            )
+            _publish_bus("conversation.interaction.responded", result)
+            await _ack(data=result)
+        except Exception as exc:
+            _log.warning("conversation interaction response command failed", exc_info=True)
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
     if kind == "pending_actions.expire.request":
         event_payload = dict(payload or {})
         event_payload.pop("_meta", None)
