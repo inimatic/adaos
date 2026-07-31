@@ -11,6 +11,7 @@ from adaos.services.skill.validation import SkillValidationService
 from adaos.services.agent_context import get_ctx
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
+    WorkflowArtifactLimits,
     canonical_workflow_digest,
     load_manifest_bound_workflow,
 )
@@ -69,6 +70,37 @@ def test_missing_and_duplicate_key_workflows_are_rejected(tmp_path: Path) -> Non
     )
     with pytest.raises(WorkflowArtifactError, match="duplicate key"):
         load_manifest_bound_workflow(tmp_path, manifest_name="skill.yaml")
+
+
+def test_multiple_json_values_and_unsupported_schema_are_rejected(tmp_path: Path) -> None:
+    _write_manifest(tmp_path, "skill.yaml", bound=True)
+    (tmp_path / "workflow.json").write_text("{}\n{}", encoding="utf-8")
+    with pytest.raises(WorkflowArtifactError, match="invalid workflow.json"):
+        load_manifest_bound_workflow(tmp_path, manifest_name="skill.yaml")
+
+    definition = builder_change_definition()
+    definition["schema"] = "adaos.workflow.definition.v999"
+    (tmp_path / "workflow.json").write_text(json.dumps(definition), encoding="utf-8")
+    with pytest.raises(WorkflowArtifactError, match="validation failed"):
+        load_manifest_bound_workflow(tmp_path, manifest_name="skill.yaml")
+
+
+def test_workflow_resource_limits_fail_before_compilation(tmp_path: Path) -> None:
+    _write_manifest(tmp_path, "skill.yaml", bound=True)
+    _write_definition(tmp_path)
+
+    with pytest.raises(WorkflowArtifactError, match="exceeds 128 bytes"):
+        load_manifest_bound_workflow(
+            tmp_path,
+            manifest_name="skill.yaml",
+            limits=WorkflowArtifactLimits(max_bytes=128),
+        )
+    with pytest.raises(WorkflowArtifactError, match="transitions exceeds limit 1"):
+        load_manifest_bound_workflow(
+            tmp_path,
+            manifest_name="skill.yaml",
+            limits=WorkflowArtifactLimits(max_transitions=1),
+        )
 
 
 def test_skill_validator_rejects_invalid_bound_workflow(tmp_path: Path) -> None:

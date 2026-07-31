@@ -258,6 +258,13 @@ its UI and view projections and must not carry a duplicate Change workflow.
 activated, and rolled back as one immutable package; Builder instances pin the
 exact definition, package, and resolved adapter-binding digests.
 
+As of the first local cutover, DEV `builder_skill@0.3.28` is the transition
+catalogue authority and instances pin definition version plus semantic digest.
+The skill push produced an immutable PackageRef with the same workflow lock.
+Workspace activation and per-instance package/adapter-binding pins remain the
+next admission step; the preceding paragraph is the complete target contract,
+not a claim that this later step is already closed.
+
 ```text
 intake -> clarification_required <-> ready
 ready -> prototype_editing -> prototype_review -> automation_ready

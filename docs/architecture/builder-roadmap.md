@@ -1503,8 +1503,12 @@ observed projection matches the latest desired generation.
   but not structural regrouping.
 - [ ] `[deferred]` Promote project-local issue items into a federated multi-user
   Issue/extraction and proposal-exchange model.
-- [ ] `[must]` Persist the authoritative Builder transition record in the skill
-  and make transition submission idempotent by generation id.
+- [x] `[must]` Persist the authoritative Builder transition record in the skill
+  and make transition submission idempotent by generation id. DEV
+  `builder_skill@0.3.28` now owns the strict manifest-bound `workflow.json`;
+  Builder loads it through the shared compiler/cache, pins instances by
+  definition version and digest, and the existing generation plus payload-bound
+  idempotency key admits each transition once.
 - [ ] `[must]` Materialize only the latest desired generation and mark older
   queued/running generations `superseded`.
 - [ ] `[must]` Stream transition and observed-projection changes to the

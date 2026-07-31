@@ -554,6 +554,16 @@ alias, duplicate-key, and implicit-type ambiguity from the LLM authoring and
 admission boundary. Legacy inline `scenario.yaml.workflow` remains a bounded
 translation input during migration, never an activated second authority.
 
+The first implemented slice uses
+`workflow_artifacts.load_manifest_bound_workflow` as the shared skill/scenario
+admission path. It enforces the exact filename, strict UTF-8 JSON with
+duplicate-key rejection, bounded bytes/depth/state/command/transition counts,
+complete ABI compilation, and a canonical semantic digest. `builder_skill` is
+the first owner: its DEV `workflow.json` is loaded and compiled by
+`BuilderWorkflowService`; the in-core JSON resource exists only as an
+isolated-test/rollback compatibility source when no DEV Builder skill is
+present. There is no remaining Python transition-table constructor.
+
 ### One Graph, Role-Dependent Access
 
 Role differences do not create alternative workflow definitions. The resolver
@@ -636,8 +646,8 @@ source component
   -> one runtime generation
 ```
 
-The package file inventory records the raw `workflow.json` hash. The package
-manifest additionally carries one `workflow_lock` containing:
+The package file inventory records the raw `workflow.json` hash. The target
+package manifest additionally carries one enriched `workflow_lock` containing:
 
 - `path: workflow.json`, workflow schema, type, and definition version;
 - the canonical semantic `definition_digest`;
@@ -665,6 +675,16 @@ Illustrative package-manifest projection:
 }
 ```
 
+The locally validated first package slice serializes the same identity as an
+`ArtifactContractLock`: `lock_id` is
+`workflow:<workflow_type>@<definition_version>` and `digest` is the canonical
+definition digest. Package verification derives that lock again from the
+packaged manifest and `workflow.json`; ProjectRelease and WorkspaceLock retain
+it inside the immutable component PackageRef. Validation-report digests,
+registered-adapter contract locks, and the aggregate
+`workflow_binding_digest` remain the next admission slice and are not implied
+by this compact v1 projection.
+
 The package digest already covers the manifest, executable code, schemas, and
 every file, so changing either code or `workflow.json` creates a different
 package. The component version must be advanced for either change; a workflow
@@ -691,7 +711,7 @@ generation, not an individual workflow file.
 `adaos.workflow.instance.v1` contains:
 
 - stable instance id and domain aggregate reference;
-- workflow type and exact definition version;
+- workflow type, exact definition version, and canonical definition digest;
 - persistence/execution adapter reference when one is used;
 - current state snapshot and monotonic generation;
 - authority and tenancy scope;

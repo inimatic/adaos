@@ -75,7 +75,7 @@ The current repository has useful but fragmented foundations:
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing | at-most-once transport path; not a workflow journal |
-| Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, definition review, migration/composition fixtures | validated-local semantic foundation; file authoring, registry trust, package binding, and activation admission remain open |
+| Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow lock | validated-local artifact foundation; registry trust, complete adapter binding, and activation admission remain open |
 | External durable engine | none | optional later evaluation, not the objective |
 
 ## Milestone Sequence
@@ -86,7 +86,7 @@ The current repository has useful but fragmented foundations:
 | GWR1 | A canonical metamodel, definition compiler, pure resolver, and admitted `workflow.json` artifact contract exist | `validated-local` semantic core; data authoring/package admission open | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` with Python-built compatibility definition | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local`; DEV `builder_skill/workflow.json` is authority and the Python transition constructor is retired | next |
 | GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local` | next |
 | GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
@@ -215,7 +215,7 @@ and release-lock admission.
   composition ABI enforces unique child/correlation identities and narrower
   delegated permissions; the pure join resolver cannot promote an incomplete
   required-child set.
-- [ ] `[must]` `GWR1-18` Freeze the single-definition component contract:
+- [x] `[must]` `GWR1-18` Freeze the single-definition component contract:
   optional `workflow.manifest: workflow.json` in `skill.yaml` and
   `scenario.yaml`, strict UTF-8 JSON, exactly one
   `adaos.workflow.definition.v1` object, no arbitrary path, inline governed
@@ -228,7 +228,7 @@ and release-lock admission.
   activities, compensation, policy, evidence, and projections. Preserve v1
   only for compatible tightening; publish a new schema id for incompatible
   changes.
-- [ ] `[must]` `GWR1-20` Add the bounded JSON loader, duplicate-key rejection,
+- [x] `[must]` `GWR1-20` Add the bounded JSON loader, duplicate-key rejection,
   size/depth/state/transition limits, canonical serialization, and semantic
   definition digest. Raw formatting and object-key order cannot change the
   semantic digest; semantic array order and transition priority remain
@@ -270,6 +270,19 @@ and release-lock admission.
   adapter catalogue, role/policy ceilings, domain invariants, examples, and
   current definition digest; persist model/context provenance and a bounded
   diagnostic repair history without treating model output as admission.
+
+Checked local evidence for the completed authoring slice:
+`tests/test_workflow_artifacts.py`, `tests/test_manifest_abi.py`,
+`tests/test_governed_workflow.py`, `tests/test_artifact_package_store.py`, and
+`tests/test_builder_governed_workflow.py`. The loader rejects missing,
+unreferenced, wrongly named, duplicate-key, multi-value, unsupported-schema,
+and over-limit inputs. Package verification recomputes the canonical
+definition digest, while ProjectRelease and WorkspaceLock preserve the exact
+component `workflow_lock`. `GWR1-23`, `GWR1-25`, and `GWR1-26` stay open:
+local `guest`/`registered` resolver enforcement and definition-digest instance
+pinning are implemented, but verified identity claims, adapter-contract /
+`workflow_binding_digest` resolution, candidate-generation migration, and
+atomic runtime activation are not yet complete.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
@@ -517,7 +530,7 @@ tests cover all legal and representative illegal paths.
   recent Run. The summary reports portfolio counts, active/unknown mutations,
   conflict/stale sets, scoped focus, and Project commands without a synthetic
   project lifecycle stage.
-- [ ] `[must]` `GWR4-20` Move the canonical Builder Change definition from
+- [x] `[must]` `GWR4-20` Move the canonical Builder Change definition from
   Python construction in `builder.governed` into the owning `builder_skill`
   package's strict `workflow.json`, referenced from `skill.yaml`. Keep Python
   as the generic loader/compiler/cache plus registered guard/effect/activity
@@ -641,7 +654,7 @@ lineage, evidence, and final Publication agree without direct state repair.
   success without partial promotion. The reference composition proof requires
   both scenario and skill child results, aggregates successful evidence, and
   reports one-child failure as non-promotable `partial_failed`.
-- [ ] `[must]` `GWR5-24` Prove manifest/file cardinality and strict JSON
+- [x] `[must]` `GWR5-24` Prove manifest/file cardinality and strict JSON
   admission: missing referenced file, unreferenced workflow, wrong filename,
   duplicate keys, unsupported schema, multiple definitions, or exceeded limits
   fail before package visibility.

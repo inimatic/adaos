@@ -304,6 +304,14 @@ symlink, size, and corruption tests.
   adapter-contract digests. Prove that code or workflow changes produce a new
   immutable package and cannot be published separately.
 
+`AP1-14` remains open as a complete gate, but its first local slice is now
+implemented: a declared `workflow.json` is strictly loaded, included in the
+package file inventory, and represented by a recomputed canonical
+`workflow:<type>@<version>` lock carried through PackageRef, ProjectRelease,
+and WorkspaceLock. The remaining closure conditions are validation-report and
+registered-adapter contract digests plus proof that those resolved bindings
+cannot be mixed during activation.
+
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
 `AP1-04` and `AP1-05` were reclosed after local and backend regressions covered
