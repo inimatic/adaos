@@ -115,6 +115,13 @@ def _actor_matches(allowed: tuple[str, ...], actor: str) -> bool:
     return kind in allowed or f"{kind}:*" in allowed
 
 
+def workflow_definition_digest(
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+) -> str:
+    source = definition.source if isinstance(definition, CompiledWorkflowDefinition) else definition
+    return _digest(dict(source))
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledTransition:
     transition_id: str
@@ -260,6 +267,7 @@ def new_instance(
         "instance_id": token,
         "workflow_type": compiled.workflow_type,
         "definition_version": compiled.definition_version,
+        "definition_digest": workflow_definition_digest(compiled),
         "state": compiled.initial_state,
         "generation": 0,
         "context": copy.deepcopy(dict(context or {})),
@@ -389,6 +397,9 @@ class WorkflowResolver:
             raise WorkflowResolutionError("workflow instance type does not match the definition")
         if instance["definition_version"] != compiled.definition_version:
             raise WorkflowResolutionError("workflow instance definition version is not pinned to this definition")
+        bound_digest = str(instance.get("definition_digest") or "").strip()
+        if bound_digest and bound_digest != workflow_definition_digest(compiled):
+            raise WorkflowResolutionError("workflow instance definition digest does not match the definition")
         if instance["state"] not in compiled.states:
             raise WorkflowResolutionError("workflow instance state is not declared by the definition")
         return instance
@@ -418,10 +429,14 @@ class WorkflowResolver:
         *,
         actor: str,
         permissions: tuple[str, ...],
+        roles: tuple[str, ...],
     ) -> tuple[bool, str | None]:
         authority = transition.descriptor["authority"]
         if not _actor_matches(tuple(authority["actors"]), actor):
             return False, "actor_not_authorized"
+        admitted_roles = tuple(str(item) for item in authority.get("roles") or ())
+        if admitted_roles and not set(admitted_roles).intersection(roles):
+            return False, f"role_not_authorized:{admitted_roles[0]}"
         missing = sorted(set(authority["permissions"]) - set(permissions))
         if missing:
             return False, f"missing_permission:{missing[0]}"
@@ -434,6 +449,7 @@ class WorkflowResolver:
         *,
         actor: str,
         permissions: tuple[str, ...] | list[str] = (),
+        roles: tuple[str, ...] | list[str] = (),
         context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         compiled = self._compiled(definition)
@@ -448,6 +464,7 @@ class WorkflowResolver:
                 transition,
                 actor=actor,
                 permissions=tuple(permissions),
+                roles=tuple(roles),
             )
             if accepted:
                 accepted, reason = self._guard_result(transition, current, {}, runtime_context)
@@ -482,6 +499,7 @@ class WorkflowResolver:
             "schema": "adaos.workflow.description.v1",
             "workflow_type": compiled.workflow_type,
             "definition_version": compiled.definition_version,
+            "definition_digest": workflow_definition_digest(compiled),
             "instance_id": current["instance_id"],
             "state": current["state"],
             "generation": current["generation"],
@@ -511,6 +529,7 @@ class WorkflowResolver:
         input_value: Mapping[str, Any] | None = None,
         actor: str,
         permissions: tuple[str, ...] | list[str] = (),
+        roles: tuple[str, ...] | list[str] = (),
         expected_generation: int | None = None,
         idempotency_key: str | None = None,
         context: Mapping[str, Any] | None = None,
@@ -573,6 +592,7 @@ class WorkflowResolver:
             transition,
             actor=actor,
             permissions=tuple(permissions),
+            roles=tuple(roles),
         )
         if not accepted:
             return self._rejection(current, command_token, reason or "not_authorized", timestamp)
@@ -701,6 +721,7 @@ def apply_workflow_command(
     *,
     resolver: WorkflowResolver | None = None,
     permissions: tuple[str, ...] | list[str] = (),
+    roles: tuple[str, ...] | list[str] = (),
     context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = validate_workflow_record(WORKFLOW_COMMAND_SCHEMA, command)
@@ -719,6 +740,7 @@ def apply_workflow_command(
         input_value=dict(record["input"]),
         actor=str(record["actor_ref"]["id"]),
         permissions=permissions,
+        roles=roles,
         expected_generation=int(record["expected_generation"]),
         idempotency_key=str(record["idempotency_key"]),
         context=context,
@@ -734,6 +756,7 @@ def migrate_workflow_instance(
     *,
     actor: str,
     permissions: tuple[str, ...] | list[str] = (),
+    roles: tuple[str, ...] | list[str] = (),
     expected_generation: int,
     idempotency_key: str,
     now: str | None = None,
@@ -780,9 +803,13 @@ def migrate_workflow_instance(
     missing_permissions = sorted(set(authority["permissions"]) - set(permissions))
     if missing_permissions:
         raise WorkflowResolutionError(f"missing_permission:{missing_permissions[0]}")
+    admitted_roles = tuple(str(item) for item in authority.get("roles") or ())
+    if admitted_roles and not set(admitted_roles).intersection(roles):
+        raise WorkflowResolutionError(f"role_not_authorized:{admitted_roles[0]}")
 
     updated = copy.deepcopy(current)
     updated["definition_version"] = target.definition_version
+    updated["definition_digest"] = workflow_definition_digest(target)
     updated["state"] = str(state_map[current["state"]])
     updated["generation"] = int(current["generation"]) + 1
     updated["updated_at"] = timestamp
@@ -1268,6 +1295,8 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "resolver": "pure",
             "effects": "described_not_executed",
             "definition_version": "pinned_per_instance",
+            "definition_digest": "pinned_per_instance",
+            "authority_roles": "declared_and_fail_closed",
             "concurrency": "generation_guarded",
             "idempotency": "payload_bound",
             "definition_migration": "explicit_event",

@@ -9,6 +9,10 @@
     "instance_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
     "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "definition_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "state": { "type": "string", "minLength": 1, "maxLength": 160 },
     "generation": { "type": "integer", "minimum": 0 },
     "context": { "type": "object" },

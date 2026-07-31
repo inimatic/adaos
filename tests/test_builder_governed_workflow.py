@@ -13,6 +13,7 @@ from adaos.services.builder.governed import (
 )
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from adaos.services.governed_workflow import definition_review_report, export_statechart
+from adaos.services.governed_workflow import workflow_definition_digest
 
 
 ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
@@ -68,6 +69,29 @@ def test_normative_builder_definition_is_compiled_and_explainable() -> None:
     assert {"prototype_editing", "automation_waiting", "trial_review", "publication_ready"} <= {
         item["id"] for item in graph["states"]
     }
+    assert all(
+        item.descriptor["authority"].get("roles") == ["registered"]
+        for item in compiled.transitions
+    )
+
+
+def test_legacy_builder_instance_gets_digest_binding_without_losing_history(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    workflow = _plan(service)
+    state_path = service.dev_scenarios_root / "recipes" / "prompt_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    governed = state["workflow"]["governed"]
+    original_history = list(governed["history"])
+    governed.pop("definition_digest")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    described = service.describe("scenario", "recipes")
+
+    assert described["governed"]["history"] == original_history
+    assert described["governed"]["definition_digest"] == workflow_definition_digest(
+        compiled_builder_change_definition()
+    )
+    assert described["governed"]["context"]["legacy_definition_binding"]["status"] == "adopted"
 
 
 def test_dev_builder_skill_workflow_is_runtime_authority(tmp_path: Path) -> None:

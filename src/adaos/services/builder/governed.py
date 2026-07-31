@@ -9,8 +9,10 @@ from typing import Any, Mapping
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
     WorkflowResolver,
+    WorkflowResolutionError,
     compile_definition,
     new_instance,
+    workflow_definition_digest,
 )
 
 
@@ -82,11 +84,29 @@ def governed_instance(
     raw = workflow.get("governed")
     if isinstance(raw, Mapping):
         candidate = copy.deepcopy(dict(raw))
-        if (
-            candidate.get("workflow_type") == definition.workflow_type
-            and candidate.get("definition_version") == definition.definition_version
-            and candidate.get("instance_id") == f"change:{project_ref}:{change_id}"
-        ):
+        if candidate.get("instance_id") == f"change:{project_ref}:{change_id}":
+            if candidate.get("workflow_type") != definition.workflow_type:
+                raise WorkflowResolutionError("Builder workflow type migration is required")
+            if candidate.get("definition_version") != definition.definition_version:
+                raise WorkflowResolutionError(
+                    "Builder workflow definition migration is required: "
+                    f"{candidate.get('definition_version')} -> {definition.definition_version}"
+                )
+            expected_digest = workflow_definition_digest(definition)
+            bound_digest = str(candidate.get("definition_digest") or "").strip()
+            if bound_digest and bound_digest != expected_digest:
+                raise WorkflowResolutionError(
+                    "Builder workflow definition digest changed without a versioned migration"
+                )
+            if not bound_digest:
+                candidate["definition_digest"] = expected_digest
+                context = dict(candidate.get("context") or {})
+                context["legacy_definition_binding"] = {
+                    "status": "adopted",
+                    "definition_version": definition.definition_version,
+                    "definition_digest": expected_digest,
+                }
+                candidate["context"] = context
             return candidate
     instance = new_instance(
         definition,
@@ -218,6 +238,7 @@ def admit_legacy_transition(
         command,
         input_value=input_value,
         actor=str(actor or "builder"),
+        roles=("registered",),
         expected_generation=int(instance["generation"]),
         idempotency_key=idempotency_key,
         now=now,
@@ -231,10 +252,12 @@ def workflow_description(
     project_ref: str,
     actor: str = "user:local",
     definition: CompiledWorkflowDefinition | None = None,
+    roles: tuple[str, ...] | list[str] = ("registered",),
 ) -> dict[str, Any]:
     definition = definition or compiled_builder_change_definition()
     return WorkflowResolver().describe(
         definition,
         governed_instance(workflow, project_ref=project_ref, definition=definition),
         actor=actor,
+        roles=roles,
     )

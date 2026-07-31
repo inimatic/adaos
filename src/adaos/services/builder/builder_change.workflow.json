@@ -1366,7 +1366,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -1483,7 +1486,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -1600,7 +1606,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -1717,7 +1726,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -1834,7 +1846,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -1951,7 +1966,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2068,7 +2086,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2188,7 +2209,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2309,7 +2333,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2439,7 +2466,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2568,7 +2598,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2698,7 +2731,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2815,7 +2851,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -2936,7 +2975,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3053,7 +3095,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3170,7 +3215,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3287,7 +3335,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3404,7 +3455,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3524,7 +3578,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3644,7 +3701,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3761,7 +3821,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3878,7 +3941,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -3995,7 +4061,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4115,7 +4184,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4234,7 +4306,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4351,7 +4426,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4472,7 +4550,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4589,7 +4670,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4706,7 +4790,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4825,7 +4912,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -4942,7 +5032,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5059,7 +5152,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5176,7 +5272,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5293,7 +5392,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5410,7 +5512,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5527,7 +5632,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5644,7 +5752,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5761,7 +5872,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5878,7 +5992,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -5995,7 +6112,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6112,7 +6232,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6229,7 +6352,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6346,7 +6472,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6463,7 +6592,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6580,7 +6712,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6697,7 +6832,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6814,7 +6952,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -6931,7 +7072,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7048,7 +7192,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7165,7 +7312,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7282,7 +7432,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7399,7 +7552,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7516,7 +7672,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7633,7 +7792,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7750,7 +7912,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7867,7 +8032,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -7984,7 +8152,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -8101,7 +8272,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {
@@ -8218,7 +8392,10 @@
         "actors": [
           "*"
         ],
-        "permissions": []
+        "permissions": [],
+        "roles": [
+          "registered"
+        ]
       },
       "guards": [
         {

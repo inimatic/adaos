@@ -31,6 +31,7 @@ def _decision(
         command,
         input_value={"confirmed": confirmed, "evidence_refs": ["evidence:test"]},
         actor="user:local",
+        roles=("registered",),
         expected_generation=0,
         idempotency_key=f"command:{instance_id}",
     )

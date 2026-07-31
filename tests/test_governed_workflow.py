@@ -9,6 +9,7 @@ import pytest
 from adaos.services.governed_workflow import (
     WorkflowDefinitionError,
     WorkflowResolver,
+    WorkflowResolutionError,
     apply_workflow_command,
     compile_definition,
     definition_review_report,
@@ -148,6 +149,49 @@ def test_compiler_builds_deterministic_transition_index() -> None:
     assert compiled.initial_state == "prototype"
     assert compiled.by_source_command[("prototype", "approve")].target == "automation"
     assert workflow_contract_snapshot()["invariants"]["resolver"] == "pure"
+
+
+def test_transition_roles_are_declared_and_enforced() -> None:
+    definition = _definition()
+    definition["transitions"][0]["authority"]["roles"] = ["registered"]
+    compiled = compile_definition(definition)
+    instance = new_instance(compiled, "change:roles")
+    resolver = WorkflowResolver()
+
+    guest = resolver.describe(
+        compiled,
+        instance,
+        actor="user:guest",
+        permissions=("builder.change",),
+        roles=("guest",),
+    )
+    registered = resolver.describe(
+        compiled,
+        instance,
+        actor="user:registered",
+        permissions=("builder.change",),
+        roles=("registered",),
+    )
+
+    assert guest["allowed_commands"] == []
+    assert guest["blocked_commands"][0]["reason_code"] == "role_not_authorized:registered"
+    assert registered["allowed_commands"][0]["command"] == "approve"
+
+
+def test_instance_is_pinned_to_definition_digest_not_only_version() -> None:
+    source = compile_definition(_definition())
+    instance = new_instance(source, "change:digest")
+    changed = _definition()
+    changed["metadata"]["revision"] = "different-content-same-version"
+    target = compile_definition(changed)
+
+    with pytest.raises(WorkflowResolutionError, match="definition digest"):
+        WorkflowResolver().describe(
+            target,
+            instance,
+            actor="user:local",
+            permissions=("builder.change",),
+        )
 
 
 def test_compiler_rejects_ambiguous_edges() -> None:
