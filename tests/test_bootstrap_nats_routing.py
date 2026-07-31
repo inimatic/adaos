@@ -869,6 +869,36 @@ def test_bootstrap_bounded_interval_rejects_non_finite_values() -> None:
     assert bootstrap_mod._bounded_interval_seconds("1", default=15.0, minimum=5.0) == 5.0
 
 
+@pytest.mark.asyncio
+async def test_nats_cleanup_timeout_does_not_trap_reconnect_supervisor() -> None:
+    cancelled = asyncio.Event()
+
+    async def _stuck_close() -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=0.01)
+
+    assert cleaned is False
+    await asyncio.wait_for(cancelled.wait(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_reports_successful_close() -> None:
+    closed = False
+
+    async def _close() -> None:
+        nonlocal closed
+        closed = True
+
+    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_close, timeout_s=0.1)
+
+    assert cleaned is True
+    assert closed is True
+
+
 def test_should_forward_node_status_to_members_skips_member_originated_payloads() -> None:
     assert bootstrap_mod._should_forward_node_status_to_members({}) is True
     assert (

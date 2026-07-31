@@ -224,6 +224,21 @@ def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> fl
     return float(interval_s)
 
 
+async def _run_bounded_async_cleanup(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    timeout_s: float = 1.0,
+) -> bool:
+    """Run best-effort transport cleanup without trapping the reconnect supervisor."""
+    try:
+        await asyncio.wait_for(operation(), timeout=max(0.01, float(timeout_s)))
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return False
+
+
 def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
     default = 256 * 1024
     minimum = 16 * 1024
@@ -4785,26 +4800,17 @@ class BootstrapService:
                                     except Exception:
                                         pass
                                     # Best-effort cleanup of partially created WS transport
-                                    try:
-                                        await nc_local.close()
-                                    except Exception:
-                                        pass
+                                    await _run_bounded_async_cleanup(nc_local.close)
                                     # Ensure WS transport is fully torn down if connect() was cancelled/timed out.
                                     try:
                                         tr = getattr(nc_local, "_transport", None)
                                         if tr:
                                             ws = getattr(tr, "_ws", None)
                                             client = getattr(tr, "_client", None)
-                                            try:
-                                                if ws is not None:
-                                                    await ws.close()
-                                            except Exception:
-                                                pass
-                                            try:
-                                                if client is not None:
-                                                    await client.close()
-                                            except Exception:
-                                                pass
+                                            if ws is not None:
+                                                await _run_bounded_async_cleanup(ws.close)
+                                            if client is not None:
+                                                await _run_bounded_async_cleanup(client.close)
                                     except Exception:
                                         pass
                                     raise e
