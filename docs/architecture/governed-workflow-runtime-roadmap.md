@@ -86,7 +86,7 @@ The current repository has useful but fragmented foundations:
 | GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `validated-local` | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model | `validated-local` | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` with Python-built compatibility definition | next |
 | GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local` | next |
 | GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
@@ -212,6 +212,16 @@ produce stable fresh interaction descriptors from the resulting state.
   composition ABI enforces unique child/correlation identities and narrower
   delegated permissions; the pure join resolver cannot promote an incomplete
   required-child set.
+- [ ] `[must]` `GWR1-18` Admit workflow definitions as versioned data artifacts
+  from Builder, scenario, skill, and LLM-assisted authoring paths. Activation
+  must treat every candidate as untrusted until ABI validation, compilation,
+  registered-code lookup, definition review, generated conformance cases, and
+  domain activation gates pass.
+- [ ] `[should]` `GWR1-19` Add an authoring validation surface that returns one
+  actionable report for an LLM-generated candidate definition: schema errors,
+  unknown registered identifiers, ambiguous transitions, unreachable states,
+  missing explanations/outcomes, unsafe risk or authority broadening, and
+  generated conformance case failures.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
@@ -459,6 +469,16 @@ tests cover all legal and representative illegal paths.
   recent Run. The summary reports portfolio counts, active/unknown mutations,
   conflict/stale sets, scoped focus, and Project commands without a synthetic
   project lifecycle stage.
+- [ ] `[must]` `GWR4-20` Move the canonical Builder Change definition from
+  Python construction in `builder.governed` into a versioned JSON/YAML
+  `adaos.workflow.definition.v1` artifact. Keep Python as the loader,
+  compiled cache, legacy command/action map, registered guard/effect/activity
+  adapter registry, and compatibility projection layer.
+- [ ] `[must]` `GWR4-21` Retire direct dependence on legacy
+  `scenario.yaml.workflow.states.actions.next_state` for governed workflows.
+  Simple scenario workflows may remain as compatibility projections or be
+  translated into `adaos.workflow.definition.v1`, but any mutating governed
+  process must use the shared compiler/resolver and registered adapters.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -794,6 +814,9 @@ This roadmap is complete only when:
 - Project coordination and every relationship plane have explicit owners,
   edge/cycle rules, typed refs, and no shared mutable truth;
 - Builder and at least one second domain use the shared workflow model;
+- LLM-assisted workflow authoring produces data definitions that can be
+  rejected or activated by the same deterministic validation gates as
+  hand-authored definitions;
 - Web and Telegram pass the same semantic interaction cases;
 - NLU cannot bypass allowed transitions or policy;
 - restart, duplicate, stale authority, cancellation, unknown outcome,

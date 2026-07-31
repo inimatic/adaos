@@ -54,6 +54,14 @@ The same definition is the source for command admission, `allowed_actions`,
 human explanation, Web/Telegram controls, tests, and workflow visualization.
 No UI or skill maintains a second handwritten table of legal transitions.
 
+Workflow definitions are data artifacts. A human, Builder, or LLM may propose
+one, but activation treats the artifact as untrusted until it passes the ABI
+schema, compiler, registered-code, migration, and conformance gates. The data
+may select registered guard, effect, activity, compensation, policy, and
+projection identifiers with typed parameters. It cannot introduce executable
+code, authority, filesystem operations, shell commands, network calls, or
+model instructions that mutate state.
+
 A persistence layer or durable-execution product may later host long-running
 instances. It is an implementation adapter below the model. DBOS, Temporal,
 Restate, SQLite, NATS, and other infrastructure are not the architectural goal
@@ -140,6 +148,9 @@ The architecture must:
     and acknowledgement so delivery recovery never repeats work;
 15. keep Issue, Change, workflow, artifact, dependency, execution,
     conversation, release, authority, and view relationship planes distinct.
+16. allow skills, scenarios, Builder, and LLM-assisted authoring to produce
+    workflow definitions as inspectable data while keeping execution in
+    registered AdaOS code.
 
 ## Non-Goals
 
@@ -147,6 +158,7 @@ The first model will not:
 
 - formalize every conversational utterance as a workflow transition;
 - allow arbitrary scripts inside declarative workflow definitions;
+- treat an LLM-authored workflow artifact as trusted code or policy;
 - replace Git, package storage, or domain databases with workflow history;
 - use Yjs or browser projections as workflow truth;
 - infer permission from an LLM decision or prior approval alone;
@@ -171,6 +183,9 @@ workflow definition that:
 - keeps artifact lineage separate from process state;
 - makes adding or changing a workflow transition a change to one canonical
   definition plus registered domain code, not several UI and handler patches.
+- can be proposed by Builder or an LLM and then rejected deterministically when
+  its structure, registered identifiers, safety policy, or conformance cases do
+  not match the AdaOS contract.
 
 Only after this semantic proof should AdaOS decide whether the existing
 persistence is sufficient or a durable workflow product materially reduces
@@ -466,6 +481,32 @@ define the target responsibilities.
 Declarative definitions may reference registered code. They may not contain
 arbitrary executable expressions, filesystem paths, shell commands, or model
 prompts with authority to mutate state.
+
+### Data-Driven Authoring Boundary
+
+Data-driven workflow authoring means the transition graph, typed command
+surface, risk model, guard/effect identifiers, explanations, and projection
+requirements are serialized and versioned. It does not mean AdaOS accepts a
+general workflow programming language from a scenario, skill, marketplace
+package, or model response.
+
+The authoring pipeline is:
+
+```text
+candidate definition
+  -> ABI schema validation
+  -> compile_definition()
+  -> registered guard/effect/activity/policy lookup
+  -> definition review report
+  -> generated conformance cases
+  -> domain activation or rejection
+```
+
+Generated definitions therefore fail before runtime execution when they name
+unknown code, create ambiguous edges, omit required outcomes, broaden
+authority, lack explanations, or cannot prove representative legal and illegal
+paths. A domain may offer higher-level templates or macros to reduce authoring
+noise, but the activated artifact is the expanded `WorkflowDefinition`.
 
 ### WorkflowInstance
 
@@ -1062,6 +1103,10 @@ request
 The normative Builder states, transition catalogue, concurrency/focus rules,
 Run purposes, data modes, and Review lifecycle are owned by
 [Builder Conversational Development](builder-conversational-development.md#builder-change-statechart).
+The activated transition catalogue is a versioned governed workflow definition
+data artifact. Builder code owns registered effects, activities, guards,
+legacy adapters, and projections; it does not own a second authoritative
+transition table.
 
 The workflow instance is keyed by `change_id`. Prototype, Automation, and
 Publication nodes are artifact lineage projections, not three independent

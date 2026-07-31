@@ -244,6 +244,12 @@ The following is the normative single-user business statechart. Exact
 serialization belongs to the shared workflow definition contract; the state
 and command meanings belong here.
 
+Builder owns the domain vocabulary and invariants below. The activated
+transition catalogue is a versioned governed workflow definition data
+artifact loaded through the shared compiler/resolver. Builder implementation
+code owns only the registered guards, effects, activities, legacy adapters,
+and projections needed to execute that definition.
+
 ```text
 intake -> clarification_required <-> ready
 ready -> prototype_editing -> prototype_review -> automation_ready
