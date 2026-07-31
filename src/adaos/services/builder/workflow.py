@@ -55,6 +55,12 @@ from adaos.services.workflow_registry import (
     WorkflowAdapterRegistryError,
     platform_workflow_adapter_registry,
 )
+from adaos.services.workflow_execution import (
+    WorkflowExecutorRegistry,
+    description_with_executor_readiness,
+    prepare_interaction_invocation,
+    prepare_sdk_invocation,
+)
 from adaos.services.scenario.workflow_translation import (
     LegacyWorkflowTranslationError,
     shadow_compare_legacy_workflow,
@@ -1163,10 +1169,15 @@ class BuilderWorkflowService:
             "archived": bool(state.get("archived")),
             "capabilities": self._capabilities(workflow, archived=bool(state.get("archived")), object_type=kind),
         }
-        projection["workflow_description"] = workflow_description(
+        description = workflow_description(
             workflow,
             project_ref=f"{kind}:{project_id}",
             definition=self._governed_definition(),
+        )
+        projection["workflow_description"] = description_with_executor_readiness(
+            description,
+            self._governed_definition(),
+            WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
         )
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)
@@ -1881,16 +1892,109 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         """Admit one validated InteractionResponse through the canonical Builder ingress."""
 
-        consumed = _mapping(response.get("consumed_command"))
-        if str(response.get("status") or "") not in {"answered", "accepted"} or not consumed:
-            raise BuilderWorkflowError("Builder requires an accepted Interaction response")
-        command = str(consumed.get("command") or "").strip()
+        try:
+            invocation = prepare_interaction_invocation(response)
+        except ValueError as exc:
+            raise BuilderWorkflowError(f"Builder interaction invocation is invalid: {exc}") from exc
+        return self._invoke_prepared_command(
+            object_type,
+            object_id,
+            invocation,
+            actor=actor,
+            metadata=metadata,
+        )
+
+    def invoke_command(
+        self,
+        object_type: str,
+        object_id: str,
+        command: str,
+        *,
+        actor: str,
+        idempotency_key: str,
+        input_value: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Invoke an SDK command through the same normalized ingress as chat."""
+
+        current = self.describe(object_type, object_id)
+        canonical = _mapping(current.get("governed"))
+        command_projection = next(
+            (
+                _mapping(item)
+                for item in _mapping(current.get("workflow_description")).get("allowed_commands") or []
+                if isinstance(item, Mapping) and str(item.get("command") or "") == str(command)
+            ),
+            {},
+        )
+        if not command_projection:
+            blocked = next(
+                (
+                    _mapping(item)
+                    for item in _mapping(current.get("workflow_description")).get("blocked_commands") or []
+                    if isinstance(item, Mapping) and str(item.get("command") or "") == str(command)
+                ),
+                {},
+            )
+            raise BuilderWorkflowError(
+                f"Builder command is unavailable: {command} "
+                f"({blocked.get('reason_code') or 'command_not_allowed'})"
+            )
+        risk = _mapping(command_projection.get("risk"))
+        invocation = prepare_sdk_invocation(
+            workflow_type=str(canonical.get("workflow_type") or ""),
+            instance_ref={
+                "schema": "adaos.workflow.ref.v1",
+                "kind": "workflow",
+                "id": str(canonical.get("instance_id") or ""),
+                "version": str(canonical.get("definition_version") or ""),
+                "generation": int(canonical.get("generation") or 0),
+                "digest": str(canonical.get("definition_digest") or "").strip() or None,
+            },
+            actor_id=actor,
+            command_id=command,
+            expected_generation=int(canonical.get("generation") or 0),
+            idempotency_key=idempotency_key,
+            input_value=input_value,
+            target_ref=_mapping(current.get("workflow_description")).get("target"),
+            context_ref={
+                "schema": "adaos.workflow.ref.v1",
+                "kind": "command_context",
+                "id": f"sdk:{object_type}:{object_id}",
+            },
+            risk=str(risk.get("class") or "read"),
+            confirmation_required=str(risk.get("confirmation") or "none") != "none",
+        )
+        return self._invoke_prepared_command(
+            object_type,
+            object_id,
+            invocation,
+            actor=actor,
+            metadata=metadata,
+        )
+
+    def _invoke_prepared_command(
+        self,
+        object_type: str,
+        object_id: str,
+        invocation: Mapping[str, Any],
+        *,
+        actor: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        command_record = _mapping(invocation.get("command"))
+        command = str(command_record.get("command_id") or "").strip()
         action = legacy_action_for_command(command)
         if action is None:
             raise BuilderWorkflowError(f"Builder command has no compatibility activity adapter: {command}")
         current = self.describe(object_type, object_id)
         canonical = _mapping(current.get("governed"))
-        expected = int(consumed.get("expected_generation") or 0)
+        instance_ref = _mapping(command_record.get("instance_ref"))
+        if str(instance_ref.get("id") or "") != str(canonical.get("instance_id") or ""):
+            raise BuilderWorkflowError("Builder command targets another workflow instance")
+        if str(command_record.get("actor_ref", {}).get("id") or "") != str(actor or ""):
+            raise BuilderWorkflowError("Builder command actor differs from the verified caller")
+        expected = int(command_record.get("expected_generation") or 0)
         if int(canonical.get("generation") or 0) != expected:
             raise BuilderWorkflowError(
                 f"stale Builder interaction command: expected {expected}, "
@@ -1898,17 +2002,20 @@ class BuilderWorkflowService:
             )
         details = {
             **dict(metadata or {}),
-            "idempotency_key": str(response.get("idempotency_key") or "").strip()
-            or f"interaction:{response.get('response_id')}",
-            "interaction_response_id": response.get("response_id"),
+            **_mapping(command_record.get("input")),
+            "idempotency_key": str(command_record.get("idempotency_key") or "").strip(),
+            "workflow_invocation_id": invocation.get("invocation_id"),
+            "interaction_response_id": _mapping(invocation.get("response_ref")).get("id"),
         }
-        return self.transition(
+        result = self.transition(
             object_type,
             object_id,
             action,
             actor=actor,
             metadata=details,
         )
+        result["invocation"] = copy.deepcopy(dict(invocation))
+        return result
 
     def update_interaction_context(
         self,
@@ -2240,10 +2347,14 @@ class BuilderWorkflowService:
             "archived": False,
             "capabilities": self._capabilities(workflow, archived=False, object_type=kind),
         }
-        projection["workflow_description"] = workflow_description(
-            workflow,
-            project_ref=f"{kind}:{project_id}",
-            definition=self._governed_definition(),
+        projection["workflow_description"] = description_with_executor_readiness(
+            workflow_description(
+                workflow,
+                project_ref=f"{kind}:{project_id}",
+                definition=self._governed_definition(),
+            ),
+            self._governed_definition(),
+            WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
         )
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)

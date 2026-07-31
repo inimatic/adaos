@@ -15,6 +15,7 @@
         "artifact",
         "evidence",
         "interaction",
+        "interaction_response",
         "command_context",
         "reply_route",
         "component",

@@ -62,6 +62,29 @@ def invoke_interaction_response(
     )
 
 
+def invoke_command(
+    object_type: str,
+    object_id: str,
+    command: str,
+    *,
+    actor: str,
+    idempotency_key: str,
+    input_value: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().invoke_command(
+            object_type,
+            object_id,
+            command,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            input_value=input_value,
+            metadata=metadata,
+        )
+    )
+
+
 def transition(
     object_type: str,
     object_id: str,
@@ -136,6 +159,7 @@ __all__ = [
     "create_conversation_interaction",
     "get_interaction_frame",
     "get_state",
+    "invoke_command",
     "invoke_interaction_response",
     "transition",
     "update_interaction_context",

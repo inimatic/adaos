@@ -2414,6 +2414,18 @@ def get_interaction_response_by_idempotency(
     return _json_load(row["payload_json"], {}) if row else None
 
 
+def get_interaction_response(response_id: str) -> dict[str, Any] | None:
+    if not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT payload_json FROM conversation_interaction_responses WHERE response_id=?",
+            (str(response_id or "").strip(),),
+        ).fetchone()
+    return _json_load(row["payload_json"], {}) if row else None
+
+
 def list_interaction_responses(interaction_id: str) -> list[dict[str, Any]]:
     if not ensure_schema():
         return []

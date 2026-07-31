@@ -259,9 +259,13 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
 
 def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path: Path) -> None:
     button_service = _service(tmp_path / "button", "button_project")
+    telegram_service = _service(tmp_path / "telegram", "telegram_project")
     text_service = _service(tmp_path / "text", "text_project")
+    sdk_service = _service(tmp_path / "sdk", "sdk_project")
     _plan(button_service, project_id="button_project", change_id="CH-button")
+    _plan(telegram_service, project_id="telegram_project", change_id="CH-telegram")
     _plan(text_service, project_id="text_project", change_id="CH-text")
+    _plan(sdk_service, project_id="sdk_project", change_id="CH-sdk")
 
     button_interaction = button_service.conversation_interaction(
         "scenario",
@@ -283,6 +287,30 @@ def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path
         expected_generation=0,
         idempotency_key="button:accept",
         action_token=token,
+        metadata={"io_type": "web"},
+    )["response"]
+
+    telegram_interaction = telegram_service.conversation_interaction(
+        "scenario",
+        "telegram_project",
+        conversation_id="conversation:telegram",
+        principal_id="user:local",
+        command_context_id="telegram:button",
+    )
+    telegram_presentation = conversation_interactions.negotiate_presentation(
+        telegram_interaction,
+        conversation_interactions.standard_capability_profile("telegram"),
+    )
+    telegram_token = next(
+        item["token"]
+        for item in telegram_presentation["actions"]
+        if item["command"] == "accept_prototype"
+    )
+    telegram_response = conversation_interactions.submit_action_token(
+        telegram_token,
+        actor_id="user:local",
+        idempotency_key="telegram:button:accept",
+        metadata={"io_type": "telegram"},
     )["response"]
 
     text_interaction = text_service.conversation_interaction(
@@ -304,21 +332,40 @@ def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path
         idempotency_key="telegram:text:accept",
     )["response"]
 
-    assert button_response["consumed_command"]["command"] == text_response["consumed_command"]["command"]
-    assert button_response["consumed_command"]["risk"] == text_response["consumed_command"]["risk"]
-    assert (
-        button_response["consumed_command"]["expected_generation"]
-        == text_response["consumed_command"]["expected_generation"]
-    )
-    assert button_response["consumed_command"]["target_ref"]["kind"] == "change"
-    assert text_response["consumed_command"]["target_ref"]["kind"] == "change"
-    assert button_response["consumed_command"]["confirmation_required"] is False
-    assert button_service.invoke_interaction_response(
+    web_result = button_service.invoke_interaction_response(
         "scenario", "button_project", button_response, actor="user:local"
-    )["workflow"]["governed"]["state"] == "automation_ready"
-    assert text_service.invoke_interaction_response(
+    )
+    telegram_result = telegram_service.invoke_interaction_response(
+        "scenario", "telegram_project", telegram_response, actor="user:local"
+    )
+    text_result = text_service.invoke_interaction_response(
         "scenario", "text_project", text_response, actor="user:local"
-    )["workflow"]["governed"]["state"] == "automation_ready"
+    )
+    sdk_result = sdk_service.invoke_command(
+        "scenario",
+        "sdk_project",
+        "accept_prototype",
+        actor="user:local",
+        idempotency_key="sdk:accept",
+    )
+
+    invocations = [
+        web_result["invocation"],
+        telegram_result["invocation"],
+        text_result["invocation"],
+        sdk_result["invocation"],
+    ]
+    assert [item["source"] for item in invocations] == ["web", "telegram", "intent", "sdk"]
+    assert {item["command"]["command_id"] for item in invocations} == {"accept_prototype"}
+    assert {item["command"]["workflow_type"] for item in invocations} == {"builder.change"}
+    assert {item["command"]["expected_generation"] for item in invocations} == {1}
+    assert {item["risk"] for item in invocations} == {"isolated_write"}
+    assert {item["target_ref"]["kind"] for item in invocations} == {"change"}
+    assert {item["confirmation_required"] for item in invocations} == {False}
+    assert all(
+        item["workflow"]["governed"]["state"] == "automation_ready"
+        for item in (web_result, telegram_result, text_result, sdk_result)
+    )
 
 
 def test_background_result_updates_originating_change_not_current_view(tmp_path: Path) -> None:
