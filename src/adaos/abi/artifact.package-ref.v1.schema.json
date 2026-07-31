@@ -30,13 +30,15 @@
     "schema_locks": {
       "type": "array",
       "items": { "$ref": "#/$defs/contractLock" }
-    }
+    },
+    "workflow_lock": { "$ref": "#/$defs/contractLock" }
   },
   "dependentRequired": {
     "builder_id": ["build_policy_digest", "materialization_path", "schema_locks"],
     "build_policy_digest": ["builder_id", "materialization_path", "schema_locks"],
     "materialization_path": ["builder_id", "build_policy_digest", "schema_locks"],
-    "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"]
+    "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"],
+    "workflow_lock": ["builder_id", "build_policy_digest", "materialization_path", "schema_locks"]
   },
   "$defs": {
     "artifactId": {

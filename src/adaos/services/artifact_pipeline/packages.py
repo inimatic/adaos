@@ -26,6 +26,12 @@ from adaos.domain.artifact_release import (
     sha256_digest,
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
+from adaos.services.workflow_artifacts import (
+    WorkflowArtifactError,
+    load_manifest_bound_workflow,
+    validate_workflow_definition_bytes,
+    workflow_manifest_reference,
+)
 
 
 PACKAGE_MANIFEST_PATH = ".adaos/package-manifest.json"
@@ -333,6 +339,14 @@ def build_artifact_package(
         raise PackageBuildError("kind must be skill or scenario")
 
     artifact_id, version, _ = _load_canonical_manifest(root, kind)
+    try:
+        workflow = load_manifest_bound_workflow(
+            root,
+            manifest_name=_MANIFEST_BY_KIND[kind],
+            allow_legacy_inline=kind == "scenario",
+        )
+    except WorkflowArtifactError as exc:
+        raise PackageBuildError(f"invalid governed workflow: {exc}") from exc
     files = _collect_package_files(root, limits)
     if _MANIFEST_BY_KIND[kind] not in {name for name, _ in files}:
         raise PackageBuildError(f"required {_MANIFEST_BY_KIND[kind]} was excluded from package")
@@ -349,6 +363,17 @@ def build_artifact_package(
         for record in file_records
         if str(record["path"]).endswith(".schema.json")
     )
+    workflow_lock = (
+        ArtifactContractLock(
+            lock_id=(
+                f"workflow:{workflow.compiled.workflow_type}@"
+                f"{workflow.compiled.definition_version}"
+            ),
+            digest=workflow.definition_digest,
+        )
+        if workflow is not None
+        else None
+    )
     materialization_path = (
         f"skills/{artifact_id}" if kind == "skill" else f"scenarios/{artifact_id}"
     )
@@ -364,6 +389,8 @@ def build_artifact_package(
         "schema_locks": [item.to_dict() for item in schema_locks],
         "files": file_records,
     }
+    if workflow_lock is not None:
+        package_manifest["workflow_lock"] = workflow_lock.to_dict()
     manifest_bytes = canonical_json_bytes(package_manifest)
     manifest_digest = sha256_digest(manifest_bytes)
 
@@ -404,6 +431,7 @@ def build_artifact_package(
             build_policy_digest=PACKAGE_BUILD_POLICY_DIGEST,
             materialization_path=materialization_path,
             schema_locks=schema_locks,
+            workflow_lock=workflow_lock,
         )
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
@@ -435,7 +463,8 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         "materialization_path",
         "schema_locks",
     }
-    unknown = sorted(set(value) - core_fields - attestation_fields)
+    optional_fields = {"workflow_lock"}
+    unknown = sorted(set(value) - core_fields - attestation_fields - optional_fields)
     if unknown:
         raise PackageVerificationError(
             f"package manifest contains unsupported fields: {', '.join(unknown)}"
@@ -512,6 +541,7 @@ def _verify_artifact_package(
             missing = sorted(set(expected_files) - archive_files)
             extra = sorted(archive_files - set(expected_files))
             raise PackageVerificationError(f"package file set mismatch: missing={missing} extra={extra}")
+        verified_file_bytes: dict[str, bytes] = {}
         for name, record in expected_files.items():
             raw = archive.read(name)
             _assert_publishable_file(name, raw, error_type=PackageVerificationError)
@@ -525,6 +555,8 @@ def _verify_artifact_package(
             expected_file_digest = str(record.get("digest") or "").strip().lower()
             if sha256_digest(raw) != expected_file_digest:
                 raise PackageVerificationError(f"package file digest mismatch: {name}")
+            if name in {*_MANIFEST_BY_KIND.values(), "workflow.json"}:
+                verified_file_bytes[name] = raw
             if extract_to is not None:
                 destination = (extract_to / Path(name)).resolve()
                 if extract_to != destination and extract_to not in destination.parents:
@@ -561,10 +593,50 @@ def _verify_artifact_package(
         if not isinstance(source, Mapping):
             raise PackageVerificationError("package manifest source_ref must be an object")
         raw_schema_locks = package_manifest.get("schema_locks") or []
+        raw_workflow_lock = package_manifest.get("workflow_lock")
         if not isinstance(raw_schema_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_schema_locks
         ):
             raise PackageVerificationError("schema_locks must be a list of objects")
+        if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
+            raise PackageVerificationError("workflow_lock must be an object")
+        manifest_name = _MANIFEST_BY_KIND.get(package_manifest.get("kind"))
+        if manifest_name is None:
+            raise PackageVerificationError("package kind must be skill or scenario")
+        try:
+            manifest_payload = yaml.safe_load(
+                verified_file_bytes[manifest_name].decode("utf-8")
+            ) or {}
+            if not isinstance(manifest_payload, Mapping):
+                raise WorkflowArtifactError(f"{manifest_name} must contain an object")
+            workflow_reference = workflow_manifest_reference(
+                manifest_payload,
+                allow_legacy_inline=manifest_name == "scenario.yaml",
+            )
+            expected_workflow_lock = None
+            if workflow_reference is not None:
+                workflow_payload = validate_workflow_definition_bytes(
+                    verified_file_bytes[workflow_reference]
+                )
+                expected_workflow_lock = ArtifactContractLock(
+                    lock_id=(
+                        f"workflow:{workflow_payload.compiled.workflow_type}@"
+                        f"{workflow_payload.compiled.definition_version}"
+                    ),
+                    digest=workflow_payload.definition_digest,
+                )
+            elif "workflow.json" in verified_file_bytes:
+                raise WorkflowArtifactError(
+                    f"workflow.json exists but {manifest_name} does not reference it"
+                )
+        except (KeyError, UnicodeError, yaml.YAMLError, WorkflowArtifactError) as exc:
+            raise PackageVerificationError(f"invalid packaged governed workflow: {exc}") from exc
+        if raw_workflow_lock != (
+            expected_workflow_lock.to_dict() if expected_workflow_lock is not None else None
+        ):
+            raise PackageVerificationError(
+                "package workflow_lock does not match packaged workflow definition"
+            )
         try:
             ref = ArtifactPackageRef(
                 kind=package_manifest.get("kind"),
@@ -579,6 +651,7 @@ def _verify_artifact_package(
                 schema_locks=tuple(
                     ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
                 ),
+                workflow_lock=expected_workflow_lock,
             )
         except ArtifactReleaseContractError as exc:
             raise PackageVerificationError(str(exc)) from exc

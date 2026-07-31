@@ -250,6 +250,7 @@ class ArtifactPackageRef:
     build_policy_digest: str | None = None
     materialization_path: str | None = None
     schema_locks: tuple[ArtifactContractLock, ...] = ()
+    workflow_lock: ArtifactContractLock | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"skill", "scenario"}:
@@ -288,6 +289,13 @@ class ArtifactPackageRef:
             "schema_locks",
             _unique_locks(self.schema_locks, field="package schema"),
         )
+        if self.workflow_lock is not None:
+            if self.builder_id is None:
+                raise ArtifactReleaseContractError("workflow_lock requires builder attestation")
+            if not isinstance(self.workflow_lock, ArtifactContractLock):
+                raise ArtifactReleaseContractError("workflow_lock must be an ArtifactContractLock")
+            if not self.workflow_lock.lock_id.startswith("workflow:"):
+                raise ArtifactReleaseContractError("workflow_lock id must start with workflow:")
 
     @property
     def key(self) -> str:
@@ -312,6 +320,8 @@ class ArtifactPackageRef:
                     "schema_locks": [item.to_dict() for item in self.schema_locks],
                 }
             )
+        if self.workflow_lock is not None:
+            payload["workflow_lock"] = self.workflow_lock.to_dict()
         return payload
 
     @classmethod
@@ -331,6 +341,7 @@ class ArtifactPackageRef:
                 "build_policy_digest",
                 "materialization_path",
                 "schema_locks",
+                "workflow_lock",
             },
             required={
                 "schema",
@@ -358,10 +369,13 @@ class ArtifactPackageRef:
                 "PackageRef builder attestation fields must be supplied together"
             )
         raw_schema_locks = value.get("schema_locks") or []
+        raw_workflow_lock = value.get("workflow_lock")
         if not isinstance(raw_schema_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_schema_locks
         ):
             raise ArtifactReleaseContractError("schema_locks must be a list of objects")
+        if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
+            raise ArtifactReleaseContractError("workflow_lock must be an object")
         return cls(
             kind=value.get("kind"),
             artifact_id=value.get("artifact_id"),
@@ -374,6 +388,11 @@ class ArtifactPackageRef:
             materialization_path=value.get("materialization_path"),
             schema_locks=tuple(
                 ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
+            ),
+            workflow_lock=(
+                ArtifactContractLock.from_mapping(raw_workflow_lock)
+                if isinstance(raw_workflow_lock, Mapping)
+                else None
             ),
         )
 

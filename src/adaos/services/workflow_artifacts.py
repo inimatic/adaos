@@ -44,6 +44,14 @@ class WorkflowDefinitionArtifact:
     raw_digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowDefinitionPayload:
+    definition: dict[str, Any]
+    compiled: CompiledWorkflowDefinition
+    definition_digest: str
+    raw_digest: str
+
+
 def _sha256(raw: bytes) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
@@ -118,11 +126,14 @@ def workflow_manifest_reference(
     return reference
 
 
-def _read_definition(path: Path, *, limits: WorkflowArtifactLimits) -> tuple[dict[str, Any], bytes]:
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise WorkflowArtifactError(f"cannot read {WORKFLOW_FILENAME}: {exc}") from exc
+def validate_workflow_definition_bytes(
+    raw: bytes,
+    *,
+    registered_guards: set[str] | frozenset[str] | None = None,
+    registered_activities: set[str] | frozenset[str] | None = None,
+    limits: WorkflowArtifactLimits | None = None,
+) -> WorkflowDefinitionPayload:
+    limits = limits or WorkflowArtifactLimits()
     if len(raw) > limits.max_bytes:
         raise WorkflowArtifactError(f"{WORKFLOW_FILENAME} exceeds {limits.max_bytes} bytes")
     try:
@@ -148,7 +159,41 @@ def _read_definition(path: Path, *, limits: WorkflowArtifactLimits) -> tuple[dic
         items = definition.get(field)
         if isinstance(items, list) and len(items) > maximum:
             raise WorkflowArtifactError(f"workflow {field} exceeds limit {maximum}")
-    return definition, raw
+    try:
+        compiled = compile_definition(
+            definition,
+            registered_guards=registered_guards,
+            registered_activities=registered_activities,
+        )
+    except WorkflowArtifactError:
+        raise
+    except WorkflowDefinitionError as exc:
+        raise WorkflowArtifactError(f"invalid {WORKFLOW_FILENAME}: {exc}") from exc
+    return WorkflowDefinitionPayload(
+        definition=copy.deepcopy(definition),
+        compiled=compiled,
+        definition_digest=canonical_workflow_digest(definition),
+        raw_digest=_sha256(raw),
+    )
+
+
+def _read_definition(
+    path: Path,
+    *,
+    registered_guards: set[str] | frozenset[str] | None,
+    registered_activities: set[str] | frozenset[str] | None,
+    limits: WorkflowArtifactLimits,
+) -> WorkflowDefinitionPayload:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise WorkflowArtifactError(f"cannot read {WORKFLOW_FILENAME}: {exc}") from exc
+    return validate_workflow_definition_bytes(
+        raw,
+        registered_guards=registered_guards,
+        registered_activities=registered_activities,
+        limits=limits,
+    )
 
 
 def load_manifest_bound_workflow(
@@ -177,28 +222,20 @@ def load_manifest_bound_workflow(
         raise WorkflowArtifactError(
             f"{manifest_name} references missing {WORKFLOW_FILENAME}"
         )
-    definition, raw = _read_definition(
+    payload = _read_definition(
         definition_path,
+        registered_guards=registered_guards,
+        registered_activities=registered_activities,
         limits=limits or WorkflowArtifactLimits(),
     )
-    try:
-        compiled = compile_definition(
-            definition,
-            registered_guards=registered_guards,
-            registered_activities=registered_activities,
-        )
-    except WorkflowArtifactError:
-        raise
-    except WorkflowDefinitionError as exc:
-        raise WorkflowArtifactError(f"invalid {WORKFLOW_FILENAME}: {exc}") from exc
     return WorkflowDefinitionArtifact(
         artifact_root=root,
         manifest_path=manifest_path,
         definition_path=definition_path,
-        definition=copy.deepcopy(definition),
-        compiled=compiled,
-        definition_digest=canonical_workflow_digest(definition),
-        raw_digest=_sha256(raw),
+        definition=copy.deepcopy(payload.definition),
+        compiled=payload.compiled,
+        definition_digest=payload.definition_digest,
+        raw_digest=payload.raw_digest,
     )
 
 
@@ -208,8 +245,10 @@ __all__ = [
     "WorkflowArtifactError",
     "WorkflowArtifactLimits",
     "WorkflowDefinitionArtifact",
+    "WorkflowDefinitionPayload",
     "canonical_workflow_bytes",
     "canonical_workflow_digest",
     "load_manifest_bound_workflow",
+    "validate_workflow_definition_bytes",
     "workflow_manifest_reference",
 ]

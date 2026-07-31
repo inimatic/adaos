@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import zipfile
@@ -8,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from adaos.domain.artifact_release import ArtifactSourceRef, canonical_json_bytes, sha256_digest
+from adaos.domain.artifact_release import (
+    ArtifactSourceRef,
+    ProjectRelease,
+    WorkspaceLock,
+    canonical_json_bytes,
+    sha256_digest,
+)
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
     PackageBuildError,
@@ -16,6 +23,7 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     verify_artifact_package,
 )
+from adaos.services.builder.governed import builder_change_definition
 
 
 def _source() -> ArtifactSourceRef:
@@ -97,6 +105,59 @@ def test_package_persists_builder_target_and_packaged_schema_identity(tmp_path: 
     assert verified.package_manifest["schema_locks"] == [
         built.ref.schema_locks[0].to_dict()
     ]
+
+
+def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (scenario / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.workflow_lock is not None
+    assert built.ref.workflow_lock.lock_id == "workflow:builder.change@1.0.0"
+    assert built.package_manifest["workflow_lock"] == built.ref.workflow_lock.to_dict()
+    assert verified.ref == built.ref
+
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(built.ref,),
+    ).seal()
+    restored_release = ProjectRelease.from_mapping(release.to_dict())
+    assert restored_release.components[0].workflow_lock == built.ref.workflow_lock
+
+    workspace_lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-07-31T00:00:00+00:00",
+        components=(built.ref,),
+    )
+    restored_lock = WorkspaceLock.from_mapping(workspace_lock.to_dict())
+    assert restored_lock.components[0].workflow_lock == built.ref.workflow_lock
+
+
+def test_package_verifier_rejects_bound_workflow_without_exact_lock() -> None:
+    definition = json.dumps(builder_change_definition()).encode("utf-8")
+    archive = _package_archive_with_files(
+        [
+            (
+                "scenario.yaml",
+                b"id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
+            ),
+            ("workflow.json", definition),
+        ]
+    )
+
+    with pytest.raises(PackageVerificationError, match="workflow_lock does not match"):
+        verify_artifact_package(archive)
 
 
 def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:
