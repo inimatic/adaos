@@ -298,6 +298,52 @@ def test_api_detached_restart_uses_root_cli_bootstrap(monkeypatch, tmp_path):
     assert captured["stderr"] is api_cmd.subprocess.STDOUT
 
 
+def test_api_detached_restart_preserves_repo_runtime_environment(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    repo_root = tmp_path / "repo"
+    repo_python = repo_root / ".venv" / "Scripts" / "python.exe"
+    (repo_root / "src").mkdir(parents=True)
+    repo_python.parent.mkdir(parents=True)
+    repo_python.write_text("", encoding="utf-8")
+
+    class _Process:
+        pid = 4321
+
+    monkeypatch.delenv("ADAOS_CLI_SLOT_BOUND", raising=False)
+    monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "A")
+    monkeypatch.setenv("ADAOS_SLOT_REPO_ROOT", "stale-slot")
+    monkeypatch.setattr(api_cmd.sys, "executable", str(repo_python))
+    monkeypatch.setattr(api_cmd, "_repo_root_for_runtime_preflight", lambda: repo_root)
+    monkeypatch.setattr(api_cmd, "_repo_runtime_git_commit", lambda: "repo-commit")
+    monkeypatch.setattr(api_cmd, "merged_runtime_dotenv_env", lambda env: dict(env))
+    monkeypatch.setattr(api_cmd, "_restart_log_path", lambda _host, _port: tmp_path / "restart.log")
+    monkeypatch.setattr(
+        api_cmd.subprocess,
+        "Popen",
+        lambda **kwargs: captured.update(kwargs) or _Process(),
+    )
+
+    api_cmd._spawn_detached_server("127.0.0.1", 8777, token=None)
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] == "1"
+    assert env["ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY"] == "1"
+    assert env["ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC"] == "1"
+    assert env["ADAOS_GIT_COMMIT"] == "repo-commit"
+    assert env["PYTHONPATH"] == str(repo_root / "src")
+    assert "ADAOS_ACTIVE_CORE_SLOT" not in env
+    assert "ADAOS_SLOT_REPO_ROOT" not in env
+    assert captured["cwd"] == str(repo_root.resolve())
+
+
+def test_api_restart_expected_commit_uses_repo_identity(monkeypatch):
+    monkeypatch.setattr(api_cmd, "_api_restart_preserves_repo_runtime", lambda: True)
+    monkeypatch.setattr(api_cmd, "_repo_runtime_git_commit", lambda: "repo-commit")
+
+    assert api_cmd._api_restart_expected_git_commit() == "repo-commit"
+
+
 def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     monkeypatch.delenv("ADAOS_API_RESTART_START_TIMEOUT_SEC", raising=False)
     assert api_cmd._api_restart_start_timeout_seconds() == 90.0
@@ -315,6 +361,11 @@ def test_api_restart_start_timeout_is_bounded_and_configurable(monkeypatch):
     assert api_cmd._api_restart_stability_seconds() == 10.0
     monkeypatch.setenv("ADAOS_API_RESTART_STABILITY_SEC", "120")
     assert api_cmd._api_restart_stability_seconds() == 60.0
+
+    monkeypatch.delenv("ADAOS_API_RESTART_READINESS_GRACE_SEC", raising=False)
+    assert api_cmd._api_restart_readiness_grace_seconds() == 60.0
+    monkeypatch.setenv("ADAOS_API_RESTART_READINESS_GRACE_SEC", "300")
+    assert api_cmd._api_restart_readiness_grace_seconds() == 120.0
 
 
 def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatch):
@@ -341,6 +392,7 @@ def test_wait_for_server_start_requires_expected_pid_and_ready_health(monkeypatc
         timeout=0.01,
         expected_git_commit="other-build",
         stability=0,
+        readiness_grace=0,
     )
 
 
@@ -361,6 +413,7 @@ def test_wait_for_server_start_rejects_listener_without_ready_health(monkeypatch
         timeout=0.01,
         expected_git_commit="abc123",
         stability=0,
+        readiness_grace=0,
     )
 
 
@@ -406,7 +459,8 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
 
     assert result.exit_code == 1
     assert observed == {"timeout": 75.0, "expected_git_commit": "abc123"}
-    assert "within 75s" in result.stdout
+    assert "base_timeout=75s" in result.stdout
+    assert "readiness_grace=60s" in result.stdout
     assert "alive=true" in result.stdout
     assert "expected_git_commit=abc123" in result.stdout
     assert str(launch.log_path) in result.stdout

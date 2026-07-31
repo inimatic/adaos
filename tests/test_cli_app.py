@@ -118,6 +118,26 @@ def test_should_reexec_active_slot_venv_when_current_python_differs(monkeypatch,
     assert cli_app._should_reexec_active_slot_venv() is True
 
 
+def test_api_restart_from_repo_venv_preserves_selected_runtime(monkeypatch, tmp_path: Path) -> None:
+    repo_python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    slot_python = tmp_path / "slot" / "venv" / "Scripts" / "python.exe"
+    repo_python.parent.mkdir(parents=True)
+    slot_python.parent.mkdir(parents=True)
+    repo_python.write_text("", encoding="utf-8")
+    slot_python.write_text("", encoding="utf-8")
+
+    monkeypatch.delenv("ADAOS_CLI_SLOT_BOUND", raising=False)
+    monkeypatch.delenv("ADAOS_CLI_REEXECED", raising=False)
+    monkeypatch.delenv("ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC", raising=False)
+    monkeypatch.setattr(cli_app, "_repo_venv_python", lambda: str(repo_python))
+    monkeypatch.setattr(cli_app, "_active_slot_manifest_payload", lambda: (str(slot_python), {}, None))
+    monkeypatch.setattr(cli_app.sys, "executable", str(repo_python))
+
+    assert cli_app._should_preserve_repo_runtime_for_api_restart(["api", "restart"])
+    assert not cli_app._should_reexec_active_slot_venv(["api", "restart"])
+    assert cli_app._should_reexec_active_slot_venv(["api", "serve"])
+
+
 def test_windows_wrapper_reexec_does_not_block_active_slot_reexec(monkeypatch, tmp_path: Path) -> None:
     base_dir = tmp_path / ".adaos"
     slot_dir = base_dir / "state" / "core_slots" / "slots" / "B"
