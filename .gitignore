@@ -35,3 +35,4 @@ example3
 .secrets/
 .codex-diagnostics
 .gitignore
+build
