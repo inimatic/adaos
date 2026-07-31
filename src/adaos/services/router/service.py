@@ -5549,6 +5549,62 @@ class RouterService:
             tool = str(policy.get("tool") or "handle_text").strip() or "handle_text"
             return _call_runtime_skill_tool(skill, tool, {"text": text}, meta)
 
+        async def _on_conversation_interaction_responded(ev: Event) -> None:
+            payload = ev.payload if isinstance(ev.payload, Mapping) else {}
+            if not payload or bool(payload.get("duplicate")):
+                return
+            interaction = payload.get("interaction") if isinstance(payload.get("interaction"), Mapping) else {}
+            response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+            interaction_meta = interaction.get("metadata") if isinstance(interaction.get("metadata"), Mapping) else {}
+            if str(interaction_meta.get("domain") or "").strip() != "builder":
+                return
+            response_meta = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            topic_ref = interaction_meta.get("topic_ref") if isinstance(interaction_meta.get("topic_ref"), Mapping) else {}
+            execution_webspace_id = str(
+                interaction_meta.get("execution_webspace_id")
+                or response_meta.get("execution_webspace_id")
+                or topic_ref.get("dev_webspace_id")
+                or response_meta.get("webspace_id")
+                or interaction_meta.get("source_webspace_id")
+                or "desktop"
+            ).strip() or "desktop"
+            route_meta = {
+                **dict(response_meta),
+                "webspace_id": execution_webspace_id,
+                "source_webspace_id": str(
+                    interaction_meta.get("source_webspace_id")
+                    or response_meta.get("source_webspace_id")
+                    or execution_webspace_id
+                ).strip(),
+                "conversation_id": str(
+                    interaction.get("conversation_id")
+                    or response_meta.get("conversation_id")
+                    or ""
+                ).strip(),
+                "dialog_channel_id": BUILDER_DIALOG_CHANNEL_ID,
+                "interaction_id": str(interaction.get("interaction_id") or "").strip(),
+                "interaction_response_id": str(response.get("response_id") or "").strip(),
+            }
+            try:
+                await asyncio.to_thread(
+                    _call_runtime_skill_tool,
+                    BUILDER_SKILL_ID,
+                    "handle_interaction_response",
+                    {
+                        "event": dict(payload),
+                        "webspace_id": execution_webspace_id,
+                    },
+                    route_meta,
+                )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "Builder interaction response dispatch failed interaction_id=%s response_id=%s webspace=%s",
+                    interaction.get("interaction_id"),
+                    response.get("response_id"),
+                    execution_webspace_id,
+                    exc_info=True,
+                )
+
         def _chat_append_matches_dialog_action(
             payload: Mapping[str, Any],
             *,
@@ -7219,6 +7275,7 @@ class RouterService:
         self.bus.subscribe("dialog.channel.select", _on_dialog_channel_select)
         self.bus.subscribe("dialog.channel.activated", _on_dialog_channel_event)
         self.bus.subscribe("dialog.channel.deactivated", _on_dialog_channel_event)
+        self.bus.subscribe("conversation.interaction.responded", _on_conversation_interaction_responded)
         self.bus.subscribe("io.out.chat.append", _on_io_out_chat_append)
         self.bus.subscribe("io.out.say", _on_io_out_say)
         self.bus.subscribe("io.out.media.route", _on_io_out_media_route)

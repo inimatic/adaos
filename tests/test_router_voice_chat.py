@@ -3960,3 +3960,70 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
     assert outputs[0].payload["messages"][0]["keyboard"]["inline_keyboard"] == [
         [{"text": "Показать процесс", "callback_data": "ia:0:builder-process"}]
     ]
+
+
+async def test_builder_interaction_response_dispatches_to_authoritative_dev_runtime(monkeypatch) -> None:
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, dict]] = []
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_dev_tool(self, skill, tool, payload):
+            calls.append((skill, tool, dict(payload)))
+            return {"ok": True, "status": "handled"}
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(node_id="hub-node", subnet_id="sn-test"),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            paths=SimpleNamespace(),
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "SkillManager", _Manager)
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == "dev1-dev")
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.publish(
+        Event(
+            type="conversation.interaction.responded",
+            source="test",
+            ts=1.0,
+            payload={
+                "interaction": {
+                    "interaction_id": "interaction.builder",
+                    "conversation_id": "conv.builder",
+                    "metadata": {
+                        "domain": "builder",
+                        "project_ref": "scenario:builder",
+                        "source_webspace_id": "dev1",
+                        "execution_webspace_id": "dev1-dev",
+                    },
+                },
+                "response": {
+                    "response_id": "response.builder",
+                    "consumed_command": {"command": "builder.change.plan"},
+                    "metadata": {"io_type": "telegram", "route_id": "telegram", "chat_id": "42"},
+                },
+                "duplicate": False,
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=2.0)
+
+    assert len(calls) == 1
+    assert calls[0][0:2] == ("builder_skill", "handle_interaction_response")
+    assert calls[0][2]["webspace_id"] == "dev1-dev"
+    assert calls[0][2]["_meta"]["source_webspace_id"] == "dev1"
