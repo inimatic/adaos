@@ -2317,6 +2317,7 @@ async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(mo
     assert calls[0][2]["text"] == "покажи текущий проект"
     assert calls[0][2]["_meta"]["route_id"] == "telegram"
     assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    assert calls[0][2]["_meta"]["_router_tool_scheduled_at"] > 0
     assert len(outputs) == 1
     assert outputs[0].type == "tg.output.main-bot.chat.42"
     assert outputs[0].payload["messages"] == [

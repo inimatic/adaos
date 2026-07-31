@@ -5399,7 +5399,14 @@ class RouterService:
         def _call_runtime_skill_tool(skill: str, tool: str, payload: dict[str, Any], meta: dict) -> Any:
             log = logging.getLogger("adaos.router.voice_chat")
             route_meta = dict(meta)
-            scheduled_raw = route_meta.pop("_router_tool_scheduled_at", None)
+            # Keep the scheduling marker in the tool metadata.  Besides
+            # measuring queue latency it is the explicit hand-off contract
+            # telling a dialog skill that Router owns fallback
+            # materialization.  Removing it here lets the skill emit an
+            # eager chat event while the materialization probe is active;
+            # the probe can then observe the event before durable storage and
+            # suppress Router's reliable fallback (most visible on Telegram).
+            scheduled_raw = route_meta.get("_router_tool_scheduled_at")
             worker_started = time.perf_counter()
             queue_ms: float | None = None
             try:
