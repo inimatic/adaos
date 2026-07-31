@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.admission.v1",
+  "title": "AdaOS Workflow Candidate Admission",
+  "type": "object",
+  "required": ["schema", "workspace_lock_digest", "release_digest", "workflows", "required_migrations", "candidate_generation_digest", "status", "diagnostics"],
+  "properties": {
+    "schema": { "const": "adaos.workflow.admission.v1" },
+    "workspace_lock_digest": { "$ref": "#/$defs/digest" },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "workflows": {
+      "type": "array",
+      "items": { "$ref": "workflow.definition_artifact.v1.schema.json" }
+    },
+    "required_migrations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "candidate_generation_digest": { "$ref": "#/$defs/digest" },
+    "status": { "enum": ["admitted", "not_required"] },
+    "diagnostics": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

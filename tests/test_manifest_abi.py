@@ -54,6 +54,8 @@ def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
         "workflow.registry_entry.v1.schema.json",
         "workflow.binding.v1.schema.json",
         "workflow.principal.v1.schema.json",
+        "workflow.definition_artifact.v1.schema.json",
+        "workflow.admission.v1.schema.json",
     ],
 )
 def test_workflow_registry_schemas_are_valid_draft_2020_12(schema_name: str) -> None:

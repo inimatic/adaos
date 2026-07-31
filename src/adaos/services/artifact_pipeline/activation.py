@@ -29,6 +29,7 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.governed_workflow import validate_workflow_record
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
@@ -38,6 +39,7 @@ ACTIVATION_PHASES = (
     "resolve",
     "fetch",
     "verify",
+    "workflow-bind",
     "dependency-plan",
     "permission-plan",
     "migration-plan",
@@ -670,6 +672,125 @@ class WorkspaceActivationManager:
         }
 
     @staticmethod
+    def _workflow_candidate_plan(
+        current: WorkspaceLock | None,
+        desired: WorkspaceLock,
+        release: ProjectRelease,
+        *,
+        candidate_keys: set[str],
+    ) -> dict[str, Any]:
+        """Bind code, definition, adapters, and explicit migrations as one generation."""
+
+        before = {item.key: item for item in (current.components if current else ())}
+        entries: list[dict[str, Any]] = []
+        required_migrations: list[str] = []
+        for package in sorted(desired.components, key=lambda item: item.key):
+            if package.workflow_lock is None:
+                continue
+            if package.key in candidate_keys and (
+                package.workflow_validation_lock is None
+                or package.workflow_binding_digest is None
+            ):
+                raise ActivationError(
+                    f"candidate workflow package has no complete binding: {package.key}"
+                )
+            previous = before.get(package.key)
+            definition_changed = bool(
+                previous is not None
+                and previous.workflow_lock is not None
+                and previous.workflow_lock.digest != package.workflow_lock.digest
+            )
+            binding_changed = bool(
+                previous is not None
+                and previous.workflow_binding_digest != package.workflow_binding_digest
+            )
+            migration_id = None
+            if definition_changed:
+                previous_lock = previous.workflow_lock
+                previous_identity = str(previous_lock.lock_id)
+                target_identity = str(package.workflow_lock.lock_id)
+                if previous_identity == target_identity:
+                    raise ActivationError(
+                        "workflow definition bytes changed without a definition version bump: "
+                        f"{package.key}"
+                    )
+                migration = next(
+                    (
+                        dict(item)
+                        for item in release.migrations
+                        if str(item.get("workflow_component") or "") == package.key
+                        and str(item.get("from_definition_digest") or "")
+                        == previous_lock.digest
+                        and str(item.get("to_definition_digest") or "")
+                        == package.workflow_lock.digest
+                    ),
+                    None,
+                )
+                if migration is None:
+                    raise ActivationError(
+                        "workflow definition upgrade requires an exact migration contract: "
+                        f"{package.key}"
+                    )
+                migration_id = str(
+                    migration.get("id") or migration.get("name") or ""
+                ).strip()
+                if not migration_id:
+                    raise ActivationError(
+                        f"workflow migration has no stable id: {package.key}"
+                    )
+                required_migrations.append(migration_id)
+            for adapter in package.workflow_adapter_locks:
+                if adapter.owner_scope == "platform":
+                    continue
+                owner = next(
+                    (
+                        item
+                        for item in desired.components
+                        if item.key == adapter.owner_package
+                    ),
+                    None,
+                )
+                if owner is None:
+                    raise ActivationError(
+                        f"workflow adapter owner package is inactive: {adapter.owner_package}"
+                    )
+            entries.append(
+                {
+                    "schema": "adaos.workflow.definition_artifact.v1",
+                    "component": package.key,
+                    "package_digest": package.digest,
+                    "definition": package.workflow_lock.to_dict(),
+                    "validation": (
+                        package.workflow_validation_lock.to_dict()
+                        if package.workflow_validation_lock is not None
+                        else None
+                    ),
+                    "binding_digest": package.workflow_binding_digest,
+                    "adapter_locks": [
+                        item.to_dict() for item in package.workflow_adapter_locks
+                    ],
+                    "definition_changed": definition_changed,
+                    "binding_changed": binding_changed,
+                    "migration_id": migration_id,
+                }
+            )
+        unsigned = {
+            "schema": "adaos.workflow.admission.v1",
+            "workspace_lock_digest": desired.to_dict()["lock_digest"],
+            "release_digest": release.release_digest or release.computed_digest(),
+            "workflows": entries,
+            "required_migrations": sorted(required_migrations),
+        }
+        admission = {
+            **unsigned,
+            "candidate_generation_digest": canonical_payload_digest(unsigned),
+            "status": "admitted" if entries else "not_required",
+            "diagnostics": [],
+        }
+        validate_workflow_record("adaos.workflow.admission.v1", admission)
+        return admission
+
+    @staticmethod
     def _approved_skip(policy: Mapping[str, Any] | None, *, phase: str) -> dict[str, Any]:
         if not isinstance(policy, Mapping) or str(policy.get("mode") or "") != "skip":
             raise ActivationError(
@@ -882,6 +1003,12 @@ class WorkspaceActivationManager:
         current_release = self._active_release(current, slot_id=slot_id)
         permission_plan = self._permission_plan(current_release, plan.release)
         migration_plan = self._migration_plan(plan.release)
+        workflow_plan = self._workflow_candidate_plan(
+            current,
+            desired,
+            plan.release,
+            candidate_keys={item.key for item in plan.packages},
+        )
         migration_locks = {item.lock_id: item.digest for item in plan.release.migration_locks}
         for entry in migration_plan["entries"]:
             entry["digest"] = migration_locks.get(str(entry["id"]))
@@ -946,6 +1073,7 @@ class WorkspaceActivationManager:
             "permissions": permission_plan,
             "schemas": schema_plan,
             "migrations": migration_plan,
+            "workflows": workflow_plan,
             "rollback": {
                 "available": rollback_available,
                 "reason": (
@@ -1229,6 +1357,25 @@ class WorkspaceActivationManager:
                 data_ref=data_ref,
             )
             operation["desired_lock"] = desired.to_dict()
+            workflow_plan = self._workflow_candidate_plan(
+                current,
+                desired,
+                plan.release,
+                candidate_keys={item.key for item in plan.packages},
+            )
+            operation["workflow_candidate"] = workflow_plan
+            self._phase(
+                operation,
+                "workflow-bind",
+                phase_hook=phase_hook,
+                evidence={
+                    "status": workflow_plan["status"],
+                    "candidate_generation_digest": workflow_plan[
+                        "candidate_generation_digest"
+                    ],
+                    "workflow_count": len(workflow_plan["workflows"]),
+                },
+            )
             component_plan = self._component_plan(current, desired)
             operation["component_plan"] = component_plan
             self._phase(

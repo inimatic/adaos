@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import threading
 import time
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     build_project_release,
 )
+from adaos.services.builder.governed import builder_change_definition
 
 
 def _source() -> ArtifactSourceRef:
@@ -37,6 +39,34 @@ def _built_scenario(root: Path, *, version: str, marker: str):
     scenario.mkdir(parents=True)
     (scenario / "scenario.yaml").write_text(
         f"id: recipes\nversion: {version}\ntitle: Recipes\n",
+        encoding="utf-8",
+    )
+    (scenario / "webui.json").write_text(
+        json.dumps({"marker": marker}) + "\n",
+        encoding="utf-8",
+    )
+    return build_artifact_package(scenario, kind="scenario", source_ref=_source())
+
+
+def _built_workflow_scenario(
+    root: Path,
+    *,
+    version: str,
+    marker: str,
+    definition_version: str = "1.0.0",
+    state_label: str = "Prototype",
+):
+    scenario = root / f"workflow-source-{marker}"
+    scenario.mkdir(parents=True)
+    (scenario / "scenario.yaml").write_text(
+        f"id: recipes\nversion: {version}\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    definition = copy.deepcopy(builder_change_definition())
+    definition["definition_version"] = definition_version
+    definition["states"][0]["label"] = state_label
+    (scenario / "workflow.json").write_text(
+        json.dumps(definition, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     (scenario / "webui.json").write_text(
@@ -171,6 +201,123 @@ def test_activation_installs_empty_workspace_and_is_idempotent(tmp_path: Path) -
         histories[0].with_suffix(".status").read_text(encoding="utf-8")
     )
     assert reconciled["status"] == "active"
+
+
+def test_workflow_candidate_generation_is_bound_into_atomic_activation(tmp_path: Path) -> None:
+    built = _built_workflow_scenario(
+        tmp_path,
+        version="1.0.0",
+        marker="workflow-bound",
+    )
+    store, manager = _manager(tmp_path)
+    store.put(built.archive_bytes)
+
+    result = _activate(
+        manager,
+        _plan(built),
+        idempotency_key="workflow-bound-generation",
+    )
+
+    operation = json.loads(
+        manager.operation_path(result.operation_id).read_text(encoding="utf-8")
+    )
+    candidate = operation["workflow_candidate"]
+    assert candidate["status"] == "admitted"
+    assert candidate["candidate_generation_digest"].startswith("sha256:")
+    assert candidate["workflows"][0]["definition"] == built.ref.workflow_lock.to_dict()
+    assert candidate["workflows"][0]["binding_digest"] == (
+        built.ref.workflow_binding_digest
+    )
+    assert result.workspace_lock.components[0].workflow_binding_digest == (
+        built.ref.workflow_binding_digest
+    )
+
+
+def test_same_version_workflow_mutation_is_rejected_before_workspace_switch(
+    tmp_path: Path,
+) -> None:
+    first = _built_workflow_scenario(
+        tmp_path,
+        version="1.0.0",
+        marker="workflow-v1",
+    )
+    second = _built_workflow_scenario(
+        tmp_path,
+        version="1.1.0",
+        marker="workflow-mutated",
+        state_label="Changed without definition version",
+    )
+    store, manager = _manager(tmp_path)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    initial = _activate(manager, _plan(first), idempotency_key="workflow-v1")
+
+    with pytest.raises(ActivationError, match="without a definition version bump"):
+        _activate(manager, _plan(second), idempotency_key="workflow-mutated")
+
+    assert manager.load_lock() == initial.workspace_lock
+    assert json.loads(
+        (tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {"marker": "workflow-v1"}
+
+
+def test_versioned_workflow_migration_and_failed_health_roll_back_as_one_generation(
+    tmp_path: Path,
+) -> None:
+    first = _built_workflow_scenario(
+        tmp_path,
+        version="1.0.0",
+        marker="workflow-before",
+    )
+    second = _built_workflow_scenario(
+        tmp_path,
+        version="2.0.0",
+        marker="workflow-after",
+        definition_version="1.1.0",
+        state_label="Prototype vNext",
+    )
+    migration = {
+        "id": "recipes-workflow-1.1.0",
+        "workflow_component": "scenario:recipes",
+        "from_definition_digest": first.ref.workflow_lock.digest,
+        "to_definition_digest": second.ref.workflow_lock.digest,
+        "rollback": {
+            "supported": True,
+            "procedure_ref": "recipes.workflow.rollback_1_1_0",
+        },
+    }
+    store, manager = _manager(tmp_path)
+    store.put(first.archive_bytes)
+    store.put(second.archive_bytes)
+    initial = _activate(manager, _plan(first), idempotency_key="workflow-before")
+    rollback_requests: list[dict[str, object]] = []
+
+    with pytest.raises(ActivationError, match="health check failed"):
+        _activate(
+            manager,
+            _plan(second, migrations=(migration,)),
+            idempotency_key="workflow-upgrade-failed-health",
+            migration_executor=lambda request: {
+                "status": "completed",
+                "checkpoint": "workflow-instances-before-1.1.0",
+                "request_digest": request["release_digest"],
+            },
+            migration_rollback=lambda request: (
+                rollback_requests.append(dict(request))
+                or {"status": "rolled_back", "checkpoint": "workflow-instances-before-1.1.0"}
+            ),
+            health_check=lambda _lock: False,
+        )
+
+    assert rollback_requests
+    assert manager.load_lock() == initial.workspace_lock
+    assert json.loads(
+        (tmp_path / "workspace" / "scenarios" / "recipes" / "webui.json").read_text(
+            encoding="utf-8"
+        )
+    ) == {"marker": "workflow-before"}
 
 
 def test_failure_after_history_write_marks_history_rolled_back(

@@ -13,31 +13,32 @@
     "adapters": {
       "type": "array",
       "uniqueItems": true,
-      "items": {
-        "type": "object",
-        "required": ["adapter_id", "kind", "contract_digest", "owner"],
-        "properties": {
-          "adapter_id": { "$ref": "#/$defs/id" },
-          "kind": { "enum": ["guard", "activity", "compensation"] },
-          "contract_digest": { "$ref": "#/$defs/digest" },
-          "owner": {
-            "type": "object",
-            "required": ["scope", "package"],
-            "properties": {
-              "scope": { "enum": ["platform", "package", "dependency"] },
-              "package": { "type": ["string", "null"], "maxLength": 200 }
-            },
-            "additionalProperties": false
-          }
-        },
-        "additionalProperties": false
-      }
+      "items": { "$ref": "#/$defs/adapterLock" }
     },
     "binding_digest": { "$ref": "#/$defs/digest" }
   },
   "$defs": {
     "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$" },
-    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "adapterLock": {
+      "type": "object",
+      "required": ["adapter_id", "kind", "contract_digest", "owner"],
+      "properties": {
+        "adapter_id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["guard", "activity", "compensation"] },
+        "contract_digest": { "$ref": "#/$defs/digest" },
+        "owner": {
+          "type": "object",
+          "required": ["scope", "package"],
+          "properties": {
+            "scope": { "enum": ["platform", "package", "dependency"] },
+            "package": { "type": ["string", "null"], "maxLength": 200 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }
