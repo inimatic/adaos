@@ -4133,7 +4133,12 @@ class RouterService:
                     route_id=route_id,
                     request_id=str(local_meta.get("request_id") or local_msg.get("request_id") or "") or None,
                     turn_trace_id=local_turn_trace_id or None,
-                    idempotency_key=str(local_meta.get("idempotency_key") or "") or None,
+                    idempotency_key=str(
+                        local_meta.get("response_idempotency_key")
+                        or local_meta.get("idempotency_key")
+                        or ""
+                    )
+                    or None,
                     ts=float(local_msg.get("ts") or time.time()),
                 )
                 projection = conversation_store.list_projection(

@@ -30,6 +30,51 @@ def test_chat_send_materializes_visible_message_and_ledger() -> None:
     assert history["messages"][0]["active_agent_id"] == "agent:core:general"
 
 
+def test_chat_response_does_not_reuse_transport_ingress_idempotency_key() -> None:
+    conversation_id = "conv.chat.transport-idempotency"
+    ingress_key = "transport:telegram:main-bot:42:100"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id="prompt-project:scenario:builder",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="user",
+        text="Строитель, что выбрано?",
+        payload={"id": "m.transport.input"},
+        meta={"idempotency_key": ingress_key},
+        request_id="telegram:main-bot:42:100",
+        turn_trace_id="trace.transport.100",
+        idempotency_key=ingress_key,
+    )
+
+    result = chat.send(
+        "Конструктор: сейчас выбран Builder (builder).",
+        conversation_id=conversation_id,
+        thread_id="prompt-project:scenario:builder",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        route_id="telegram",
+        request_id="telegram:main-bot:42:100",
+        turn_trace_id="trace.transport.100",
+        meta={"idempotency_key": ingress_key, "io_type": "telegram"},
+        bus=None,
+    )
+
+    stored = result["stored_message"]
+    history = chat.history(conversation_id, thread_id="prompt-project:scenario:builder", limit=5)
+    assert stored["from"] == "hub"
+    assert [item["from"] for item in history["messages"]] == ["user", "hub"]
+    assert stored["_meta"]["idempotency_key"] == ingress_key
+    assert stored["_meta"]["response_idempotency_key"].startswith("response:")
+
+
 def test_chat_start_thread_and_history_filter_messages() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_conversation(

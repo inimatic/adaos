@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import is_dataclass
 from typing import Any, Mapping, Sequence
+import hashlib
+import logging
 import time
 import uuid
 
@@ -11,6 +13,30 @@ from adaos.services import conversation_store
 
 DEFAULT_RENDER_TARGETS = ("text_tail",)
 CARD_CONTENT_TYPES = {"card", "card_list", "table", "form", "webui", "builder_evidence"}
+_LOG = logging.getLogger("adaos.conversation.response")
+
+
+def _response_idempotency_key(
+    *,
+    meta: Mapping[str, Any],
+    request_id: str | None,
+    turn_trace_id: str | None,
+) -> str | None:
+    explicit = str(meta.get("response_idempotency_key") or "").strip()
+    if explicit:
+        return explicit
+    request_ref = str(request_id or meta.get("request_id") or meta.get("idempotency_key") or "").strip()
+    if not request_ref:
+        return None
+    presentation_ref = str(
+        meta.get("interaction_presentation_id")
+        or meta.get("interaction_id")
+        or turn_trace_id
+        or meta.get("turn_trace_id")
+        or "message"
+    ).strip()
+    digest = hashlib.sha256(f"{request_ref}\n{presentation_ref}".encode("utf-8")).hexdigest()
+    return f"response:{digest}"
 
 
 def materialize_response(
@@ -64,6 +90,13 @@ def materialize_response(
         clean_meta.setdefault("turn_trace_id", turn_trace_id)
     if thread_id:
         clean_meta.setdefault("thread_id", thread_id)
+    response_idempotency_key = _response_idempotency_key(
+        meta=clean_meta,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+    )
+    if response_idempotency_key:
+        clean_meta["response_idempotency_key"] = response_idempotency_key
 
     published: list[dict[str, Any]] = []
     stored: dict[str, Any] | None = None
@@ -376,10 +409,23 @@ def _append_ledger_message(
             route_id=route_id,
             request_id=request_id,
             turn_trace_id=turn_trace_id,
-            idempotency_key=str(meta.get("idempotency_key") or "").strip() or None,
+            idempotency_key=str(
+                meta.get("response_idempotency_key")
+                or meta.get("idempotency_key")
+                or ""
+            ).strip()
+            or None,
             ts=float(payload.get("ts") or time.time()),
         )
-    except Exception:
+    except Exception as exc:
+        _LOG.warning(
+            "conversation response ledger append failed conversation=%s webspace=%s request=%s error=%s",
+            conversation_id,
+            webspace_id,
+            str(request_id or "").strip() or "-",
+            type(exc).__name__,
+            exc_info=True,
+        )
         return None
 
 
