@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services.builder.governed import (
     builder_change_definition,
     compiled_builder_change_definition,
 )
-from adaos.services.builder.workflow import BuilderWorkflowService
+from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 from adaos.services.governed_workflow import definition_review_report, export_statechart
 
 
@@ -66,6 +68,51 @@ def test_normative_builder_definition_is_compiled_and_explainable() -> None:
     assert {"prototype_editing", "automation_waiting", "trial_review", "publication_ready"} <= {
         item["id"] for item in graph["states"]
     }
+
+
+def test_dev_builder_skill_workflow_is_runtime_authority(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    builder_skill = service.dev_skills_root / "builder_skill"
+    builder_skill.mkdir()
+    (builder_skill / "skill.yaml").write_text(
+        "name: builder_skill\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    definition = builder_change_definition()
+    definition["definition_version"] = "1.0.1"
+    (builder_skill / "workflow.json").write_text(
+        json.dumps(definition, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    described = service.describe("scenario", "recipes")
+
+    assert described["governed"]["definition_version"] == "1.0.1"
+
+
+def test_present_but_invalid_dev_builder_workflow_fails_closed(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    builder_skill = service.dev_skills_root / "builder_skill"
+    builder_skill.mkdir()
+    (builder_skill / "skill.yaml").write_text(
+        "name: builder_skill\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "adaos"
+        / "services"
+        / "builder"
+        / "builder_change.workflow.json"
+    )
+    shutil.copyfile(source, builder_skill / "workflow.json")
+    definition = json.loads((builder_skill / "workflow.json").read_text(encoding="utf-8"))
+    definition["transitions"][0]["effect"]["activity"] = "builder.unregistered"
+    (builder_skill / "workflow.json").write_text(json.dumps(definition), encoding="utf-8")
+
+    with pytest.raises(BuilderWorkflowError, match="unregistered activity"):
+        service.describe("scenario", "recipes")
 
 
 def test_legacy_transition_is_admitted_and_persisted_by_canonical_statechart(tmp_path: Path) -> None:

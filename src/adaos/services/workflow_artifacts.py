@@ -181,11 +181,16 @@ def load_manifest_bound_workflow(
         definition_path,
         limits=limits or WorkflowArtifactLimits(),
     )
-    compiled = compile_definition(
-        definition,
-        registered_guards=registered_guards,
-        registered_activities=registered_activities,
-    )
+    try:
+        compiled = compile_definition(
+            definition,
+            registered_guards=registered_guards,
+            registered_activities=registered_activities,
+        )
+    except WorkflowArtifactError:
+        raise
+    except WorkflowDefinitionError as exc:
+        raise WorkflowArtifactError(f"invalid {WORKFLOW_FILENAME}: {exc}") from exc
     return WorkflowDefinitionArtifact(
         artifact_root=root,
         manifest_path=manifest_path,

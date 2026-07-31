@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -17,6 +18,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.builder.action_contracts import build_builder_action
 from adaos.services.builder.governed import (
     admit_legacy_transition,
+    compiled_builder_change_definition,
     governed_instance,
     legacy_action_for_command,
     workflow_description,
@@ -41,7 +43,9 @@ from adaos.services.builder.project_aggregate import (
     set_focus,
 )
 from adaos.services.conversation_interactions import interaction_from_workflow_description
+from adaos.services.governed_workflow import CompiledWorkflowDefinition
 from adaos.services.runtime_paths import current_state_dir
+from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
 
 
 BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
@@ -73,10 +77,44 @@ _PROJECT_MUTATION_FINISH_ACTIONS = {
     "return_to_prototype_failed": (False, False),
 }
 _PROJECT_ATOMIC_MUTATION_ACTIONS = {"prototype_revision_recorded", "adopt_experiment"}
+_BUILDER_WORKFLOW_GUARDS = frozenset({"always"})
+_BUILDER_WORKFLOW_ACTIVITIES = frozenset(
+    {
+        "builder.codex.run",
+        "builder.prototype.derive",
+        "builder.publication.publish",
+        "builder.trial.activate",
+    }
+)
 
 
 class BuilderWorkflowError(ValueError):
     """Raised when a Builder lifecycle transition is not permitted."""
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=16)
+def _load_builder_skill_definition(
+    skill_root: str,
+    _manifest_signature: tuple[int, int],
+    _definition_signature: tuple[int, int],
+) -> CompiledWorkflowDefinition:
+    artifact = load_manifest_bound_workflow(
+        Path(skill_root),
+        manifest_name="skill.yaml",
+        registered_guards=set(_BUILDER_WORKFLOW_GUARDS),
+        registered_activities=set(_BUILDER_WORKFLOW_ACTIVITIES),
+        allow_legacy_inline=False,
+    )
+    if artifact is None:
+        raise WorkflowArtifactError("builder_skill must reference workflow.json")
+    if artifact.compiled.workflow_type != "builder.change":
+        raise WorkflowArtifactError("builder_skill workflow_type must be builder.change")
+    return artifact.compiled
 
 
 def _now() -> str:
@@ -717,6 +755,23 @@ class BuilderWorkflowService:
             raise FileNotFoundError(f"DEV {kind} project not found: {project_id}")
         return root
 
+    def _governed_definition(self) -> CompiledWorkflowDefinition:
+        skill_root = (self.dev_skills_root / "builder_skill").resolve()
+        if not skill_root.is_dir():
+            # Bounded compatibility for isolated core tests and rollback only. A
+            # real DEV Builder installation is authoritative when it is present.
+            return compiled_builder_change_definition()
+        manifest_path = skill_root / "skill.yaml"
+        definition_path = skill_root / "workflow.json"
+        try:
+            return _load_builder_skill_definition(
+                str(skill_root),
+                _file_signature(manifest_path),
+                _file_signature(definition_path),
+            )
+        except (OSError, WorkflowArtifactError) as exc:
+            raise BuilderWorkflowError(f"invalid declarative Builder workflow: {exc}") from exc
+
     def _state_path(self, object_type: str, object_id: str) -> Path:
         return self.project_root(object_type, object_id) / "prompt_state.json"
 
@@ -891,6 +946,7 @@ class BuilderWorkflowService:
         normalized["governed"] = governed_instance(
             {**normalized, "governed": raw.get("governed")},
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
+            definition=self._governed_definition(),
         )
         normalized["data_binding"] = normalize_binding_state(
             raw.get("data_binding"),
@@ -964,6 +1020,7 @@ class BuilderWorkflowService:
         projection["workflow_description"] = workflow_description(
             workflow,
             project_ref=f"{kind}:{project_id}",
+            definition=self._governed_definition(),
         )
         projection["process"] = self._process_projection(projection)
         projection["project_summary"] = self._project_summary(projection)
@@ -1912,6 +1969,7 @@ class BuilderWorkflowService:
                     idempotency_key=str(details.get("idempotency_key") or "").strip()
                     or f"legacy:{kind}:{project_id}:{int(workflow.get('generation') or 0)}:{action_token}",
                     now=changed_at,
+                    definition=self._governed_definition(),
                 )
                 if governed_decision is not None and not bool(governed_decision.get("accepted")):
                     raise BuilderWorkflowError(
@@ -2038,6 +2096,7 @@ class BuilderWorkflowService:
         projection["workflow_description"] = workflow_description(
             workflow,
             project_ref=f"{kind}:{project_id}",
+            definition=self._governed_definition(),
         )
         projection["process"] = self._process_projection(projection)
         projection["project_summary"] = self._project_summary(projection)
