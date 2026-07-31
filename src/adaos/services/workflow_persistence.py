@@ -634,3 +634,99 @@ def restore_instance(backup: Mapping[str, Any]) -> dict[str, Any]:
             )
         con.commit()
     return snapshot
+
+
+def rollback_instance(
+    backup: Mapping[str, Any],
+    *,
+    expected_current_definition_version: str,
+    expected_current_generation: int,
+) -> dict[str, Any]:
+    """CAS-restore one pre-migration checkpoint without replaying effects.
+
+    This is intentionally narrower than ordinary restore. It only removes
+    journal/outbox/activity records newer than the checkpoint after proving
+    that none of those activity effects started. The instance snapshot carries
+    its bounded idempotency ledger, so previously accepted external work cannot
+    be admitted again merely because a definition migration rolled back.
+    """
+
+    if backup.get("schema") != "adaos.workflow.backup.v1":
+        raise WorkflowPersistenceError("unsupported workflow backup schema")
+    snapshot = validate_workflow_record(WORKFLOW_INSTANCE_SCHEMA, backup.get("snapshot") or {})
+    events = [
+        validate_workflow_record(WORKFLOW_EVENT_SCHEMA, item)
+        for item in backup.get("events") or []
+    ]
+    if events and int(events[-1]["generation"]) != int(snapshot["generation"]):
+        raise WorkflowPersistenceError("workflow backup journal does not match snapshot generation")
+    ensure_schema()
+    instance_id = str(snapshot["instance_id"])
+    with _sql().connect() as con:
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        current = con.execute(
+            "SELECT definition_version, generation FROM governed_workflow_instances WHERE instance_id=?",
+            (instance_id,),
+        ).fetchone()
+        if current is None:
+            con.rollback()
+            raise WorkflowPersistenceError("workflow rollback target does not exist")
+        if (
+            str(current["definition_version"]) != str(expected_current_definition_version)
+            or int(current["generation"]) != int(expected_current_generation)
+        ):
+            con.rollback()
+            raise WorkflowPersistenceError("workflow rollback compare-and-swap failed")
+        unsafe = con.execute(
+            """
+            SELECT attempt_id FROM governed_workflow_activity_attempts
+            WHERE instance_id=? AND generation>? AND effect_started=1
+            LIMIT 1
+            """,
+            (instance_id, int(snapshot["generation"])),
+        ).fetchone()
+        if unsafe is not None:
+            con.rollback()
+            raise WorkflowPersistenceError(
+                f"workflow rollback requires reconciliation for started activity: {unsafe['attempt_id']}"
+            )
+        payload = _dump(snapshot)
+        updated = con.execute(
+            """
+            UPDATE governed_workflow_instances
+            SET workflow_type=?, definition_version=?, state=?, generation=?,
+                snapshot_digest=?, snapshot_json=?, updated_at=?
+            WHERE instance_id=? AND definition_version=? AND generation=?
+            """,
+            (
+                snapshot["workflow_type"], snapshot["definition_version"],
+                snapshot["state"], snapshot["generation"], _digest(snapshot),
+                payload, snapshot.get("updated_at") or _now(), instance_id,
+                str(expected_current_definition_version), int(expected_current_generation),
+            ),
+        )
+        if updated.rowcount != 1:
+            con.rollback()
+            raise WorkflowPersistenceError("workflow rollback compare-and-swap failed")
+        con.execute(
+            "DELETE FROM governed_workflow_journal WHERE instance_id=? AND generation>?",
+            (instance_id, int(snapshot["generation"])),
+        )
+        con.execute(
+            "DELETE FROM governed_workflow_outbox WHERE instance_id=? AND generation>?",
+            (instance_id, int(snapshot["generation"])),
+        )
+        con.execute(
+            "DELETE FROM governed_workflow_activity_attempts WHERE instance_id=? AND generation>?",
+            (instance_id, int(snapshot["generation"])),
+        )
+        # Inbox rows do not carry a generation. Rebuild their protection from
+        # the checkpoint snapshot's canonical idempotency ledger instead of
+        # retaining a result that names the rolled-back definition.
+        con.execute(
+            "DELETE FROM governed_workflow_inbox WHERE instance_id=?",
+            (instance_id,),
+        )
+        con.commit()
+    return snapshot

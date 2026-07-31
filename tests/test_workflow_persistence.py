@@ -288,3 +288,93 @@ def test_definition_migration_updates_durable_index_and_snapshot_atomically() ->
     assert stored["context"]["definition_migrated"] is True
     event = workflow_persistence.list_events(instance["instance_id"])[0]
     assert event["type"] == "workflow.definition.migrated"
+
+
+def test_definition_migration_checkpoint_rolls_back_by_exact_generation() -> None:
+    source = compiled_builder_change_definition()
+    target_value = copy.deepcopy(source.source)
+    target_value["definition_version"] = "1.1.0"
+    instance = new_instance(source, "change:persistence:migration-rollback")
+    workflow_persistence.create_instance(instance)
+    checkpoint = workflow_persistence.export_instance(instance["instance_id"])
+    migration = {
+        "schema": "adaos.workflow.definition_migration.v1",
+        "migration_id": "builder_change_rollback_1_1",
+        "workflow_type": source.workflow_type,
+        "from_definition_version": source.definition_version,
+        "to_definition_version": "1.1.0",
+        "allowed_source_states": [source.initial_state],
+        "state_map": {source.initial_state: source.initial_state},
+        "context_set": {"definition_migrated": True},
+        "context_remove": [],
+        "authority": {
+            "actors": ["user"],
+            "permissions": ["workflow.definition.migrate"],
+        },
+        "explanation": "Upgrade then roll back the pinned definition.",
+    }
+    decision = migrate_workflow_instance(
+        source,
+        target_value,
+        instance,
+        migration,
+        actor="user:local",
+        permissions=("workflow.definition.migrate",),
+        expected_generation=0,
+        idempotency_key="migration:persistence:rollback:1.1.0",
+    )
+    workflow_persistence.commit_decision(
+        decision,
+        idempotency_key="migration:persistence:rollback:1.1.0",
+        permission_granted=True,
+    )
+
+    restored = workflow_persistence.rollback_instance(
+        checkpoint,
+        expected_current_definition_version="1.1.0",
+        expected_current_generation=1,
+    )
+
+    assert restored == instance
+    assert workflow_persistence.get_instance(instance["instance_id"]) == instance
+    assert workflow_persistence.list_events(instance["instance_id"]) == []
+    with pytest.raises(workflow_persistence.WorkflowPersistenceError, match="compare-and-swap"):
+        workflow_persistence.rollback_instance(
+            checkpoint,
+            expected_current_definition_version="1.1.0",
+            expected_current_generation=1,
+        )
+
+
+def test_checkpoint_rollback_refuses_a_newer_started_effect() -> None:
+    instance_id = "change:persistence:unsafe-rollback"
+    definition = compiled_builder_change_definition()
+    instance = new_instance(definition, instance_id)
+    instance["state"] = "automation_ready"
+    workflow_persistence.create_instance(instance)
+    checkpoint = workflow_persistence.export_instance(instance_id)
+    decision = WorkflowResolver().apply(
+        definition,
+        instance,
+        "start_automation",
+        input_value={},
+        actor="user:local",
+        roles=("registered",),
+        expected_generation=0,
+        idempotency_key="unsafe-rollback:start",
+    )
+    committed = workflow_persistence.commit_decision(
+        decision,
+        idempotency_key="unsafe-rollback:start",
+        permission_granted=True,
+        effect_binding={"activity": "builder.codex.run", "executor": "builder:test"},
+    )
+    workflow_persistence.claim_activity(committed["activity_attempt_id"])
+    workflow_persistence.mark_effect_started(committed["activity_attempt_id"])
+
+    with pytest.raises(workflow_persistence.WorkflowPersistenceError, match="reconciliation"):
+        workflow_persistence.rollback_instance(
+            checkpoint,
+            expected_current_definition_version=definition.definition_version,
+            expected_current_generation=1,
+        )
