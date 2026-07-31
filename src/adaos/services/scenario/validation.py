@@ -10,6 +10,7 @@ import yaml
 from jsonschema import Draft7Validator
 
 from adaos.sdk.scenarios.runtime import ActionRegistry, ScenarioModel, ScenarioRuntime, default_registry
+from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
 
 
 _SCENARIO_MANIFESTS = ("scenario.yaml",)
@@ -275,6 +276,22 @@ def validate_scenario_path(
                 "scenario.schema.unavailable",
                 f"scenario schema validation failed: {type(exc).__name__}: {exc}",
                 str(schema_path),
+            )
+        )
+
+    try:
+        load_manifest_bound_workflow(
+            manifest.parent,
+            manifest_name="scenario.yaml",
+            allow_legacy_inline=True,
+        )
+    except WorkflowArtifactError as exc:
+        issues.append(
+            ScenarioValidationIssue(
+                "error",
+                "scenario.workflow.invalid",
+                str(exc),
+                "workflow.json",
             )
         )
 

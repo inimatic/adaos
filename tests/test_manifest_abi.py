@@ -479,6 +479,23 @@ def test_scenario_schema_accepts_default_builder_template_manifest() -> None:
     Draft7Validator(schema).validate(payload)
 
 
+def test_skill_and_scenario_schemas_accept_single_workflow_manifest() -> None:
+    skill = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
+    scenario = {"id": "demo_scenario", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
+
+    Draft7Validator(_load_schema("skill.schema.json")).validate(skill)
+    Draft202012Validator(_load_service_skill_schema()).validate(skill)
+    Draft7Validator(_load_schema("scenario.schema.json")).validate(scenario)
+
+
+@pytest.mark.parametrize("manifest", ["workflows/main.json", "workflow.yaml", "WORKFLOW.json"])
+def test_manifest_schemas_reject_noncanonical_workflow_path(manifest: str) -> None:
+    payload = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": manifest}}
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(_load_schema("skill.schema.json")).validate(payload)
+
+
 def test_default_scenario_template_exposes_a_valid_empty_builder_canvas() -> None:
     root = Path(__file__).resolve().parents[1] / "src" / "adaos"
     template = root / "scenario_templates" / "scenario_default"

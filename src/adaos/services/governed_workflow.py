@@ -3,12 +3,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from functools import lru_cache
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
 
 
 WORKFLOW_DEFINITION_SCHEMA = "adaos.workflow.definition.v1"
@@ -76,8 +78,22 @@ def _abi_schema(name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=1)
+def _abi_registry() -> Registry:
+    root = Path(__file__).resolve().parents[1] / "abi"
+    registry = Registry()
+    for path in sorted(root.glob("workflow.*.schema.json")):
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        resource = Resource.from_contents(schema)
+        registry = registry.with_resource(path.name, resource)
+        schema_id = str(schema.get("$id") or "").strip()
+        if schema_id:
+            registry = registry.with_resource(schema_id, resource)
+    return registry
+
+
 def _validate(schema_name: str, value: Mapping[str, Any]) -> None:
-    validator = Draft202012Validator(_abi_schema(schema_name))
+    validator = Draft202012Validator(_abi_schema(schema_name), registry=_abi_registry())
     errors = sorted(validator.iter_errors(dict(value)), key=lambda item: list(item.absolute_path))
     if not errors:
         return

@@ -53,7 +53,7 @@
     "transitions": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "object" }
+      "items": { "$ref": "workflow.transition.v1.schema.json" }
     },
     "subworkflows": {
       "type": "array",

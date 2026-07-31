@@ -132,16 +132,11 @@
     },
 
     "workflow": {
-      "description": "Optional high-level workflow definition for the scenario (used by Prompt IDE and ScenarioWorkflowRuntime).",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "initial_state": { "type": "string" },
-        "states": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/workflowState" }
-        }
-      }
+      "description": "Optional single governed workflow.json manifest reference or bounded legacy inline workflow accepted only for migration.",
+      "oneOf": [
+        { "$ref": "#/$defs/workflowManifest" },
+        { "$ref": "#/$defs/legacyWorkflow" }
+      ]
     },
 
     "steps": {
@@ -186,6 +181,25 @@
   "required": ["id", "version"],
 
   "$defs": {
+    "workflowManifest": {
+      "type": "object",
+      "required": ["manifest"],
+      "properties": {
+        "manifest": { "const": "workflow.json" }
+      },
+      "additionalProperties": false
+    },
+    "legacyWorkflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initial_state": { "type": "string" },
+        "states": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/workflowState" }
+        }
+      }
+    },
     "identifier": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
     "authoringHints": {
       "type": "object",

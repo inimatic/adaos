@@ -14,6 +14,10 @@
 			"$ref": "#/$defs/authoringHints",
 			"description": "Builder-readable NLU hints for aliases, examples, slot schemas, entities, and owner routing."
 		},
+		"workflow": {
+			"$ref": "#/$defs/workflowManifest",
+			"description": "Optional single governed workflow definition stored in the component-root workflow.json file."
+		},
     "runtime": {
       "type": "object",
       "properties": {
@@ -180,6 +184,14 @@
 		}
 	},
 	"$defs": {
+		"workflowManifest": {
+			"type": "object",
+			"required": ["manifest"],
+			"properties": {
+				"manifest": { "const": "workflow.json" }
+			},
+			"additionalProperties": false
+		},
 		"conversationContract": {
 			"type": "object",
 			"additionalProperties": true,
