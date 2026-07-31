@@ -17,10 +17,10 @@ Related documents:
   durable Issues and evidence, not the development source of truth
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE3 Support and
   repair gate and GE4 collaboration horizon
-- [Explainable Workflow Model and Interaction Architecture](governed-workflow-runtime.md):
+- [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md):
   semantic interactions, capability negotiation, workflow commands,
   ReplyRoutes, and asynchronous delivery invariants
-- [Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md):
+- [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md):
   shared interaction and delivery implementation gates
 - [Channel Semantics](channel-semantics.md)
 - [Endpoint Audio Service](endpoint-audio-service.md)

@@ -5,7 +5,7 @@ engine adoption postponed.
 
 Decision date: 2026-07-30.
 
-Owners: Explainable Workflow Model Roadmap GWR6/GWR7 and the AdaOS runtime.
+Owners: Governed Data-Driven Workflow Model Roadmap GWR6/GWR7 and the AdaOS runtime.
 
 ## Decision
 

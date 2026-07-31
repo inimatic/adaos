@@ -1,13 +1,13 @@
-# Explainable Workflow Model Roadmap
+# Governed Data-Driven Workflow Model Roadmap
 
 Status: domain roadmap for the AdaOS workflow metamodel, validation,
 explanation, interaction projection, NLU mediation, and optional durable
 execution adapters.
 
-Last reviewed: 2026-07-30.
+Last reviewed: 2026-07-31.
 
 This roadmap implements the
-[Explainable Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
+[Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
 conversation architecture, NLU roadmap, or operational event roadmap. Tasks
@@ -75,7 +75,7 @@ The current repository has useful but fragmented foundations:
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing | at-most-once transport path; not a workflow journal |
-| Shared workflow metamodel | none | primary architecture gap |
+| Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, definition review, migration/composition fixtures | validated-local semantic foundation; file authoring, registry trust, package binding, and activation admission remain open |
 | External durable engine | none | optional later evaluation, not the objective |
 
 ## Milestone Sequence
@@ -83,7 +83,7 @@ The current repository has useful but fragmented foundations:
 | Milestone | Outcome | Current maturity | Horizon |
 | --- | --- | --- | --- |
 | GWR0 | The semantic problem, boundaries, and authority are fixed | `specified` | now |
-| GWR1 | A canonical metamodel, definition compiler, and pure resolver exist | `validated-local` | now |
+| GWR1 | A canonical metamodel, definition compiler, pure resolver, and admitted `workflow.json` artifact contract exist | `validated-local` semantic core; data authoring/package admission open | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
 | GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` with Python-built compatibility definition | next |
@@ -133,13 +133,16 @@ already selected.
 
 **Outcome:** workflow state, legal transitions, guards, effects, evidence, and
 explanation can be described and validated without a UI, NLU model, worker, or
-external execution engine.
+external execution engine; one strict `workflow.json` can then be admitted as
+an immutable skill/scenario package input.
 
 **Admission gate:** GWR0 is complete.
 
 **Exit proof:** unit and property tests compile a representative workflow,
-reject invalid definitions, exercise every legal/illegal transition, and
-produce stable fresh interaction descriptors from the resulting state.
+reject invalid definitions, exercise every legal/illegal transition, produce
+stable fresh interaction descriptors, and prove that an LLM-authored candidate
+cannot become active without manifest, registry, policy, conformance, package,
+and release-lock admission.
 
 - [x] `[must]` `GWR1-01` Add versioned schemas and typed models for
   `WorkflowDefinition`, `WorkflowInstance`, `WorkflowCommand`, and
@@ -212,16 +215,61 @@ produce stable fresh interaction descriptors from the resulting state.
   composition ABI enforces unique child/correlation identities and narrower
   delegated permissions; the pure join resolver cannot promote an incomplete
   required-child set.
-- [ ] `[must]` `GWR1-18` Admit workflow definitions as versioned data artifacts
-  from Builder, scenario, skill, and LLM-assisted authoring paths. Activation
-  must treat every candidate as untrusted until ABI validation, compilation,
-  registered-code lookup, definition review, generated conformance cases, and
-  domain activation gates pass.
-- [ ] `[should]` `GWR1-19` Add an authoring validation surface that returns one
-  actionable report for an LLM-generated candidate definition: schema errors,
-  unknown registered identifiers, ambiguous transitions, unreachable states,
-  missing explanations/outcomes, unsafe risk or authority broadening, and
-  generated conformance case failures.
+- [ ] `[must]` `GWR1-18` Freeze the single-definition component contract:
+  optional `workflow.manifest: workflow.json` in `skill.yaml` and
+  `scenario.yaml`, strict UTF-8 JSON, exactly one
+  `adaos.workflow.definition.v1` object, no arbitrary path, inline governed
+  definition, multiple file, or role-specific variants. Absence remains an
+  explicit no-workflow case.
+- [ ] `[must]` `GWR1-19` Make the existing `src/adaos/abi/workflow.*` family a
+  self-contained authoring ABI: `definition.transitions[]` references the full
+  transition schema; stable schema resolution works outside the Python
+  process; registry refs and typed parameters cover guards, effects,
+  activities, compensation, policy, evidence, and projections. Preserve v1
+  only for compatible tightening; publish a new schema id for incompatible
+  changes.
+- [ ] `[must]` `GWR1-20` Add the bounded JSON loader, duplicate-key rejection,
+  size/depth/state/transition limits, canonical serialization, and semantic
+  definition digest. Raw formatting and object-key order cannot change the
+  semantic digest; semantic array order and transition priority remain
+  deliberate data.
+- [ ] `[must]` `GWR1-21` Publish typed
+  `workflow.definition_artifact`, `workflow.validation_report`,
+  `workflow.registry_entry`, and `workflow.admission` records. Keep mutable
+  candidate/review/activation state and LLM provenance outside the pure
+  definition while binding every decision to exact definition, policy,
+  registry-contract, source, and package digests.
+- [ ] `[must]` `GWR1-22` Implement the registered-code trust model: distinguish
+  platform-, package-, and dependency-owned adapters; validate typed input/
+  output, side effect, permission ceiling, sandbox policy, owner package, and
+  contract digest; reject mutable global-name resolution and any definition
+  that broadens its registered contract.
+- [ ] `[must]` `GWR1-23` Bootstrap one-graph role policy with verified `guest`
+  and `registered` role claims. Generate role-dependent `allowed_actions` from
+  the same resolver, default unknown roles/permissions to deny, prohibit role
+  self-assignment, and prove that authentication alone grants no privileged
+  effect. Advanced role/zone approval remains GWR8.
+- [ ] `[must]` `GWR1-24` Add one structured authoring validation surface for
+  humans, Builder, and LLM repair. Its stable diagnostics cover JSON/schema
+  paths, unknown or incompatible registry refs, ambiguity/reachability,
+  missing outcomes/explanations, unsafe authority/risk, migration, complexity,
+  and generated conformance failures without weakening policy to obtain a
+  pass.
+- [ ] `[must]` `GWR1-25` Bind `workflow.json` to the existing artifact pipeline:
+  package file record plus canonical `workflow_lock`; validation evidence and
+  required adapter contract locks; ProjectRelease adapter resolution and
+  `workflow_binding_digest`; inspectable WorkspaceLock definition/binding
+  digests. Changing code or workflow produces a new package and component
+  version; neither can be delivered independently.
+- [ ] `[must]` `GWR1-26` Make activation atomic across code and definition:
+  stage the complete release, build the candidate adapter registry, compile and
+  validate migrations, health-check, then switch one WorkspaceLock/runtime
+  generation through CAS. Pin exact definition/package/binding digests in each
+  instance and roll back only to a prior complete generation.
+- [ ] `[should]` `GWR1-27` Supply LLM authoring with the exact ABI, registered
+  adapter catalogue, role/policy ceilings, domain invariants, examples, and
+  current definition digest; persist model/context provenance and a bounded
+  diagnostic repair history without treating model output as admission.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 
@@ -470,15 +518,30 @@ tests cover all legal and representative illegal paths.
   conflict/stale sets, scoped focus, and Project commands without a synthetic
   project lifecycle stage.
 - [ ] `[must]` `GWR4-20` Move the canonical Builder Change definition from
-  Python construction in `builder.governed` into a versioned JSON/YAML
-  `adaos.workflow.definition.v1` artifact. Keep Python as the loader,
-  compiled cache, legacy command/action map, registered guard/effect/activity
-  adapter registry, and compatibility projection layer.
+  Python construction in `builder.governed` into the owning `builder_skill`
+  package's strict `workflow.json`, referenced from `skill.yaml`. Keep Python
+  as the generic loader/compiler/cache plus registered guard/effect/activity
+  adapter registry and bounded compatibility projection; the Builder scenario
+  must not contain a duplicate Change definition.
 - [ ] `[must]` `GWR4-21` Retire direct dependence on legacy
   `scenario.yaml.workflow.states.actions.next_state` for governed workflows.
   Simple scenario workflows may remain as compatibility projections or be
   translated into `adaos.workflow.definition.v1`, but any mutating governed
   process must use the shared compiler/resolver and registered adapters.
+- [ ] `[must]` `GWR4-22` Implement a deterministic legacy-to-governed translator
+  and inventory every Builder and scenario reader/writer. During migration run
+  one write authority and shadow-compare compiled state, commands, targets,
+  explanations, and role projections; divergence blocks cutover rather than
+  repairing either source silently.
+- [ ] `[must]` `GWR4-23` Cut Builder over by immutable candidate package and
+  feature-gated WorkspaceLock activation. Preserve the prior complete package,
+  workflow binding, and runtime generation as the rollback target; remove the
+  Python transition table only after restart, rollback, and in-flight instance
+  migration evidence passes.
+- [ ] `[must]` `GWR4-24` Update Builder templates, context packets, Specification,
+  artifact inspection, and publication evidence so an LLM can create or repair
+  one `workflow.json`, see its structured validation report and graph diff, and
+  cannot publish code/definition or role-policy mismatches.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -578,6 +641,29 @@ lineage, evidence, and final Publication agree without direct state repair.
   success without partial promotion. The reference composition proof requires
   both scenario and skill child results, aggregates successful evidence, and
   reports one-child failure as non-promotable `partial_failed`.
+- [ ] `[must]` `GWR5-24` Prove manifest/file cardinality and strict JSON
+  admission: missing referenced file, unreferenced workflow, wrong filename,
+  duplicate keys, unsupported schema, multiple definitions, or exceeded limits
+  fail before package visibility.
+- [ ] `[must]` `GWR5-25` Prove registry trust and role policy: unknown/mutable or
+  permission-broadening adapters fail compilation; `guest` and `registered`
+  receive different allowed controls from one snapshot where declared, and a
+  forged role or direct unauthorized command still fails at commit.
+- [ ] `[must]` `GWR5-26` Prove package atomicity: code-only, definition-only, and
+  adapter-contract changes create new package/release/binding digests; a mixed
+  old/new set cannot activate; injected failure leaves the prior complete
+  WorkspaceLock/runtime generation authoritative.
+- [ ] `[must]` `GWR5-27` Prove LLM authoring convergence with one valid proposal
+  and representative invalid proposals. Structured diagnostics permit bounded
+  repair of structural errors while authority, risk, policy, and validation
+  gates remain unchanged and every attempt retains provenance.
+- [ ] `[must]` `GWR5-28` Prove definition upgrade and rollback with an in-flight
+  instance: pin compatible old code or apply an explicit migration, reject
+  silent reinterpretation, and restore the prior complete package/binding
+  without repeating an external effect.
+- [ ] `[must]` `GWR5-29` Migrate one small non-Builder skill or scenario through
+  the same manifest, ABI, role, package, activation, explanation, and rollback
+  contracts to demonstrate that the model is not Builder-specific.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 
@@ -692,8 +778,9 @@ change proposals.
 complete only if an external adapter was admitted; and a concrete multi-user
 use case supplies authority, privacy, conflict, and availability requirements.
 
-- [ ] `[deferred]` `GWR8-01` Add role/zone-specific approvals, delegation,
-  quorum, revocation, and audit.
+- [ ] `[deferred]` `GWR8-01` Extend the GWR1 `guest`/`registered` bootstrap with
+  domain/zone-specific roles, approvals, delegation, quorum, revocation, and
+  cross-user audit.
 - [ ] `[deferred]` `GWR8-02` Add conflict and supersession handling for
   concurrent Changes over one immutable base.
 - [ ] `[deferred]` `GWR8-03` Add extraction and promotion of proven personal
@@ -796,6 +883,32 @@ admitted, the GWR7 adapter:
 33. **Subworkflow partial result:** one child succeeds and one fails; the
     parent records both, applies its declared join/failure policy, and never
     promotes a partial dependency lock.
+34. **Single workflow artifact:** a manifest may omit workflow or reference the
+    one root `workflow.json`; missing, additional, inline governed, multi-file,
+    and role-variant definitions are rejected.
+35. **Canonical definition:** equivalent JSON formatting and object-key order
+    produce one semantic digest, while a semantic transition or policy change
+    produces a new digest and component package.
+36. **Registry trust:** unknown, mutable-name-only, schema-incompatible, or
+    authority-broadening registered code cannot compile or dispatch.
+37. **Role projection:** one snapshot yields the policy-correct guest and
+    registered affordances; a forged role or hidden direct command cannot cross
+    the same commit-time guard.
+38. **Atomic package activation:** code, `workflow.json`, adapter contracts,
+    ProjectRelease binding, and WorkspaceLock move as one candidate; no fault
+    leaves a mixed runtime generation.
+39. **LLM repair:** a malformed or incomplete proposal receives structured
+    diagnostics, can be repaired without changing policy ceilings, and remains
+    inactive until the exact repaired digest passes every gate.
+40. **Legacy shadow cutover:** translated `scenario.yaml.workflow` and the
+    governed definition agree for representative states/actions before the
+    legacy reader is disabled; divergence blocks migration.
+41. **Pinned upgrade:** an in-flight instance remains on its admitted package
+    and binding or follows an explicit migration; update and rollback never
+    reinterpret history or repeat an uncertain effect.
+42. **Second-domain proof:** one non-Builder component is authored, packaged,
+    activated, exercised as guest/registered, updated, and rolled back through
+    the same shared contracts.
 
 ## Definition of Done for This Roadmap
 
@@ -814,6 +927,12 @@ This roadmap is complete only when:
 - Project coordination and every relationship plane have explicit owners,
   edge/cycle rules, typed refs, and no shared mutable truth;
 - Builder and at least one second domain use the shared workflow model;
+- every governed skill/scenario uses zero or one manifest-bound
+  `workflow.json`; no inline, role-specific, or separately activated definition
+  remains authoritative;
+- package, ProjectRelease, WorkspaceLock, runtime instance, registry contracts,
+  and validation/admission evidence agree on exact definition and binding
+  digests, and code/definition update or rollback is atomic;
 - LLM-assisted workflow authoring produces data definitions that can be
   rejected or activated by the same deterministic validation gates as
   hand-authored definitions;

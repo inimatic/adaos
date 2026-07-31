@@ -1,15 +1,18 @@
-# Explainable Workflow Model and Interaction Architecture
+# Governed Data-Driven Workflow Model and Interaction Architecture
 
 Status: target architecture and system boundary.
 
-Last reviewed: 2026-07-30.
+Last reviewed: 2026-07-31.
 
-This document defines the AdaOS-wide model for explainable and validatable
-states, transitions, guards, effects, interactions, and natural-language
-input. Its primary purpose is to prevent each skill, channel, and UI from
-inventing an incompatible workflow. Persistence and durable execution support
-that model but do not define it. The implementation sequence is owned by the
-[Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md).
+This document defines the AdaOS-wide governed data-driven model for explainable
+and validatable states, transitions, guards, effects, interactions, and
+natural-language input. "Data-driven" means the authoritative transition
+catalogue is a validated, versioned artifact; it does not move authority or
+executable code into that artifact. Its primary purpose is to prevent each
+skill, channel, and UI from inventing an incompatible workflow. Persistence
+and durable execution support that model but do not define it. The
+implementation sequence is owned by the
+[Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md).
 
 Domain documents continue to own their business vocabulary and state
 transitions. In particular:
@@ -507,6 +510,181 @@ unknown code, create ambiguous edges, omit required outcomes, broaden
 authority, lack explanations, or cannot prove representative legal and illegal
 paths. A domain may offer higher-level templates or macros to reduce authoring
 noise, but the activated artifact is the expanded `WorkflowDefinition`.
+
+### Artifact Location And Manifest Binding
+
+A skill or scenario that owns a governed process stores exactly one canonical
+definition in `workflow.json` at the artifact root, alongside `skill.yaml` or
+`scenario.yaml`. The canonical manifests reference it explicitly in the same
+style that a scenario references `webui.json`:
+
+```yaml
+# scenario.yaml
+ui:
+  manifest: webui.json
+workflow:
+  manifest: workflow.json
+```
+
+```yaml
+# skill.yaml
+workflow:
+  manifest: workflow.json
+```
+
+The bootstrap contract deliberately permits zero or one workflow per skill or
+scenario:
+
+- an absent `workflow` field means that the component owns no governed business
+  process; it does not cause an implicit workflow to be inferred from tools,
+  events, UI, or prompts;
+- when present, `workflow.manifest` must be exactly `workflow.json` for v1 and
+  the file contains exactly one `adaos.workflow.definition.v1` object;
+- arbitrary paths, inline governed definitions, and several workflow files or
+  role-specific variants in one component are rejected;
+- a Project may contain a scenario and several skills, each with its own single
+  component workflow; Project coordination and parent/child composition use
+  typed refs rather than merging them into one global graph;
+- the component manifest, `workflow.json`, registered adapter contracts, and
+  executable code are one package candidate. `workflow.json` cannot be pushed,
+  installed, activated, or rolled back independently from that package.
+
+Governed v1 definitions use strict UTF-8 JSON, not YAML. This removes YAML tag,
+alias, duplicate-key, and implicit-type ambiguity from the LLM authoring and
+admission boundary. Legacy inline `scenario.yaml.workflow` remains a bounded
+translation input during migration, never an activated second authority.
+
+### One Graph, Role-Dependent Access
+
+Role differences do not create alternative workflow definitions. The resolver
+evaluates the same state, transition catalogue, target generation, and domain
+facts against the principal's verified role and permission claims. `explain()`
+therefore may project different allowed commands and blockers for two actors
+without changing the workflow state or definition.
+
+The first local validation profile defines two stable role ids:
+
+- `guest`: an unauthenticated or anonymous principal. It receives only commands
+  explicitly allowed by both the definition and the platform guest policy;
+  publication, installation, authority management, and protected external
+  effects remain denied;
+- `registered`: an authenticated principal. It is eligible for commands that
+  explicitly admit `registered`, but authentication alone grants no
+  administrator, publication, filesystem, network, or destructive authority.
+
+Role claims come from the AdaOS identity/authority plane, never from a model,
+channel payload, workflow context write, or definition. Transition `actors`
+and `permissions` can narrow platform authority; they cannot grant a role,
+invent a permission, or weaken a platform policy floor. Unknown roles and
+permissions fail closed. More roles, responsibility zones, delegation, quorum,
+and revocation remain later extensions of this same policy boundary.
+
+### Registered Code And Trust Levels
+
+"Registered" describes resolvable executable code, not trusted authorship.
+The registry distinguishes:
+
+- platform-owned adapters shipped and attested with the AdaOS runtime;
+- package-owned adapters whose code, tool ABI, permissions, and package digest
+  are admitted with the skill or scenario;
+- dependency-owned adapters resolved to an exact package in the containing
+  `ProjectRelease`.
+
+An LLM-authored package adapter does not become trusted merely because its id is
+present in a registry. Admission validates its input/output contract,
+side-effect and permission declaration, runtime isolation policy, and exact
+package binding. A definition may only narrow those declarations. If the
+definition requests broader authority or risk than the registered contract,
+compilation fails. Runtime dispatch resolves the adapter through the immutable
+release binding, never through a mutable global name alone.
+
+### Workflow Artifact, Validation, Registry, And Admission Records
+
+The existing `src/adaos/abi/workflow.*` contracts remain the normative
+foundation and evolve in place under normal schema-version rules. The
+definition schema references the complete transition schema; the compiler
+validates all guard, effect, activity, compensation, policy, evidence, and
+projection registry refs plus their typed parameters.
+
+Authoring and activation add records around, not inside, the pure definition:
+
+- `adaos.workflow.definition_artifact.v1` binds the canonical definition,
+  semantic digest, source/package refs, authoring provenance, and timestamps;
+- `adaos.workflow.validation_report.v1` carries structured schema/compiler/
+  registry/conformance diagnostics and coverage;
+- `adaos.workflow.registry_entry.v1` describes a registered adapter's owner,
+  trust class, typed input/output, side effects, permissions, compatibility,
+  and contract digest;
+- `adaos.workflow.admission.v1` records `candidate`, `validated`, `reviewed`,
+  `admitted`, `active`, `rejected`, `superseded`, or `rolled_back`, with the
+  actor, policy version, evidence, and exact digests supporting the decision.
+
+`WorkflowDefinition` remains deterministic process data. Mutable review state,
+LLM provenance, package installation state, and activation pointers do not
+become fields of the definition and cannot change its semantic digest.
+
+### Packaging, Release Binding, And Atomic Activation
+
+`workflow.json` participates in the existing artifact pipeline rather than a
+new workflow-specific delivery channel:
+
+```text
+source component
+  -> immutable PackageRef(code + manifest + workflow.json)
+  -> ProjectRelease(package set + resolved adapter bindings)
+  -> WorkspaceLock CAS(package and workflow bindings)
+  -> one runtime generation
+```
+
+The package file inventory records the raw `workflow.json` hash. The package
+manifest additionally carries one `workflow_lock` containing:
+
+- `path: workflow.json`, workflow schema, type, and definition version;
+- the canonical semantic `definition_digest`;
+- the validation-report/evidence digest;
+- the required registered adapter contract ids and digests.
+
+Illustrative package-manifest projection:
+
+```json
+{
+  "workflow_lock": {
+    "path": "workflow.json",
+    "schema": "adaos.workflow.definition.v1",
+    "workflow_type": "builder.change",
+    "definition_version": "1.0.0",
+    "definition_digest": "sha256:...",
+    "validation_report_digest": "sha256:...",
+    "required_adapter_contracts": [
+      {
+        "id": "builder.codex.run",
+        "contract_digest": "sha256:..."
+      }
+    ]
+  }
+}
+```
+
+The package digest already covers the manifest, executable code, schemas, and
+every file, so changing either code or `workflow.json` creates a different
+package. The component version must be advanced for either change; a workflow
+definition version remains independently meaningful for instance migration.
+
+`ProjectRelease` resolves every required adapter to a platform runtime contract
+or an exact component `PackageRef` and records a `workflow_binding_digest`.
+`WorkspaceLock` pins the ProjectRelease/package digests and projects, for
+inspection, the workflow definition and binding digests selected for each
+component. A runtime instance pins the exact definition, package, and binding
+digests. A mutable registry lookup cannot reinterpret an existing instance.
+
+Activation stages the complete ProjectRelease, verifies all package and
+workflow locks, builds a candidate adapter registry, compiles the definitions,
+checks migration and health, and only then performs one compare-and-switch of
+the WorkspaceLock and runtime-generation pointer. Failure before that switch
+leaves the prior generation authoritative. Failure after an uncertain external
+effect enters the declared reconciliation path; it never mixes old code with a
+new definition. Rollback selects the prior complete WorkspaceLock/runtime
+generation, not an individual workflow file.
 
 ### WorkflowInstance
 
@@ -1035,6 +1213,10 @@ The workflow boundary enforces:
 - no secrets in model prompts, workflow history, or action tokens;
 - explicit consent and URL-mode handoff for sensitive external interactions;
 - fail-closed handling of prompt injection or model-produced authority claims;
+- `guest` and `registered` bootstrap role claims issued only by the identity
+  plane, with definition rules allowed to narrow but never grant authority;
+- package-owned registered code constrained by its admitted package digest,
+  adapter contract, sandbox, and permission ceiling;
 - audit without copying unrestricted sensitive payloads into every trace.
 
 ## Versioning and Migration
@@ -1043,15 +1225,18 @@ The following versions remain independent:
 
 - workflow schema version;
 - workflow definition version;
+- canonical definition and workflow-binding digests;
 - interaction/response/envelope schema versions;
 - capability-profile and presentation-plan versions;
 - executor/provider and worker code version;
 - domain artifact or release version.
 
-New instances use the admitted definition version. In-flight instances either
-remain pinned to compatible worker code, use an explicit deterministic
-migration, or enter a visible operator-required state. Deployment must never
-reinterpret old history with incompatible code silently.
+New instances use the admitted definition version and exact package/binding
+digests selected by WorkspaceLock. In-flight instances either remain pinned to
+compatible worker code, use an explicit deterministic migration, or enter a
+visible operator-required state. Deployment must never reinterpret old history
+with incompatible code silently or combine a definition from one package with
+code from another.
 
 An in-flight Interaction remains pinned to its semantic schema and target
 generation. A channel/client change may negotiate a new presentation against a

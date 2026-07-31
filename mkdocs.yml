@@ -159,8 +159,8 @@ nav:
       - Overview: architecture/index.md
       - Governed Evolution: architecture/governed-evolution.md
       - Governed Evolution Roadmap: architecture/governed-evolution-roadmap.md
-      - Explainable Workflow Model and Interaction Architecture: architecture/governed-workflow-runtime.md
-      - Explainable Workflow Model Roadmap: architecture/governed-workflow-runtime-roadmap.md
+      - Governed Data-Driven Workflow Model and Interaction Architecture: architecture/governed-workflow-runtime.md
+      - Governed Data-Driven Workflow Model Roadmap: architecture/governed-workflow-runtime-roadmap.md
       - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
       - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
       - Artifact Pipeline Local Evidence 2026-07-24: architecture/artifact-pipeline-local-evidence-2026-07-24.md

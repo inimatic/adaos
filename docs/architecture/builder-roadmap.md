@@ -877,7 +877,7 @@ Architecture:
   [Builder Conversational Development Architecture](builder-conversational-development.md).
 - [x] `[must]` Link the domain definition to the shared compiler/resolver and
   conformance proof in the
-  [Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
+  [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
   instead of treating current skill JSON and UI handlers as the target model.
 - [x] `[deferred]` Reserve, but do not implement in this refactoring slice,
   miniapp rendering, hard cross-channel feature parity, trusted groups,

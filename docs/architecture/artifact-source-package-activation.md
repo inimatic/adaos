@@ -81,7 +81,7 @@ deferred until the single-user loop is stable.
 | Term | Meaning |
 | --- | --- |
 | Project | Independently understandable development and release subject, such as a scenario and its dedicated companion skills. |
-| Component | A scenario, skill, schema, migration, UI descriptor, or other versioned item included in a project release. |
+| Component | A scenario, skill, schema, migration, UI descriptor, governed `workflow.json`, or other versioned item included in a project release. |
 | SourceRef | Exact forge-independent reference to source content. |
 | PackageRef | Content-addressed reference to one immutable package. |
 | ProjectRelease | Immutable, dependency-locked set of component packages. |
@@ -198,6 +198,22 @@ Package requirements:
   route;
 - atomic write and verification before visibility.
 
+When a canonical `skill.yaml` or `scenario.yaml` declares
+`workflow.manifest: workflow.json`, the workflow is part of the same component
+package as its code and manifest. It is not a separately installable component.
+The package manifest records a `workflow_lock` with the exact path, workflow
+schema/type/version, canonical definition digest, validation report digest,
+and required registered-adapter contract locks. The ordinary package file list
+also records the raw file digest, and the package digest covers both code and
+workflow bytes. A mismatch between the manifest reference, file inventory,
+semantic digest, adapter contract, or validation evidence rejects the package
+before visibility.
+
+`workflow.json` is the only governed workflow source file for v1. A component
+may omit it or contain exactly one. Role-specific variants and independent
+workflow updates are not package inputs; role-dependent behavior is resolved
+from the one definition plus authority policy.
+
 Packages can initially be stored locally and in the existing registry backend.
 The contract allows later use of GitHub immutable release assets, OCI, or an
 object store without changing Builder or Workspace semantics.
@@ -272,9 +288,13 @@ workspace_lock:
     scenario:recipes:
       version: 2.4.1
       package_digest: sha256:...
+      workflow_definition_digest: sha256:...
+      workflow_binding_digest: sha256:...
     skill:shopping_list:
       version: 1.6.2
       package_digest: sha256:...
+      workflow_definition_digest: sha256:...
+      workflow_binding_digest: sha256:...
 
   bindings:
     scenario:recipes:
@@ -283,8 +303,23 @@ workspace_lock:
   previous_lock_revision: 16
 ```
 
-Filesystem materialization, runtime reload, and browser projection are derived
-from this record. They are not independent sources of activation truth.
+The two workflow digest fields are present only for components that declare a
+workflow manifest. They remain absent, rather than synthesized, for a component
+with no governed workflow.
+
+A `ProjectRelease` resolves every workflow activity to
+an exact platform contract or dependency `PackageRef` and includes the
+resulting `workflow_binding_digest`. Activation stages and validates the full
+package set, candidate adapter registry, workflow definitions, and migrations
+before switching one WorkspaceLock/runtime-generation pointer. It cannot
+activate new code with an old workflow, a new workflow with old code, or roll
+back only one of them. The projected workflow digests in WorkspaceLock are
+inspectable consistency witnesses; PackageRef and ProjectRelease digests remain
+the delivery authority.
+
+Filesystem materialization, runtime reload, workflow dispatch, and browser
+projection are derived from this record. They are not independent sources of
+activation truth.
 
 ## Identity And Authority
 

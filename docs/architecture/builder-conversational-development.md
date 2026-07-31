@@ -112,7 +112,7 @@ Cross-component delivery remains one Change only when its scenario/skills must
 be accepted and promoted as one ProjectRelease dependency lock. Otherwise the
 work is split into linked Changes with explicit contract and join evidence.
 The Project aggregate links the separate relationship planes defined by the
-[Explainable Workflow Model](governed-workflow-runtime.md#related-models-that-must-stay-separate)
+[Governed Data-Driven Workflow Model](governed-workflow-runtime.md#related-models-that-must-stay-separate)
 without copying their mutable state.
 
 ### Issue
@@ -249,6 +249,14 @@ transition catalogue is a versioned governed workflow definition data
 artifact loaded through the shared compiler/resolver. Builder implementation
 code owns only the registered guards, effects, activities, legacy adapters,
 and projections needed to execute that definition.
+
+The first data-driven migration places this definition in the owning
+`builder_skill` package as `workflow.json` and declares
+`workflow.manifest: workflow.json` in `skill.yaml`. The Builder scenario owns
+its UI and view projections and must not carry a duplicate Change workflow.
+`builder_skill` code and `workflow.json` are built, trialled, published,
+activated, and rolled back as one immutable package; Builder instances pin the
+exact definition, package, and resolved adapter-binding digests.
 
 ```text
 intake -> clarification_required <-> ready
@@ -732,7 +740,7 @@ remain discoverable from one map:
 
 | Decision | Owning contract | Delivery/evidence owner |
 | --- | --- | --- |
-| One validated state/transition model drives commands and explanations | [Explainable Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
+| One validated state/transition model drives commands and explanations | [Governed Data-Driven Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
 | Project is a portfolio/coordination aggregate, not one global stage | [Project Aggregate](#project-aggregate) | Builder Phase 11 and GWR4 project/concurrency proof |
 | Conversation is primary; rich views are contextual | [Interaction Contract](#interaction-contract) and [Workbench Projection](#builder-workbench-projection) | Phase 11 in the [Builder Roadmap](builder-roadmap.md) |
 | Channel capabilities select presentation but never change command legality | [Channel Capability Boundary](#channel-capability-boundary) and the shared interaction protocol | GWR2 negotiation/conformance evidence |

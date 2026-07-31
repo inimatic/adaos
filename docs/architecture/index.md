@@ -33,8 +33,8 @@ Current target-state control-plane extensions are documented in:
 
 - [Governed Evolution](governed-evolution.md): cross-domain target model from human signal and durable issue through Builder, publication, runtime evidence, and repair
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): major product and architecture milestones, proof gates, and references to the roadmaps that own implementation detail
-- [Explainable Workflow Model and Interaction Architecture](governed-workflow-runtime.md): canonical states, transitions, relationship planes, capability-negotiated interactions, and asynchronous reply/delivery contracts that keep workflows consistent across skills, Web, Telegram, NLU, and tests
-- [Explainable Workflow Model Roadmap](governed-workflow-runtime-roadmap.md): MoSCoW implementation sequence from the metamodel and TransitionDescriptor through negotiated interactions, Builder/Project proof, async recovery, and only then evidence-gated persistence choices
+- [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md): canonical `workflow.json`, states, transitions, registry and authority boundaries, relationship planes, capability-negotiated interactions, package-atomic activation, and asynchronous reply/delivery contracts that keep workflows consistent across skills, Web, Telegram, NLU, and tests
+- [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md): MoSCoW implementation sequence from the metamodel and TransitionDescriptor through LLM authoring admission, package-bound definitions, negotiated interactions, Builder/Project proof, async recovery, and only then evidence-gated persistence choices
 - [AdaOS Product Terminology](product-terminology.md): product-facing terms and compatibility rules for Assistant, Webspace, Application, Device, Agent, Skill, Widget/Panel, Interface, and Catalog
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions

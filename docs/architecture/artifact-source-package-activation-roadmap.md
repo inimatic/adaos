@@ -3,7 +3,7 @@
 Status: implementation roadmap for
 [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
 
-Last reviewed: 2026-07-27.
+Last reviewed: 2026-07-31.
 
 ## Outcome
 
@@ -179,13 +179,13 @@ proof is not silently promoted to stand or production acceptance.
 | Milestone | Closed | Maturity | Validated task slices | Remaining broader gates |
 | --- | ---: | --- | --- | --- |
 | AP0 | 8/9 | validated-local (bounded) | identities, fail-closed schemas, canonical digests, immutable version identity, SourceProvider, registry v2 compatibility, deterministic historical registry/manifest migration fixtures, and read-only identity diagnostics | publisher namespaces and ownership transfer remain deferred |
-| AP1 | 10/13 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, deployed immutable exact release binding, separately provisioned signer/trust, and clean required-mode activation | streamed/object-store transport, multi-zone durability, package lifecycle diagnostics, publisher namespaces, and commercial entitlements remain open/deferred |
-| AP2 | 7/10 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | lock explain UI, plan cache, and stand validation |
-| AP3 | 12/13 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | unattended irreversible migrations remain deferred |
+| AP1 | 10/14 | validated-stand (bounded, single-zone) | deterministic package build/store/verify, source and builder-policy identity, exact materialization target, evidence references, secret and authoring-state exclusion, portable path admission, single-pass verified extraction, deployed binary transport, detached Ed25519 trust/admission, deterministic no-replay publication journal, deployed immutable exact release binding, separately provisioned signer/trust, and clean required-mode activation | governed workflow lock, streamed/object-store transport, multi-zone durability, package lifecycle diagnostics, publisher namespaces, and commercial entitlements remain open/deferred |
+| AP2 | 7/11 | validated-local (bounded) | exact component/dependency, permission, schema, migration, and validation locks; complete-set fixed-point selection; consistent bindings and reverse consumers | workflow adapter binding, lock explain UI, plan cache, and stand validation |
+| AP3 | 12/14 | validated-stand (bounded, isolated same-host) | Workspace writer lease/CAS, reachable-set materialization and orphan rollback, mandatory reload/health receipts, phase journal, permission admission, reversible migration/reconciliation, interruption recovery, digest-bound operator diff, exact-lock delayed verification, fail-closed retention, durable rename metadata, terminal lock-history states, and clean package-only activation | atomic workflow/code runtime generation and unattended irreversible migrations remain open/deferred |
 | AP4 | 8/10 | validated-local (bounded) | exact candidate identity, explicit trial data modes, health/duration/rollback evidence, isolated package materialization, immutable Builder task snapshot, concurrent-DEV compare-and-switch | policy-proven evidence reuse and stand validation |
 | AP5 | 7/10 | validated-stand + production-route-verified (bounded) | freshness/stale/rebase flow, renewed trial, Forge tree lookup, deployed backend admission and atomic channel CAS, durable post-CAS continuation, and successful external package/release/channel round-trip across a backend redeploy | metadata rebase policy and later merge-queue support |
 | AP6 | 12/14 | validated-local + recovered-live (bounded) | stable subscription discovery, notify/pinned policy, reviewed package update, runtime-aware rollback, post-success observation, primary update-entrypoint cutover, Builder review/apply UI, digest-reviewed remote-to-local reconciliation, attested recovery of missing remote immutable state, one fail-closed package/legacy route contract, and explicit no-op planning for an up-to-date subscription | production deployment/observation of the route contract and later evidence-based retirement of the compatibility route |
-| AP7 | 14/16 | validated-stand + second-machine-core-recovered (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery under real browser reconnects, and generation-bound second-machine core convergence | candidate-before-health proxy admission is reopened under AP7-14; frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
+| AP7 | 14/17 | validated-stand + second-machine-core-recovered (bounded), route-fix pending | source-faithful representative LLM/Codex scenario+skill proof, 21 bounded resilience tests, 375 final core/Yjs/artifact regressions, live Builder `0.2.20` publication, external-backend clean required-mode activation, package/release/channel survival across redeploy, exact-build local A/B recovery under real browser reconnects, and generation-bound second-machine core convergence | governed workflow package proof and candidate-before-health proxy admission are open; frontend/WebSocket continuity, offline browser-draft merge, plus broad production and marketplace acceptance remain open/deferred |
 
 ## Milestone AP0: Contracts And Compatibility Boundary
 
@@ -298,6 +298,11 @@ symlink, size, and corruption tests.
   versioned Ed25519 records, purpose-scoped key rotation/revocation, local and
   external immutable stores, and fail-closed activation admission before fetch
   and again under the Workspace writer lease.
+- [ ] `[must]` `AP1-14` When `workflow.manifest: workflow.json` is declared,
+  validate the strict single-file contract and add a canonical `workflow_lock`
+  to the package manifest with definition, validation-report, and required
+  adapter-contract digests. Prove that code or workflow changes produce a new
+  immutable package and cannot be published separately.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and package store regressions in `tests/test_artifact_package_store.py`.
@@ -381,6 +386,10 @@ rejected without changing active state.
 - [ ] `[could]` `AP2-09` Cache compatible dependency plans by release digest.
 - [ ] `[deferred]` `AP2-10` Add context-aware simultaneous active versions and a
   general-purpose dependency solver.
+- [ ] `[must]` `AP2-11` Resolve every workflow activity through a platform or
+  exact dependency package registry contract, persist the resulting
+  `workflow_binding_digest` in ProjectRelease, and reject missing, mutable,
+  permission-broadening, or package-inconsistent bindings.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and dependency resolver regressions in
@@ -433,6 +442,10 @@ leave either the old or the new complete release active.
   write-through or POSIX directory sync without retrying the enclosing action.
 - [x] `[should]` `AP3-13` Distinguish pending, active, and rolled-back
   WorkspaceLock history and keep incomplete history fail-closed.
+- [ ] `[must]` `AP3-14` Stage package code, adapter registry, workflow compile,
+  instance migration, and health as one candidate runtime generation; project
+  exact definition/binding digests into WorkspaceLock and switch or roll back
+  only the complete generation under the existing writer lease and CAS.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md)
 and Workspace activation regressions in
@@ -730,6 +743,11 @@ dependency-conflict, interruption, and rollback cases.
 - [x] `[must]` `AP7-16` Prove second-machine core-release convergence after a
   partial root promotion: verified-slot supervisor fallback, transactional root
   repair, truthful restart authority, and one subsequent clean update cycle.
+- [ ] `[must]` `AP7-17` Extend the representative pipeline with one
+  manifest-bound `workflow.json`: LLM authoring diagnostics, package and
+  ProjectRelease workflow locks, guest/registered projection, trial, stable
+  activation, update with an in-flight instance, and complete rollback without
+  a mixed code/definition generation.
 
 Checked scope evidence: [local pipeline proof](artifact-pipeline-local-evidence-2026-07-24.md),
 including its reproducible verifier command, immutable digests, operation
