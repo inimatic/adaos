@@ -1283,6 +1283,22 @@ Autonomy, evidence, and acceptance:
   slot first. The three runtimes affected while finding the defect were
   explicitly recovered and are ready: `adaos_connect@0.16.4`,
   `conversation_companions@0.1.12`, and `new_face_vision_skill@0.2.25`.
+- [x] The 2026-07-31 contextual-control repair is committed as core
+  `ee752bf1` plus `1f6dc4a4` and client `256f3f4`; DEV
+  `builder_skill@0.3.26` is active in slot B at Forge commit
+  `4e1da1529cf4686d21988259cced1a3c670716ac`. “Что выбрано?” now creates one
+  durable semantic interaction whose bounded process/change/Preview commands
+  render from the same presentation in Web and Telegram. Opaque Web/Telegram
+  callbacks return through one response ingress and an explicit core adapter
+  into the authoritative DEV runtime; unadapted external-effect controls are
+  withheld. Post-fix regressions pass 122/122 core/router/workflow tests,
+  150/150 Builder-skill tests, strict probed skill validation, and 18/18
+  ChromeHeadless chat tests. A live local paired-Telegram projection preserved
+  Russian UTF-8 and five actions; an injected safe `Показать процесс` callback
+  was accepted, durably answered, dispatched cross-process, and recorded a
+  reply in the originating Telegram conversation. A human button click and
+  backend DeliveryAttempt receipt remain acceptance gates rather than inferred
+  proof.
 - [ ] Human wide/compact browser comparison and one live Telegram-bot ingress
   and reply remain production-acceptance gates. UI 058 is now a Workspace
   publication, but these checks still gate a broader rollout claim.
