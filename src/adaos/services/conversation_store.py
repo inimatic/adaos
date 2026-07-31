@@ -4930,3 +4930,73 @@ def redact_conversation(
     if audit_event_id:
         result["audit_event_id"] = audit_event_id
     return result
+
+
+def redact_messages(
+    message_ids: Sequence[str],
+    *,
+    reason: str = "user_request",
+) -> dict[str, Any]:
+    """Soft-redact an explicit message set without hiding its conversation."""
+    selected_ids = list(
+        dict.fromkeys(str(message_id or "").strip() for message_id in message_ids if str(message_id or "").strip())
+    )
+    if not selected_ids:
+        raise ValueError("message_ids are required")
+    if not ensure_schema():
+        return {"ok": False, "message_ids": selected_ids, "error": "conversation_store_unavailable"}
+    now = time.time()
+    clean_reason = str(reason or "user_request").strip() or "user_request"
+    placeholders = ",".join("?" for _ in selected_ids)
+    audit_event_id: str | None = None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute(
+            f"SELECT message_id, conversation_id FROM conversation_messages WHERE message_id IN ({placeholders})",
+            selected_ids,
+        ).fetchall()
+        found_ids = [str(row["message_id"]) for row in rows]
+        conversation_ids = sorted({str(row["conversation_id"]) for row in rows})
+        count = 0
+        if found_ids:
+            found_placeholders = ",".join("?" for _ in found_ids)
+            count = int(
+                con.execute(
+                    f"""
+                    UPDATE conversation_messages
+                    SET redaction_state='redacted',
+                        redacted_at=?,
+                        redaction_reason=?
+                    WHERE message_id IN ({found_placeholders})
+                      AND redaction_state!='redacted'
+                    """,
+                    (now, clean_reason, *found_ids),
+                ).rowcount
+                or 0
+            )
+        audit = _append_audit_event_with_connection(
+            con,
+            event_type="conversation.privacy",
+            action="redact_messages",
+            conversation_id=conversation_ids[0] if len(conversation_ids) == 1 else None,
+            status="completed",
+            reason=clean_reason,
+            counts={"messages": count, "requested": len(selected_ids), "found": len(found_ids)},
+            meta={
+                "message_ids": selected_ids,
+                "conversation_ids": conversation_ids,
+            },
+        )
+        audit_event_id = str(audit.get("audit_event_id") or "") or None
+        con.commit()
+    result: dict[str, Any] = {
+        "ok": True,
+        "message_ids": selected_ids,
+        "conversation_ids": conversation_ids,
+        "redaction_reason": clean_reason,
+        "counts": {"messages": count, "requested": len(selected_ids), "found": len(found_ids)},
+    }
+    if audit_event_id:
+        result["audit_event_id"] = audit_event_id
+    return result

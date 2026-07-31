@@ -941,6 +941,44 @@ def test_conversation_store_hard_deletes_conversation_bundle() -> None:
     assert audit and audit[0]["counts"]["conversation"] == 1
 
 
+def test_conversation_store_redacts_only_selected_messages() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.message-redaction",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for message_id, text in (("keep.msg.1", "keep me"), ("redact.msg.1", "redact me")):
+        conversation_store.append_message(
+            conversation_id="conv.message-redaction",
+            webspace_id="desktop",
+            channel_id="general",
+            owner="skill:test",
+            role="user",
+            text=text,
+            payload={"id": message_id, "from": "user", "text": text},
+        )
+
+    result = conversation_store.redact_messages(
+        ["redact.msg.1", "missing.msg.1"],
+        reason="test_message_redaction",
+    )
+
+    assert result["ok"] is True
+    assert result["counts"] == {"messages": 1, "requested": 2, "found": 1}
+    assert [
+        message["id"] for message in conversation_store.export_conversation("conv.message-redaction")["messages"]
+    ] == ["keep.msg.1"]
+    exported = conversation_store.export_conversation("conv.message-redaction", include_redacted=True)
+    assert [message["id"] for message in exported["messages"]] == ["keep.msg.1", "redact.msg.1"]
+    assert exported["messages"][1]["redaction_reason"] == "test_message_redaction"
+    audit = conversation_store.list_audit_events(
+        conversation_id="conv.message-redaction",
+        action="redact_messages",
+    )
+    assert audit and audit[0]["counts"] == {"messages": 1, "requested": 2, "found": 1}
+
+
 def test_conversation_store_persists_active_dialog_channel() -> None:
     conversation_store.ensure_schema()
     conversation_store.upsert_dialog_channel(

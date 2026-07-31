@@ -300,6 +300,15 @@ def list_development_changes(
     )
 
 
+def redact_messages(
+    message_ids: Sequence[str],
+    *,
+    reason: str = "user_request",
+) -> dict[str, Any]:
+    """Soft-redact selected messages and retain the surrounding history."""
+    return conversation_store.redact_messages(message_ids, reason=reason)
+
+
 def upsert_development_run(
     *,
     run_id: str,
