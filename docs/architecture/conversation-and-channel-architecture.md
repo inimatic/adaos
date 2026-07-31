@@ -290,6 +290,17 @@ connection cleanup is bounded. Durable zone inbox and hub delivery receipts
 remain required work under `GWR6-16`; until then Telegram ingress is
 operational but not lossless during a target-hub disconnect.
 
+Webhook authentication activation is one deployment transition, not two
+independent operator steps. A backend generation must not enforce a new secret
+while Telegram still targets the endpoint without the matching secret header.
+The deployment owner for `TG_WEBHOOK_BASE` therefore performs idempotent
+`setWebhook` after candidate health admission, uses the canonical lowercase bot
+route, keeps `drop_pending_updates=false`, and fails deployment if Telegram
+rejects registration. Regional/non-owner targets must skip registration so
+they cannot race the public ingress owner. Deployment success proves
+configuration convergence only; a signed live ingress turn and the durable
+zone/hub receipts remain separate acceptance evidence.
+
 ## Vocabulary
 
 ### Transport

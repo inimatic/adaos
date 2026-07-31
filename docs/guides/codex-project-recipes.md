@@ -53,6 +53,16 @@ curl.exe -H "Content-Type: application/json; charset=utf-8" `
   http://127.0.0.1:8777/io/bus/tg.input.<hub-id>
 ```
 
+Do not use `Invoke-RestMethod -Body $string` or an interpolated remote shell
+command as evidence for a non-ASCII ingress contract. Use a
+repository-reviewed UTF-8 fixture and `curl.exe --data-binary @file`, then
+verify persisted code points before evaluating the downstream response. A
+2026-07-31 signed Telegram diagnostic also demonstrated why redirected logs
+are not authoritative: `tg.input` log rendering contained `U+FFFD`, while the
+durable SQLite message held the exact Russian code points and Builder produced
+the correct response plus five actions. Diagnose the log sink separately; do
+not rewrite or reject valid durable input based only on console/file rendering.
+
 For `adaos dev skill run`, never pass user-authored Unicode as inline JSON on
 Windows. Store the payload as UTF-8 and use `--json-file`; reserve `--json` for
 short ASCII-only payloads:

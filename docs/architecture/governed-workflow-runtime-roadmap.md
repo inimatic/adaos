@@ -756,7 +756,18 @@ is warranted.
   root-to-zone retry distinct from zone-to-hub delivery. The 2026-07-31 outage
   proved both failure classes: root relay timeout now returns retryable `503`,
   and bounded hub-root cleanup prevents an indefinitely trapped reconnect; the
-  durable zone-to-hub receipt remains open.
+  durable zone-to-hub receipt remains open. The deployment-side admission gap
+  is closed: webhook authentication and Telegram registration now converge in
+  the same deploy, only the domain owning `TG_WEBHOOK_BASE` may register, bot
+  route IDs are canonicalized, and `drop_pending_updates=false` is mandatory.
+  Infra run `30657956114` exposed the mixed-case production bot-ID edge; run
+  `30658617393` then proved canonical owner registration and non-owner skip
+  with the new regression case. This prevents configuration-induced loss
+  but does not replace the durable per-hub inbox required by this item. A
+  signed UTF-8 fixture then traversed public root, RU relay, local hub, Builder,
+  and Telegram outbound under request `telegram:adaos_home_bot:<chat>:990055`;
+  the durable conversation retained exact Russian code points and the response
+  carried all five canonical actions.
 
 ## GWR7. Optional External Durable Adapter
 

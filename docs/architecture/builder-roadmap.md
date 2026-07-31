@@ -1013,10 +1013,14 @@ Commands, projections, and Workbench:
   latency. The durable ledger and dialog registry are already authoritative;
   finish moving the remaining bounded chat-tail projection off event handlers
   and add a browser-attached latency/soak budget.
-- [ ] `[should]` Make repository-local `adaos api restart` preserve the active
-  developer checkout. The current managed restart may intentionally relaunch
-  the promoted core slot, so Builder acceptance uses an explicit local
-  `adaos api serve` until a DEV-runtime restart contract exists.
+- [x] `[should]` Make repository-local `adaos api restart` preserve the active
+  developer checkout. The exception is limited to `api restart` invoked by the
+  checkout's own `.venv`; production entry points remain bound to the promoted
+  core slot. The detached child clears inherited slot identity, pins the source
+  checkout and exact Git commit, and uses a bounded listener-progress readiness
+  grace. Local acceptance on 2026-07-31 restarted the full 37-skill catalog in
+  93.5 seconds, returned exact commit `07ce8ed1`, and restored the hub-root
+  sidecar to `active_session=true` without a manual reconnect.
 - [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
   automatic decomposition is ambiguous.
 
