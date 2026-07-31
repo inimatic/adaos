@@ -75,6 +75,22 @@ def test_normative_builder_definition_is_compiled_and_explainable() -> None:
     )
 
 
+def test_builder_projection_exposes_process_and_project_workflow_inspection(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    described = service.describe("scenario", "recipes")
+
+    process = described["workflow_inspection"]["process"]
+    project = described["workflow_inspection"]["project"]
+    assert process["status"] == "admitted"
+    assert process["validation"]["valid"] is True
+    assert process["validation"]["metrics"]["transitions"] > 0
+    assert process["binding"]["binding_digest"].startswith("sha256:")
+    assert project["status"] == "not_declared"
+
+
 def test_legacy_builder_instance_gets_digest_binding_without_losing_history(tmp_path: Path) -> None:
     service = _service(tmp_path)
     workflow = _plan(service)

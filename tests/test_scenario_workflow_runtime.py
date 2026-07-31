@@ -8,6 +8,7 @@ import pytest
 
 from adaos.services.scenario import workflow_runtime as workflow_runtime_module
 from adaos.services.scenario.workflow_runtime import ScenarioWorkflowRuntime
+from adaos.services.scenario.workflow_runtime import GovernedScenarioWorkflowRequired
 
 
 class _Paths:
@@ -93,6 +94,22 @@ def test_prompt_workflow_exposes_virtual_automation_state(tmp_path: Path) -> Non
 
     assert states["automation"]["label"] == "Stage: Automation"
     assert states["automation"]["actions"] == []
+
+
+@pytest.mark.anyio
+async def test_manifest_bound_workflow_cannot_use_legacy_next_state_writer(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime, _paths = _runtime(tmp_path)
+    monkeypatch.setattr(
+        workflow_runtime_module.scenarios_loader,
+        "read_content",
+        lambda _scenario_id: {"workflow": {"manifest": "workflow.json"}},
+    )
+
+    with pytest.raises(GovernedScenarioWorkflowRequired, match="legacy next_state mutation"):
+        await runtime.apply_action("governed", "default", "approve")
 
 
 @pytest.mark.anyio

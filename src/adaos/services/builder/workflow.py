@@ -45,8 +45,21 @@ from adaos.services.builder.project_aggregate import (
 from adaos.services.conversation_interactions import interaction_from_workflow_description
 from adaos.services.governed_workflow import CompiledWorkflowDefinition
 from adaos.services.runtime_paths import current_state_dir
-from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
-from adaos.services.workflow_registry import platform_workflow_adapter_registry
+from adaos.services.workflow_artifacts import (
+    WorkflowArtifactError,
+    canonical_workflow_bytes,
+    load_manifest_bound_workflow,
+    validate_workflow_definition_report,
+)
+from adaos.services.workflow_registry import (
+    WorkflowAdapterRegistryError,
+    platform_workflow_adapter_registry,
+)
+from adaos.services.scenario.workflow_translation import (
+    LegacyWorkflowTranslationError,
+    shadow_compare_legacy_workflow,
+    translate_legacy_scenario_workflow,
+)
 
 
 BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
@@ -96,6 +109,36 @@ class BuilderWorkflowError(ValueError):
 def _file_signature(path: Path) -> tuple[int, int]:
     stat = path.stat()
     return stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=32)
+def _inspect_workflow_definition(raw: bytes, source: str) -> dict[str, Any]:
+    validation = validate_workflow_definition_report(raw)
+    inspection: dict[str, Any] = {
+        "schema": "adaos.workflow.inspection.v1",
+        "source": source,
+        "status": "invalid",
+        "validation": copy.deepcopy(validation.report),
+        "binding": None,
+    }
+    if validation.compiled is None:
+        return inspection
+    try:
+        binding = platform_workflow_adapter_registry().bind(validation.compiled)
+    except WorkflowAdapterRegistryError as exc:
+        inspection["status"] = "binding_rejected"
+        inspection["validation"]["diagnostics"].append(
+            {
+                "code": "workflow.registry.binding_rejected",
+                "severity": "error",
+                "path": "$.transitions",
+                "message": str(exc),
+            }
+        )
+    else:
+        inspection["status"] = "admitted"
+        inspection["binding"] = binding
+    return inspection
 
 
 @lru_cache(maxsize=16)
@@ -774,6 +817,107 @@ class BuilderWorkflowService:
         except (OSError, WorkflowArtifactError) as exc:
             raise BuilderWorkflowError(f"invalid declarative Builder workflow: {exc}") from exc
 
+    def _workflow_inspection(self, object_type: str, object_id: str) -> dict[str, Any]:
+        definition = self._governed_definition()
+        process = copy.deepcopy(
+            _inspect_workflow_definition(
+                canonical_workflow_bytes(definition.source),
+                "builder_skill/workflow.json",
+            )
+        )
+        root = self.project_root(object_type, object_id)
+        manifest_name = "scenario.yaml" if object_type == "scenario" else "skill.yaml"
+        try:
+            artifact = load_manifest_bound_workflow(
+                root,
+                manifest_name=manifest_name,
+                allow_legacy_inline=object_type == "scenario",
+            )
+        except WorkflowArtifactError as exc:
+            project: dict[str, Any] = {
+                "schema": "adaos.workflow.inspection.v1",
+                "source": f"{object_id}/{manifest_name}",
+                "status": "invalid",
+                "validation": {
+                    "valid": False,
+                    "diagnostics": [
+                        {
+                            "code": "workflow.artifact.invalid",
+                            "severity": "error",
+                            "path": "$",
+                            "message": str(exc),
+                        }
+                    ],
+                },
+                "binding": None,
+            }
+        else:
+            if artifact is not None:
+                project = copy.deepcopy(
+                    _inspect_workflow_definition(
+                        canonical_workflow_bytes(artifact.definition),
+                        f"{object_id}/workflow.json",
+                    )
+                )
+            elif object_type == "scenario":
+                try:
+                    manifest = yaml.safe_load(
+                        (root / manifest_name).read_text(encoding="utf-8")
+                    ) or {}
+                    legacy = manifest.get("workflow") if isinstance(manifest, Mapping) else None
+                    if isinstance(legacy, Mapping) and isinstance(legacy.get("states"), Mapping):
+                        translated = translate_legacy_scenario_workflow(
+                            legacy,
+                            scenario_id=object_id,
+                        )
+                        project = copy.deepcopy(
+                            _inspect_workflow_definition(
+                                canonical_workflow_bytes(translated),
+                                f"{object_id}/{manifest_name}#workflow",
+                            )
+                        )
+                        project["status"] = "legacy_shadow"
+                        project["shadow"] = shadow_compare_legacy_workflow(
+                            legacy,
+                            translated,
+                            scenario_id=object_id,
+                        )
+                    else:
+                        project = {
+                            "schema": "adaos.workflow.inspection.v1",
+                            "source": f"{object_id}/{manifest_name}",
+                            "status": "not_declared",
+                            "validation": None,
+                            "binding": None,
+                        }
+                except (OSError, UnicodeError, yaml.YAMLError, LegacyWorkflowTranslationError) as exc:
+                    project = {
+                        "schema": "adaos.workflow.inspection.v1",
+                        "source": f"{object_id}/{manifest_name}#workflow",
+                        "status": "invalid",
+                        "validation": {
+                            "valid": False,
+                            "diagnostics": [
+                                {
+                                    "code": "workflow.legacy.translation_failed",
+                                    "severity": "error",
+                                    "path": "$.workflow",
+                                    "message": str(exc),
+                                }
+                            ],
+                        },
+                        "binding": None,
+                    }
+            else:
+                project = {
+                    "schema": "adaos.workflow.inspection.v1",
+                    "source": f"{object_id}/{manifest_name}",
+                    "status": "not_declared",
+                    "validation": None,
+                    "binding": None,
+                }
+        return {"process": process, "project": project}
+
     def _state_path(self, object_type: str, object_id: str) -> Path:
         return self.project_root(object_type, object_id) / "prompt_state.json"
 
@@ -1024,6 +1168,7 @@ class BuilderWorkflowService:
             project_ref=f"{kind}:{project_id}",
             definition=self._governed_definition(),
         )
+        projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)
         projection["project_summary"] = self._project_summary(projection)
         return projection
@@ -2100,6 +2245,7 @@ class BuilderWorkflowService:
             project_ref=f"{kind}:{project_id}",
             definition=self._governed_definition(),
         )
+        projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)
         projection["project_summary"] = self._project_summary(projection)
         if callable(self.event_sink):
