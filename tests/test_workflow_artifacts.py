@@ -14,6 +14,8 @@ from adaos.services.workflow_artifacts import (
     WorkflowArtifactLimits,
     canonical_workflow_digest,
     load_manifest_bound_workflow,
+    validate_workflow_definition_report,
+    workflow_graph_diff,
 )
 
 
@@ -49,6 +51,34 @@ def test_manifest_bound_workflow_loads_and_has_canonical_digest(tmp_path: Path) 
     assert artifact.compiled.workflow_type == "builder.change"
     assert artifact.definition_digest == canonical_workflow_digest(definition)
     assert artifact.raw_digest.startswith("sha256:")
+    assert artifact.validation_report["valid"] is True
+    assert artifact.validation_report["metrics"]["transitions"] == len(definition["transitions"])
+
+
+def test_validation_report_is_structured_for_invalid_authoring_input() -> None:
+    result = validate_workflow_definition_report(
+        b'{"schema":"adaos.workflow.definition.v1","states":[]}'
+    )
+
+    assert result.compiled is None
+    assert result.report["valid"] is False
+    assert result.report["diagnostics"]
+    assert all(item["path"].startswith("$") for item in result.report["diagnostics"])
+    assert {item["severity"] for item in result.report["diagnostics"]} == {"error"}
+
+
+def test_graph_diff_uses_semantic_identities_not_array_positions() -> None:
+    before = builder_change_definition()
+    after = json.loads(json.dumps(before))
+    after["states"] = list(reversed(after["states"]))
+    after["states"][0]["label"] = "Changed label"
+    removed_command = after["commands"].pop()
+
+    diff = workflow_graph_diff(after, before)
+
+    assert diff["states"]["changed"] == [after["states"][0]["id"]]
+    assert diff["commands"]["removed"] == [removed_command["id"]]
+    assert diff["states"]["added"] == []
 
 
 def test_unreferenced_workflow_is_rejected(tmp_path: Path) -> None:

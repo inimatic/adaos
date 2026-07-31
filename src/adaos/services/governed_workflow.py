@@ -22,6 +22,7 @@ WORKFLOW_EVENT_SCHEMA = "adaos.workflow.event.v1"
 WORKFLOW_DEFINITION_MIGRATION_SCHEMA = "adaos.workflow.definition_migration.v1"
 WORKFLOW_COMPOSITION_SCHEMA = "adaos.workflow.composition.v1"
 WORKFLOW_DECISION_SCHEMA = "adaos.workflow.decision.v1"
+WORKFLOW_VALIDATION_REPORT_SCHEMA = "adaos.workflow.validation_report.v1"
 _MAX_LEDGER = 200
 
 
@@ -100,6 +101,38 @@ def _validate(schema_name: str, value: Mapping[str, Any]) -> None:
     first = errors[0]
     location = ".".join(str(item) for item in first.absolute_path) or "$"
     raise WorkflowDefinitionError(f"{schema_name} validation failed at {location}: {first.message}")
+
+
+def workflow_schema_diagnostics(
+    schema_name: str,
+    value: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return stable, machine-readable ABI diagnostics without weakening admission."""
+
+    validator = Draft202012Validator(_abi_schema(schema_name), registry=_abi_registry())
+    errors = sorted(
+        validator.iter_errors(dict(value)),
+        key=lambda item: (list(item.absolute_path), item.validator, item.message),
+    )
+    diagnostics: list[dict[str, Any]] = []
+    for error in errors:
+        path = "$" + "".join(
+            f"[{item}]" if isinstance(item, int) else f".{item}"
+            for item in error.absolute_path
+        )
+        diagnostics.append(
+            {
+                "code": f"workflow.schema.{str(error.validator).replace('$', 'ref')}",
+                "severity": "error",
+                "path": path,
+                "message": error.message,
+                "details": {
+                    "validator": str(error.validator),
+                    "schema_path": "/".join(str(item) for item in error.absolute_schema_path),
+                },
+            }
+        )
+    return diagnostics
 
 
 def _sources(value: Any) -> tuple[str, ...]:
@@ -1290,6 +1323,7 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "WorkflowDefinitionMigration": WORKFLOW_DEFINITION_MIGRATION_SCHEMA,
             "WorkflowComposition": WORKFLOW_COMPOSITION_SCHEMA,
             "WorkflowDecision": WORKFLOW_DECISION_SCHEMA,
+            "WorkflowValidationReport": WORKFLOW_VALIDATION_REPORT_SCHEMA,
         },
         "invariants": {
             "resolver": "pure",

@@ -43,6 +43,10 @@ def test_conversational_builder_schemas_are_valid_draft_2020_12(schema_name: str
     Draft202012Validator.check_schema(_load_schema(schema_name))
 
 
+def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
+    Draft202012Validator.check_schema(_load_schema("workflow.validation_report.v1.schema.json"))
+
+
 def test_skill_schema_accepts_runtime_activation_policy() -> None:
     schema = _load_schema("skill.schema.json")
     payload = {
