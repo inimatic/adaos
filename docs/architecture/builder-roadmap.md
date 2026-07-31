@@ -1284,7 +1284,7 @@ Autonomy, evidence, and acceptance:
   explicitly recovered and are ready: `adaos_connect@0.16.4`,
   `conversation_companions@0.1.12`, and `new_face_vision_skill@0.2.25`.
 - [x] The 2026-07-31 contextual-control repair is committed as core
-  `ee752bf1` plus `1f6dc4a4` and client `256f3f4`; DEV
+  `ee752bf1` plus `1f6dc4a4` and client `ad200ee`; DEV
   `builder_skill@0.3.26` is active in slot B at Forge commit
   `4e1da1529cf4686d21988259cced1a3c670716ac`. “Что выбрано?” now creates one
   durable semantic interaction whose bounded process/change/Preview commands
