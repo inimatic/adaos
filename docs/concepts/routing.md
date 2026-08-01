@@ -146,6 +146,30 @@ If the hub receives `/api/tools/call` for a skill that is not installed locally,
 
 Selection prefers active runtimes and most recent `last_seen`.
 
+### Action transport contract
+
+Browser-originated `callSkill` actions must send a stable `idempotency_key` and
+`request_id` with `/api/tools/call`. The tool bridge copies both fields into
+`arguments._meta` and into member proxy payloads. For the same key and same
+request fingerprint, the bridge replays the first completed result or error
+from a short in-memory cache. Reusing the same key with different arguments is a
+`409 tool_call_idempotency_conflict`.
+
+The root hub-route retry policy treats `/api/tools/call` as write-capable:
+
+- connection/setup failures before an upstream runtime accepted the request are
+  retryable
+- `ReadTimeout` is retryable only when the request carries `idempotency_key` or
+  `request_id`
+- other upstream failures remain at-most-once unless a higher-level contract
+  explicitly supplies idempotency
+
+Client-side action errors should preserve the failure class. A local upstream
+timeout should surface as `runtime_upstream_timeout`, a refused/broken local
+runtime hop as `runtime_upstream_unreachable`, and root-known route backoff as
+`hub_route_unavailable`; `transport_unreachable` is reserved for browser/root
+network loss.
+
 Target-state note:
 
 - this should evolve from a single ad-hoc proxy rule into router-owned semantic route selection

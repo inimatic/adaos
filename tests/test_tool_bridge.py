@@ -25,11 +25,15 @@ def _reset_tool_bridge_runtime_guards() -> None:
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):
         tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+    if hasattr(tool_bridge_module, "_TOOL_CALL_IDEMPOTENCY_CACHE"):
+        tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
     yield
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):
         tool_bridge_module._WORKSPACE_RUNTIME_LOCKS.clear()
+    if hasattr(tool_bridge_module, "_TOOL_CALL_IDEMPOTENCY_CACHE"):
+        tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
 
 
 def _fake_ctx() -> SimpleNamespace:
@@ -105,6 +109,109 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert calls[1] == "prompt_engineer_skill:prompt_list_project_objects:None"
     assert result["ok"] is True
     assert result["trace_id"] == "trace-123"
+
+
+def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"count": len(calls), "payload": payload}
+
+    async def _allow_action(**_kwargs):
+        return {"risk_class": "local_write", "approval_required": False}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        calls.append("run_sync")
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _allow_action)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    body = tool_bridge_module.ToolCall(
+        tool="notebook_skill:save_note",
+        arguments={"side_effect_class": "local_write", "note_id": "note-1", "content": "a"},
+        idempotency_key="idem-1",
+        request_id="req-1",
+    )
+    first_response = Response()
+    second_response = Response()
+
+    first = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), first_response, ctx=_fake_ctx()))
+    second = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), second_response, ctx=_fake_ctx()))
+
+    assert calls == ["run_sync", "notebook_skill:save_note"]
+    assert first == second
+    assert second_response.headers["x-adaos-idempotency-replay"] == "1"
+    assert first["result"]["payload"]["_meta"]["idempotency_key"] == "idem-1"
+    assert first["result"]["payload"]["_meta"]["request_id"] == "req-1"
+
+
+def test_call_tool_rejects_reused_idempotency_key_with_different_payload(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _allow_action(**_kwargs):
+        return {"risk_class": "local_write", "approval_required": False}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _allow_action)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="notebook_skill:save_note",
+                arguments={"side_effect_class": "local_write", "note_id": "note-1", "content": "a"},
+                idempotency_key="idem-conflict",
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="notebook_skill:save_note",
+                    arguments={"side_effect_class": "local_write", "note_id": "note-1", "content": "b"},
+                    idempotency_key="idem-conflict",
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=_fake_ctx(),
+            )
+        )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "tool_call_idempotency_conflict"
+    assert excinfo.value.detail["retryable"] is False
+    assert calls == ["notebook_skill:save_note"]
 
 
 def test_call_tool_prepares_workspace_runtime_before_single_mutation(monkeypatch) -> None:

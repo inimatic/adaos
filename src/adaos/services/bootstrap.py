@@ -869,15 +869,40 @@ def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
     return (1.5, 2.5)
 
 
+def _hub_route_tools_call_has_idempotency(body: bytes | None = None) -> bool:
+    if not body:
+        return False
+    try:
+        payload = _json.loads(bytes(body).decode("utf-8", errors="replace"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    for key in ("idempotency_key", "request_id"):
+        if str(payload.get(key) or "").strip():
+            return True
+    arguments = payload.get("arguments")
+    if isinstance(arguments, dict):
+        meta = arguments.get("_meta") if isinstance(arguments.get("_meta"), dict) else {}
+        for key in ("idempotency_key", "request_id"):
+            if str(arguments.get(key) or meta.get(key) or "").strip():
+                return True
+    return False
+
+
 def _hub_route_should_retry_http_upstream_error(
-    *, method: str, path: str, error_kind: str
+    *, method: str, path: str, error_kind: str, body: bytes | None = None
 ) -> bool:
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     method_norm = str(method or "").strip().upper()
     kind = str(error_kind or "").strip()
     if path_norm == "/api/tools/call":
-        # The tool may already have committed a side effect before the route
-        # observed a connection failure. Execution is at-most-once here.
+        if kind in {"ConnectionError", "ConnectTimeout", "NewConnectionError"}:
+            return True
+        if kind == "ReadTimeout" and _hub_route_tools_call_has_idempotency(body):
+            return True
+        # Other failures may happen after the tool committed a side effect.
+        # Execution stays at-most-once unless the caller supplied idempotency.
         return False
     if kind == "ReadTimeout" and (
         method_norm not in {"GET", "HEAD"}
@@ -7511,6 +7536,7 @@ class BootstrapService:
                                             method=method,
                                             path=path,
                                             error_kind=type(e).__name__,
+                                            body=body,
                                         ):
                                             break
                                 if resp is None:
@@ -9423,6 +9449,7 @@ class BootstrapService:
                                                                 method=method,
                                                                 path=path,
                                                                 error_kind=type(e).__name__,
+                                                                body=body,
                                                             ):
                                                                 break
                                                     if resp is None:

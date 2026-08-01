@@ -92,6 +92,16 @@ _WORKSPACE_RUNTIME_SYNC_MIN_INTERVAL_S = max(
 _WORKSPACE_RUNTIME_LOCKS_LOCK = threading.RLock()
 _WORKSPACE_RUNTIME_LOCKS: dict[str, threading.RLock] = {}
 _WORKSPACE_RUNTIME_LAST_SYNC_AT: dict[str, float] = {}
+_TOOL_CALL_IDEMPOTENCY_TTL_S = max(
+    1.0,
+    min(3600.0, float(os.getenv("ADAOS_TOOL_CALL_IDEMPOTENCY_TTL_S") or "180")),
+)
+_TOOL_CALL_IDEMPOTENCY_WAIT_S = max(
+    1.0,
+    min(300.0, float(os.getenv("ADAOS_TOOL_CALL_IDEMPOTENCY_WAIT_S") or "65")),
+)
+_TOOL_CALL_IDEMPOTENCY_LOCK = threading.RLock()
+_TOOL_CALL_IDEMPOTENCY_CACHE: dict[str, dict[str, Any]] = {}
 _APPROVED_ACTION_STATES = {"approve", "approved", "allowed", "operator_apply_allowed", "responded"}
 _RISK_FREEFORM_ARGUMENT_KEYS = {"content", "text"}
 
@@ -455,6 +465,169 @@ def _stable_json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str)
     except Exception:
         return str(value)
+
+
+def _tool_call_idempotency_key(body: "ToolCall", request: Request) -> str:
+    raw = _first_text(
+        getattr(body, "idempotency_key", None),
+        getattr(body, "request_id", None),
+        request.headers.get("Idempotency-Key") if hasattr(request, "headers") else "",
+        request.headers.get("X-Idempotency-Key") if hasattr(request, "headers") else "",
+    )
+    if not raw:
+        return ""
+    token = "".join(ch if ch.isalnum() or ch in "._:-" else "_" for ch in raw.strip())
+    if len(token) <= 180:
+        return token
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return f"{token[:140]}.{digest[:32]}"
+
+
+def _tool_call_idempotency_fingerprint(body: "ToolCall") -> str:
+    payload = {
+        "tool": str(body.tool or "").strip(),
+        "arguments": body.arguments or {},
+        "context": body.context or {},
+        "timeout": body.timeout,
+        "dev": bool(body.dev),
+    }
+    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def _tool_call_idempotency_cleanup(now: float) -> None:
+    expired = [
+        key
+        for key, entry in _TOOL_CALL_IDEMPOTENCY_CACHE.items()
+        if float(entry.get("expires_at") or 0.0) <= now
+    ]
+    for key in expired:
+        _TOOL_CALL_IDEMPOTENCY_CACHE.pop(key, None)
+
+
+def _tool_call_idempotency_begin(
+    body: "ToolCall",
+    request: Request,
+) -> tuple[str, str, dict[str, Any] | None]:
+    key = _tool_call_idempotency_key(body, request)
+    if not key:
+        return "bypass", "", None
+    fingerprint = _tool_call_idempotency_fingerprint(body)
+    now = time.time()
+    with _TOOL_CALL_IDEMPOTENCY_LOCK:
+        _tool_call_idempotency_cleanup(now)
+        entry = _TOOL_CALL_IDEMPOTENCY_CACHE.get(key)
+        if entry is not None:
+            if str(entry.get("fingerprint") or "") != fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "tool_call_idempotency_conflict",
+                        "idempotency_key": key,
+                        "retryable": False,
+                    },
+                )
+            if bool(entry.get("done")):
+                return "cached", key, entry
+            return "wait", key, entry
+        event = threading.Event()
+        entry = {
+            "fingerprint": fingerprint,
+            "created_at": now,
+            "expires_at": now + _TOOL_CALL_IDEMPOTENCY_TTL_S,
+            "event": event,
+            "done": False,
+        }
+        _TOOL_CALL_IDEMPOTENCY_CACHE[key] = entry
+        return "owner", key, entry
+
+
+def _tool_call_idempotency_store_result(entry: dict[str, Any], result: Any) -> None:
+    with _TOOL_CALL_IDEMPOTENCY_LOCK:
+        entry["kind"] = "result"
+        entry["result"] = copy.deepcopy(result)
+        entry["done"] = True
+        entry["expires_at"] = time.time() + _TOOL_CALL_IDEMPOTENCY_TTL_S
+        event = entry.get("event")
+        if isinstance(event, threading.Event):
+            event.set()
+
+
+def _tool_call_idempotency_store_http_error(entry: dict[str, Any], exc: HTTPException) -> None:
+    with _TOOL_CALL_IDEMPOTENCY_LOCK:
+        entry["kind"] = "http_error"
+        entry["status_code"] = int(exc.status_code)
+        entry["detail"] = copy.deepcopy(exc.detail)
+        entry["headers"] = copy.deepcopy(exc.headers)
+        entry["done"] = True
+        entry["expires_at"] = time.time() + _TOOL_CALL_IDEMPOTENCY_TTL_S
+        event = entry.get("event")
+        if isinstance(event, threading.Event):
+            event.set()
+
+
+def _tool_call_idempotency_store_runtime_error(entry: dict[str, Any], exc: BaseException) -> None:
+    with _TOOL_CALL_IDEMPOTENCY_LOCK:
+        entry["kind"] = "runtime_error"
+        entry["detail"] = f"{type(exc).__name__}: {exc}"
+        entry["done"] = True
+        entry["expires_at"] = time.time() + _TOOL_CALL_IDEMPOTENCY_TTL_S
+        event = entry.get("event")
+        if isinstance(event, threading.Event):
+            event.set()
+
+
+def _tool_call_idempotency_replay(entry: dict[str, Any], response: Response) -> Any:
+    kind = str(entry.get("kind") or "")
+    try:
+        response.headers["X-AdaOS-Idempotency-Replay"] = "1"
+    except Exception:
+        pass
+    if kind == "result":
+        return copy.deepcopy(entry.get("result"))
+    if kind == "http_error":
+        raise HTTPException(
+            status_code=int(entry.get("status_code") or 500),
+            detail=copy.deepcopy(entry.get("detail")),
+            headers=copy.deepcopy(entry.get("headers")),
+        )
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "error": "tool_call_idempotent_retry_failed",
+            "detail": str(entry.get("detail") or "cached call failed"),
+            "retryable": False,
+        },
+    )
+
+
+async def _tool_call_idempotency_wait(entry: dict[str, Any], response: Response) -> Any:
+    event = entry.get("event")
+    if not isinstance(event, threading.Event):
+        raise HTTPException(status_code=409, detail={"error": "tool_call_idempotency_in_progress"})
+    done = await anyio.to_thread.run_sync(event.wait, _TOOL_CALL_IDEMPOTENCY_WAIT_S)
+    if not done:
+        raise HTTPException(
+            status_code=425,
+            detail={
+                "error": "tool_call_idempotency_in_progress",
+                "retryable": True,
+                "retry_after_s": min(5.0, _TOOL_CALL_IDEMPOTENCY_WAIT_S),
+            },
+        )
+    return _tool_call_idempotency_replay(entry, response)
+
+
+def _tool_call_forward_payload(body: "ToolCall", payload: Dict[str, Any]) -> Dict[str, Any]:
+    forward: Dict[str, Any] = {"tool": body.tool, "arguments": payload}
+    if body.timeout is not None:
+        forward["timeout"] = body.timeout
+    if body.dev:
+        forward["dev"] = True
+    if body.idempotency_key:
+        forward["idempotency_key"] = body.idempotency_key
+    if body.request_id:
+        forward["request_id"] = body.request_id
+    return forward
 
 
 def _runtime_action_domain_ref(
@@ -1032,11 +1205,7 @@ async def _proxy_tool_call_to_node(
         if rpc_error is not None:
             raise HTTPException(status_code=502, detail=f"member link rpc failed: {type(rpc_error).__name__}: {rpc_error}")
         raise HTTPException(status_code=503, detail="no base_url or p2p link for target node")
-    forward = {"tool": body.tool, "arguments": payload}
-    if body.timeout is not None:
-        forward["timeout"] = body.timeout
-    if body.dev:
-        forward["dev"] = True
+    forward = _tool_call_forward_payload(body, payload)
     token = conf.token or request.headers.get("X-AdaOS-Token") or "dev-local-token"
     try:
         r = await anyio.to_thread.run_sync(
@@ -1142,11 +1311,37 @@ class ToolCall(BaseModel):
     context: Dict[str, Any] | None = None
     timeout: float | None = Field(default=None)
     dev: bool = Field(default=False, description="Run tool from DEV workspace instead of installed runtime")
+    idempotency_key: str | None = None
+    request_id: str | None = None
     model_config = {"extra": "ignore"}
 
 
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
+    mode, key, entry = _tool_call_idempotency_begin(body, request)
+    if mode == "cached" and entry is not None:
+        return _tool_call_idempotency_replay(entry, response)
+    if mode == "wait" and entry is not None:
+        return await _tool_call_idempotency_wait(entry, response)
+    if mode != "owner" or entry is None:
+        return await _call_tool_impl(body, request, response, ctx)
+    try:
+        response.headers["X-AdaOS-Idempotency-Key"] = key
+    except Exception:
+        pass
+    try:
+        result = await _call_tool_impl(body, request, response, ctx)
+    except HTTPException as exc:
+        _tool_call_idempotency_store_http_error(entry, exc)
+        raise
+    except Exception as exc:
+        _tool_call_idempotency_store_runtime_error(entry, exc)
+        raise
+    _tool_call_idempotency_store_result(entry, result)
+    return result
+
+
+async def _call_tool_impl(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     call_started_at = time.perf_counter()
     if not is_accepting_new_work():
         raise HTTPException(status_code=503, detail="node is draining")
@@ -1183,6 +1378,10 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
         meta.setdefault("origin_label", "API")
     meta.setdefault("tool", body.tool)
     meta.setdefault("tool_name", body.tool)
+    if body.idempotency_key:
+        meta.setdefault("idempotency_key", body.idempotency_key)
+    if body.request_id:
+        meta.setdefault("request_id", body.request_id)
     payload["_meta"] = meta
     webspace_id = _resolve_tool_webspace_id(payload)
     target_node_id = _resolve_target_node_id(payload)
@@ -1380,12 +1579,7 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
 
         # Проксируем запрос прозрачно
         url = f"{base_url.rstrip('/')}/api/tools/call"
-        forward = {"tool": body.tool, "arguments": payload}
-        if body.timeout is not None:
-            forward["timeout"] = body.timeout
-        # сохраняем dev-флаг при прокси, если он был указан
-        if body.dev:
-            forward["dev"] = True
+        forward = _tool_call_forward_payload(body, payload)
         token = conf.token or request.headers.get("X-AdaOS-Token") or "dev-local-token"
         try:
             r = await anyio.to_thread.run_sync(

@@ -673,17 +673,30 @@ def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> No
     )
 
 
-def test_hub_route_tools_call_never_retries_after_upstream_error() -> None:
+def test_hub_route_tools_call_retries_only_transport_safe_or_idempotent_failures() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","arguments":{"content":"a"}}',
     ) is False
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ConnectionError",
-    ) is False
+    ) is True
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","idempotency_key":"idem-1","arguments":{"content":"a"}}',
+    ) is True
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","arguments":{"_meta":{"request_id":"req-1"}}}',
+    ) is True
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="GET",
         path="/api/ping",
