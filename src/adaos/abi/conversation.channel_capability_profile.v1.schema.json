@@ -3,7 +3,7 @@
   "$id": "adaos.conversation.channel_capability_profile.v1",
   "title": "AdaOS Channel Capability Profile",
   "type": "object",
-  "required": ["schema", "profile_id", "version", "transport", "client", "surface", "capabilities", "limits", "locale", "accessibility", "handoff", "acknowledgement", "fresh_until", "updated_at"],
+  "required": ["schema", "profile_id", "version", "transport", "client", "surface", "capabilities", "limits", "locale", "accessibility", "handoff", "acknowledgement", "permission_boundary", "business_availability_boundary", "fresh_until", "updated_at"],
   "properties": {
     "schema": { "const": "adaos.conversation.channel_capability_profile.v1" },
     "profile_id": { "type": "string", "minLength": 1, "maxLength": 240 },
@@ -26,6 +26,8 @@
       "additionalProperties": false
     },
     "acknowledgement": { "enum": ["none", "delivery", "read", "action"] },
+    "permission_boundary": { "const": "separate" },
+    "business_availability_boundary": { "const": "separate" },
     "fresh_until": { "type": ["string", "null"], "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" },
     "metadata": { "type": "object" }

@@ -68,9 +68,25 @@ def test_project_aggregate_is_schema_valid_and_reference_oriented(service: Build
 
     Draft202012Validator(schema).validate(project)
     assert project["project_ref"] == "scenario:recipes"
+    assert project["identity"] == {
+        "stable_id": "recipes",
+        "kind": "scenario",
+        "project_ref": "scenario:recipes",
+    }
     assert project["focus_by_context"]["default"] == "CH-favorites"
     assert project["changes"][0]["workflow_instance_ref"] == workflow["governed"]["instance_id"]
     assert project["changes"][0]["affected_refs"] == ["widget:favorites"]
+    assert project["changes"][0]["issue_refs"] == ["issue:issue-CH-favorites"]
+    assert project["change_edges"] == [
+        {
+            "from_ref": "change:CH-favorites",
+            "to_ref": "issue:issue-CH-favorites",
+            "relation": "contains_issue",
+        }
+    ]
+    assert project["workflow_definition_version"] == "1.0.0"
+    assert project["policy"]["risk_policy"]["fail_closed"] is True
+    assert project["explanation"]["status"] == "active"
     assert "request" not in project["changes"][0]
 
 

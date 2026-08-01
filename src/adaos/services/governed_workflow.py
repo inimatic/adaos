@@ -145,6 +145,145 @@ def _sources(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value or [])
 
 
+def normalize_transition_descriptor(
+    value: Mapping[str, Any],
+    *,
+    definition_version: str,
+) -> dict[str, Any]:
+    """Materialize the complete normative TransitionDescriptor.
+
+    Workflow authors may omit protocol values that have one safe platform
+    default. The compiler records every such value in the executable
+    descriptor so the resolver, reviews, audit tools, and generated clients do
+    not independently invent transition semantics.
+    """
+
+    descriptor = copy.deepcopy(dict(value))
+    descriptor["version"] = str(
+        descriptor.get("version")
+        or dict(descriptor.get("migration") or {}).get("introduced_in")
+        or definition_version
+    )
+    sources = list(_sources(descriptor.get("source")))
+    descriptor.setdefault(
+        "source_selector",
+        {"states": sources, "predicate": None},
+    )
+    descriptor.setdefault("invariants", [])
+
+    concurrency = descriptor.setdefault("concurrency", {})
+    scope = str(concurrency.get("conflict_scope") or "aggregate")
+    concurrency.setdefault("conflict_key", f"{scope}:{{instance_id}}")
+    concurrency.setdefault(
+        "expected_generation",
+        "required" if concurrency.get("requires_generation") else "not_applicable",
+    )
+    idempotency_mode = str(concurrency.get("idempotency") or "not_applicable")
+    descriptor.setdefault(
+        "idempotency_contract",
+        {
+            "mode": idempotency_mode,
+            "key_scope": (
+                "transition_instance" if idempotency_mode != "not_applicable" else "none"
+            ),
+            "result_reuse": (
+                "return_recorded_outcome"
+                if idempotency_mode != "not_applicable"
+                else "not_applicable"
+            ),
+            "ttl_seconds": None,
+        },
+    )
+
+    effect = descriptor.setdefault("effect", {})
+    effect.setdefault("input_schema", copy.deepcopy(dict(descriptor.get("trigger") or {}).get("input_schema") or {}))
+    effect.setdefault("output_schema", {"type": "object"})
+    effect.setdefault(
+        "transaction_boundary",
+        {
+            "none": "none",
+            "atomic": "aggregate",
+            "outbox": "aggregate_and_outbox",
+        }.get(str(effect.get("transaction") or "none"), "external_saga"),
+    )
+
+    recovery = descriptor.setdefault("recovery", {})
+    retry_mode = str(effect.get("retry") or "never")
+    recovery.setdefault(
+        "retry_policy",
+        {
+            "mode": retry_mode,
+            "max_attempts": 3 if retry_mode == "bounded" else None,
+            "backoff": "exponential" if retry_mode == "bounded" else "none",
+            "retryable_reason_codes": [],
+        },
+    )
+
+    outcomes = descriptor.setdefault("outcomes", {})
+    outcomes.setdefault(
+        "reason_codes",
+        {
+            "success": "transition_succeeded",
+            "failure": "transition_failed",
+            "input_required": "transition_input_required",
+            "cancelled": "transition_cancelled",
+            "unknown": "transition_outcome_unknown",
+        },
+    )
+    outcomes.setdefault("terminal_result_once", True)
+
+    evidence = descriptor.setdefault("evidence", {})
+    evidence.setdefault("types", [])
+    evidence.setdefault("immutable_refs", True)
+    approval = descriptor.setdefault("approval", {})
+    approval.setdefault("mode", "single" if approval.get("required") else "none")
+
+    async_reply = descriptor.setdefault("async_reply", {})
+    reply_mode = str(async_reply.get("mode") or "none")
+    async_reply.setdefault("acknowledge_acceptance", reply_mode != "none")
+    async_reply.setdefault("terminal_once", True)
+    async_reply.setdefault("delivery_retry_without_execution", True)
+    async_reply.setdefault("resume_after_restart", True)
+    async_reply.setdefault("late_result_policy", "origin_thread")
+    async_reply.setdefault(
+        "progress",
+        {
+            "ordered": True,
+            "coalesce": reply_mode == "progress_and_terminal",
+            "rate_limit_seconds": 2 if reply_mode == "progress_and_terminal" else 0,
+        },
+    )
+    async_reply.setdefault("route_expiry", "query_only")
+
+    capabilities = descriptor.setdefault("capability_requirements", {})
+    capabilities.setdefault("fail_closed", True)
+    capabilities.setdefault("semantic_equivalence_required", True)
+
+    explanations = descriptor.setdefault("explanations", {})
+    allowed = str(explanations.get("allowed") or "Transition is available")
+    rejected = str(explanations.get("rejected") or "Transition is blocked")
+    completed = str(explanations.get("completed") or "Transition completed")
+    explanations.setdefault("available", allowed)
+    explanations.setdefault("blocked", rejected)
+    explanations.setdefault("running", f"{allowed}; work is running")
+    explanations.setdefault("failed", f"{rejected}; execution failed")
+    explanations.setdefault("input_required", f"{rejected}; input is required")
+    explanations.setdefault("unknown", f"{rejected}; outcome requires reconciliation")
+
+    events = descriptor.setdefault("events", {})
+    events.setdefault("correlation_required", True)
+    events.setdefault("causation_required", True)
+    observability = descriptor.setdefault("observability", {})
+    observability.setdefault("correlation_id_required", True)
+    observability.setdefault("causation_id_required", True)
+    observability.setdefault("actor_id_required", True)
+    migration = descriptor.setdefault("migration", {})
+    migration.setdefault("policy", "pin_in_flight")
+    migration.setdefault("compatible_from", [])
+    migration.setdefault("migration_ref", None)
+    return descriptor
+
+
 def _actor_matches(allowed: tuple[str, ...], actor: str) -> bool:
     if "*" in allowed or actor in allowed:
         return True
@@ -206,7 +345,10 @@ def compile_definition(
     for raw in definition["transitions"]:
         if not isinstance(raw, Mapping):
             raise WorkflowDefinitionError("workflow transitions must be objects")
-        descriptor = copy.deepcopy(dict(raw))
+        descriptor = normalize_transition_descriptor(
+            raw,
+            definition_version=str(definition["definition_version"]),
+        )
         _validate(WORKFLOW_TRANSITION_SCHEMA, descriptor)
         transition_id = str(descriptor["transition_id"])
         if transition_id in transition_ids:

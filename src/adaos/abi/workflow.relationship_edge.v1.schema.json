@@ -3,15 +3,15 @@
   "$id": "adaos.workflow.relationship_edge.v1",
   "title": "AdaOS Governed Relationship Plane Edge",
   "type": "object",
-  "required": ["schema", "edge_id", "plane", "source", "target", "relation", "ownership"],
+  "required": ["schema", "edge_id", "plane", "plane_version", "source", "target", "relation", "ownership"],
   "properties": {
     "schema": { "const": "adaos.workflow.relationship_edge.v1" },
     "edge_id": { "type": "string", "minLength": 1, "maxLength": 300 },
     "plane": {
       "enum": [
-        "demand",
-        "delivery",
-        "workflow",
+        "issue",
+        "change",
+        "workflow_statechart",
         "artifact_lineage",
         "component_dependency",
         "execution",
@@ -21,6 +21,7 @@
         "view_context"
       ]
     },
+    "plane_version": { "type": "integer", "minimum": 1 },
     "source": { "$ref": "#/$defs/ref" },
     "target": { "$ref": "#/$defs/ref" },
     "relation": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,79}$" },

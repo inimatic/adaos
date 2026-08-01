@@ -75,6 +75,11 @@ def test_capability_negotiation_preserves_semantics_across_web_telegram_and_text
     assert set(web_view["action_tokens"].values()) == {"prototype", "automation"}
     assert telegram["handoff"]["cross_channel"] is True
     assert telegram["acknowledgement"] == "action"
+    assert telegram["permission_boundary"] == "separate"
+    assert telegram["business_availability_boundary"] == "separate"
+    assert telegram_view["plan"]["requirements_id"] == interaction["requirements"]["requirements_id"]
+    assert telegram_view["plan"]["semantic_equivalent"] is True
+    assert telegram_view["plan"]["renegotiate_on_profile_change"] is True
 
 
 def test_sensitive_interaction_never_degrades_to_plain_text() -> None:
@@ -458,3 +463,5 @@ def test_profile_change_renegotiates_presentation_without_changing_semantics() -
     assert compact_view["mode"] == "numbered_text"
     assert rich_view["interaction_generation"] == compact_view["interaction_generation"] == 0
     assert rich_view["action_tokens"] == compact_view["action_tokens"]
+    assert compact_view["plan"]["fallback_used"] == "numbered_text"
+    assert compact_view["plan"]["reason_code"] == "numbered_fallback"

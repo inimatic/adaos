@@ -28,6 +28,7 @@
   ],
   "properties": {
     "schema": { "const": "adaos.workflow.transition.v1" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$" },
     "transition_id": { "$ref": "#/$defs/id" },
     "source": {
       "oneOf": [
@@ -39,6 +40,18 @@
           "items": { "$ref": "#/$defs/id" }
         }
       ]
+    },
+    "source_selector": {
+      "type": "object",
+      "required": ["states", "predicate"],
+      "properties": {
+        "states": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "predicate": { "type": ["string", "null"], "maxLength": 500 }
+      },
+      "additionalProperties": false
     },
     "target": { "$ref": "#/$defs/id" },
     "trigger": {
@@ -97,13 +110,41 @@
         "additionalProperties": false
       }
     },
+    "invariants": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["id", "phase", "reason_code"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "phase": { "enum": ["before", "after", "always"] },
+          "reason_code": { "$ref": "#/$defs/id" },
+          "params": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
     "concurrency": {
       "type": "object",
       "required": ["conflict_scope", "requires_generation", "idempotency"],
       "properties": {
         "conflict_scope": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "conflict_key": { "type": "string", "minLength": 1, "maxLength": 300 },
         "requires_generation": { "type": "boolean" },
+        "expected_generation": { "enum": ["required", "optional", "not_applicable"] },
         "idempotency": { "enum": ["required", "optional", "not_applicable"] }
+      },
+      "additionalProperties": false
+    },
+    "idempotency_contract": {
+      "type": "object",
+      "required": ["mode", "key_scope", "result_reuse", "ttl_seconds"],
+      "properties": {
+        "mode": { "enum": ["required", "optional", "not_applicable"] },
+        "key_scope": { "enum": ["transition_instance", "aggregate", "global", "none"] },
+        "result_reuse": { "enum": ["return_recorded_outcome", "reject_duplicate", "not_applicable"] },
+        "ttl_seconds": { "type": ["integer", "null"], "minimum": 1 }
       },
       "additionalProperties": false
     },
@@ -124,7 +165,10 @@
       "required": ["activity", "transaction", "retry", "compensation"],
       "properties": {
         "activity": { "type": ["string", "null"], "maxLength": 200 },
+        "input_schema": { "type": "object" },
+        "output_schema": { "type": "object" },
         "transaction": { "enum": ["none", "atomic", "outbox"] },
+        "transaction_boundary": { "enum": ["none", "aggregate", "aggregate_and_outbox", "external_saga"] },
         "retry": { "enum": ["never", "bounded", "operator"] },
         "compensation": { "type": ["string", "null"], "maxLength": 200 }
       },
@@ -136,6 +180,20 @@
       "properties": {
         "timeout_seconds": { "type": ["integer", "null"], "minimum": 1 },
         "heartbeat_seconds": { "type": ["integer", "null"], "minimum": 1 },
+        "retry_policy": {
+          "type": "object",
+          "required": ["mode", "max_attempts", "backoff", "retryable_reason_codes"],
+          "properties": {
+            "mode": { "enum": ["never", "bounded", "operator"] },
+            "max_attempts": { "type": ["integer", "null"], "minimum": 1 },
+            "backoff": { "enum": ["none", "fixed", "exponential"] },
+            "retryable_reason_codes": {
+              "type": "array", "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            }
+          },
+          "additionalProperties": false
+        },
         "cancellation": { "enum": ["not_applicable", "cooperative", "abandon", "compensate"] },
         "reconciliation": { "enum": ["not_applicable", "required_on_unknown", "always"] }
       },
@@ -149,7 +207,13 @@
         "failure": { "type": "string", "minLength": 1, "maxLength": 120 },
         "input_required": { "type": "string", "minLength": 1, "maxLength": 120 },
         "cancelled": { "type": "string", "minLength": 1, "maxLength": 120 },
-        "unknown": { "type": "string", "minLength": 1, "maxLength": 120 }
+        "unknown": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "reason_codes": {
+          "type": "object",
+          "required": ["success", "failure", "input_required", "cancelled", "unknown"],
+          "additionalProperties": { "$ref": "#/$defs/id" }
+        },
+        "terminal_result_once": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -158,7 +222,9 @@
       "required": ["required", "minimum"],
       "properties": {
         "required": { "type": "boolean" },
-        "minimum": { "type": "integer", "minimum": 0, "maximum": 100 }
+        "minimum": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "types": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "immutable_refs": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -167,7 +233,8 @@
       "required": ["required", "policy_refs"],
       "properties": {
         "required": { "type": "boolean" },
-        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } },
+        "mode": { "enum": ["none", "single", "all", "quorum", "separation_of_duties"] }
       },
       "additionalProperties": false
     },
@@ -176,7 +243,23 @@
       "required": ["mode", "reply_route"],
       "properties": {
         "mode": { "enum": ["none", "terminal", "progress_and_terminal", "input_required"] },
-        "reply_route": { "enum": ["none", "origin", "authorized_fallback"] }
+        "reply_route": { "enum": ["none", "origin", "authorized_fallback"] },
+        "acknowledge_acceptance": { "type": "boolean" },
+        "terminal_once": { "type": "boolean" },
+        "delivery_retry_without_execution": { "type": "boolean" },
+        "resume_after_restart": { "type": "boolean" },
+        "late_result_policy": { "enum": ["origin_thread", "authorized_fallback", "query_only"] },
+        "progress": {
+          "type": "object",
+          "required": ["ordered", "coalesce", "rate_limit_seconds"],
+          "properties": {
+            "ordered": { "type": "boolean" },
+            "coalesce": { "type": "boolean" },
+            "rate_limit_seconds": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "route_expiry": { "enum": ["fallback", "query_only", "fail"] }
       },
       "additionalProperties": false
     },
@@ -186,7 +269,9 @@
       "properties": {
         "required": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "optional": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-        "fallback": { "enum": ["plain_text", "numbered_text", "deep_link", "unsupported"] }
+        "fallback": { "enum": ["plain_text", "numbered_text", "deep_link", "web_view", "miniapp", "unsupported"] },
+        "fail_closed": { "type": "boolean" },
+        "semantic_equivalence_required": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -196,7 +281,13 @@
       "properties": {
         "allowed": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "rejected": { "type": "string", "minLength": 1, "maxLength": 1000 },
-        "completed": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        "available": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "blocked": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "running": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "completed": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "failed": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "input_required": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "unknown": { "type": "string", "minLength": 1, "maxLength": 1000 }
       },
       "additionalProperties": false
     },
@@ -205,7 +296,9 @@
       "required": ["emitted", "outbox"],
       "properties": {
         "emitted": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
-        "outbox": { "type": "boolean" }
+        "outbox": { "type": "boolean" },
+        "correlation_required": { "type": "boolean" },
+        "causation_required": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -216,7 +309,10 @@
         "audit_event": { "type": "string", "minLength": 1, "maxLength": 200 },
         "redaction": { "enum": ["none", "input", "evidence", "policy"] },
         "metrics": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
-        "trace": { "type": "boolean" }
+        "trace": { "type": "boolean" },
+        "correlation_id_required": { "type": "boolean" },
+        "causation_id_required": { "type": "boolean" },
+        "actor_id_required": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -225,7 +321,10 @@
       "required": ["introduced_in", "aliases"],
       "properties": {
         "introduced_in": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "aliases": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } }
+        "aliases": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+        "policy": { "enum": ["pin_in_flight", "migrate_explicitly", "restart", "reject"] },
+        "compatible_from": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "migration_ref": { "type": ["string", "null"], "maxLength": 300 }
       },
       "additionalProperties": false
     }

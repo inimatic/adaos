@@ -3,7 +3,7 @@
   "$id": "adaos.conversation.interaction_presentation.v1",
   "title": "AdaOS Negotiated Interaction Presentation",
   "type": "object",
-  "required": ["schema", "presentation_id", "interaction_id", "interaction_generation", "profile_id", "profile_version", "mode", "supported", "reason_code", "prompt", "actions", "action_tokens", "deep_link", "created_at"],
+  "required": ["schema", "presentation_id", "interaction_id", "interaction_generation", "profile_id", "profile_version", "plan", "mode", "supported", "reason_code", "prompt", "actions", "action_tokens", "deep_link", "created_at"],
   "properties": {
     "schema": { "const": "adaos.conversation.interaction_presentation.v1" },
     "presentation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
@@ -11,7 +11,8 @@
     "interaction_generation": { "type": "integer", "minimum": 0 },
     "profile_id": { "type": "string", "minLength": 1, "maxLength": 240 },
     "profile_version": { "type": "integer", "minimum": 1 },
-    "mode": { "enum": ["rich_form", "buttons", "numbered_text", "plain_text", "deep_link", "unsupported"] },
+    "plan": { "type": "object" },
+    "mode": { "enum": ["rich_form", "buttons", "numbered_text", "plain_text", "deep_link", "web_view", "miniapp", "unsupported"] },
     "supported": { "type": "boolean" },
     "reason_code": { "type": "string", "minLength": 1, "maxLength": 160 },
     "prompt": { "type": "string", "minLength": 1, "maxLength": 12000 },

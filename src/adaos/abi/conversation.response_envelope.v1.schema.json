@@ -5,14 +5,16 @@
   "type": "object",
   "required": [
     "schema", "envelope_id", "conversation_id", "category", "sequence",
-    "correlation", "payload", "sensitivity", "attention", "coalesce_key",
-    "reply_route_ids", "status", "created_at", "updated_at", "delivered_at"
+    "correlation", "payload", "sensitivity", "attention", "attention_plan",
+    "coalesce_key", "terminal_key", "reply_route_ids", "materialization_status",
+    "status", "created_at", "updated_at", "materialized_at", "delivered_at",
+    "acknowledged_at"
   ],
   "properties": {
     "schema": {"const": "adaos.conversation.response_envelope.v1"},
     "envelope_id": {"type": "string", "minLength": 1, "maxLength": 240},
     "conversation_id": {"type": "string", "minLength": 1, "maxLength": 240},
-    "category": {"enum": ["accepted", "progress", "input_required", "terminal", "notification"]},
+    "category": {"enum": ["accepted", "started", "progress", "input_required", "resumed", "terminal", "cancelled", "notification"]},
     "sequence": {"type": "integer", "minimum": 1},
     "correlation": {
       "type": "object",
@@ -36,15 +38,20 @@
     },
     "sensitivity": {"enum": ["public", "internal", "personal", "sensitive"]},
     "attention": {"enum": ["silent", "normal", "important", "urgent"]},
+    "attention_plan": {"type": "object"},
     "coalesce_key": {"type": ["string", "null"], "maxLength": 240},
+    "terminal_key": {"type": ["string", "null"], "maxLength": 500},
     "reply_route_ids": {
       "type": "array", "maxItems": 20, "uniqueItems": true,
       "items": {"type": "string", "minLength": 1, "maxLength": 240}
     },
-    "status": {"enum": ["pending", "delivering", "delivered", "undeliverable", "superseded"]},
+    "materialization_status": {"enum": ["pending", "materialized", "failed", "not_applicable"]},
+    "status": {"enum": ["pending", "delivering", "delivered", "acknowledged", "undeliverable", "superseded", "cancelled"]},
     "created_at": {"type": "string", "format": "date-time"},
     "updated_at": {"type": "string", "format": "date-time"},
-    "delivered_at": {"type": ["string", "null"], "format": "date-time"}
+    "materialized_at": {"type": ["string", "null"], "format": "date-time"},
+    "delivered_at": {"type": ["string", "null"], "format": "date-time"},
+    "acknowledged_at": {"type": ["string", "null"], "format": "date-time"}
   },
   "additionalProperties": false
 }

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction_presentation_plan.v1",
+  "title": "AdaOS Interaction Presentation Plan",
+  "type": "object",
+  "required": [
+    "schema", "plan_id", "interaction_id", "interaction_generation",
+    "profile_id", "profile_version", "requirements_id", "selected_mode",
+    "supported", "reason_code", "missing_required", "fallback_used",
+    "semantic_equivalent", "limits_applied", "renegotiate_on_profile_change"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction_presentation_plan.v1" },
+    "plan_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_generation": { "type": "integer", "minimum": 0 },
+    "profile_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "profile_version": { "type": "integer", "minimum": 1 },
+    "requirements_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "selected_mode": { "enum": ["rich_form", "buttons", "numbered_text", "plain_text", "deep_link", "web_view", "miniapp", "unsupported"] },
+    "supported": { "type": "boolean" },
+    "reason_code": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "missing_required": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+    "fallback_used": { "type": ["string", "null"], "maxLength": 80 },
+    "semantic_equivalent": { "type": "boolean" },
+    "limits_applied": { "type": "object" },
+    "renegotiate_on_profile_change": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

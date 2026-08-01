@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.attention_policy.v1",
+  "title": "AdaOS User Attention Policy",
+  "type": "object",
+  "required": [
+    "schema", "policy_id", "version", "principal_scope", "channel_preferences",
+    "category_rules", "progress", "quiet_hours", "escalation"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.attention_policy.v1" },
+    "policy_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "version": { "type": "integer", "minimum": 1 },
+    "principal_scope": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+    "channel_preferences": {
+      "type": "object",
+      "required": ["preferred", "allowed_fallbacks"],
+      "properties": {
+        "preferred": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+        "allowed_fallbacks": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } }
+      },
+      "additionalProperties": false
+    },
+    "category_rules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["disposition", "notify", "minimum_attention"],
+        "properties": {
+          "disposition": { "enum": ["append_message", "update_status", "evidence_only", "projection_only"] },
+          "notify": { "type": "boolean" },
+          "minimum_attention": { "enum": ["silent", "normal", "important", "urgent"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "progress": {
+      "type": "object",
+      "required": ["coalesce", "minimum_interval_seconds", "retain_evidence"],
+      "properties": {
+        "coalesce": { "type": "boolean" },
+        "minimum_interval_seconds": { "type": "integer", "minimum": 0 },
+        "retain_evidence": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "quiet_hours": {
+      "type": "object",
+      "required": ["enabled", "start", "end", "timezone", "urgent_bypass"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "start": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$" },
+        "end": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$" },
+        "timezone": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "urgent_bypass": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "escalation": {
+      "type": "object",
+      "required": ["input_required", "failure", "expiry"],
+      "properties": {
+        "input_required": { "enum": ["none", "important", "urgent"] },
+        "failure": { "enum": ["none", "important", "urgent"] },
+        "expiry": { "enum": ["none", "important", "urgent"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

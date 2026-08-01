@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.attention_plan.v1",
+  "title": "AdaOS User Attention Plan",
+  "type": "object",
+  "required": [
+    "schema", "policy_id", "policy_version", "category", "disposition",
+    "attention", "notify", "quiet_hours_applied", "coalesce", "coalesce_key",
+    "retain_evidence", "escalation_reason"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.attention_plan.v1" },
+    "policy_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "policy_version": { "type": "integer", "minimum": 1 },
+    "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "disposition": { "enum": ["append_message", "update_status", "evidence_only", "projection_only"] },
+    "attention": { "enum": ["silent", "normal", "important", "urgent"] },
+    "notify": { "type": "boolean" },
+    "quiet_hours_applied": { "type": "boolean" },
+    "coalesce": { "type": "boolean" },
+    "coalesce_key": { "type": ["string", "null"], "maxLength": 240 },
+    "retain_evidence": { "type": "boolean" },
+    "escalation_reason": { "type": ["string", "null"], "maxLength": 160 }
+  },
+  "additionalProperties": false
+}

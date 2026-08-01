@@ -18,7 +18,9 @@ from adaos.services import conversation_store
 INTERACTION_SCHEMA = "adaos.conversation.interaction.v1"
 INTERACTION_RESPONSE_SCHEMA = "adaos.conversation.interaction_response.v1"
 CAPABILITY_PROFILE_SCHEMA = "adaos.conversation.channel_capability_profile.v1"
+INTERACTION_REQUIREMENTS_SCHEMA = "adaos.conversation.interaction_requirements.v1"
 INTERACTION_PRESENTATION_SCHEMA = "adaos.conversation.interaction_presentation.v1"
+INTERACTION_PRESENTATION_PLAN_SCHEMA = "adaos.conversation.interaction_presentation_plan.v1"
 _PENDING_STATUSES = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
 
@@ -62,6 +64,41 @@ def _schema(name: str) -> dict[str, Any]:
 
 def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
     record = copy.deepcopy(dict(value))
+    if name == CAPABILITY_PROFILE_SCHEMA:
+        record.setdefault("permission_boundary", "separate")
+        record.setdefault("business_availability_boundary", "separate")
+    elif name == INTERACTION_SCHEMA and "requirements" not in record:
+        record["requirements"] = {
+            "schema": INTERACTION_REQUIREMENTS_SCHEMA,
+            "requirements_id": f"requirements:{record.get('interaction_id') or 'unknown'}",
+            "version": 1,
+            "required": list(record.get("required_capabilities") or []),
+            "optional": list(record.get("optional_capabilities") or []),
+            "limits": {},
+            "fallbacks": list(record.get("fallbacks") or []),
+            "fail_closed": True,
+            "semantic_equivalence_required": True,
+            "permission_boundary": "separate",
+            "business_availability_boundary": "separate",
+        }
+    elif name == INTERACTION_PRESENTATION_SCHEMA and "plan" not in record:
+        record["plan"] = {
+            "schema": INTERACTION_PRESENTATION_PLAN_SCHEMA,
+            "plan_id": f"plan:{record.get('presentation_id') or 'unknown'}",
+            "interaction_id": str(record.get("interaction_id") or "unknown"),
+            "interaction_generation": int(record.get("interaction_generation") or 0),
+            "profile_id": str(record.get("profile_id") or "unknown"),
+            "profile_version": max(1, int(record.get("profile_version") or 1)),
+            "requirements_id": f"requirements:{record.get('interaction_id') or 'unknown'}",
+            "selected_mode": str(record.get("mode") or "unsupported"),
+            "supported": bool(record.get("supported")),
+            "reason_code": str(record.get("reason_code") or "legacy_presentation"),
+            "missing_required": [],
+            "fallback_used": None,
+            "semantic_equivalent": bool(record.get("supported")),
+            "limits_applied": {},
+            "renegotiate_on_profile_change": True,
+        }
     errors = sorted(
         Draft202012Validator(_schema(name)).iter_errors(record),
         key=lambda item: list(item.absolute_path),
@@ -72,6 +109,37 @@ def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
             f"{name} validation failed at {location}: {errors[0].message}"
         )
     return record
+
+
+def interaction_requirements(
+    interaction_id: str,
+    *,
+    required: Sequence[str] = (),
+    optional: Sequence[str] = (),
+    limits: Mapping[str, Any] | None = None,
+    fallbacks: Sequence[str] = ("numbered_text", "plain_text", "unsupported"),
+    version: int = 1,
+    fail_closed: bool = True,
+    semantic_equivalence_required: bool = True,
+) -> dict[str, Any]:
+    """Build the channel-neutral requirements contract for one interaction."""
+
+    return _validate(
+        INTERACTION_REQUIREMENTS_SCHEMA,
+        {
+            "schema": INTERACTION_REQUIREMENTS_SCHEMA,
+            "requirements_id": f"requirements:{str(interaction_id or '').strip()}",
+            "version": int(version),
+            "required": list(dict.fromkeys(str(item) for item in required if str(item))),
+            "optional": list(dict.fromkeys(str(item) for item in optional if str(item))),
+            "limits": copy.deepcopy(dict(limits or {})),
+            "fallbacks": list(dict.fromkeys(str(item) for item in fallbacks if str(item))),
+            "fail_closed": bool(fail_closed),
+            "semantic_equivalence_required": bool(semantic_equivalence_required),
+            "permission_boundary": "separate",
+            "business_availability_boundary": "separate",
+        },
+    )
 
 
 def _is_expired(value: str | None, *, now: str | None = None) -> bool:
@@ -123,6 +191,8 @@ def channel_capability_profile(
                 **copy.deepcopy(dict(handoff or {})),
             },
             "acknowledgement": str(acknowledgement or "delivery").strip(),
+            "permission_boundary": "separate",
+            "business_availability_boundary": "separate",
             "fresh_until": fresh_until,
             "updated_at": updated_at or _now(),
             "metadata": copy.deepcopy(dict(metadata or {})),
@@ -153,8 +223,12 @@ def standard_capability_profile(
             "cancel": True,
             "message_edit": True,
             "secure_input": True,
+            "file_upload": True,
+            "web_view": True,
+            "miniapp": True,
+            "pagination": True,
         }
-        limits = {"actions": 30, "text_chars": 12000}
+        limits = {"actions": 30, "text_chars": 12000, "button_text_chars": 240, "files": 20}
     elif channel == "telegram":
         capabilities = {
             "text": True,
@@ -166,8 +240,12 @@ def standard_capability_profile(
             "cancel": True,
             "message_edit": True,
             "secure_input": False,
+            "file_upload": True,
+            "web_view": True,
+            "miniapp": True,
+            "pagination": True,
         }
-        limits = {"actions": 8, "text_chars": 3500}
+        limits = {"actions": 8, "text_chars": 3500, "button_text_chars": 64, "files": 10}
     else:
         capabilities = {
             "text": True,
@@ -179,8 +257,12 @@ def standard_capability_profile(
             "cancel": True,
             "message_edit": False,
             "secure_input": False,
+            "file_upload": False,
+            "web_view": False,
+            "miniapp": False,
+            "pagination": True,
         }
-        limits = {"actions": 0, "text_chars": 2000}
+        limits = {"actions": 0, "text_chars": 2000, "button_text_chars": 0, "files": 0}
     return channel_capability_profile(
         f"{channel}:{client or channel}:{surface}",
         transport=channel,
@@ -255,17 +337,27 @@ def create_interaction(
     required = list(dict.fromkeys(str(item).strip() for item in required_capabilities if str(item).strip()))
     if bool(spec.get("sensitive")) and "secure_input" not in required:
         required.append("secure_input")
+    selected_interaction_id = str(
+        interaction_id or f"interaction.{uuid.uuid4().hex}"
+    ).strip()
+    requirements = interaction_requirements(
+        selected_interaction_id,
+        required=required,
+        optional=optional_capabilities,
+        fallbacks=fallbacks,
+    )
     record = _validate(
         INTERACTION_SCHEMA,
         {
             "schema": INTERACTION_SCHEMA,
-            "interaction_id": str(interaction_id or f"interaction.{uuid.uuid4().hex}").strip(),
+            "interaction_id": selected_interaction_id,
             "conversation_id": str(conversation_id or "").strip(),
             "thread_id": str(thread_id).strip() if thread_id else None,
             "owner": str(owner or "").strip(),
             "prompt": str(prompt or "").strip(),
             "input_spec": spec,
             "actions": normalized_actions,
+            "requirements": requirements,
             "required_capabilities": required,
             "optional_capabilities": list(
                 dict.fromkeys(str(item).strip() for item in optional_capabilities if str(item).strip())
@@ -402,7 +494,11 @@ def negotiate_presentation(
     semantic = _validate(INTERACTION_SCHEMA, interaction)
     channel = _validate(CAPABILITY_PROFILE_SCHEMA, profile)
     capabilities = dict(channel["capabilities"])
-    required = set(semantic["required_capabilities"])
+    requirements = _validate(
+        INTERACTION_REQUIREMENTS_SCHEMA,
+        dict(semantic.get("requirements") or {}),
+    )
+    required = set(requirements["required"])
     actions = list(semantic["actions"])
     action_limit = int(dict(channel.get("limits") or {}).get("actions") or 0)
     buttons_usable = bool(capabilities.get("buttons")) and (
@@ -463,9 +559,48 @@ def negotiate_presentation(
     if mode == "deep_link" and deep_link:
         prompt += f"\n{deep_link}"
     timestamp = now or _now()
+    fallback_used = (
+        mode
+        if mode in {"numbered_text", "plain_text", "deep_link", "web_view", "miniapp"}
+        and reason != "native_capabilities"
+        else None
+    )
+    semantic_equivalent = bool(
+        supported
+        and (
+            not actions
+            or mode in {"buttons", "numbered_text", "deep_link", "rich_form", "web_view", "miniapp"}
+        )
+        and not (semantic["input_spec"].get("sensitive") and mode in {"plain_text", "numbered_text"})
+    )
+    if requirements["semantic_equivalence_required"] and not semantic_equivalent:
+        mode = "unsupported"
+        supported = False
+        reason = "semantic_equivalence_unavailable"
+        fallback_used = None
     presentation_id = "presentation." + hashlib.sha256(
         f"{semantic['interaction_id']}:{semantic['generation']}:{channel['profile_id']}:{channel['version']}:{mode}".encode("utf-8")
     ).hexdigest()[:32]
+    plan = _validate(
+        INTERACTION_PRESENTATION_PLAN_SCHEMA,
+        {
+            "schema": INTERACTION_PRESENTATION_PLAN_SCHEMA,
+            "plan_id": f"plan:{presentation_id}",
+            "interaction_id": semantic["interaction_id"],
+            "interaction_generation": semantic["generation"],
+            "profile_id": channel["profile_id"],
+            "profile_version": channel["version"],
+            "requirements_id": requirements["requirements_id"],
+            "selected_mode": mode,
+            "supported": supported,
+            "reason_code": reason if supported else f"unsupported:{','.join(missing) or reason}",
+            "missing_required": missing,
+            "fallback_used": fallback_used,
+            "semantic_equivalent": semantic_equivalent,
+            "limits_applied": copy.deepcopy(dict(channel.get("limits") or {})),
+            "renegotiate_on_profile_change": True,
+        },
+    )
     presentation = _validate(
         INTERACTION_PRESENTATION_SCHEMA,
         {
@@ -475,6 +610,7 @@ def negotiate_presentation(
             "interaction_generation": semantic["generation"],
             "profile_id": channel["profile_id"],
             "profile_version": channel["version"],
+            "plan": plan,
             "mode": mode,
             "supported": supported,
             "reason_code": reason if supported else f"unsupported:{','.join(missing) or 'no_output_capability'}",

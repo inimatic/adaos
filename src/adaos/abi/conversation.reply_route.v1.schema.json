@@ -4,14 +4,16 @@
   "title": "AdaOS Durable Reply Route",
   "type": "object",
   "required": [
-    "schema", "route_id", "conversation_id", "transport", "destination_ref",
+    "schema", "route_id", "conversation_id", "thread_id", "transport", "destination_ref",
     "principal_scope", "capability_profile_ref", "priority", "status",
-    "expires_at", "created_at", "updated_at"
+    "authorized_fallback_route_ids", "channel_context", "ordering_key",
+    "delivery_policy", "expires_at", "created_at", "updated_at"
   ],
   "properties": {
     "schema": {"const": "adaos.conversation.reply_route.v1"},
     "route_id": {"type": "string", "minLength": 1, "maxLength": 240},
     "conversation_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "thread_id": {"type": ["string", "null"], "maxLength": 240},
     "transport": {"type": "string", "minLength": 1, "maxLength": 80},
     "destination_ref": {"type": "object"},
     "principal_scope": {
@@ -20,6 +22,23 @@
     },
     "capability_profile_ref": {"type": ["object", "null"]},
     "priority": {"type": "integer", "minimum": 0, "maximum": 1000},
+    "authorized_fallback_route_ids": {
+      "type": "array", "maxItems": 20, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 240}
+    },
+    "channel_context": {"type": "object"},
+    "ordering_key": {"type": "string", "minLength": 1, "maxLength": 300},
+    "delivery_policy": {
+      "type": "object",
+      "required": ["late_result", "on_expiry", "cross_channel", "retry_without_execution"],
+      "properties": {
+        "late_result": {"enum": ["origin_thread", "authorized_fallback", "query_only"]},
+        "on_expiry": {"enum": ["authorized_fallback", "query_only", "fail"]},
+        "cross_channel": {"type": "boolean"},
+        "retry_without_execution": {"const": true}
+      },
+      "additionalProperties": false
+    },
     "status": {"enum": ["active", "paused", "expired", "revoked"]},
     "expires_at": {"type": ["string", "null"], "format": "date-time"},
     "created_at": {"type": "string", "format": "date-time"},

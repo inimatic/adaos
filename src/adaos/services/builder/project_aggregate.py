@@ -82,6 +82,23 @@ def affected_refs(change: Mapping[str, Any], project_ref: str) -> list[str]:
     return _refs(inferred) or [project_ref]
 
 
+def _issue_refs(change: Mapping[str, Any]) -> list[str]:
+    return _refs(
+        [
+            f"issue:{str(item.get('issue_id') or '').strip()}"
+            for item in change.get("issues") or []
+            if isinstance(item, Mapping) and str(item.get("issue_id") or "").strip()
+        ]
+    )
+
+
+def _change_dependencies(change: Mapping[str, Any]) -> list[str]:
+    values = change.get("depends_on_change_ids") or change.get("dependencies") or []
+    if isinstance(values, str):
+        values = [values]
+    return _refs(values)
+
+
 def _change_summary(
     change: Mapping[str, Any],
     governed: Mapping[str, Any],
@@ -100,6 +117,8 @@ def _change_summary(
         "gate": str(change.get("gate") or "prototype"),
         "base_generation": max(0, int((previous or {}).get("base_generation") or change.get("base_generation") or 0)),
         "affected_refs": affected_refs(change, project_ref),
+        "issue_refs": _issue_refs(change),
+        "depends_on_change_ids": _change_dependencies(change),
         "workflow_instance_ref": str(governed.get("instance_id") or f"change:{project_ref}:{change_id}"),
         "workflow_state": str(governed.get("state") or "") or None,
         "mutation_status": str((previous or {}).get("mutation_status") or "idle"),
@@ -183,6 +202,9 @@ def normalize_project(
     raw = dict(value) if isinstance(value, Mapping) else {}
     project_ref = f"{object_type}:{object_id}"
     changes = [dict(item) for item in raw.get("changes") or [] if isinstance(item, Mapping)]
+    for item in changes:
+        item.setdefault("issue_refs", [])
+        item.setdefault("depends_on_change_ids", [])
     by_id = {str(item.get("change_id") or ""): item for item in changes if str(item.get("change_id") or "")}
     current = workflow.get("change") or workflow.get("change_set")
     governed = workflow.get("governed")
@@ -210,11 +232,169 @@ def normalize_project(
         copy.deepcopy(dict(item)) for item in raw.get("dependencies") or [] if isinstance(item, Mapping)
     ][:1000]
     timestamp = str(raw.get("updated_at") or now or _now())
+    prototype = dict(workflow.get("prototype") or {})
+    automation = dict(workflow.get("automation") or {})
+    governed = dict(workflow.get("governed") or {})
+    prototype_revision = str(prototype.get("head_revision") or "").strip()
+    accepted_prototype_ref = (
+        {
+            "kind": "prototype",
+            "id": project_ref,
+            "revision": prototype_revision or "current",
+        }
+        if bool(prototype.get("stable"))
+        else None
+    )
+    implementation_id = str(
+        automation.get("snapshot_task_id")
+        or automation.get("head_task_id")
+        or automation.get("result_version")
+        or ""
+    ).strip()
+    accepted_implementation_ref = (
+        {
+            "kind": "implementation",
+            "id": implementation_id or project_ref,
+            "version": str(automation.get("result_version") or "").strip() or None,
+            "source_prototype_revision": str(
+                automation.get("source_prototype_revision") or ""
+            ).strip()
+            or None,
+        }
+        if str(automation.get("status") or "") == "completed"
+        else None
+    )
+    candidate_ref = (
+        copy.deepcopy(raw.get("candidate_ref"))
+        if isinstance(raw.get("candidate_ref"), Mapping)
+        else {
+            "kind": "candidate",
+            "id": str(delivery.get("candidate_id")),
+            "digest": delivery.get("package_digest") or delivery.get("release_digest"),
+        }
+        if str(delivery.get("candidate_id") or "").strip()
+        else None
+    )
+    issue_refs = _refs(
+        issue_ref
+        for item in normalized_changes
+        for issue_ref in item.get("issue_refs") or []
+    )
+    change_edges = [
+        copy.deepcopy(dict(item))
+        for item in raw.get("change_edges") or []
+        if isinstance(item, Mapping)
+        and str(item.get("relation") or "")
+        in {"contains_issue", "alternative", "supersedes", "depends", "blocks", "related"}
+    ]
+    for item in normalized_changes:
+        change_ref = str(item.get("change_ref") or f"change:{item.get('change_id')}")
+        for issue_ref in item.get("issue_refs") or []:
+            change_edges.append(
+                {"from_ref": change_ref, "to_ref": str(issue_ref), "relation": "contains_issue"}
+            )
+        for dependency in item.get("depends_on_change_ids") or []:
+            change_edges.append(
+                {
+                    "from_ref": change_ref,
+                    "to_ref": f"change:{str(dependency).removeprefix('change:')}",
+                    "relation": "depends",
+                }
+            )
+    if isinstance(current, Mapping):
+        current_ref = f"change:{str(current.get('change_id') or current.get('change_set_id') or '')}"
+        supersedes = str(
+            current.get("supersedes_change_id")
+            or current.get("supersedes_change_set_id")
+            or ""
+        ).strip()
+        if supersedes:
+            change_edges.append(
+                {
+                    "from_ref": current_ref,
+                    "to_ref": f"change:{supersedes.removeprefix('change:')}",
+                    "relation": "supersedes",
+                }
+            )
+    change_edges = list(
+        {
+            (item["from_ref"], item["to_ref"], item["relation"]): item
+            for item in change_edges
+            if str(item.get("from_ref") or "").strip()
+            and str(item.get("to_ref") or "").strip()
+        }.values()
+    )[-2000:]
+    trials = [
+        copy.deepcopy(dict(item))
+        for item in raw.get("trials") or []
+        if isinstance(item, Mapping)
+    ]
+    delivery_status = str(delivery.get("status") or "idle")
+    if candidate_ref and delivery_status in {
+        "checkpoint",
+        "trial",
+        "accepted",
+        "rejected",
+        "stale",
+        "published",
+    }:
+        normalized_trial_status = "ready" if delivery_status == "checkpoint" else delivery_status
+        current_trial = {
+            "trial_ref": f"trial:{candidate_ref['id']}",
+            "candidate_ref": copy.deepcopy(candidate_ref),
+            "status": normalized_trial_status,
+            "workspace_ref": str(delivery.get("trial_workspace") or "").strip() or None,
+            "started_at": delivery.get("prepared_at"),
+            "decided_at": delivery.get("decided_at"),
+        }
+        trials = [
+            item for item in trials if item.get("trial_ref") != current_trial["trial_ref"]
+        ]
+        trials.append(current_trial)
+    conflicts = _conflicts(normalized_changes, dependencies)
+    raw_lifecycle = dict(raw.get("lifecycle") or {})
+    was_archived = str(raw_lifecycle.get("status") or "active") == "archived"
+    lifecycle = {
+        "status": "archived" if archived else "active",
+        "archived_at": (
+            raw_lifecycle.get("archived_at")
+            or (timestamp if archived and not was_archived else None)
+        ),
+        "restored_at": (
+            timestamp if not archived and was_archived else raw_lifecycle.get("restored_at")
+        ),
+        "reason": raw_lifecycle.get("reason"),
+    }
+    if archived:
+        explanation_status = "archived"
+        blockers = ["project_archived"]
+        next_commands = ["builder.project.restore"]
+    elif conflicts:
+        explanation_status = "conflicted"
+        blockers = ["change_conflicts_require_resolution"]
+        next_commands = ["builder.change.focus", "builder.change.rebase"]
+    elif delivery_status in {"checkpoint", "trial", "accepted"}:
+        explanation_status = "trial"
+        blockers = []
+        next_commands = ["builder.trial.inspect", "builder.trial.decide"]
+    elif str(publication.get("status") or "") == "published":
+        explanation_status = "published"
+        blockers = []
+        next_commands = ["builder.change.plan"]
+    elif any(str(item.get("status") or "") not in _TERMINAL_CHANGE_STATES for item in normalized_changes):
+        explanation_status = "active"
+        blockers = []
+        next_commands = ["builder.process.inspect", "builder.change.focus"]
+    else:
+        explanation_status = "ready"
+        blockers = []
+        next_commands = ["builder.change.plan"]
     return {
         "schema": BUILDER_PROJECT_SCHEMA,
         "project_id": object_id,
         "project_ref": project_ref,
         "object_type": object_type,
+        "identity": {"stable_id": object_id, "kind": object_type, "project_ref": project_ref},
         "source_ref": (
             copy.deepcopy(raw.get("source_ref"))
             if isinstance(raw.get("source_ref"), Mapping)
@@ -244,30 +424,45 @@ def normalize_project(
                 "generation": int(workflow.get("generation") or 0),
             }
         ),
-        "candidate_ref": (
-            copy.deepcopy(raw.get("candidate_ref"))
-            if isinstance(raw.get("candidate_ref"), Mapping)
-            else {
-                "kind": "candidate",
-                "id": str(delivery.get("candidate_id")),
-                "digest": delivery.get("package_digest") or delivery.get("release_digest"),
-            }
-            if str(delivery.get("candidate_id") or "").strip()
-            else None
-        ),
+        "candidate_ref": candidate_ref,
+        "accepted_prototype_ref": accepted_prototype_ref,
+        "accepted_implementation_ref": accepted_implementation_ref,
+        "issue_refs": issue_refs,
         "policy": {
             "parallel_changes": True,
             "unknown_conflict_scope": "project",
             "prototype_data_modes": ["mock", "fixture"],
+            "risk_policy": {"default_class": "isolated_write", "fail_closed": True},
+            "approval_policy_refs": [],
+            "allowed_executors": ["builder.llm", "builder.codex", "builder.deterministic"],
             **(dict(raw.get("policy")) if isinstance(raw.get("policy"), Mapping) else {}),
         },
         "component_refs": _refs(raw.get("component_refs") or [project_ref]),
         "changes": normalized_changes,
-        "conflicts": _conflicts(normalized_changes, dependencies),
+        "conflicts": conflicts,
         "dependencies": dependencies,
+        "change_edges": change_edges,
+        "active_candidate_refs": (
+            [copy.deepcopy(candidate_ref)]
+            if candidate_ref and delivery_status not in {"rejected", "stale", "published"}
+            else []
+        ),
+        "trials": trials[-100:],
         "focus_by_context": focus,
         "workflow_versions": {"project": BUILDER_PROJECT_VERSION, "change": "1.0.0"},
+        "workflow_definition_version": str(governed.get("definition_version") or "1.0.0"),
         "archived": bool(archived),
+        "lifecycle": lifecycle,
+        "explanation": {
+            "status": explanation_status,
+            "summary": (
+                f"Project {project_ref} is {explanation_status}; "
+                f"{len(normalized_changes)} change(s), {len(conflicts)} conflict(s), "
+                f"{len(trials)} trial(s)."
+            ),
+            "blockers": blockers,
+            "next_commands": next_commands,
+        },
         "generation": max(0, int(raw.get("generation") or 0)),
         "artifact_generation": max(0, int(raw.get("artifact_generation") or 0)),
         "view_generation": max(0, int(raw.get("view_generation") or 0)),

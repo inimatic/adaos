@@ -5,7 +5,7 @@
   "type": "object",
   "required": [
     "schema", "interaction_id", "conversation_id", "owner", "prompt",
-    "input_spec", "actions", "required_capabilities", "optional_capabilities",
+    "input_spec", "actions", "requirements", "required_capabilities", "optional_capabilities",
     "fallbacks", "status", "generation", "task_ref", "workflow_ref",
     "reply_route_ref", "expires_at", "created_at", "updated_at"
   ],
@@ -57,9 +57,10 @@
         "additionalProperties": false
       }
     },
+    "requirements": { "type": "object" },
     "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
     "optional_capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
-    "fallbacks": { "type": "array", "uniqueItems": true, "items": { "enum": ["plain_text", "numbered_text", "deep_link", "unsupported"] } },
+    "fallbacks": { "type": "array", "uniqueItems": true, "items": { "enum": ["plain_text", "numbered_text", "deep_link", "web_view", "miniapp", "unsupported"] } },
     "status": { "enum": ["created", "projected", "awaiting_input", "partially_answered", "answered", "accepted", "completed", "validation_failed", "expired", "cancelled", "superseded"] },
     "generation": { "type": "integer", "minimum": 0 },
     "task_ref": { "type": ["object", "null"] },

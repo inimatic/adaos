@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from adaos.services import conversation_interactions, conversation_store, durable_delivery
+from adaos.services import (
+    conversation_interactions,
+    conversation_store,
+    durable_delivery,
+)
 
 
 def _route(conversation_id: str = "conversation:delivery") -> dict[str, object]:

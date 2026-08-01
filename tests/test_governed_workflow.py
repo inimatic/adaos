@@ -150,6 +150,21 @@ def test_compiler_builds_deterministic_transition_index() -> None:
 
     assert compiled.initial_state == "prototype"
     assert compiled.by_source_command[("prototype", "approve")].target == "automation"
+    descriptor = compiled.by_source_command[("prototype", "approve")].descriptor
+    assert descriptor["version"] == "1.0.0"
+    assert descriptor["source_selector"] == {
+        "states": ["prototype"],
+        "predicate": None,
+    }
+    assert descriptor["concurrency"]["conflict_key"] == "change:{instance_id}"
+    assert descriptor["concurrency"]["expected_generation"] == "required"
+    assert descriptor["idempotency_contract"]["result_reuse"] == "return_recorded_outcome"
+    assert descriptor["effect"]["transaction_boundary"] == "aggregate_and_outbox"
+    assert descriptor["outcomes"]["terminal_result_once"] is True
+    assert descriptor["async_reply"]["delivery_retry_without_execution"] is True
+    assert descriptor["capability_requirements"]["fail_closed"] is True
+    assert descriptor["explanations"]["running"]
+    assert descriptor["migration"]["policy"] == "pin_in_flight"
     assert workflow_contract_snapshot()["invariants"]["resolver"] == "pure"
 
 
