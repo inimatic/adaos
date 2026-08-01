@@ -245,6 +245,94 @@ async def test_telegram_callback_resumes_durable_interaction_without_nlu(monkeyp
     assert responses[0].payload["response"]["values"]["choice"] == "prototype"
 
 
+async def test_legacy_raw_action_token_never_enters_builder_dialog(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        nlu_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(subnet_id="sn-test"), bus=bus),
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "claim_transport_ingress",
+        lambda **_kwargs: {"ok": True, "claimed": True},
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "mark_transport_ingress_dispatched",
+        lambda _key: {"status": "dispatched"},
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_interactions,
+        "submit_action_token",
+        lambda token, **_kwargs: {
+            "interaction": {"interaction_id": "interaction.legacy"},
+            "response": {"response_id": "response.legacy", "token": token},
+            "duplicate": False,
+        },
+    )
+    responses: list[Event] = []
+    user_messages: list[Event] = []
+    bus.subscribe("conversation.interaction.responded", lambda event: responses.append(event))
+    bus.subscribe("dialog.user_message", lambda event: user_messages.append(event))
+    nlu_bridge.register_chat_nlu_bridge(bus)
+    envelope = _telegram_envelope(dedup_key="tg:bot:42:legacy-action")
+    envelope["payload"]["update_id"] = "legacy-action"
+    envelope["payload"]["payload"]["text"] = "ia:0:builder-process"
+
+    bus.publish(Event(type="tg.input.sn-test", source="test", ts=3.5, payload=envelope))
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert user_messages == []
+    assert len(responses) == 1
+    assert responses[0].source == "chat_io.interaction_legacy_text"
+
+
+async def test_unknown_action_token_fails_closed_with_notification(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        nlu_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(subnet_id="sn-test"), bus=bus),
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "claim_transport_ingress",
+        lambda **_kwargs: {"ok": True, "claimed": True},
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "mark_transport_ingress_dispatched",
+        lambda _key: {"status": "dispatched"},
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_interactions,
+        "submit_action_token",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            nlu_bridge.conversation_interactions.ConversationInteractionError("expired")
+        ),
+    )
+    notifications: list[Event] = []
+    user_messages: list[Event] = []
+    bus.subscribe("ui.notify", lambda event: notifications.append(event))
+    bus.subscribe("dialog.user_message", lambda event: user_messages.append(event))
+    nlu_bridge.register_chat_nlu_bridge(bus)
+
+    bus.publish(
+        Event(
+            type="tg.input.sn-test",
+            source="test",
+            ts=3.75,
+            payload=_telegram_action_envelope("ia:0:expired"),
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert user_messages == []
+    assert len(notifications) == 1
+    assert notifications[0].payload["_meta"]["reason_code"] == "interaction_action_unknown_or_expired"
+
+
 async def test_telegram_exact_button_label_uses_same_interaction_without_builder_or_nlu(monkeypatch) -> None:
     bus = LocalEventBus()
     monkeypatch.setattr(

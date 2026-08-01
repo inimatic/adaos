@@ -146,6 +146,7 @@ def _extract_action_io_input(env: Mapping[str, Any]) -> tuple[str | None, dict[s
         return None, {}
     source = _text(payload.get("source")) or "chat"
     bot_id = _text(payload.get("bot_id"))
+    hub_id = _text(payload.get("hub_id"))
     chat_id = _text(payload.get("chat_id"))
     user_id = _text(payload.get("user_id"))
     update_id = _text(payload.get("update_id"))
@@ -153,15 +154,59 @@ def _extract_action_io_input(env: Mapping[str, Any]) -> tuple[str | None, dict[s
     dedup_key = _text(env.get("dedup_key")) or _text(payload.get("dedup_key")) or ":".join(
         value for value in (source, bot_id, chat_id, update_id, token) if value
     )
-    return token, {
+    msg_meta = inner.get("meta") if isinstance(inner.get("meta"), Mapping) else {}
+    route = payload.get("route") if isinstance(payload.get("route"), Mapping) else {}
+    metadata = {
         "io_type": source,
         "bot_id": bot_id,
+        "hub_id": hub_id,
         "chat_id": chat_id,
         "user_id": user_id,
         "update_id": update_id,
         "transport_event_id": event_id,
         "idempotency_key": f"transport:{dedup_key}" if dedup_key else f"transport-action:{token}",
     }
+    if route:
+        metadata["transport_route"] = {
+            key: route.get(key)
+            for key in ("via", "alias", "session_id", "webspace_id", "dialog_channel_id")
+            if route.get(key) is not None
+        }
+        if _text(route.get("webspace_id")):
+            metadata["webspace_id"] = _text(route.get("webspace_id"))
+        if _text(route.get("dialog_channel_id")):
+            metadata["dialog_channel_id"] = _text(route.get("dialog_channel_id"))
+    msg_id = msg_meta.get("msg_id")
+    try:
+        if msg_id is not None and str(msg_id).strip():
+            metadata["reply_to"] = int(msg_id)
+    except (TypeError, ValueError):
+        pass
+    lang = _text(msg_meta.get("lang"))
+    if lang:
+        metadata["lang"] = lang
+    return token, metadata
+
+
+def _publish_rejected_action(bus: LocalEventBus, *, meta: Mapping[str, Any], reason_code: str) -> None:
+    """Fail closed without reinterpreting an interaction token as dialog text."""
+
+    bus.publish(
+        Event(
+            type="ui.notify",
+            source="chat_io.interaction",
+            ts=0.0,
+            payload={
+                "text": "Эта кнопка больше недоступна. Запросите текущее состояние ещё раз.",
+                "_meta": {
+                    **dict(meta),
+                    "route_id": "telegram" if _text(meta.get("io_type")) == "telegram" else "voice_chat",
+                    "reason_code": reason_code,
+                    "side_effect_class": "none",
+                },
+            },
+        )
+    )
 
 
 def _bound_conversation_id(webspace_id: str | None, meta: Mapping[str, Any]) -> str:
@@ -200,12 +245,21 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
                 )
                 if not receipt.get("claimed"):
                     return
-                result = conversation_interactions.submit_action_token(
-                    action_token,
-                    actor_id=f"transport:{_text(action_meta.get('io_type')) or 'chat'}:{_text(action_meta.get('user_id')) or 'unknown'}",
-                    idempotency_key=idempotency_key,
-                    metadata=action_meta,
-                )
+                try:
+                    result = conversation_interactions.submit_action_token(
+                        action_token,
+                        actor_id=f"transport:{_text(action_meta.get('io_type')) or 'chat'}:{_text(action_meta.get('user_id')) or 'unknown'}",
+                        idempotency_key=idempotency_key,
+                        metadata=action_meta,
+                    )
+                except conversation_interactions.ConversationInteractionError:
+                    _publish_rejected_action(
+                        bus,
+                        meta=action_meta,
+                        reason_code="interaction_action_unknown_or_expired",
+                    )
+                    conversation_store.mark_transport_ingress_dispatched(idempotency_key)
+                    return
                 bus.publish(
                     Event(
                         type="conversation.interaction.responded",
@@ -234,6 +288,38 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
                     else:
                         _log.info("duplicate transport update suppressed key=%s", idempotency_key)
                     return
+            # Defense in depth for older relays which flattened callback_data
+            # into the text field.  A token is an authority-bearing action, not
+            # natural language, and must never reach Builder Automation/LLM.
+            if text.startswith("ia:"):
+                try:
+                    action_result = conversation_interactions.submit_action_token(
+                        text,
+                        actor_id=(
+                            f"transport:{_text(meta.get('io_type')) or 'chat'}:"
+                            f"{_text(meta.get('user_id')) or 'unknown'}"
+                        ),
+                        idempotency_key=idempotency_key or f"transport-raw-action:{text}",
+                        metadata={**dict(meta), "legacy_text_action": True},
+                    )
+                except conversation_interactions.ConversationInteractionError:
+                    _publish_rejected_action(
+                        bus,
+                        meta=meta,
+                        reason_code="legacy_text_action_unknown_or_expired",
+                    )
+                else:
+                    bus.publish(
+                        Event(
+                            type="conversation.interaction.responded",
+                            source="chat_io.interaction_legacy_text",
+                            ts=evt.ts,
+                            payload=action_result,
+                        )
+                    )
+                if idempotency_key:
+                    conversation_store.mark_transport_ingress_dispatched(idempotency_key)
+                return
             # A visible interaction label typed as text is semantically the
             # same response as pressing its button. Resolve that exact bounded
             # label before Builder/Automation/NLU routing. Fuzzy text remains a
