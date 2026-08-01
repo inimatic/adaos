@@ -123,7 +123,20 @@ def _telegram_output_projection(
     for action in actions[:8]:
         label = str(action.get("label") or "").strip()
         token = str(action.get("token") or "").strip()
-        if label and token and len(token.encode("utf-8")) <= 64:
+        action_config = action.get("action") if isinstance(action.get("action"), Mapping) else {}
+        action_params = action_config.get("params") if isinstance(action_config.get("params"), Mapping) else {}
+        url = str(
+            action.get("url")
+            or (
+                action_params.get("url")
+                if str(action_config.get("type") or "").strip() == "openUrl"
+                else ""
+            )
+            or ""
+        ).strip()
+        if label and url and len(url) <= 2048 and re.match(r"^https?://", url, flags=re.IGNORECASE):
+            keyboard_rows.append([{"text": label[:64], "url": url}])
+        elif label and token and len(token.encode("utf-8")) <= 64:
             keyboard_rows.append([{"text": label[:64], "callback_data": token}])
     if messages and keyboard_rows:
         messages[0]["keyboard"] = {"inline_keyboard": keyboard_rows}

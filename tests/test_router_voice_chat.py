@@ -607,6 +607,8 @@ async def test_voice_chat_not_obtained_routes_active_dialog_followup(monkeypatch
     assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
     assert calls[0][2]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    scheduled_at = calls[0][2]["_meta"].pop("_router_tool_scheduled_at")
+    assert isinstance(scheduled_at, float)
     assert calls[0][2]["_meta"] == {
         "route_id": "voice_chat",
         "webspace_id": webspace_id,
@@ -1955,6 +1957,8 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
     assert calls[0][2]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    scheduled_at = calls[0][2]["_meta"].pop("_router_tool_scheduled_at")
+    assert isinstance(scheduled_at, float)
     assert calls[0][2]["_meta"] == {
         "route_id": "voice_chat",
         "voice_chat_scope": "shared",
@@ -3940,6 +3944,13 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
                     {
                         "label": "Показать процесс",
                         "token": "ia:0:builder-process",
+                    },
+                    {
+                        "label": "Открыть Preview",
+                        "action": {
+                            "type": "openUrl",
+                            "params": {"url": "https://inimatic.com/?webspace=dev1-dev"},
+                        },
                     }
                 ],
                 "_meta": {
@@ -3959,7 +3970,8 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
     assert len(outputs) == 1
     assert outputs[0].type == "tg.output.main-bot.chat.42"
     assert outputs[0].payload["messages"][0]["keyboard"]["inline_keyboard"] == [
-        [{"text": "Показать процесс", "callback_data": "ia:0:builder-process"}]
+        [{"text": "Показать процесс", "callback_data": "ia:0:builder-process"}],
+        [{"text": "Открыть Preview", "url": "https://inimatic.com/?webspace=dev1-dev"}],
     ]
 
 

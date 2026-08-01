@@ -492,6 +492,17 @@ def open_workspace(source_webspace_id: str | None = None, *, base_url: str | Non
     return _plain(_service().open_dev_webspace(source, base_url=base_url))
 
 
+def public_app_base() -> str:
+    """Return the configured public AdaOS application origin for deep links."""
+
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        return str(get_ctx().settings.app_base or "https://inimatic.com").strip().rstrip("/")
+    except Exception:
+        return "https://inimatic.com"
+
+
 # Compatibility operation names used by the existing Builder tool surface.
 get_workspace_binding = get_binding
 ensure_dev_webspace = ensure
@@ -596,6 +607,7 @@ __all__ = [
     "materialize_revision",
     "materialize_revision_async",
     "open_workspace",
+    "public_app_base",
     "open_dev_webspace",
     "reload",
     "reload_async",
