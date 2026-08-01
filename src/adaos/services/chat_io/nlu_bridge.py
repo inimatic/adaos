@@ -164,6 +164,18 @@ def _extract_action_io_input(env: Mapping[str, Any]) -> tuple[str | None, dict[s
     }
 
 
+def _bound_conversation_id(webspace_id: str | None, meta: Mapping[str, Any]) -> str:
+    ws = _text(webspace_id) or "default"
+    requested_channel = _text(meta.get("dialog_channel_id"))
+    if requested_channel:
+        channel = conversation_store.get_dialog_channel(ws, requested_channel)
+        conversation_id = _text((channel or {}).get("conversation_id"))
+        if conversation_id:
+            return conversation_id
+    active = conversation_store.get_active_dialog_channel(ws)
+    return _text((active or {}).get("conversation_id"))
+
+
 def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
     """
     Attach a handler to Telegram input and dispatch canonical dialog messages.
@@ -221,6 +233,38 @@ def register_chat_nlu_bridge(bus: LocalEventBus | None = None) -> None:
                         _log.error("transport idempotency conflict key=%s", idempotency_key)
                     else:
                         _log.info("duplicate transport update suppressed key=%s", idempotency_key)
+                    return
+            # A visible interaction label typed as text is semantically the
+            # same response as pressing its button. Resolve that exact bounded
+            # label before Builder/Automation/NLU routing. Fuzzy text remains a
+            # normal dialog turn and cannot acquire action authority here.
+            conversation_id = _bound_conversation_id(webspace_id, meta)
+            if conversation_id and bool(dict(meta.get("channel_capabilities") or {}).get("deterministic_actions")):
+                action_result = conversation_interactions.submit_exact_action_label(
+                    conversation_id,
+                    text,
+                    actor_id=(
+                        f"transport:{_text(meta.get('io_type')) or 'chat'}:"
+                        f"{_text(meta.get('user_id')) or 'unknown'}"
+                    ),
+                    idempotency_key=idempotency_key or f"transport-text-action:{conversation_id}:{text}",
+                    metadata=meta,
+                )
+                if action_result.get("status") == "resolved":
+                    bus.publish(
+                        Event(
+                            type="conversation.interaction.responded",
+                            source="chat_io.interaction_text_fallback",
+                            ts=evt.ts,
+                            payload={
+                                "interaction": action_result["interaction"],
+                                "response": action_result["response"],
+                                "duplicate": bool(action_result.get("duplicate")),
+                            },
+                        )
+                    )
+                    if idempotency_key:
+                        conversation_store.mark_transport_ingress_dispatched(idempotency_key)
                     return
             try:
                 if os.getenv("HUB_TG_DEBUG", "0") == "1" and isinstance(meta, dict) and meta.get("io_type") == "telegram":

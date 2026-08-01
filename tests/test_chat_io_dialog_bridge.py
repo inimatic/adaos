@@ -243,3 +243,65 @@ async def test_telegram_callback_resumes_durable_interaction_without_nlu(monkeyp
     assert len(responses) == 1
     assert responses[0].payload["response"]["source"] == "action"
     assert responses[0].payload["response"]["values"]["choice"] == "prototype"
+
+
+async def test_telegram_exact_button_label_uses_same_interaction_without_builder_or_nlu(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        nlu_bridge,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(subnet_id="sn-test"), bus=bus),
+    )
+    interaction = conversation_interactions.create_interaction(
+        conversation_id="conv.telegram.text-action",
+        owner="skill:builder",
+        prompt="Choose",
+        input_spec={
+            "kind": "choice",
+            "required_fields": [],
+            "choices": [{"value": "process", "label": "Показать процесс", "description": None}],
+            "sensitive": False,
+        },
+        actions=[
+            {
+                "action_id": "process",
+                "label": "Показать процесс",
+                "command": "builder.process.inspect",
+                "value": "process",
+                "risk": "read",
+                "confirmation_required": False,
+            }
+        ],
+        interaction_id="interaction.telegram.text-action",
+    )
+    conversation_interactions.negotiate_presentation(
+        interaction,
+        conversation_interactions.standard_capability_profile("telegram"),
+    )
+    monkeypatch.setattr(
+        nlu_bridge.conversation_store,
+        "get_active_dialog_channel",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "channel_id": "builder",
+            "conversation_id": "conv.telegram.text-action",
+        },
+    )
+    responses: list[Event] = []
+    user_messages: list[Event] = []
+    bus.subscribe("conversation.interaction.responded", lambda event: responses.append(event))
+    bus.subscribe("dialog.user_message", lambda event: user_messages.append(event))
+    nlu_bridge.register_chat_nlu_bridge(bus)
+    envelope = _telegram_envelope(dedup_key="tg:bot:42:102")
+    envelope["payload"]["update_id"] = "102"
+    envelope["payload"]["payload"]["text"] = "Показать процесс"
+
+    bus.publish(Event(type="tg.input.sn-test", source="test", ts=4.0, payload=envelope))
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert user_messages == []
+    assert len(responses) == 1
+    assert responses[0].source == "chat_io.interaction_text_fallback"
+    assert responses[0].payload["response"]["source"] == "action"
+    assert responses[0].payload["response"]["values"]["command"] == "builder.process.inspect"
+    assert responses[0].payload["response"]["metadata"]["text_fallback"] is True

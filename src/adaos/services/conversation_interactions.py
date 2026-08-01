@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import uuid
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -764,6 +765,81 @@ def submit_action_token(
         metadata=metadata,
         now=now,
     )
+
+
+def _normalized_action_label(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = " ".join(text.casefold().strip().split())
+    return text.strip(" \t\r\n:;,.!?()[]{}\"'«»")
+
+
+def submit_exact_action_label(
+    conversation_id: str,
+    text: str,
+    *,
+    actor_id: str,
+    idempotency_key: str,
+    metadata: Mapping[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an exact visible action label against the latest live interaction.
+
+    This is the deterministic text fallback for channels where buttons are not
+    displayed or a user types the button label manually.  It deliberately does
+    not perform fuzzy NLU: only the newest live interaction in the bound
+    conversation is eligible, and exactly one action label must match.
+    """
+
+    normalized = _normalized_action_label(text)
+    if not normalized:
+        return {"status": "unbound", "reason_code": "empty_action_label", "candidates": []}
+    pending = conversation_store.list_interactions(
+        conversation_id=str(conversation_id or "").strip(),
+        statuses=sorted(_PENDING_STATUSES),
+        limit=20,
+    )
+    live = [item for item in pending if not _is_expired(item.get("expires_at"), now=now)]
+    if not live:
+        return {"status": "unbound", "reason_code": "no_pending_interaction", "candidates": []}
+    interaction = live[0]
+    presentation = conversation_store.latest_interaction_presentation(str(interaction["interaction_id"]))
+    if (
+        presentation is None
+        or int(presentation.get("interaction_generation") or 0) != int(interaction.get("generation") or 0)
+    ):
+        return {
+            "status": "unbound",
+            "reason_code": "latest_presentation_unavailable",
+            "candidates": [],
+        }
+    matches = [
+        item
+        for item in presentation.get("actions") or []
+        if isinstance(item, Mapping) and _normalized_action_label(item.get("label")) == normalized
+    ]
+    if not matches:
+        return {"status": "unbound", "reason_code": "action_label_not_available", "candidates": []}
+    if len(matches) != 1:
+        return {
+            "status": "ambiguous",
+            "reason_code": "duplicate_action_label",
+            "candidates": [str(item.get("action_id") or "") for item in matches],
+        }
+    token = str(matches[0].get("token") or "").strip()
+    if not token:
+        return {"status": "unbound", "reason_code": "action_token_unavailable", "candidates": []}
+    result = submit_action_token(
+        token,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key,
+        metadata={
+            **dict(metadata or {}),
+            "text_fallback": True,
+            "matched_action_label": str(matches[0].get("label") or ""),
+        },
+        now=now,
+    )
+    return {"status": "resolved", **result}
 
 
 def accept_response(
