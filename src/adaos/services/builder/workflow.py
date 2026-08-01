@@ -2624,6 +2624,33 @@ class BuilderWorkflowService:
                 "profiles": data_binding.get("profiles") or [],
                 "implementation_mapping": implementation_mapping_report(data_binding),
             }
+            workflow_inspection = _mapping(
+                self._workflow_inspection(kind, project_id).get("project")
+            )
+            inspection_status = str(workflow_inspection.get("status") or "not_declared")
+            workflow_validation = _mapping(workflow_inspection.get("validation"))
+            workflow_binding = _mapping(workflow_inspection.get("binding"))
+            workflow_definition_status = (
+                "present"
+                if inspection_status in {"admitted", "legacy_shadow"}
+                else "missing"
+                if inspection_status == "not_declared"
+                else "ambiguous"
+            )
+            workflow_definition = {
+                "status": workflow_definition_status,
+                "inspection_status": inspection_status,
+                "source": workflow_inspection.get("source"),
+                "schema": "adaos.workflow.definition.v1",
+                "definition_ref": "abi:workflow.definition.v1.schema.json",
+                "definition_digest": workflow_validation.get("definition_digest"),
+                "valid": workflow_validation.get("valid"),
+                "metrics": copy.deepcopy(_mapping(workflow_validation.get("metrics"))),
+                "diagnostics": copy.deepcopy(
+                    list(workflow_validation.get("diagnostics") or [])[:50]
+                ),
+                "binding_digest": workflow_binding.get("binding_digest"),
+            }
             facets: dict[str, Any] = {
                 "target_structure": target_structure,
                 "abi": {
@@ -2635,6 +2662,7 @@ class BuilderWorkflowService:
                 },
                 "constraints": constraints,
                 "data_policy": data_policy,
+                "workflow_definition": workflow_definition,
                 "execution_authority": {
                     "status": "present" if selected_paths else "missing",
                     "allowed_paths": selected_paths,

@@ -252,6 +252,8 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
     assert "payload" not in packet["pending_actions"][0]
     assert packet["budget"]["conversation_message_count"] == 1
     assert packet["budget"]["pending_action_ref_count"] == 1
+    assert packet["facets"]["workflow_definition"]["status"] == "missing"
+    assert packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
     assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
 
 
