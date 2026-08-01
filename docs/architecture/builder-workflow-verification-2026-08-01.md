@@ -6,17 +6,20 @@ remain unproven.
 
 ## Accepted local baseline
 
-- Core checkout: branch `rev2026`, implementation commits through `6088aa2b`
+- Core checkout: branch `rev2026`, implementation commits through `4ec78aa5`
   in this slice.
-- DEV Builder skill: `0.3.32`, Forge commit
-  `36d71c044cfaad6f00e2eafd3c529dfc3f968f2c`.
-- Workspace Builder skill: `0.3.27`.
+- DEV Builder skill: `0.3.34`, Forge commit
+  `83ccedda048f1afccb6fca9cea36b379ff801a37`.
+- Workspace Builder skill: `0.3.28`, Forge commit
+  `a5ddf74937cd027f34f26f57c9cd6eb2a0975e1c`.
 - `handlers/main.py`, `workflow.json`, and `tests/test_builder_skill.py` are
   byte-identical between DEV and Workspace; independent version counters are
   expected.
 - Both DEV and Workspace runtimes were explicitly activated after publication.
-- The backend relay fix is deployed from nested backend commit `5ef3568` and
-  preserves validated Telegram inline keyboards.
+- Nested backend `80c5a15` preserves validated Telegram inline keyboards and
+  normalizes text/callback relay paths into one canonical exactly-once input.
+  Deployment and the final human callback check are recorded separately from
+  local contract proof.
 
 ## Contract audit
 
@@ -80,6 +83,9 @@ aggregate explanation without inventing one global project stage.
 The following read commands are deterministic and bypass Automation/LLM:
 
 - `Строитель, что выбрано?`;
+- `Строитель, покажи проекты` and `Строитель, выбери <id>`;
+- `Строитель, помощь`;
+- `Строитель, ссылка на Preview`;
 - `Показать процесс`;
 - `Показать прототип`;
 - `Показать реализацию`;
@@ -103,6 +109,25 @@ Exact local Preview materialization produced:
 The test workspace was then restored to
 `proto: test04_recipes · UI 003`. Preview selection did not perform a business
 workflow transition.
+
+The limited-channel project list no longer calls two sessions «active». It
+projects one `current in this conversation` Project and labels all others as
+`available in DEV`; each bounded row has an exact `builder.project.select`
+action. Selection changes only the originating conversation focus. It does not
+implicitly move a Preview opened by a different Webspace or conversation.
+
+`Строитель, ссылка на Preview` returned the exact local target
+`proto: test04_recipes · UI 003` and an `openUrl` action for
+`https://inimatic.com/?webspace=dev1-dev`. Telegram presentation preserves the
+URL action rather than encoding it as a callback payload.
+
+The stale task `task.01KYXSAT6NKN5Y5M6161YW7MJP`, created when the old path
+mistook `Показать процесс` for an Automation request, was cancelled through the
+task API with reason `misrouted_read_command`; no state file was edited.
+Structured callback ingress now takes priority over callback message text and
+uses one `tg:<bot>:<update>` deduplication key across local publish, relay, and
+retry. Unknown/expired structured actions and legacy raw `ia:` tokens fail
+closed before Builder, Automation, NLU, or an LLM.
 
 The same exact selection was repeated through the one-shot CLI after hardening
 the Yjs ownership boundary. UI-navigation tools stay on their caller thread,
@@ -153,7 +178,9 @@ UTF-8 JSON file or ASCII JSON with `\uXXXX`, never a PowerShell text pipeline.
 
 ## Executed checks
 
-- DEV Builder skill: 156/156 tests.
+- DEV Builder skill: 159/159 tests.
+- Telegram backend callback/relay contract: 13/13 focused tests.
+- Core dialog action-ingress contract: 7/7 focused tests.
 - DEV Builder scenario: 14/14 tests; strict skill and scenario validation pass.
 - Context/worker/Automation group: 105/105 tests.
 - Governed coordination contracts: 44/44 focused tests.
@@ -182,4 +209,5 @@ UTF-8 JSON file or ASCII JSON with `\uXXXX`, never a PowerShell text pipeline.
 - GWR5 mutating cross-channel, registry, package, migration, and authoring
   convergence proofs.
 - GWR6-16: durable per-hub Telegram ingress receipt/inbox.
-- Human wide/compact browser comparison and one mutating Telegram callback.
+- Human wide/compact browser comparison and one mutating Telegram project
+  selection callback after backend deployment.

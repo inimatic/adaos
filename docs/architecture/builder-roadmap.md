@@ -987,7 +987,11 @@ Commands, projections, and Workbench:
 - [x] `[must]` Claim Telegram updates durably before dispatch, suppress exact
   duplicates, reject idempotency conflicts, and prohibit automatic replay of
   an uncertain state-changing turn. NATS envelope and HTTP fallback inputs use
-  the same UTF-8 normalization path.
+  the same UTF-8 normalization path. Nested backend `80c5a15` now gives the
+  local publish, root relay, callback retry, and HTTP fallback one canonical
+  `tg:<bot>:<update>` key; callback actions take priority over the bot-authored
+  message text. Core `351d66d6` rejects unknown, expired, or flattened `ia:`
+  tokens before Builder, Automation, NLU, or an LLM can observe them.
 - [x] `[must]` Bind limited-channel execution to an explicit trusted Webspace.
   Pairing persists `webspace_id`; DEV manifests execute the DEV skill runtime
   directly, while unbound/non-DEV routes remain Workspace-authoritative. A DEV
@@ -1333,6 +1337,18 @@ Autonomy, evidence, and acceptance:
   preserves explicit remote-node labels when inventory contains only a node-id
   default; relevant regressions pass 63/63 and full Webspace Phase 2 passes
   113/113.
+- [x] The 2026-08-01 limited-channel navigation correction is active as DEV
+  `builder_skill@0.3.34` (Forge `83ccedda048f1afccb6fca9cea36b379ff801a37`)
+  and published as Workspace `builder_skill@0.3.28` (Forge
+  `a5ddf74937cd027f34f26f57c9cd6eb2a0975e1c`). Project listing now names one
+  conversation-scoped current Project, marks the remainder as DEV-available,
+  and emits bounded `Выбрать <id>` controls. Help, Process inspection, project
+  selection, and Preview-link commands are deterministic and cannot queue
+  Automation/Codex. Core `4ec78aa5` and the skill expose the exact Preview
+  target through an `https://inimatic.com` deep-link button. DEV/Workspace
+  handler, workflow, and test files are byte-identical; the Builder suite
+  passes 159/159. Human verification of the newly deployed Telegram
+  project-selection callback remains part of the production gate.
 
 ## Cross-Document Anchors
 
