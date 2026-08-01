@@ -222,14 +222,14 @@ authority. AdaOS therefore keeps the following relationship planes separate:
 
 | Plane | Nodes and edges | Cycle rule | Source of truth |
 | --- | --- | --- | --- |
-| Demand / Issue | Issues with `related`, `duplicate`, `depends_on`, and `blocks` | `related` may cycle; dependency/blocking cycles are rejected or explicitly diagnosed | Issue/project store |
-| Delivery / Change | Changes containing Issues and linked by `depends_on`, `alternative_to`, `supersedes`, and `split_from` | dependency and supersession edges are acyclic | Builder/project store |
-| Workflow | Named business states connected by command transitions | deliberate review/revision loops are allowed | versioned WorkflowDefinition plus instance snapshot |
+| Issue graph | Issues with `related`, `duplicate`, `depends`, and `blocks` | `related` may cycle; dependency/blocking cycles are rejected or explicitly diagnosed | Issue/project store |
+| Change graph | Changes containing Issues and linked by `depends`, `alternative`, `supersedes`, and `split_from` | dependency, split, and supersession edges are acyclic | Builder/project store |
+| Workflow statechart | Named business states connected by command transitions | deliberate review/revision loops are allowed | versioned WorkflowDefinition plus instance snapshot |
 | Artifact lineage | Revisions, candidates, and releases connected by `derived_from`, `implements`, and `published_as` | immutable DAG | artifact and release stores |
 | Component dependency | Scenarios, skills, packages, and contracts connected by declared requirements and resolved bindings | source constraints may be recursive; an activated lock must resolve without a dependency cycle | manifests and ProjectRelease/WorkspaceLock |
 | Execution | Tasks, Runs, attempts, child work, retries, and recovery | attempt/causation graph is append-only and acyclic | task/Run journal |
-| Conversation / interaction | Conversations, threads, messages, interactions, responses, tasks, and ReplyRoutes connected by correlation and causation | message order is monotonic per conversation; correlation is not business state | conversation ledger and interaction registry |
-| Release / deployment | SourceRefs, packages, releases, candidates, channels, activation locks, and receipts | releases are immutable; channel/slot pointer history is append-only | registry and WorkspaceLock |
+| Conversation / interaction graph | Conversations, threads, messages, interactions, responses, tasks, and ReplyRoutes connected by correlation and causation | message order is monotonic per conversation; correlation is not business state | conversation ledger and interaction registry |
+| Release / deployment graph | SourceRefs, packages, releases, candidates, channels, activation locks, and receipts | releases are immutable; channel/slot pointer history is append-only | registry and WorkspaceLock |
 | Authority / trust | Principals, roles, scopes, approvals, delegations, and policy witnesses | policy-defined; never inferred from another plane | identity, policy, and audit stores |
 | View / command context | Focused project/Change, inspected ref, Preview target, and channel surface | not an authoritative graph and freely replaceable | scoped context projection |
 
@@ -237,6 +237,15 @@ Each plane has typed refs into other planes, but may not copy another plane's
 mutable state or reinterpret its edges. For example, an Issue `blocks` edge
 does not create a workflow transition, a completed Run does not imply an
 accepted Change, and selecting an artifact does not promote it.
+
+The first eight rows are the normative product/execution graph family.
+Authority/trust and view/command context are independent cross-cutting planes,
+not omitted edges of that family. `adaos.workflow.relationship_edge.v1` and
+the relationship-plane validator reject unknown plane/relation pairs,
+self-links in acyclic relations, forbidden cycles, duplicate edge ids, and
+embedded mutable state. Historical `demand`, `delivery`, and `workflow` names
+are input aliases only and normalize to `issue`, `change`, and
+`workflow_statechart`.
 
 The four planes most frequently confused in the current Builder are described
 in more detail below.
@@ -343,6 +352,12 @@ Defaults may reduce repetition, but the compiled descriptor contains the
 effective value of every field. A UI hint, model prompt, activity function, or
 transport adapter cannot add a guard, retry rule, or outcome absent from the
 compiled descriptor.
+
+The reference compiler materializes this effective record through
+`normalize_transition_descriptor(...)` before validation and execution. Raw
+definition source/digest remains pinned for in-flight compatibility, but
+executors and projections consume the same compiled descriptor rather than
+maintaining partial transition structures.
 
 ### Guard and Invariant
 
@@ -802,7 +817,7 @@ apply before it is consumed.
 
 ### Capability Profile And Presentation Negotiation
 
-`adaos.channel.capability_profile.v1` describes the effective capabilities of
+`adaos.conversation.channel_capability_profile.v1` describes the effective capabilities of
 one transport + client + surface combination. It is versioned and includes:
 
 - text, markdown, choices, multi-select, typed forms, file upload/download,
@@ -814,13 +829,15 @@ one transport + client + surface combination. It is versioned and includes:
 - reconnect/resume and cross-channel handoff support;
 - profile source, freshness, and downgrade reason.
 
-`ConversationInteraction` declares semantic requirements rather than a chosen
+`ConversationInteraction` carries an embedded
+`adaos.conversation.interaction_requirements.v1` rather than naming a chosen
 widget: required and optional capabilities, input schema, risk, secure-entry
 requirement, fallback classes, and whether text-only representation preserves
 meaning.
 
 Negotiation produces
-`adaos.conversation.interaction_presentation.v1` containing:
+`adaos.conversation.interaction_presentation_plan.v1`, retained by
+`adaos.conversation.interaction_presentation.v1`, containing:
 
 - interaction and capability-profile versions;
 - selected presentation and bounded layout/transport parameters;
@@ -886,8 +903,8 @@ A local ledger flag named `notified` must not imply transport delivery.
 
 `ResponseEnvelope` is channel-neutral outbound content. It is not an
 Interaction, user answer, task result, or delivery receipt. It contains a
-message class (`accepted`, `progress`, `input_required`, `terminal`, or
-`notification`), conversation/task/workflow refs, content, sensitivity,
+message class (`accepted`, `started`, `progress`, `input_required`, `resumed`,
+`terminal`, `cancelled`, or `notification`), conversation/task/workflow refs, content, sensitivity,
 presentation requirements, and optional replacement/coalescing key.
 
 `adaos.conversation.delivery_attempt.v1` records one attempt to materialize or
@@ -933,6 +950,14 @@ status card, updates only a progress projection, records evidence silently, or
 raises a notification. It considers risk, urgency, user preferences, quiet
 periods, channel limits, and whether input is required. It cannot suppress a
 required approval or make delivery success part of the business transition.
+
+The normative records are `adaos.conversation.attention_policy.v1` and
+`adaos.conversation.attention_plan.v1`. The policy classifies events into
+`append`, `update`, `evidence_only`, or `projection_only`; defines progress
+coalescing windows; records channel preferences and quiet hours; and escalates
+`input_required`, terminal failure, and expiry. The resulting plan is attached
+to the envelope so restart/re-delivery does not re-decide user attention from
+different transient client state.
 
 ## Command and Transition Boundary
 

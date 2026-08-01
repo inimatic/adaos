@@ -40,7 +40,7 @@ materialized into Workspace. Stable release `test05_recipes@0.1.4` locks the
 companion `test05_recipes_skill@0.1.1`; WorkspaceLock revision `10` completed
 reload and exact health verification. The `proto:` / `active:` / `public:`
 Preview bindings were checked independently in the nested Builder preview
-workspace. Human wide/compact and live Telegram-bot acceptance remain open, so
+workspace. Human wide/compact and mutating Telegram-callback acceptance remain open, so
 this is still a local architecture proof rather than production acceptance.
 
 The 2026-07-29 limited-channel routing slice is `validated-local`: Telegram
@@ -123,7 +123,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, live Telegram-bot and human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -1300,12 +1300,31 @@ Autonomy, evidence, and acceptance:
   ChromeHeadless chat tests. A live local paired-Telegram projection preserved
   Russian UTF-8 and five actions; an injected safe `Показать процесс` callback
   was accepted, durably answered, dispatched cross-process, and recorded a
-  reply in the originating Telegram conversation. A human button click and
-  backend DeliveryAttempt receipt remain acceptance gates rather than inferred
-  proof.
-- [ ] Human wide/compact browser comparison and one live Telegram-bot ingress
-  and reply remain production-acceptance gates. UI 058 is now a Workspace
-  publication, but these checks still gate a broader rollout claim.
+  reply in the originating Telegram conversation. On 2026-08-01 the production
+  backend relay retained the negotiated keyboard and the user confirmed that
+  all five buttons rendered in the real Telegram client. A human mutating
+  callback click and durable backend DeliveryAttempt receipt remain acceptance
+  gates rather than inferred proof.
+- [ ] Human wide/compact browser comparison and one mutating Telegram callback
+  remain production-acceptance gates. Live Telegram ingress, Builder reply,
+  UTF-8, and human-visible inline controls are now proven; these remaining
+  checks still gate a broader rollout claim.
+- [x] The 2026-08-01 workflow-command correction is published as DEV
+  `builder_skill@0.3.32` and Workspace `builder_skill@0.3.27`; handler,
+  `workflow.json`, and tests are byte-identical and both runtimes are active.
+  Exact `Показать процесс` and Preview commands bypass Automation/LLM, while
+  `workflow.json`/statechart/TransitionDescriptor correction is classified as
+  Automation and visual process-panel layout remains Prototype. DEV Builder
+  passes 156/156 tests. Live exact Preview selection resolved
+  `proto: builder · UI 058`, `active: builder · 0.2.54`, and
+  `public: builder · 0.2.55`, then restored `proto: test04_recipes · UI 003`.
+- [x] Core commit `5c20e5fe` preserves the exact governed context packet and
+  digest through Skill Factory, adds a bounded Issue/acceptance/facet
+  projection to Codex `task.md`, and compiles every manifest-bound
+  `workflow.json` before accepting a result. Builder workflow, Automation, and
+  Skill Factory worker regressions pass 105/105. Historical lossy records are
+  retained as provenance; new question-mark/replacement corruption is rejected
+  before model submission.
 
 ## Cross-Document Anchors
 
@@ -1319,6 +1338,9 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Builder Conversational Development Architecture](builder-conversational-development.md):
   chat-first product model, canonical Change/Run terminology, interaction
   frames, semantic UI operations, and future proposal collaboration
+- [Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md):
+  local contract audit, live Web/Telegram/Preview evidence, model-context audit,
+  and remaining proof gates
 - [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
   Builder control architecture, migration checklist, and local proof record
 - [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote
@@ -1509,7 +1531,7 @@ observed projection matches the latest desired generation.
   Issue/extraction and proposal-exchange model.
 - [x] `[must]` Persist the authoritative Builder transition record in the skill
   and make transition submission idempotent by generation id. DEV
-  `builder_skill@0.3.28` now owns the strict manifest-bound `workflow.json`;
+  `builder_skill@0.3.32` now owns the strict manifest-bound `workflow.json`;
   Builder loads it through the shared compiler/cache, pins instances by
   definition version and digest, and the existing generation plus payload-bound
   idempotency key admits each transition once.

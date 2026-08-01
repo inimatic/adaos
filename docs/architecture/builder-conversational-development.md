@@ -258,12 +258,14 @@ its UI and view projections and must not carry a duplicate Change workflow.
 activated, and rolled back as one immutable package; Builder instances pin the
 exact definition, package, and resolved adapter-binding digests.
 
-As of the first local cutover, DEV `builder_skill@0.3.28` is the transition
-catalogue authority and instances pin definition version plus semantic digest.
-The skill push produced an immutable PackageRef with the same workflow lock.
-Workspace activation and per-instance package/adapter-binding pins remain the
-next admission step; the preceding paragraph is the complete target contract,
-not a claim that this later step is already closed.
+As of the 2026-08-01 local cutover, DEV `builder_skill@0.3.32` is the
+transition-catalogue authority and Workspace `builder_skill@0.3.27` contains
+the byte-identical handler, definition, and tests. Both runtimes are activated;
+instances pin definition version plus semantic digest. The skill push produced
+an immutable PackageRef with the same workflow lock. Complete per-instance
+package/adapter-binding pins and atomic WorkspaceLock admission remain open;
+the preceding paragraph is the target contract, not a claim that those later
+gates are closed.
 
 ```text
 intake -> clarification_required <-> ready
@@ -324,6 +326,30 @@ The `*_waiting` states are business waits pointing to a Run. Run attempt state
 (`queued`, `working`, `input_required`, `completed`, `failed`,
 `outcome_unknown`) remains separate and cannot be copied into the Change state
 enum.
+
+### Workflow Definition Correction Boundary
+
+The word "workflow" is ambiguous in natural language. Builder resolves it by
+target and risk rather than by one broad keyword:
+
+- moving a process button, renaming a stage label, or changing the visible
+  process layout is a Prototype Issue and may change only `webui.json`;
+- changing `workflow.json`, a statechart transition, guard, invariant,
+  TransitionDescriptor, registered adapter binding, migration, or role policy
+  is an Automation Issue and requires an isolated Codex Run;
+- `Show process` / `Показать процесс` is a deterministic read command and
+  cannot create either kind of Issue or start an executor;
+- a mixed request is split into typed Issues; definition work cannot be hidden
+  inside the UI LLM context.
+
+The Prototype LLM receives no write authority over `workflow.json`. The current
+Automation slice receives the complete project source, definition ref/digest,
+validation diagnostics, governed Issue/acceptance context, and worker-side
+structural compilation. Supplying a self-contained exact ABI plus admitted
+adapter catalogue remains GWR1-27/GWR4-24 work and must not be inferred as
+complete. A valid JSON result is still only a candidate: package, policy,
+migration, conformance, release-lock, and atomic activation gates remain
+authoritative.
 
 ## Development Capsule
 
@@ -435,7 +461,9 @@ fresh frame; the client never infers the next workflow state.
 `adaos.builder.interaction_frame.v1` is the Builder domain snapshot and
 compatibility projection. Human input is requested through the shared
 `adaos.conversation.interaction.v1`; its response, capability negotiation,
-presentation plan, ReplyRoute, ResponseEnvelope, and DeliveryAttempts follow
+`adaos.conversation.interaction_requirements.v1`,
+`adaos.conversation.interaction_presentation_plan.v1`, ReplyRoute,
+ResponseEnvelope, attention plan, and DeliveryAttempts follow
 the [shared workflow interaction protocol](governed-workflow-runtime.md#conversationinteraction).
 Builder must not invent a second action-token, fallback, acknowledgement, or
 delivery lifecycle inside the frame.
@@ -473,6 +501,18 @@ The first limited-channel slice uses one dialog contract for Web and Telegram:
   the user deliberately sends a new message;
 - envelope-based NATS delivery and the raw HTTP fallback share the same UTF-8
   normalization and idempotency contract.
+- exact text matching an action label on the latest live Interaction resolves
+  through its opaque action token before Automation or NLU; fuzzy text cannot
+  infer authority;
+- the backend relay validates and preserves Telegram `inline_keyboard` rows;
+  a renderer may not recreate controls from localized prose or silently drop
+  them.
+
+Live acceptance on 2026-08-01 proved the current-project frame in Web and the
+real Telegram bot with five actions. It also proved the activation invariant:
+publishing changed skill files is insufficient while an older runtime process
+is still loaded; one explicit activation/reload and a health/behavior probe are
+part of the publication acceptance.
 
 Telegram pairing may additionally bind a trusted `webspace_id`. The binding is
 persisted with the bot/chat-to-hub route and is copied into every normalized

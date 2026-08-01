@@ -8,6 +8,8 @@ Last reviewed: 2026-07-31.
 
 This roadmap implements the
 [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
+The current local and live-channel proof ledger is
+[Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
 conversation architecture, NLU roadmap, or operational event roadmap. Tasks
@@ -328,8 +330,11 @@ blocked.
   for every mutating Builder control; unavailable executors are deliberately
   not projected. A live Telegram turn on 2026-07-31 proved webhook ingress,
   Builder materialization, root relay, and five inline actions for the read-only
-  current-project interaction. This is evidence for the channel adapter, not
-  completion evidence for executor-backed mutating controls.
+  current-project interaction. On 2026-08-01 the production backend relay and
+  local current core repeated the real-bot proof: Telegram received the same
+  five inline actions as the Web presentation, and exact action-label text was
+  resolved before Automation/NLU. This is evidence for the channel adapter,
+  not completion evidence for executor-backed mutating controls.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
@@ -557,7 +562,19 @@ tests cover all legal and representative illegal paths.
 - [ ] `[must]` `GWR4-24` Update Builder templates, context packets, Specification,
   artifact inspection, and publication evidence so an LLM can create or repair
   one `workflow.json`, see its structured validation report and graph diff, and
-  cannot publish code/definition or role-policy mismatches.
+  cannot publish code/definition or role-policy mismatches. The 2026-08-01
+  worker slice now preserves the exact governed context packet in task evidence,
+  places its bounded Issue/acceptance/facet projection in Codex `task.md`, adds
+  project workflow inspection to context facets, and compiles every
+  manifest-bound definition before accepting worker output. Template authoring,
+  graph-diff presentation, role-policy mismatch, and publication-lock proof keep
+  this item open.
+- [x] `[must]` `GWR4-25` Route workflow-definition corrections to the isolated
+  Automation/Codex lane while keeping visual process-layout requests in
+  Prototype and process inspection read-only. DEV Builder regression tests
+  cover Russian/English `workflow.json`/statechart corrections and a visual
+  process-panel counterexample; the Prototype LLM has no workflow-definition
+  write path.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -743,10 +760,16 @@ is warranted.
 - [x] `[must]` `GWR6-14` Recover pending interactions, terminal envelopes, and
   delivery attempts after restart; preserve a queryable terminal result when
   every route expires or is undeliverable.
-- [ ] `[should]` `GWR6-15` Add ordered progress, update coalescing, attention
+- [x] `[should]` `GWR6-15` Add ordered progress, update coalescing, attention
   policy, quiet periods/preferences, alternate authorized routes, delivery
   receipts, and operator inspection without coupling delivery to business
-  completion.
+  completion. `adaos.conversation.attention_policy.v1` and
+  `attention_plan.v1` classify append/update/evidence/projection behavior,
+  coalesce progress, retain quiet-hours/channel preferences, and escalate
+  input-required/failure/expiry. ReplyRoute and DeliveryAttempt keep alternate
+  authorized delivery and acknowledgement independent from terminal outcome;
+  local protocol tests cover terminal-once, retry, acknowledgement, and
+  restart-safe materialization.
 - [ ] `[must]` `GWR6-16` Establish an end-to-end Telegram ingress acceptance
   boundary. The public webhook may acknowledge an update only after the target
   zone has durably accepted it for the addressed hub. A successful core NATS

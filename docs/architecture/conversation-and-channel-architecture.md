@@ -127,13 +127,31 @@ Implemented today:
   resolves the active/addressed conversation before Builder dispatch or NLU
   fallback, and assistant `io.out.chat.append` output is projected back to the
   originating Telegram chat.
+- `ConversationInteraction`, `InteractionResponse`,
+  `ChannelCapabilityProfile`, `InteractionRequirements`,
+  `InteractionPresentationPlan`, and `InteractionPresentation` are persisted
+  as separate versioned records. Web, Telegram, and numbered-text fallback use
+  the same semantic action identities and generation checks.
+- `ReplyRoute`, `ResponseEnvelope`, and `DeliveryAttempt` implement independent
+  accepted/started/progress/input-required/resumed/terminal/delivery facts.
+  Terminal outcome idempotency and delivery retry are keyed separately, so a
+  transport retry cannot re-run a tool, LLM, Codex task, or workflow command.
+- `AttentionPolicy` and `AttentionPlan` distinguish append/update/evidence-only/
+  projection-only handling, progress coalescing, quiet hours and escalation.
+  Input required, failure, and expiry remain visible even when ordinary
+  progress is muted.
+- Builder's current-project Interaction is live in Web and Telegram. The
+  2026-08-01 acceptance returned five Telegram inline actions from the same
+  presentation used by Web; the backend relay preserves a validated
+  `reply_markup.inline_keyboard` rather than reconstructing actions.
 
 Important gaps:
 
-- The node-local conversation/memory store is an MVP: append-only messages,
-  channels, agents, memory items, and turn traces exist, but FTS, summaries,
-  deletion/redaction workflows, delivery attempts, and budgeted retrieval are
-  still missing.
+- The node-local conversation/memory store remains an MVP for retrieval:
+  append-only messages, channels, agents, memory items, interactions, reply
+  routes, envelopes, delivery attempts, and turn traces exist, but complete
+  FTS/summaries, deletion/redaction workflows, and budgeted retrieval are not
+  finished.
 - The dialog-channel and agent registry is persisted for the current pilot, but
   full manifest schema validation, dynamic skill-owned channels, and Builder /
   Teacher channel registration are still missing.
@@ -231,12 +249,16 @@ adapters, delivery attempts, and SDK ergonomics. `DialogFrame` may adapt a
 legacy slot/form flow to ConversationInteraction, but it cannot become a
 second interaction registry.
 
-Capability negotiation uses the effective profile of the current transport,
-client, and surface. Policy may remove a technically supported capability. A
-renderer selects a safe presentation or an explicit text/deep-link/Web/miniapp
-fallback and records that decision. It never drops the only required action,
-weakens confirmation, exposes sensitive input as chat text, or changes which
-workflow commands are legal.
+Capability negotiation uses
+`adaos.conversation.channel_capability_profile.v1` for the effective transport,
+client, and surface; `adaos.conversation.interaction_requirements.v1` for the
+semantic need; and `adaos.conversation.interaction_presentation_plan.v1` for
+the auditable decision. Policy may remove a technically supported capability.
+A renderer selects a safe presentation or an explicit
+text/deep-link/Web/miniapp fallback and records that decision. It never drops
+the only required action, weakens confirmation, exposes sensitive input as chat
+text, or changes which workflow commands are legal. Capability, permission,
+and business availability are three independent decisions.
 
 Durable waits do not block an ordinary skill process. The target SDK separates:
 
@@ -262,6 +284,21 @@ once. Delivery may be retried or handed off to another authorized channel
 without invoking the skill, LLM, Codex, or workflow command again. Progress is
 sequenced and may be coalesced; `input_required`, cancellation, expiry, and
 undeliverable results remain queryable after restart.
+
+The reference sequence is explicit rather than implied by one status flag:
+
+```text
+accepted -> started -> progress* -> input_required? -> resumed?
+         -> terminal|cancelled -> materialized -> delivery_attempt+
+         -> acknowledged|undeliverable
+```
+
+`adaos.conversation.attention_policy.v1` and
+`adaos.conversation.attention_plan.v1` decide whether each envelope appends a
+new message, updates an existing status card, remains evidence-only, or changes
+only a projection. The decision and coalescing key are persisted with the
+envelope; delivery after restart does not re-run attention classification from
+new transient client state.
 
 ### Telegram ingress acceptance boundary
 
