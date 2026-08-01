@@ -1712,6 +1712,11 @@ def _member_device_inventory_display_map() -> dict[str, dict[str, Any]]:
             str(policy.get("effective_name") or "").strip()
             or str(policy.get("display_name") or "").strip()
         )
+        # Inventory identity defaults are not user-facing names.  Let the
+        # fresher directory/runtime projection keep its explicit label when
+        # inventory only repeats the stable node id.
+        if effective_name == node_id:
+            effective_name = ""
         display: dict[str, Any] = {}
         if effective_name:
             display["node_label"] = effective_name
