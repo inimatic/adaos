@@ -214,6 +214,28 @@ def test_call_tool_rejects_reused_idempotency_key_with_different_payload(monkeyp
     assert calls == ["notebook_skill:save_note"]
 
 
+def test_call_tool_replays_idempotent_http_errors_with_replay_header(monkeypatch) -> None:
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+
+    body = tool_bridge_module.ToolCall(
+        tool="bad",
+        arguments={},
+        idempotency_key="idem-http-error",
+        request_id="req-http-error",
+    )
+
+    with pytest.raises(HTTPException) as first_exc:
+        asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+    with pytest.raises(HTTPException) as second_exc:
+        asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=_fake_ctx()))
+
+    assert first_exc.value.status_code == 400
+    assert first_exc.value.headers["X-AdaOS-Idempotency-Key"] == "idem-http-error"
+    assert second_exc.value.status_code == 400
+    assert second_exc.value.headers["X-AdaOS-Idempotency-Replay"] == "1"
+    assert second_exc.value.detail == first_exc.value.detail
+
+
 def test_call_tool_prepares_workspace_runtime_before_single_mutation(monkeypatch) -> None:
     calls: list[str] = []
 

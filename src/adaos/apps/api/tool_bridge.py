@@ -585,10 +585,12 @@ def _tool_call_idempotency_replay(entry: dict[str, Any], response: Response) -> 
     if kind == "result":
         return copy.deepcopy(entry.get("result"))
     if kind == "http_error":
+        headers = copy.deepcopy(entry.get("headers") or {}) or {}
+        headers["X-AdaOS-Idempotency-Replay"] = "1"
         raise HTTPException(
             status_code=int(entry.get("status_code") or 500),
             detail=copy.deepcopy(entry.get("detail")),
-            headers=copy.deepcopy(entry.get("headers")),
+            headers=headers,
         )
     raise HTTPException(
         status_code=500,
@@ -1332,6 +1334,12 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
     try:
         result = await _call_tool_impl(body, request, response, ctx)
     except HTTPException as exc:
+        try:
+            headers = dict(exc.headers or {})
+            headers.setdefault("X-AdaOS-Idempotency-Key", key)
+            exc.headers = headers
+        except Exception:
+            pass
         _tool_call_idempotency_store_http_error(entry, exc)
         raise
     except Exception as exc:
