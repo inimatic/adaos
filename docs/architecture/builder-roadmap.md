@@ -1325,6 +1325,14 @@ Autonomy, evidence, and acceptance:
   Skill Factory worker regressions pass 105/105. Historical lossy records are
   retained as provenance; new question-mark/replacement corruption is rejected
   before model submission.
+- [x] Core commits `20319201` and `6088aa2b` harden the final local Preview
+  verification path: one-shot UI navigation and materialization remain on the
+  Yjs owner thread, resolver inputs are deeply detached before persistent CPU
+  execution, and the real CLI restored `proto: test04_recipes · UI 003`
+  without the prior cross-thread YDoc finalizer failure. The expanded run also
+  preserves explicit remote-node labels when inventory contains only a node-id
+  default; relevant regressions pass 63/63 and full Webspace Phase 2 passes
+  113/113.
 
 ## Cross-Document Anchors
 

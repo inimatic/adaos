@@ -6,7 +6,8 @@ remain unproven.
 
 ## Accepted local baseline
 
-- Core checkout: branch `rev2026`, commits through `5c20e5fe` in this slice.
+- Core checkout: branch `rev2026`, implementation commits through `6088aa2b`
+  in this slice.
 - DEV Builder skill: `0.3.32`, Forge commit
   `36d71c044cfaad6f00e2eafd3c529dfc3f968f2c`.
 - Workspace Builder skill: `0.3.27`.
@@ -103,6 +104,13 @@ The test workspace was then restored to
 `proto: test04_recipes · UI 003`. Preview selection did not perform a business
 workflow transition.
 
+The same exact selection was repeated through the one-shot CLI after hardening
+the Yjs ownership boundary. UI-navigation tools stay on their caller thread,
+nested YMap/YArray values are detached before CPU work, and one-shot
+materialization does not enter the persistent executor. The command exited
+cleanly without the former `YDoc ... dropped on another thread` diagnostic;
+ordinary non-UI tools retain their bounded executor timeout.
+
 ## Model and Codex context audit
 
 Prototype LLM receives the complete current `webui.json`, project memory,
@@ -155,6 +163,12 @@ UTF-8 JSON file or ASCII JSON with `\uXXXX`, never a PowerShell text pipeline.
 - Live Telegram: text ingress, Builder reply, UTF-8, and human-visible inline
   controls.
 - Live Preview: exact Prototype, Automation, Publication, and restoration.
+- One-shot Preview ownership regression: caller-thread UI navigation, detached
+  resolver inputs, owner-thread one-shot materialization, and a clean real CLI
+  process exit.
+- Materialization/DEV tool regression: 63/63 checks plus the complete 113/113
+  `test_webspace_phase2.py` suite. The run also exposed and closed an unrelated
+  stale inventory-name override that hid explicit remote-node labels.
 
 ## Open risks and next gates
 
@@ -169,7 +183,3 @@ UTF-8 JSON file or ASCII JSON with `\uXXXX`, never a PowerShell text pipeline.
   convergence proofs.
 - GWR6-16: durable per-hub Telegram ingress receipt/inbox.
 - Human wide/compact browser comparison and one mutating Telegram callback.
-- CLI one-shot `select_preview_target` succeeds but process shutdown prints a
-  Windows y_py thread-affinity diagnostic (`YDoc ... dropped on another
-  thread`). Preview state remained correct; the ownership/timeout execution
-  boundary still needs a dedicated repair and regression test.

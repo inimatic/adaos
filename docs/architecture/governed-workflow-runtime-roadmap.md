@@ -575,6 +575,11 @@ tests cover all legal and representative illegal paths.
   cover Russian/English `workflow.json`/statechart corrections and a visual
   process-panel counterexample; the Prototype LLM has no workflow-definition
   write path.
+- [x] `[must]` `GWR4-26` Keep one-shot Preview materialization within the Yjs
+  owner thread and detach all nested document values before bounded CPU work.
+  The real `select_preview_target` CLI path now exits cleanly after restoring
+  `proto: test04_recipes · UI 003`; persistent runtime materialization keeps
+  its bounded executor, and ordinary DEV tools keep their timeout contract.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
