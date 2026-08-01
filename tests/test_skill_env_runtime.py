@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -524,6 +525,75 @@ def test_run_dev_tool_respects_timeout(monkeypatch, tmp_path: Path) -> None:
         assert "timed out" in str(exc)
     else:  # pragma: no cover - regression guard
         raise AssertionError("expected run_dev_tool() to respect timeout_seconds")
+
+
+def test_run_dev_ui_navigation_oneshot_stays_on_caller_thread(monkeypatch, tmp_path: Path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
+    skill_dir = tmp_path / "skills" / "navigation_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = tmp_path / "resolved.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "source": str(skill_dir),
+                "version": "1.0.0",
+                "slot": "A",
+                "tools": {
+                    "select_preview": {
+                        "callable": "select_preview",
+                        "side_effects": "ui_navigation",
+                        "timeout_seconds": 120,
+                    }
+                },
+                "runtime": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeEnv:
+        def __init__(self, root: Path) -> None:
+            self._root = root
+
+        def data_root(self) -> Path:
+            return self._root / "data"
+
+        def build_slot_paths(self, _version: str | None, slot_name: str | None) -> SimpleNamespace:
+            runtime_root = self._root / "runtime" / str(slot_name or "A")
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            return SimpleNamespace(
+                skill_env_path=runtime_root / "skill_env.json",
+                skill_memory_path=runtime_root / "skill_memory.json",
+            )
+
+    monkeypatch.setattr(
+        mgr,
+        "dev_runtime_status",
+        lambda _name: {
+            "version": "1.0.0",
+            "active_slot": "A",
+            "resolved_manifest": str(manifest_path),
+            "ready": True,
+        },
+    )
+    monkeypatch.setattr(mgr, "_runtime_env_dev", lambda _name: _FakeEnv(tmp_path))
+    monkeypatch.setattr(mgr, "_persist_skill_env", lambda *_args, **_kwargs: None)
+    observed_threads: list[int] = []
+
+    def _execute(*_args, **_kwargs):
+        observed_threads.append(threading.get_ident())
+        return {"thread": threading.get_ident()}
+
+    monkeypatch.setattr(skill_manager_module, "execute_tool", _execute)
+    monkeypatch.setenv("ADAOS_DEV_TOOL_EXECUTION_MODE", "oneshot")
+
+    caller_thread = threading.get_ident()
+    result = mgr.run_dev_tool("navigation_skill", "select_preview", {})
+
+    assert observed_threads == [caller_thread]
+    assert result == {"thread": caller_thread}
 
 
 def test_run_tool_resolves_async_tool_before_context_cleanup(tmp_path: Path, monkeypatch) -> None:

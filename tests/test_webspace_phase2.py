@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import time
 import types
 import importlib
@@ -4098,6 +4099,64 @@ def test_phase4_collect_resolver_inputs_does_not_refresh_projection_registry(mon
 
     assert inputs.scenario_id == "web_desktop"
     assert projection_calls == []
+
+
+def test_materialization_cpu_oneshot_stays_on_owner_thread(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_DEV_TOOL_EXECUTION_MODE", "oneshot")
+    owner_thread = threading.get_ident()
+
+    observed_thread = asyncio.run(
+        webspace_runtime_module._run_materialization_cpu(threading.get_ident)
+    )
+
+    assert observed_thread == owner_thread
+
+
+def test_collect_resolver_inputs_detaches_nested_doc_values_before_worker(monkeypatch) -> None:
+    class _DocMap:
+        def __init__(self, values: dict[str, object]) -> None:
+            self._values = values
+
+        def get(self, key: str):
+            return self._values.get(key)
+
+        def items(self):
+            return self._values.items()
+
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    monkeypatch.setattr(runtime, "_collect_skill_decls", lambda mode="mixed": [])
+    monkeypatch.setattr(runtime, "_list_desktop_scenarios", lambda space="mixed": [])
+    monkeypatch.setattr(webspace_runtime_module, "_preserve_live_state_on_rebuild_enabled", lambda: True)
+    monkeypatch.setattr(
+        webspace_runtime_module.scenarios_loader,
+        "read_content",
+        lambda scenario_id, space="workspace": {
+            "id": scenario_id,
+            "ui": {"application": {"desktop": {"pageSchema": {"id": "detached"}}}},
+            "catalog": {},
+            "registry": {},
+        },
+    )
+    nested_doc_value = _DocMap({"dialog": _DocMap({"title": "Detached"})})
+    fake_doc = _FakeDoc(
+        {
+            "ui": _FakeMap(
+                {
+                    "current_scenario": "web_desktop",
+                    "application": _DocMap({"modals": nested_doc_value}),
+                    "scenarios": {},
+                }
+            ),
+            "data": _FakeMap({"scenarios": {}}),
+            "registry": _FakeMap({"scenarios": {}}),
+        }
+    )
+
+    inputs = runtime._collect_resolver_inputs_in_doc(fake_doc, "detached-inputs")
+
+    assert inputs.live_state["application"]["modals"] == {"dialog": {"title": "Detached"}}
+    assert not isinstance(inputs.live_state["application"]["modals"], _DocMap)
+    assert not isinstance(inputs.live_state["application"]["modals"]["dialog"], _DocMap)
 
 
 def test_phase_pointer_collect_resolver_inputs_prefers_loader_payload_over_legacy_yjs(monkeypatch) -> None:

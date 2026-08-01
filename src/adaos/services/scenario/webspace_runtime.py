@@ -3931,6 +3931,13 @@ def _shutdown_materialization_cpu_executor() -> None:
 
 
 async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+    # CLI one-shot execution has no persistent owner loop.  Running a resolver
+    # that still holds any y_py-backed value in the shared CPU executor can
+    # make its YDoc finalize on the worker thread during interpreter shutdown.
+    # Keep this rare diagnostic/control path single-threaded; persistent API
+    # runtimes continue to use the bounded executor.
+    if str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() == "oneshot":
+        return function(*args, **kwargs)
     loop = asyncio.get_running_loop()
     call = partial(function, *args, **kwargs)
     return await loop.run_in_executor(_get_materialization_cpu_executor(), call)
@@ -5795,28 +5802,41 @@ class WebspaceScenarioRuntime:
         _record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
         self._last_collect_inputs_timings_ms = collect_timings
 
+        # Resolver work continues in the materialization CPU executor.  Never
+        # let thread-affine y_py values escape the owner loop through this
+        # boundary: shallow ``dict(...)`` conversion can retain nested YMap or
+        # YArray objects and make their parent YDoc finalize on the worker.
+        detached_live_state = _coerce_dict(
+            _clone_json_like(
+                {
+                    "application": live_application,
+                    "catalog": live_catalog,
+                    "registry": live_registry,
+                    "desktop": live_desktop,
+                    "routing": live_routing,
+                }
+            )
+        )
+        detached_skill_decls = _clone_json_like(skill_decls)
+
         return WebspaceResolverInputs(
             webspace_id=webspace_id,
             scenario_id=str(scenario_id),
             source_mode=mode,
-            metadata=metadata,
-            scenario_application=scenario_app_ui,
-            scenario_catalog=base_catalog,
-            scenario_registry=registry_entry,
-            overlay_snapshot=overlay_snapshot,
-            live_state={
-                "application": live_application,
-                "catalog": live_catalog,
-                "registry": live_registry,
-                "desktop": live_desktop,
-                "routing": live_routing,
-            },
+            metadata=_coerce_dict(_clone_json_like(metadata)),
+            scenario_application=_coerce_dict(_clone_json_like(scenario_app_ui)),
+            scenario_catalog=_coerce_dict(_clone_json_like(base_catalog)),
+            scenario_registry=_coerce_dict(_clone_json_like(registry_entry)),
+            overlay_snapshot=_coerce_dict(_clone_json_like(overlay_snapshot)),
+            live_state=detached_live_state,
             compatibility_cache_presence={
                 "scenario_ui_application": bool(scenario_ui_application),
                 "scenario_registry_entry": bool(scenario_registry_entry),
                 "scenario_catalog": bool(scenario_catalog),
             },
-            skill_decls=skill_decls,
+            skill_decls=[dict(item) for item in detached_skill_decls if isinstance(item, Mapping)]
+            if isinstance(detached_skill_decls, list)
+            else [],
             skill_decls_fingerprint=skill_decls_fingerprint,
             desktop_scenarios=desktop_scenarios,
             scenario_source=scenario_source,

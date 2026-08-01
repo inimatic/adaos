@@ -117,6 +117,21 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "write", "mutate"}
 
 
+def _dev_tool_requires_caller_thread(tool_spec: Mapping[str, Any] | None) -> bool:
+    """Keep thread-affine UI/Yjs state on the CLI one-shot caller thread."""
+
+    if str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() != "oneshot":
+        return False
+    spec = _mapping_or_empty(tool_spec)
+    side_effects = str(
+        spec.get("side_effects")
+        or spec.get("sideEffects")
+        or _mapping_or_empty(spec.get("yjs_governance") or spec.get("yjs")).get("side_effects")
+        or ""
+    ).strip().lower()
+    return side_effects == "ui_navigation"
+
+
 def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -3031,7 +3046,7 @@ class SkillManager:
         try:
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
-            if execution_timeout:
+            if execution_timeout and not _dev_tool_requires_caller_thread(tool_spec):
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
                 from contextvars import copy_context
 
