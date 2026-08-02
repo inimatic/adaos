@@ -832,7 +832,10 @@ def submit_response(
             "source_message_ref": copy.deepcopy(dict(metadata or {}).get("source_message_ref")) if isinstance(dict(metadata or {}).get("source_message_ref"), Mapping) else None,
             "consumed_command": (
                 {
+                    "action_id": resolved_action["action_id"],
+                    "label": resolved_action["label"],
                     "command": resolved_action["command"],
+                    "value": copy.deepcopy(resolved_action.get("value")),
                     "target_ref": copy.deepcopy(resolved_action.get("target_ref")),
                     "expected_generation": int(resolved_action["expected_generation"]),
                     "risk": resolved_action["risk"],

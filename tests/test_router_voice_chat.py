@@ -3975,9 +3975,26 @@ async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(m
     ]
 
 
+def test_text_fallback_does_not_edit_the_user_message() -> None:
+    assert router_service_module._telegram_interaction_consumed_projection(
+        {"interaction_id": "interaction.text", "prompt": "Choose"},
+        {
+            "response_id": "response.text",
+            "consumed_command": {"command": "builder.project.select", "label": "Choose recipes"},
+            "metadata": {
+                "io_type": "telegram",
+                "chat_id": "42",
+                "reply_to": 901,
+                "text_fallback": True,
+            },
+        },
+    ) is None
+
+
 async def test_builder_interaction_response_dispatches_to_authoritative_dev_runtime(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict]] = []
+    outputs: list[Event] = []
 
     class _Manager:
         def __init__(self, **_kwargs):
@@ -4009,6 +4026,7 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
 
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
     bus.publish(
         Event(
             type="conversation.interaction.responded",
@@ -4018,6 +4036,7 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
                 "interaction": {
                     "interaction_id": "interaction.builder",
                     "conversation_id": "conv.builder",
+                    "prompt": "Конструктор: проекты в разработке:\n- Recipes (recipes)",
                     "metadata": {
                         "domain": "builder",
                         "project_ref": "scenario:builder",
@@ -4027,8 +4046,22 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
                 },
                 "response": {
                     "response_id": "response.builder",
-                    "consumed_command": {"command": "builder.change.plan"},
-                    "metadata": {"io_type": "telegram", "route_id": "telegram", "chat_id": "42"},
+                    "consumed_command": {
+                        "action_id": "select-recipes",
+                        "label": "Выбрать recipes",
+                        "command": "builder.project.select",
+                        "value": "recipes",
+                        "target_ref": {"kind": "scenario", "id": "recipes", "title": "Recipes"},
+                    },
+                    "metadata": {
+                        "io_type": "telegram",
+                        "route_id": "telegram",
+                        "bot_id": "main-bot",
+                        "hub_id": "sn-test",
+                        "chat_id": "42",
+                        "telegram_source_message_id": 900,
+                        "telegram_callback_query_id": "callback-3230",
+                    },
                 },
                 "duplicate": False,
             },
@@ -4040,3 +4073,16 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
     assert calls[0][0:2] == ("builder_skill", "handle_interaction_response")
     assert calls[0][2]["webspace_id"] == "dev1-dev"
     assert calls[0][2]["_meta"]["source_webspace_id"] == "dev1"
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"] == [
+        {
+            "type": "text",
+            "text": "Конструктор: проекты в разработке:\n- Recipes (recipes)\n\n✓ Выбрано: Recipes (recipes)",
+        }
+    ]
+    assert outputs[0].payload["options"] == {
+        "edit_message_id": 900,
+        "callback_query_id": "callback-3230",
+    }
+    assert outputs[0].payload["_protocol"]["presentation_state"] == "consumed"

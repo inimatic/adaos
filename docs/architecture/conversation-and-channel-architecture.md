@@ -144,6 +144,12 @@ Implemented today:
   2026-08-01 acceptance returned five Telegram inline actions from the same
   presentation used by Web; the backend relay preserves a validated
   `reply_markup.inline_keyboard` rather than reconstructing actions.
+- A typed callback carries the bot-authored source message ref into the
+  `InteractionResponse`. Once the response is stored, Telegram acknowledges
+  the callback and edits that exact message into a consumed presentation:
+  prompt retained, keyboard removed, and `selected` summary appended. The
+  following command outcome remains a separate response. A text fallback has
+  no edit authority over the user's message.
 
 Important gaps:
 
@@ -299,6 +305,14 @@ new message, updates an existing status card, remains evidence-only, or changes
 only a projection. The decision and coalescing key are persisted with the
 envelope; delivery after restart does not re-run attention classification from
 new transient client state.
+
+An actionable Interaction presentation is an update-in-place attention item,
+not an append-only menu. A successful typed response terminally consumes the
+displayed generation. Transports with mutable bot-authored messages replace
+its controls with a bounded selection receipt; immutable transports append an
+equivalent receipt. Presentation consumption is idempotent and must not repeat
+the command. It records what the user selected, not that the downstream effect
+succeeded; success, failure, or `input_required` is materialized separately.
 
 ### Telegram ingress acceptance boundary
 

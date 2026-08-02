@@ -179,8 +179,13 @@ UTF-8 JSON file or ASCII JSON with `\uXXXX`, never a PowerShell text pipeline.
 ## Executed checks
 
 - DEV Builder skill: 159/159 tests.
-- Telegram backend callback/relay contract: 13/13 focused tests.
+- Telegram backend callback/relay/edit contract: 17/17 focused tests.
 - Core dialog action-ingress contract: 7/7 focused tests.
+- The 2026-08-02 consumed-presentation increment carries source message and
+  callback refs through `InteractionResponse`, acknowledges the callback, and
+  replaces the exact bot message with its prompt plus `✓ Выбрано: …`; buttons
+  are removed without repeating the selected command. Text fallbacks cannot
+  edit user-authored messages.
 - DEV Builder scenario: 14/14 tests; strict skill and scenario validation pass.
 - Context/worker/Automation group: 105/105 tests.
 - Governed coordination contracts: 44/44 focused tests.

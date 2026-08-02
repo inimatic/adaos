@@ -55,7 +55,7 @@ def _telegram_action_envelope(token: str) -> dict:
             "update_id": "101",
             "payload": {
                 "action": {"id": token},
-                "meta": {"msg_id": 56},
+                "meta": {"msg_id": 56, "callback_query_id": "callback-101"},
             },
         },
     }
@@ -243,6 +243,14 @@ async def test_telegram_callback_resumes_durable_interaction_without_nlu(monkeyp
     assert len(responses) == 1
     assert responses[0].payload["response"]["source"] == "action"
     assert responses[0].payload["response"]["values"]["choice"] == "prototype"
+    assert responses[0].payload["response"]["metadata"]["telegram_source_message_id"] == 56
+    assert responses[0].payload["response"]["metadata"]["telegram_callback_query_id"] == "callback-101"
+    assert responses[0].payload["response"]["source_message_ref"] == {
+        "transport": "telegram",
+        "bot_id": "main-bot",
+        "chat_id": "42",
+        "message_id": "56",
+    }
 
 
 async def test_legacy_raw_action_token_never_enters_builder_dialog(monkeypatch) -> None:

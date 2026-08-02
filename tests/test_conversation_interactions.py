@@ -147,6 +147,9 @@ def test_chat_request_is_durable_materializes_actions_and_resumes_by_token() -> 
     assert answered["response"]["values"]["choice"] == "prototype"
     assert answered["response"]["presentation_id"] == result["presentation"]["presentation_id"]
     assert answered["response"]["consumed_command"]["command"] == "builder.change.route"
+    assert answered["response"]["consumed_command"]["action_id"] == "prototype"
+    assert answered["response"]["consumed_command"]["label"] == "Prototype first"
+    assert answered["response"]["consumed_command"]["value"] == "prototype"
     assert duplicate["duplicate"] is True
     assert conversation_store.get_interaction("interaction.builder.route")["status"] == "answered"
 

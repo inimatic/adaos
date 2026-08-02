@@ -179,9 +179,20 @@ def _extract_action_io_input(env: Mapping[str, Any]) -> tuple[str | None, dict[s
     msg_id = msg_meta.get("msg_id")
     try:
         if msg_id is not None and str(msg_id).strip():
-            metadata["reply_to"] = int(msg_id)
+            source_message_id = int(msg_id)
+            metadata["reply_to"] = source_message_id
+            metadata["telegram_source_message_id"] = source_message_id
+            metadata["source_message_ref"] = {
+                "transport": "telegram",
+                "bot_id": bot_id,
+                "chat_id": chat_id,
+                "message_id": str(source_message_id),
+            }
     except (TypeError, ValueError):
         pass
+    callback_query_id = _text(msg_meta.get("callback_query_id"))
+    if callback_query_id:
+        metadata["telegram_callback_query_id"] = callback_query_id
     lang = _text(msg_meta.get("lang"))
     if lang:
         metadata["lang"] = lang

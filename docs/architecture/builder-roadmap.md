@@ -1002,7 +1002,9 @@ Commands, projections, and Workbench:
 - [ ] `[should]` Render typed deterministic actions as Telegram inline
   callbacks with generation/precondition checks, and persist per-attempt
   delivery receipts. Inline callback rendering, opaque action-token ingress,
-  generation checks, and idempotent response persistence are implemented;
+  generation checks, idempotent response persistence, callback acknowledgement,
+  and consumed-message replacement are implemented. The bot-authored prompt is
+  retained, its keyboard is removed, and the exact selection is appended;
   per-attempt outbound delivery receipts remain open.
 - [ ] `[must]` Project a mutating control only when its declared effect/activity
   executor is registered and ready. The current-project migration exposes only
