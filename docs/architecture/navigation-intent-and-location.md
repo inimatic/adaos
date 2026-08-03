@@ -90,6 +90,11 @@ choices. `input_required` never silently changes zone, subnet, Webspace, or
 scenario. A copied link therefore cannot mutate workflow state merely because
 it was opened.
 
+`webspace_id` inside `webspace.open` is a destination, not a bootstrap query.
+The Yjs client must not enter that room while zone/subnet resolution is still
+pending. It starts from the current safe context and calls the normal Webspace
+switch command only after the user accepts the preceding topology decisions.
+
 If authentication is absent, the client presents login but preserves the
 complete `webspace.open` destination. Successful login continues resolution;
 it does not discard the requested subnet/Webspace. One-time registration
@@ -111,6 +116,12 @@ Builder obtains the authoritative relation from
 Opening it from another subnet first explains the mismatch. A user may switch
 to the referenced subnet, cancel, or keep the current context. The link does
 not assume that the Telegram-bound subnet is also the browser's active subnet.
+
+Builder also reports the source Webspace and its related Preview Webspace in
+project/current/Preview-link responses. A Telegram conversation without an
+explicit trusted Webspace binding is labelled as a persisted dialog scope;
+selecting a Project changes that conversation focus but does not silently
+claim or switch a browser Webspace.
 
 ## Address Bar And Browser History
 
@@ -149,19 +160,28 @@ The 2026-08-03 local slice includes:
 - Builder SDK tests proving full Preview expectations in the URL;
 - AdaOS Connect tests proving SDK-owned registration destinations;
 - backend TypeScript compilation after removal of legacy `mode` generation;
-- client navigation/login tests (36/36), App tests (113/113), YDoc tests
-  (111/111), Desktop tests (26/26), and a successful Ionic build;
+- client Navigation/App/YDoc regression tests (228/228), including the exact
+  `ruhub` to `sn_6acf0c01` same-zone mismatch, and a successful Ionic build;
 - localized English/Russian navigation explanations; no new shell-written
   Cyrillic fixtures;
-- published `adaos_connect@0.16.5`, DEV `builder_skill@0.3.35`, and Workspace
-  `builder_skill@0.3.29`; both Builder runtimes are active locally;
+- published `adaos_connect@0.16.5`, DEV `builder_skill@0.3.36`, and Workspace
+  `builder_skill@0.3.30`; both Builder runtimes are active locally;
 - live calls through the real tool bridge: Workspace Builder resolved
   `desktop-dev` / `builder` / Prototype `047`, while DEV Builder resolved
   `dev1-dev` / `test04_recipes` / Prototype `003`. Both destinations used
   `zone=ru`, `subnet_id=sn_6acf0c01`, `space_kind=development`, and
   authenticated `openUrl` actions;
-- 61/61 focused core/SDK/publication tests and 159/159 tests against each of
+- 61/61 focused core/SDK/publication tests and 160/160 tests against each of
   the DEV and published Workspace Builder copies.
+
+The production-client correction is commit `e10e3e8`: the previous feature
+branch had not reached `main`, so Firebase still served a client that ignored
+the new intent and treated `webspace_id` as an immediate startup room. The
+corrected client both deploys the resolver from `main` and prevents destination
+room admission before consent. Firebase Hosting and Notify Infra runs
+`30811335897` and `30811335892` completed successfully; the live hashed bundle
+contains the canonical destination schema, `webspace.open`, and
+`subnet_mismatch` resolver reason.
 
 Publication also proved the Windows lock recovery path. Artifact activation
 keeps a staged source and rollback copy, prefers a whole-directory atomic swap,

@@ -1379,6 +1379,14 @@ Autonomy, evidence, and acceptance:
   Builder copies pass 159/159. Windows publication now falls back from either
   locked directory-swap boundary to transactional file-atomic activation with
   rollback, without replaying Forge/registry mutation.
+- [x] The 2026-08-03 production acceptance correction makes Builder report its
+  source and Preview Webspaces explicitly and labels an unbound Telegram
+  context as conversation-scoped rather than browser-global. DEV
+  `builder_skill@0.3.36` and Workspace `builder_skill@0.3.30` pass 160/160.
+  Client commit `e10e3e8` covers the exact same-zone `ruhub` to
+  `sn_6acf0c01` mismatch, keeps destination `webspace_id` out of Yjs bootstrap
+  until consent, passes 228/228 Navigation/App/YDoc tests, and builds for
+  production.
 
 ## Cross-Document Anchors
 
