@@ -530,7 +530,7 @@ def navigation_link(
         zone=zone,
         subnet_id=subnet_id,
         webspace_id=preview_webspace_id,
-        space_kind="preview",
+        space_kind="development",
         expected_scenario_id=(
             str(target.get("object_id") or "").strip() or None
             if object_type == "scenario"

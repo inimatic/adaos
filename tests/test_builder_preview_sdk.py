@@ -101,7 +101,7 @@ def test_navigation_link_uses_shared_sdk_and_preserves_preview_expectations(monk
 
     assert result["url"] == (
         "https://inimatic.com/?intent=webspace.open&zone=ru&subnet_id=sn_6acf0c01"
-        "&webspace_id=dev1-dev&space_kind=preview&expected_scenario_id=recipes"
+        "&webspace_id=dev1-dev&space_kind=development&expected_scenario_id=recipes"
         "&expected_revision=003&preview_stage=prototype"
     )
     assert result["destination"] == {
@@ -110,7 +110,7 @@ def test_navigation_link_uses_shared_sdk_and_preserves_preview_expectations(monk
         "zone": "ru",
         "subnet_id": "sn_6acf0c01",
         "webspace_id": "dev1-dev",
-        "space_kind": "preview",
+        "space_kind": "development",
         "expected_scenario_id": "recipes",
         "expected_revision": "003",
         "preview_stage": "prototype",
