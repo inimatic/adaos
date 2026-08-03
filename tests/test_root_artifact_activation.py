@@ -77,3 +77,32 @@ def test_file_atomic_activation_rolls_back_after_partial_failure(
     assert (target / "skill.yaml").read_text(encoding="utf-8") == "version: old\n"
     assert not staged.exists()
     assert not list(tmp_path.glob(".builder_skill.rollback-*"))
+
+
+def test_directory_activation_falls_back_when_staged_directory_install_is_locked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "builder_skill"
+    staged = tmp_path / ".builder_skill.staged"
+    _write(target / "handlers" / "main.py", "old")
+    _write(target / "obsolete.txt", "remove")
+    _write(staged / "handlers" / "main.py", "new")
+    _write(staged / "workflow.json", "{}")
+    original_replace = Path.replace
+
+    def locked_staged_directory_replace(path: Path, destination: Path) -> Path:
+        if path == staged and destination == target:
+            raise PermissionError(32, "directory is in use", str(path))
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", locked_staged_directory_replace)
+
+    root_service._replace_directory_transactionally(staged, target)
+
+    assert (target / "handlers" / "main.py").read_text(encoding="utf-8") == "new"
+    assert (target / "workflow.json").read_text(encoding="utf-8") == "{}"
+    assert not (target / "obsolete.txt").exists()
+    assert not staged.exists()
+    assert not list(tmp_path.glob(".builder_skill.backup-*"))
+    assert not list(tmp_path.glob(".builder_skill.rollback-*"))

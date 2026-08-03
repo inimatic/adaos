@@ -693,6 +693,28 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
         try:
             staged.replace(target)
             activated = True
+        except PermissionError as activation_error:
+            # A directory handle can also prevent Windows from installing the
+            # staged directory after the old copy was moved successfully. Put
+            # the old copy back before using the same file-atomic fallback;
+            # otherwise the fallback would have no rollback baseline.
+            if target_moved:
+                try:
+                    backup.replace(target)
+                    target_moved = False
+                except Exception as rollback_error:
+                    raise RootServiceError(
+                        "Artifact activation failed and rollback could not restore the previous copy; "
+                        f"backup retained at {backup}: {type(rollback_error).__name__}: {rollback_error}"
+                    ) from activation_error
+            _log.warning(
+                "staged artifact directory activation is locked; using file-atomic activation target=%s: %s",
+                target,
+                activation_error,
+            )
+            _replace_directory_contents_transactionally(staged, target)
+            activated = True
+            return
         except Exception as activation_error:
             if target_moved:
                 try:
