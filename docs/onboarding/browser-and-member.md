@@ -22,7 +22,7 @@ Both flows eventually appear in the device access model described in
 2. Open the client:
 
    ```text
-   https://inimatic.com/?zone=ru&mode=login
+   https://inimatic.com/?intent=auth.login&zone=ru
    ```
 
 3. For diagnostic or local development sessions, use:

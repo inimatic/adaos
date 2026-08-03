@@ -459,7 +459,7 @@ Role не должен быть profile field. Role и membership принадл
 settings API для profile, locale, timezone, theme, membership и device context.
 AdaOS Connect также показывает owner/admin surface для join, device pairing,
 recovery, grants и revoke. Guest/targeted links расширяют AdaOS Connect flow
-`mode=registration&user_code=...&zone=...`: root хранит invite parameters во
+`intent=connect.register&user_code=...&zone=...`: root хранит invite parameters во
 временной purpose-tagged code session, а URL несет только code и zone. Более
 глубокое privacy-zone enforcement и skill/tool SDK enforcement остаются
 отдельными фазами roadmap.

@@ -45,7 +45,7 @@ Invite URLs теперь используют AdaOS Connect code flow, а не �
 subnet и root hub endpoint прямо в URL. Видимая браузеру ссылка:
 
 ```text
-https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru
+https://inimatic.com/?intent=connect.register&user_code=DF0B-2729&zone=ru
 ```
 
 Root хранит invite payload в том же temporary `device_code:*` session space,

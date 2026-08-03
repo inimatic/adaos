@@ -78,6 +78,9 @@ clean-stand or multi-user production acceptance claim.
   context packets, semantic UI changes, and future collaboration seams.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
+- [Navigation Intent And Location](navigation-intent-and-location.md) defines
+  cross-zone/subnet/Webspace links shared by AdaOS Connect, Builder, and other
+  skills.
 - Checked items mean an implementation slice exists, not necessarily full
   product maturity.
 - Every checklist item carries a four-level MoSCoW-style priority label.
@@ -123,7 +126,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, canonical cross-topology navigation, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -980,6 +983,20 @@ Commands, projections, and Workbench:
 - [x] `[must]` Preserve rich Web project/file search, artifact browsing, diff,
   and spatial Preview behavior. Limited channels receive compact status,
   deterministic actions, and context-preserving deep links.
+- [x] `[must]` Replace URL `mode` with the versioned
+  `NavigationDestination` intent contract. Core/SDK owns validation, URL
+  construction, and ordered explainable resolution; AdaOS Connect and Builder
+  are thin producers. Builder Preview links carry zone, subnet, opaque
+  Webspace, development/workspace boundary, scenario, revision, and stage.
+  The client checks zone -> authentication -> subnet -> Webspace -> source
+  boundary -> fresh sync -> scenario, and never changes context without the
+  declared user decision. See
+  [Navigation Intent And Location](navigation-intent-and-location.md).
+- [ ] `[should]` Add canonical `NavigationLocation` address-bar projection:
+  `pushState` for semantic user navigation, `replaceState` for hydration,
+  normalization and secret removal, one `popstate` resolver, and a Copy Link
+  command built from resolved non-secret state. Browser Back navigates views;
+  it never compensates or repeats workflow effects.
 - [x] `[must]` Route Telegram text through the same neutral
   `dialog.user_message` and Builder dialog contract as Web instead of invoking
   NLU directly. Preserve transport reply metadata and project topic context,

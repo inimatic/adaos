@@ -32,6 +32,12 @@ Builder is a **chat-first, state-backed development control plane**.
   decisions of one Change, not independent top-level work queues.
 - Git records source history, but the product-level Change graph is expressed
   with AdaOS identities, source digests, evidence, and decisions.
+- Cross-channel navigation is expressed as a typed destination, not as a
+  transport-specific URL mode. AdaOS Connect and Builder delegate link
+  construction to the shared Navigation SDK; the client resolves zone,
+  authentication, subnet, Webspace, source boundary, synchronization, and
+  scenario explicitly. See
+  [Navigation Intent And Location](navigation-intent-and-location.md).
 
 `Automation` remains the compatibility name of the current internal execution
 lane. User-facing surfaces should prefer **Implementation**. Migration must not

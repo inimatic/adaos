@@ -256,7 +256,7 @@ The full list of client URL parameters lives in
 `src/adaos/integrations/adaos-client/README.md#client-url-parameters`.
 
 ```text
-https://inimatic.com/?zone=ru&mode=login&auto_login=1
+https://inimatic.com/?intent=auth.login&zone=ru&auto_login=1
 https://inimatic.com/?boot_debug=1
 https://inimatic.com/?runtime_debug=0
 https://inimatic.com/?yjs_persist=0
