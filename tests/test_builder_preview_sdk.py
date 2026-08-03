@@ -21,7 +21,11 @@ class _Workbench:
         return value or "desktop"
 
     def get_workspace_binding(self, _source):
-        return {"preview_target": dict(self.target), "selection": dict(self.selection)}
+        return {
+            "preview_target": dict(self.target),
+            "selection": dict(self.selection),
+            "preview_webspace_id": "dev1-dev",
+        }
 
     def set_preview_target(self, *, source_webspace_id, target):
         self.set_calls.append({"source_webspace_id": source_webspace_id, "target": dict(target)})
@@ -83,3 +87,31 @@ def test_refresh_follow_active_target_preserves_explicit_snapshot(monkeypatch) -
     assert result["skipped"] == "preview_target_not_following_active"
     assert result["binding"]["preview_target"]["revision"] == "003"
     assert service.set_calls == []
+
+
+def test_navigation_link_uses_shared_sdk_and_preserves_preview_expectations(monkeypatch) -> None:
+    service = _Workbench()
+    monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.navigation.runtime_scope",
+        lambda: {"zone": "ru", "subnet_id": "sn_6acf0c01"},
+    )
+
+    result = preview.navigation_link("dev1", base_url="https://inimatic.com")
+
+    assert result["url"] == (
+        "https://inimatic.com/?intent=webspace.open&zone=ru&subnet_id=sn_6acf0c01"
+        "&webspace_id=dev1-dev&space_kind=preview&expected_scenario_id=recipes"
+        "&expected_revision=003&preview_stage=prototype"
+    )
+    assert result["destination"] == {
+        "schema": "adaos.navigation.destination.v1",
+        "intent": "webspace.open",
+        "zone": "ru",
+        "subnet_id": "sn_6acf0c01",
+        "webspace_id": "dev1-dev",
+        "space_kind": "preview",
+        "expected_scenario_id": "recipes",
+        "expected_revision": "003",
+        "preview_stage": "prototype",
+    }

@@ -503,6 +503,53 @@ def public_app_base() -> str:
         return "https://inimatic.com"
 
 
+def navigation_link(
+    source_webspace_id: str | None = None,
+    *,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """Build a topology-aware Preview destination through Navigation SDK."""
+
+    from adaos.sdk import navigation
+
+    source = canonical_source_webspace_id(source_webspace_id)
+    binding = get_binding(source)
+    preview_webspace_id = str(
+        binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+    ).strip()
+    if not preview_webspace_id:
+        raise RuntimeError("Builder preview relation is missing")
+    target = _plain(binding.get("preview_target"))
+    scope = navigation.runtime_scope()
+    zone = str(scope.get("zone") or "").strip()
+    subnet_id = str(scope.get("subnet_id") or "").strip()
+    if not zone or not subnet_id:
+        raise RuntimeError("Builder Preview navigation requires zone and subnet identity")
+    object_type = str(target.get("object_type") or "").strip().lower().rstrip("s")
+    destination = navigation.webspace_destination(
+        zone=zone,
+        subnet_id=subnet_id,
+        webspace_id=preview_webspace_id,
+        space_kind="preview",
+        expected_scenario_id=(
+            str(target.get("object_id") or "").strip() or None
+            if object_type == "scenario"
+            else None
+        ),
+        expected_revision=str(target.get("revision") or "").strip() or None,
+        preview_stage=str(target.get("stage") or "").strip() or None,
+    )
+    return {
+        "schema": "adaos.builder.preview_navigation.v1",
+        "url": navigation.build_url(destination, base_url=base_url or public_app_base()),
+        "destination": destination,
+        "preview_webspace_id": preview_webspace_id,
+        "source_webspace_id": source,
+        "target": target,
+        "label": str(target.get("label") or "").strip() or f"preview: {preview_webspace_id}",
+    }
+
+
 # Compatibility operation names used by the existing Builder tool surface.
 get_workspace_binding = get_binding
 ensure_dev_webspace = ensure
@@ -606,6 +653,7 @@ __all__ = [
     "list_development_skills",
     "materialize_revision",
     "materialize_revision_async",
+    "navigation_link",
     "open_workspace",
     "public_app_base",
     "open_dev_webspace",
