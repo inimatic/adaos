@@ -152,5 +152,20 @@ The 2026-08-03 local slice includes:
 - client navigation/login tests (36/36), App tests (113/113), YDoc tests
   (111/111), Desktop tests (26/26), and a successful Ionic build;
 - localized English/Russian navigation explanations; no new shell-written
-  Cyrillic fixtures.
+  Cyrillic fixtures;
+- published `adaos_connect@0.16.5`, DEV `builder_skill@0.3.35`, and Workspace
+  `builder_skill@0.3.29`; both Builder runtimes are active locally;
+- live calls through the real tool bridge: Workspace Builder resolved
+  `desktop-dev` / `builder` / Prototype `047`, while DEV Builder resolved
+  `dev1-dev` / `test04_recipes` / Prototype `003`. Both destinations used
+  `zone=ru`, `subnet_id=sn_6acf0c01`, `space_kind=development`, and
+  authenticated `openUrl` actions;
+- 61/61 focused core/SDK/publication tests and 159/159 tests against each of
+  the DEV and published Workspace Builder copies.
 
+Publication also proved the Windows lock recovery path. Artifact activation
+keeps a staged source and rollback copy, prefers a whole-directory atomic swap,
+and falls back to file-atomic replacement when either removal of the live
+directory or installation of the staged directory is denied by an open handle.
+It never retries the remote push or another state-changing command; a partial
+local activation rolls back from the sibling copy.

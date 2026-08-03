@@ -1368,6 +1368,17 @@ Autonomy, evidence, and acceptance:
   handler, workflow, and test files are byte-identical; the Builder suite
   passes 159/159. Human verification of the newly deployed Telegram
   project-selection callback remains part of the production gate.
+- [x] The 2026-08-03 topology-safe deep-link slice replaces navigation URL
+  `mode` with the shared `NavigationDestination` intent ABI. AdaOS Connect is
+  published as `0.16.5`; Builder is active as DEV `0.3.35` and published
+  Workspace `0.3.29`. Live tool-bridge calls resolved Workspace Builder to
+  `desktop-dev / builder / UI 047` and DEV Builder to
+  `dev1-dev / test04_recipes / UI 003`, both in zone `ru`, subnet
+  `sn_6acf0c01`, with explicit authorization and the development source
+  boundary. Focused core/SDK/publication tests pass 61/61 and both complete
+  Builder copies pass 159/159. Windows publication now falls back from either
+  locked directory-swap boundary to transactional file-atomic activation with
+  rollback, without replaying Forge/registry mutation.
 
 ## Cross-Document Anchors
 

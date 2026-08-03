@@ -251,3 +251,19 @@ WorkspaceLock. Истиной версии исходника является Y
 - Недоступный `active:` или `public:` Preview объясняет отсутствие источника и
   не подменяется Desktop/другим сценарием.
 - Неверный UTF-8 отклоняется до LLM/Codex и не попадает в Clarification history.
+
+## Локальное доказательство навигации 2026-08-03
+
+- `adaos_connect@0.16.5`, DEV `builder_skill@0.3.35` и Workspace
+  `builder_skill@0.3.29` опубликованы и активированы на проверочной машине.
+- Реальный вызов Workspace Builder вернул назначение
+  `desktop-dev / builder / UI 047`; DEV Builder —
+  `dev1-dev / test04_recipes / UI 003`.
+- Обе ссылки содержат `intent=webspace.open`, `zone=ru`,
+  `subnet_id=sn_6acf0c01`, `space_kind=development`, точный сценарий и ревизию;
+  `mode` отсутствует, действие требует авторизацию.
+- Фокусный набор core/SDK/публикации прошёл 61/61 тест, полные наборы DEV и
+  Workspace Builder — по 159/159.
+- Публикация Workspace проверила транзакционное восстановление при блокировке
+  каталога Windows: изменяющая состояние команда не повторяется, локальная
+  активация использует staged copy, file-atomic fallback и rollback.
