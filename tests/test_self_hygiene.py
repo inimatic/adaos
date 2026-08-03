@@ -32,12 +32,28 @@ def test_apply_retention_policy_writes_linux_policy_files(monkeypatch, tmp_path:
     assert (etc_dir / "logrotate.d" / "adaos").exists()
     assert (systemd_dir / "adaos-hygiene.service").exists()
     assert (systemd_dir / "adaos-hygiene.timer").exists()
+    assert (systemd_dir / "adaos-hygiene-full.service").exists()
+    assert (systemd_dir / "adaos-hygiene-full.timer").exists()
+    tmpfiles_text = (etc_dir / "tmpfiles.d" / "adaos.conf").read_text(encoding="utf-8")
+    assert "R /tmp/pip-target-* - - - 3d" in tmpfiles_text
+    assert "R /tmp/pip-build-env-* - - - 3d" in tmpfiles_text
+    assert "R /tmp/adaos-rasa-nlu-* - - - 3d" in tmpfiles_text
+    assert "R /tmp/model*.crfsuite - - - 3d" in tmpfiles_text
+    assert "R /tmp/tmp*.wav - - - 3d" in tmpfiles_text
     service_text = (systemd_dir / "adaos-hygiene.service").read_text(encoding="utf-8")
     assert str(base_dir.resolve()) in service_text
     assert "ExecStart=/usr/local/bin/adaos maintenance run" in service_text
     assert " -m adaos " not in service_text
+    full_service_text = (systemd_dir / "adaos-hygiene-full.service").read_text(encoding="utf-8")
+    assert str(base_dir.resolve()) in full_service_text
+    assert "ExecStart=/usr/local/bin/adaos maintenance run --json" in full_service_text
+    assert "--pressure-only" not in full_service_text
+    full_timer_text = (systemd_dir / "adaos-hygiene-full.timer").read_text(encoding="utf-8")
+    assert "OnCalendar=Sun *-*-* 05:20:00 UTC" in full_timer_text
+    assert "RandomizedDelaySec=30min" in full_timer_text
     state = json.loads((base_dir / "state" / "self_hygiene" / "retention-policy.json").read_text(encoding="utf-8"))
     assert state["base_dir"] == str(base_dir.resolve())
+    assert state["policy"]["full_hygiene_on_calendar"] == "Sun *-*-* 05:20:00 UTC"
 
 
 def test_apply_retention_policy_is_safe_on_windows(monkeypatch, tmp_path: Path) -> None:
@@ -58,22 +74,32 @@ def test_run_hygiene_cleans_old_adaos_and_pip_tmp(monkeypatch, tmp_path: Path) -
     old_adaos = base_tmp / "old.tmp"
     recent_adaos = base_tmp / "recent.tmp"
     old_pip = global_tmp / "pip-unpack-old"
+    old_pip_target = global_tmp / "pip-target-old"
+    old_pip_build_env = global_tmp / "pip-build-env-old"
+    old_rasa_tmp = global_tmp / "adaos-rasa-nlu-old"
+    old_crfsuite = global_tmp / "model-old.crfsuite"
+    old_wav = global_tmp / "tmp-old.wav"
+    recent_rasa_tmp = global_tmp / "adaos-rasa-nlu-recent"
     old_large_tmp = global_tmp / "tmp-large-file"
     old_adaos.parent.mkdir(parents=True, exist_ok=True)
     global_tmp.mkdir(parents=True, exist_ok=True)
     old_adaos.write_text("old", encoding="utf-8")
     recent_adaos.write_text("recent", encoding="utf-8")
-    old_pip.mkdir()
-    (old_pip / "wheel.whl").write_text("wheel", encoding="utf-8")
+    for path in (old_pip, old_pip_target, old_pip_build_env, old_rasa_tmp, recent_rasa_tmp):
+        path.mkdir()
+        (path / "payload.txt").write_text("payload", encoding="utf-8")
+    old_crfsuite.write_text("model", encoding="utf-8")
+    old_wav.write_bytes(b"RIFF")
     with old_large_tmp.open("wb") as handle:
         handle.truncate(101 * self_hygiene.MiB)
 
     now = 2_000_000_000.0
     old_time = now - 10_000.0
     recent_time = now - 10.0
-    for path in (old_adaos, old_pip, old_large_tmp):
+    for path in (old_adaos, old_pip, old_pip_target, old_pip_build_env, old_rasa_tmp, old_crfsuite, old_wav, old_large_tmp):
         os.utime(path, (old_time, old_time))
-    os.utime(recent_adaos, (recent_time, recent_time))
+    for path in (recent_adaos, recent_rasa_tmp):
+        os.utime(path, (recent_time, recent_time))
 
     monkeypatch.setattr(self_hygiene.platform, "system", lambda: "Linux")
     monkeypatch.setattr(self_hygiene, "_clean_pip_cache", lambda **_kwargs: {"ok": True, "commands": []})
@@ -91,6 +117,12 @@ def test_run_hygiene_cleans_old_adaos_and_pip_tmp(monkeypatch, tmp_path: Path) -
     assert old_adaos.exists() is False
     assert recent_adaos.exists() is True
     assert old_pip.exists() is False
+    assert old_pip_target.exists() is False
+    assert old_pip_build_env.exists() is False
+    assert old_rasa_tmp.exists() is False
+    assert old_crfsuite.exists() is False
+    assert old_wav.exists() is False
+    assert recent_rasa_tmp.exists() is True
     assert old_large_tmp.exists() is False
 
 
