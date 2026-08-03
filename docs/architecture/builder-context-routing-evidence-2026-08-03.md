@@ -65,6 +65,9 @@ runtime browser surfaces use exact topology resolution.
 - [x] `[must]` Run a local DEV runtime smoke: choose `dev1`, then observe
   `Builder: dev1 -> Preview dev1-dev`, current project `test04_recipes`, and
   project-choice controls.
+- [x] `[must]` Publish the validated skill locally to Workspace version
+  `0.3.31`, activate slot `A`, and run a Workspace Telegram-route smoke that
+  returns `builder_context_required` with `builder.context.select` controls.
 - [ ] `[must]` Human Telegram acceptance with the real conversation buttons.
 - [ ] `[must]` Human browser acceptance of a generated Preview link after the
   updated client is deployed.
@@ -74,6 +77,8 @@ runtime browser surfaces use exact topology resolution.
 ## Local activation and publication status
 
 `builder_skill` version `0.3.38` is validated and activated in the local DEV
-runtime. It is intentionally not pushed or published by this change set. The
-AdaOS core commits are local. Only the client repository is authorized for
-remote push in this iteration.
+runtime. The same content is locally published as Workspace version `0.3.31`
+and activated on slot `A`, so the Workspace-backed Telegram route no longer
+uses version `0.3.30`. The registry publication commit is local and was not
+pushed. The AdaOS core commits are also local. Only the client repository is
+authorized for remote push in this iteration.
