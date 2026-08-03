@@ -351,8 +351,8 @@ class BuilderWorkbenchService:
         """
 
         inventory = self._webspace_inventory()
-        configured_builder_scenarios = os.getenv("ADAOS_BUILDER_SCENARIO_IDS") or (
-            f"{BUILDER_HOST_SCENARIO_ID},{BUILDER_WORKBENCH_SCENARIO_ID}"
+        configured_builder_scenarios = (
+            os.getenv("ADAOS_BUILDER_HOST_SCENARIO_IDS") or BUILDER_HOST_SCENARIO_ID
         )
         builder_scenarios = {
             item.strip()
@@ -405,6 +405,7 @@ class BuilderWorkbenchService:
             contexts,
             key=lambda item: (
                 not bool(item.get("selectable")),
+                str(item.get("builder_space_kind") or "workspace") == "dev",
                 str(item.get("builder_title") or "").casefold(),
                 str(item.get("builder_webspace_id") or "").casefold(),
             ),
