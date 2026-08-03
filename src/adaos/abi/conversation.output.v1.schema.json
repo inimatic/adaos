@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.output.v1",
+  "title": "AdaOS Semantic Conversation Output",
+  "type": "object",
+  "required": [
+    "schema",
+    "output_id",
+    "conversation_id",
+    "kind",
+    "audience",
+    "risk_level",
+    "summary",
+    "details",
+    "actions",
+    "fields",
+    "evidence_refs",
+    "correlation",
+    "next_expected_input",
+    "channel_constraints",
+    "response_envelope_ref",
+    "created_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.output.v1" },
+    "output_id": { "$ref": "#/$defs/id" },
+    "conversation_id": { "$ref": "#/$defs/refId" },
+    "kind": {
+      "enum": [
+        "clarification",
+        "confirmation",
+        "accepted",
+        "progress",
+        "result",
+        "repair",
+        "refusal",
+        "handoff"
+      ]
+    },
+    "audience": { "enum": ["user", "developer", "operator"] },
+    "risk_level": { "enum": ["none", "low", "medium", "high", "destructive"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "details": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["label", "value"],
+        "properties": {
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "value": {},
+          "sensitivity": { "enum": ["public", "internal", "personal", "sensitive"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "label",
+          "command",
+          "risk_level",
+          "target_refs",
+          "requires_confirmation",
+          "presentation_hint"
+        ],
+        "properties": {
+          "action_id": { "$ref": "#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "command": { "type": ["string", "null"], "maxLength": 160 },
+          "risk_level": { "enum": ["none", "low", "medium", "high", "destructive"] },
+          "target_refs": {
+            "type": "array",
+            "maxItems": 20,
+            "items": { "$ref": "#/$defs/ref" }
+          },
+          "requires_confirmation": { "type": "boolean" },
+          "presentation_hint": { "enum": ["primary", "secondary", "danger", "link", "hidden"] },
+          "metadata": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "fields": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["field_id", "label", "kind", "required", "value"],
+        "properties": {
+          "field_id": { "$ref": "#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "kind": { "enum": ["text", "number", "boolean", "choice", "multi_choice", "date", "json"] },
+          "required": { "type": "boolean" },
+          "value": {},
+          "choices": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["value", "label"],
+              "properties": {
+                "value": { "type": "string", "minLength": 1, "maxLength": 240 },
+                "label": { "type": "string", "minLength": 1, "maxLength": 240 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/ref" }
+    },
+    "correlation": {
+      "type": "object",
+      "required": [
+        "turn_trace_id",
+        "intent_proposal_id",
+        "interaction_id",
+        "workflow_ref",
+        "workflow_event_id",
+        "command_id",
+        "run_ref",
+        "reply_route_ref"
+      ],
+      "properties": {
+        "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+        "intent_proposal_id": { "type": ["string", "null"], "maxLength": 240 },
+        "interaction_id": { "type": ["string", "null"], "maxLength": 240 },
+        "workflow_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+        "workflow_event_id": { "type": ["string", "null"], "maxLength": 240 },
+        "command_id": { "type": ["string", "null"], "maxLength": 160 },
+        "run_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+        "reply_route_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "next_expected_input": {
+      "type": "object",
+      "required": ["kind", "interaction_id", "fields"],
+      "properties": {
+        "kind": { "enum": ["action", "text", "form", "none"] },
+        "interaction_id": { "type": ["string", "null"], "maxLength": 240 },
+        "fields": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "channel_constraints": {
+      "type": "object",
+      "required": ["preferred", "fallbacks", "requires_rich_view"],
+      "properties": {
+        "preferred": { "type": ["string", "null"], "maxLength": 80 },
+        "fallbacks": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+        },
+        "requires_rich_view": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "response_envelope_ref": {
+      "description": "Optional link to the current channel-neutral delivery envelope derived from this semantic output.",
+      "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }]
+    },
+    "metadata": { "type": "object" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$" },
+    "refId": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "ref": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "schema": { "type": ["string", "null"], "maxLength": 120 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "version": { "type": ["string", "null"], "maxLength": 120 },
+        "generation": { "type": ["integer", "null"], "minimum": 0 },
+        "digest": { "type": ["string", "null"], "maxLength": 120 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -22,6 +22,12 @@ is the master-detail entry point for controlled evolution: each implementation
 slice should close a replayable user loop before broadening the surface. This
 document remains the detailed technical checklist behind those gates.
 
+[Conversational Control Interface](../architecture/conversational-interface.md)
+owns the cross-domain conversational input/output contract, NLU data boundary,
+Teacher-to-Builder promotion path, and conversation-story test model. This NLU
+roadmap owns provider/runtime and Teacher implementation work inside that
+contract.
+
 The existing API remains the implementation backend. Root MCP should wrap or
 proxy governed NLU authoring capabilities; it should not become a second source
 of truth for templates, candidates, or dispatch behavior.
@@ -123,6 +129,15 @@ clarification loop over a deterministic AdaOS runtime:
     transport, STT backend choice, dialog/dictation ownership, response
     routing, and retention are owned by shared endpoint infrastructure, not by
     NLU templates or ReDevice-specific skills.
+11. **Conversational artifact plane**: reusable NLU input data, output
+    templates, repair policy, affordances, examples, locales, and conversation
+    stories live in a git-versioned `conversational/` package beside the
+    owning skill/scenario. Runtime provider indexes and model caches are
+    compiled outputs, not source.
+12. **Builder design-time plane**: Teacher can submit candidates with evidence,
+    but Builder/SDK validation, story tests, review, and release decide whether
+    runtime learning becomes design-time package source or a public catalog
+    candidate.
 
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
@@ -247,6 +262,23 @@ below remain useful for tracking existing implementation work.
 
 ### A. Contracts and State Model
 
+- [ ] `[must]` Align NLU proposal records with the
+  [Conversational Control Interface](../architecture/conversational-interface.md):
+  NLU outputs `IntentProposal` evidence, not protected effects or direct source
+  mutations.
+- [ ] `[must]` Define the NLU-owned subset of the `conversational/` package:
+  intents, entities, examples, affordances, repair rules, locale files, output
+  references, and story assertions relevant to understanding.
+- [ ] `[must]` Keep runtime specialization and Teacher candidate storage
+  separate from git-versioned package source; promotion requires Builder
+  validation and evidence.
+- [ ] `[must]` Map Teacher candidates to the shared lifecycle: observed,
+  proposed, scoped, previewed, confirmed, local overlay applied, replay
+  verified, promotion candidate, Builder Change, package patch validated,
+  trialed, released/rejected/quarantined/rolled back.
+- [ ] `[must]` Treat every provider build artifact as compiled output with
+  source package digest, provider/runtime compatibility, build parameters,
+  active version, previous version, and rollback ref.
 - [x] `[must]` Define first-class `action_candidate` records separate from
   `template_candidate` records: candidate id, class, planned action/intent,
   slots, owner, side-effect class, action-preview status, dispatch status,
@@ -536,6 +568,16 @@ below remain useful for tracking existing implementation work.
 
 - [ ] `[must]` Separate local learned overlays from repo-owned skill/scenario
   artifacts and public reusable templates.
+- [ ] `[must]` Route reusable Teacher candidates through Builder Changes that
+  patch `conversational/` package source, run validation/story tests, and
+  attach provenance before repository push or catalog publication.
+- [ ] `[must]` Treat runtime NLU provider artifacts, embeddings, indexes,
+  prompt caches, and model bundles as derived outputs with source digest and
+  rollback pointer, not as independently edited truth.
+- [ ] `[must]` Require reusable candidate promotion to include at least one
+  conversation story or regression story proving the target behavior and one
+  hard-negative case when the behavior can trigger a mutating or protected
+  command.
 - [x] `[must]` Implementation slice: LLM-created candidates, accepted regex
   rules, governed training examples, and plan/development candidates now carry
   a local learned promotion envelope. Public export is blocked by default until

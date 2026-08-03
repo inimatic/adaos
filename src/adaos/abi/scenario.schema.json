@@ -138,6 +138,10 @@
         { "$ref": "#/$defs/legacyWorkflow" }
       ]
     },
+    "conversational": {
+      "$ref": "#/$defs/conversationalManifest",
+      "description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
+    },
 
     "steps": {
       "description": "Optional low-level execution steps for ScenarioRuntime (CLI/SDK runner).",
@@ -186,6 +190,14 @@
       "required": ["manifest"],
       "properties": {
         "manifest": { "const": "workflow.json" }
+      },
+      "additionalProperties": false
+    },
+    "conversationalManifest": {
+      "type": "object",
+      "required": ["manifest"],
+      "properties": {
+        "manifest": { "const": "conversational/manifest.yaml" }
       },
       "additionalProperties": false
     },

@@ -22,6 +22,9 @@ Related documents:
   ReplyRoutes, and asynchronous delivery invariants
 - [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md):
   shared interaction and delivery implementation gates
+- [Conversational Control Interface](conversational-interface.md): shared
+  conversational input/output, NLU data, Teacher promotion, and story-test
+  contract across Builder, workflow, NLU, and channels
 - [Channel Semantics](channel-semantics.md)
 - [Endpoint Audio Service](endpoint-audio-service.md)
 - [AdaOS Builder](builder.md)
@@ -231,6 +234,10 @@ Implemented companion pilot scenarios:
 12. NLU is not the dialog manager. Rasa, regex, neural, or Teacher stages may
     classify text, but AdaOS owns turn tracking, repair state, forms, response
     planning, memory policy, and action dispatch.
+13. Output is semantic before it is channel-specific. Web, Telegram, voice,
+    IDE, and future channel adapters render a `ConversationOutput` or
+    `ResponseEnvelope` identity; they do not decide command meaning or repeat
+    effects to recover missing delivery.
 
 ## Interaction, Capability, And Async Reply Boundary
 

@@ -18,6 +18,10 @@
 			"$ref": "#/$defs/workflowManifest",
 			"description": "Optional single governed workflow definition stored in the component-root workflow.json file."
 		},
+		"conversational": {
+			"$ref": "#/$defs/conversationalManifest",
+			"description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
+		},
     "runtime": {
       "type": "object",
       "properties": {
@@ -189,6 +193,14 @@
 			"required": ["manifest"],
 			"properties": {
 				"manifest": { "const": "workflow.json" }
+			},
+			"additionalProperties": false
+		},
+		"conversationalManifest": {
+			"type": "object",
+			"required": ["manifest"],
+			"properties": {
+				"manifest": { "const": "conversational/manifest.yaml" }
 			},
 			"additionalProperties": false
 		},

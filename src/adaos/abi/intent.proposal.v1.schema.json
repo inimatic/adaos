@@ -24,11 +24,21 @@
         "required": ["act_id", "kind", "text", "target_ref", "interaction_id", "command", "arguments", "confidence"],
         "properties": {
           "act_id": { "type": "string", "minLength": 1, "maxLength": 160 },
-          "kind": { "enum": ["interaction_answer", "workflow_command", "feedback", "new_issue", "question", "context_selection", "unrelated"] },
+          "kind": { "enum": ["interaction_answer", "workflow_command", "skill_invocation", "feedback", "new_issue", "question", "context_selection", "unrelated"] },
           "text": { "type": "string", "minLength": 1, "maxLength": 4000 },
           "target_ref": { "type": ["object", "null"] },
           "interaction_id": { "type": ["string", "null"], "maxLength": 240 },
           "command": { "type": ["string", "null"], "maxLength": 160 },
+          "skill_invocation": {
+            "type": ["object", "null"],
+            "required": ["skill_id", "operation_id", "arguments"],
+            "properties": {
+              "skill_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "operation_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "arguments": { "type": "object" }
+            },
+            "additionalProperties": false
+          },
           "arguments": { "type": "object" },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
         },

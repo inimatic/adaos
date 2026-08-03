@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.input.v1",
+  "title": "AdaOS Conversational Input Source",
+  "type": "object",
+  "required": ["schema", "package_id", "intents", "hard_negatives", "policy"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.input.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "intents": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "kind", "affordance_id", "examples", "slots"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "kind": { "enum": ["workflow_command", "skill_invocation", "query", "feedback", "question", "unrelated"] },
+          "affordance_id": { "type": ["string", "null"], "maxLength": 160 },
+          "workflow": {
+            "type": ["object", "null"],
+            "required": ["workflow_type", "command_id"],
+            "properties": {
+              "workflow_type": { "$ref": "#/$defs/id" },
+              "command_id": { "$ref": "#/$defs/id" },
+              "transition_id": { "type": ["string", "null"], "maxLength": 160 }
+            },
+            "additionalProperties": false
+          },
+          "skill_invocation": {
+            "type": ["object", "null"],
+            "required": ["skill_id", "operation_id"],
+            "properties": {
+              "skill_id": { "$ref": "#/$defs/id" },
+              "operation_id": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": false
+          },
+          "examples": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "required": ["text", "locale"],
+              "properties": {
+                "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+                "source": { "enum": ["authored", "teacher", "trace", "test"] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "slots": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["id", "required", "schema"],
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "required": { "type": "boolean" },
+                "schema": { "type": "object" },
+                "entity_type": { "type": ["string", "null"], "maxLength": 160 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "metadata": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "hard_negatives": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["text", "locale", "reason"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["default_confidence", "abstain_below", "protected_action_confirmation"],
+      "properties": {
+        "default_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "abstain_below": { "type": "number", "minimum": 0, "maximum": 1 },
+        "protected_action_confirmation": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" }
+  },
+  "additionalProperties": false
+}

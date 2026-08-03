@@ -76,6 +76,9 @@ clean-stand or multi-user production acceptance claim.
 - [Builder Conversational Development Architecture](builder-conversational-development.md)
   defines the chat-first product model, canonical Issue/Change/Run terms,
   context packets, semantic UI changes, and future collaboration seams.
+- [Conversational Control Interface](conversational-interface.md) defines the
+  shared conversational input/output contract, NLU data boundary,
+  Teacher-to-Builder promotion path, and conversation-story testing model.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - [Navigation Intent And Location](navigation-intent-and-location.md) defines
@@ -126,7 +129,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, canonical cross-topology navigation, and one non-Builder request-to-Workspace proof. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, canonical cross-topology navigation, and one non-Builder request-to-Workspace proof. Open extension: conversational package contract, output IR alignment, story-runner proof, and Teacher-candidate promotion through Builder. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, static workflow/story reports, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, definition complexity reports, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -878,6 +881,9 @@ Architecture:
   data modes, submitted Review lifecycle, context-sufficiency contract, and
   decision traceability map in
   [Builder Conversational Development Architecture](builder-conversational-development.md).
+- [x] `[must]` Define the shared conversational input/output, NLU data,
+  Teacher-candidate, artifact-pipeline, and story-test target contract in
+  [Conversational Control Interface](conversational-interface.md).
 - [x] `[must]` Link the domain definition to the shared compiler/resolver and
   conformance proof in the
   [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
@@ -886,6 +892,49 @@ Architecture:
   miniapp rendering, hard cross-channel feature parity, trusted groups,
   proposal exchange, WorkLog extraction, public candidate discovery, and
   cross-deployment evidence aggregation.
+
+Conversational artifacts and learning:
+
+- [ ] `[must]` Add Builder/SDK support for a git-versioned `conversational/`
+  package beside a skill/scenario, including input, output, affordance, repair,
+  example, locale, and story sources.
+- [ ] `[must]` Define Builder/SDK ports for conversational validation,
+  compilation, proposal emission, semantic output, interaction creation,
+  Teacher candidate capture, and candidate-to-Change promotion.
+- [ ] `[must]` Include conversational package digest, story coverage, output
+  contract coverage, Teacher candidate refs, and promotion privacy scope in
+  Builder context packets for conversational Changes.
+- [ ] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias, and
+  example candidates through a Builder Change before any git-versioned package
+  source or public catalog candidate is updated.
+- [ ] `[must]` Add a conversational artifact validation command that checks
+  source schemas, cross-file refs, workflow command refs, locale coverage,
+  protected-action policy, and package cardinality.
+- [x] `[must]` Land the workflow-facing validation service slice behind the
+  future Builder/SDK command. `conversational_artifacts` now validates package
+  source schemas, checks affordance refs against the manifest-bound workflow,
+  rejects affordance-owned workflow shape, and runs deterministic stories with
+  mocked activities.
+- [ ] `[must]` Compile conversational package sources into provider/runtime
+  artifacts with source digests, rollout metadata, and rollback refs; compiled
+  routers, embeddings, indexes, prompt packs, and model bundles must not become
+  independent source truth.
+- [ ] `[must]` Preserve conversational trace continuity from user turn through
+  proposal, dialog/interaction, workflow command, Run/activity, semantic
+  output, and delivery attempt in Builder evidence.
+- [ ] `[should]` Generate static workflow/statechart and conversation-story
+  reports for Builder review, model context, and trial evidence.
+- [ ] `[should]` Add conversational threat-model checks for prompt injection in
+  descriptors/stories, alias hijacking, private-data promotion, output/action
+  mismatch, and MCP scope confusion.
+- [ ] `[should]` Track comparison metrics against direct Codex/Claude access:
+  time to diagnosis, context needed, rework, missing tests, review load, and
+  release confidence.
+- [ ] `[could]` Export accepted conversation stories as user-facing learning or
+  education-on-the-go material after they pass privacy and localization checks.
+- [ ] `[deferred]` Build an interactive workflow/conversation studio with trace
+  replay, expected/actual story diffs, candidate promotion, and Builder Change
+  creation only after static artifacts and runners are stable.
 
 Canonical model and context:
 

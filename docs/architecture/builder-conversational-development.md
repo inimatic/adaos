@@ -6,7 +6,8 @@ refactoring.
 This document defines how AdaOS turns a conversation into a governed software
 change without making either chat history, a browser widget, an LLM session, or
 a Git branch the development source of truth. It refines the broader
-[Builder](builder.md), [Conversation and Channel Architecture](conversation-and-channel-architecture.md),
+[Builder](builder.md), [Conversational Control Interface](conversational-interface.md),
+[Conversation and Channel Architecture](conversation-and-channel-architecture.md),
 [Governed Evolution](governed-evolution.md), and
 [Artifact Source, Package, and Activation](artifact-source-package-activation.md)
 contracts.
@@ -796,6 +797,7 @@ remain discoverable from one map:
 | One validated state/transition model drives commands and explanations | [Governed Data-Driven Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
 | Project is a portfolio/coordination aggregate, not one global stage | [Project Aggregate](#project-aggregate) | Builder Phase 11 and GWR4 project/concurrency proof |
 | Conversation is primary; rich views are contextual | [Interaction Contract](#interaction-contract) and [Workbench Projection](#builder-workbench-projection) | Phase 11 in the [Builder Roadmap](builder-roadmap.md) |
+| Conversational input, output, NLU data, and conversation stories use one shared control protocol | [Conversational Control Interface](conversational-interface.md) | Builder Phase 11, GWR5 story proof, and NLU Teacher promotion gates |
 | Channel capabilities select presentation but never change command legality | [Channel Capability Boundary](#channel-capability-boundary) and the shared interaction protocol | GWR2 negotiation/conformance evidence |
 | Async completion, conversation materialization, and delivery are independent | Shared ReplyRoute/DeliveryAttempt protocol | GWR6 recovery and delivery evidence |
 | A message does not automatically equal a Change | [Issue/Change/Run model](#canonical-development-model) | Builder Phase 11 plus GWR4 |
@@ -812,6 +814,10 @@ remain discoverable from one map:
 ## Source Of Truth And Projection Rules
 
 - `scenario.yaml` / `skill.yaml` remain canonical artifact manifests.
+- `conversational/` package sources beside a skill/scenario own reusable
+  input, output, affordance, repair, example, locale, and story data; runtime
+  learned overlays and Teacher candidates are not package truth until Builder
+  promotes them.
 - Project/Change/Issue/Run records live in backend-owned durable storage or a
   versioned project contract during migration.
 - `webui.json` is the active declarative UI source; UI revisions are immutable

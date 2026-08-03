@@ -28,6 +28,14 @@ def _load_service_skill_schema() -> dict:
 @pytest.mark.parametrize(
     "schema_name",
     [
+        "conversation.output.v1.schema.json",
+        "conversational.package_manifest.v1.schema.json",
+        "conversational.input.v1.schema.json",
+        "conversational.affordances.v1.schema.json",
+        "conversational.repair.v1.schema.json",
+        "conversational.output.v1.schema.json",
+        "conversational.story.v1.schema.json",
+        "conversational.validation_report.v1.schema.json",
         "builder.issue.v1.schema.json",
         "builder.change.v1.schema.json",
         "builder.run.v1.schema.json",
@@ -40,7 +48,7 @@ def _load_service_skill_schema() -> dict:
         "builder.context_ref.v1.schema.json",
     ],
 )
-def test_conversational_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
     Draft202012Validator.check_schema(_load_schema(schema_name))
 
 
@@ -82,6 +90,30 @@ def test_skill_schema_accepts_runtime_activation_policy() -> None:
                 },
             },
         },
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
+def test_skill_schema_accepts_conversational_package_manifest_ref() -> None:
+    schema = _load_schema("skill.schema.json")
+    payload = {
+        "name": "conversation_ready_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
+def test_scenario_schema_accepts_conversational_package_manifest_ref() -> None:
+    schema = _load_schema("scenario.schema.json")
+    payload = {
+        "id": "conversation_ready_scenario",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
     }
 
     Draft7Validator(schema).validate(payload)
@@ -211,6 +243,18 @@ def test_runtime_skill_validator_schema_accepts_data_routes() -> None:
                 "guard_visibility": "show degraded status and log suppression count",
             }
         ],
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_runtime_skill_validator_schema_accepts_conversational_package_ref() -> None:
+    schema = _load_service_skill_schema()
+    payload = {
+        "name": "conversation_ready_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
     }
 
     Draft202012Validator(schema).validate(payload)

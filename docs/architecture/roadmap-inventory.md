@@ -69,6 +69,7 @@ the acceptance records required by the owning roadmap.
 | Runtime, skills, scenarios, install lifecycle | [Skill Runtime Lifecycle](../skill_runtime.md), [Skills](../skills.md), [Scenarios](../scenarios.md) | [Registry, Marketplace, and Operations Roadmap](registry-marketplace-operations-roadmap.md) | Issue Tracker; lifecycle and operations tests; release records |
 | Governed capability development | [AdaOS Builder](builder.md), [Builder Conversational Development](builder-conversational-development.md), [Builder SDK Boundary](builder-sdk-boundary.md) | [Builder Roadmap](builder-roadmap.md), [Skill Factory](skill-factory.md) | Builder acceptance evidence; isolated DEV runs; Git and publication records |
 | Governed data-driven workflow models, transitions, interactions, and intent mediation | [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md), [Reference Persistence Decision](workflow-reference-persistence-decision.md) | [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md) | Definition/relationship-plane validation; `workflow.json` authoring/admission; registry and role policy; package-atomic activation; transition coverage; capability/presentation equivalence; async result/delivery recovery; Builder Project and second-domain reference runs; conditional persistence ADR |
+| Conversational control, NLU data, semantic output, and conversation-story tests | [Conversational Control Interface](conversational-interface.md), [Conversation and Channel Architecture](conversation-and-channel-architecture.md), [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md) | [Builder Roadmap](builder-roadmap.md), [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md), [NLU Roadmap Checklist](../concepts/nlu-roadmap.md), [NLU Teacher Evolution Roadmap](../concepts/nlu-evolution-roadmap.md) | Conversational package validation; story-runner reports; Teacher candidate provenance; Builder Change evidence; channel presentation tests |
 | Root MCP and agent-facing governance | [Root MCP Foundation](root-mcp-foundation.md), [SDK Control Plane](../sdk_control_plane.md) | [Root MCP Roadmap](root-mcp-roadmap.md) | MCP contract tests; audit records; Issue Tracker |
 | Events, projections, status, and Yjs shape | [Operational Event Model](operational-event-model.md), [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md), [Skill Projection and Stream Boundary](skill-projection-and-stream-boundary.md) | [Operational Event Model Roadmap](operational-event-model-roadmap.md), [Reference Plan](operational-event-model-reference-plan.md), [Projection Subscription Roadmap](projection-subscription-roadmap.md) | ABI tests; projection integration tests; stand evidence |
 | Realtime transport, sidecar, supervisor, and media | [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md), [AdaOS Supervisor](adaos-supervisor.md), [Transport Ownership](transport-ownership.md), [Channel Semantics](channel-semantics.md), [Authority and Degraded Mode](authority-and-degraded-mode.md) | [Realtime Reliability Roadmap](realtime-reliability-roadmap.md) | Reliability tests; soak and stand reports; supervisor attempt records |
@@ -151,9 +152,11 @@ accept it without creating conflicting authority.
   and post-deploy testing. A concise observability contract is still needed to
   define shared signal and evidence boundaries; it should reference those
   owners rather than duplicate their roadmaps.
-- NLU sequencing currently lives under `docs/concepts/`. When it is next
-  materially revised, promote or replace it with one clearly authoritative
-  architecture roadmap and retain redirects for existing links.
+- NLU sequencing currently lives under `docs/concepts/`. The
+  [Conversational Control Interface](conversational-interface.md) now owns the
+  cross-domain input/output and NLU-data boundary; the next material NLU
+  revision should either promote the NLU roadmap into architecture or make the
+  concept documents explicitly subordinate to this contract.
 - The two webspace roadmaps overlap. Their next revisions should state which
   owns semantic pointer migration and which owns broader client evolution.
 

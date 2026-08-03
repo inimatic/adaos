@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.package_manifest.v1",
+  "title": "AdaOS Conversational Package Manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "package_id",
+    "package_kind",
+    "owner_ref",
+    "version",
+    "workflow_refs",
+    "files",
+    "locales",
+    "privacy_defaults",
+    "compiled_outputs"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversational.package_manifest.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "package_kind": { "enum": ["skill", "scenario", "system"] },
+    "owner_ref": { "$ref": "#/$defs/ref" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "workflow_refs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["workflow_type", "definition_ref"],
+        "properties": {
+          "workflow_type": { "$ref": "#/$defs/id" },
+          "definition_ref": { "const": "../workflow.json" },
+          "definition_version": { "type": ["string", "null"], "maxLength": 80 },
+          "definition_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "object",
+      "required": ["input", "affordances", "repair", "output", "stories"],
+      "properties": {
+        "input": { "const": "input.yaml" },
+        "affordances": { "const": "affordances.yaml" },
+        "repair": { "const": "repair.yaml" },
+        "output": { "const": "output.yaml" },
+        "stories": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "pattern": "^tests/stories/[A-Za-z0-9_.:-]+\\.ya?ml$"
+          }
+        },
+        "locales": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "pattern": "^locale\\.[A-Za-z0-9_.-]+\\.ya?ml$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "locales": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 2, "maxLength": 40 }
+    },
+    "privacy_defaults": {
+      "type": "object",
+      "required": ["source_scope", "runtime_overlay_scope", "public_promotion"],
+      "properties": {
+        "source_scope": { "enum": ["skill", "scenario", "system", "public"] },
+        "runtime_overlay_scope": { "enum": ["session", "user", "webspace", "node", "organization"] },
+        "public_promotion": { "enum": ["blocked", "requires_review", "allowed"] }
+      },
+      "additionalProperties": false
+    },
+    "compiled_outputs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["kind", "source_digest", "artifact_ref", "rollback_ref"],
+        "properties": {
+          "kind": { "enum": ["regex", "rasa", "neural", "embedding_index", "prompt_pack", "router"] },
+          "source_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+          "artifact_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+          "rollback_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metadata": { "type": "object" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
+    "ref": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "version": { "type": ["string", "null"], "maxLength": 120 },
+        "digest": { "type": ["string", "null"], "maxLength": 120 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

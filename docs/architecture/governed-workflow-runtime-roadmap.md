@@ -12,8 +12,9 @@ The current local and live-channel proof ledger is
 [Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
-conversation architecture, NLU roadmap, or operational event roadmap. Tasks
-that belong to those domains are linked rather than redefined.
+conversation architecture, Conversational Control Interface, NLU roadmap, or
+operational event roadmap. Tasks that belong to those domains are linked rather
+than redefined.
 
 ## Priority and Status Rules
 
@@ -52,11 +53,15 @@ record. A successful happy-path UI demonstration does not prove durability.
    materialization, and transport DeliveryAttempts; this roadmap owns semantic
    Interaction/Response lifecycles, negotiation invariants, action invocation,
    task/workflow correlation, and reply binding.
-6. [Pending Actions](pending-actions.md) is a compatibility input and may be
+6. [Conversational Control Interface](conversational-interface.md) owns the
+   shared conversational input/output, NLU data, Teacher-promotion, and
+   conversation-story artifact boundary; this roadmap owns the workflow command,
+   resolver, guard, state, and path-proof semantics consumed by that boundary.
+7. [Pending Actions](pending-actions.md) is a compatibility input and may be
    migrated; it is not a second permanent interaction authority.
-7. [Builder Roadmap](builder-roadmap.md) owns Builder product acceptance; this
+8. [Builder Roadmap](builder-roadmap.md) owns Builder product acceptance; this
    roadmap owns the reusable runtime proven by that acceptance.
-8. A consistent and validated workflow model is the delivery objective.
+9. A consistent and validated workflow model is the delivery objective.
    External engine adoption is an optional decision produced by later
    reliability evidence.
 
@@ -75,6 +80,7 @@ The current repository has useful but fragmented foundations:
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
+| Conversation stories | early golden-conversation fixtures in NLU tests; workflow graph export exists as a non-authoritative projection | no shared story schema, workflow-path coverage, or Builder package admission yet |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing, bounded reconnect cleanup | at-most-once transport path; target-zone publish is not durable hub acceptance or a workflow journal |
 | Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow lock | validated-local artifact foundation; registry trust, complete adapter binding, and activation admission remain open |
@@ -704,6 +710,28 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [ ] `[must]` `GWR5-29` Migrate one small non-Builder skill or scenario through
   the same manifest, ABI, role, package, activation, explanation, and rollback
   contracts to demonstrate that the model is not Builder-specific.
+- [x] `[must]` `GWR5-30` Define and run the first workflow-facing conversation
+  stories as executable conversation -> workflow -> output paths. The first
+  contract slice validates deterministic `IntentProposal` fixtures, admitted or
+  rejected `WorkflowCommand`, state generation, and semantic output without
+  relying on exact chat prose.
+- [x] `[must]` `GWR5-31` Keep story execution side-effect isolated by default:
+  mutating effects use registered mock activities, provider/model calls use
+  fixtures unless an explicit integration-trial profile admits them, and every
+  live-effect story records its risk and environment. First runner records
+  activities as mocked timeline entries and makes no provider calls.
+- [ ] `[should]` `GWR5-32` Generate static statechart, story, and coverage
+  reports from admitted workflow/conversational package sources for human
+  review, Builder context packets, and trial evidence.
+- [ ] `[should]` `GWR5-33` Preserve trace identity across turn, proposal,
+  dialog frame, interaction, response, command, workflow event, Run/activity,
+  semantic output, and delivery attempt.
+- [ ] `[must]` `GWR5-34` Extend story assertions to full dialog repair,
+  `ConversationInteraction`, and channel fallback coverage once the workflow
+  contract slice is stable.
+- [x] `[deferred]` `GWR5-35` Defer an interactive workflow/conversation studio
+  until static graph/story exports, runner evidence, and package admission are
+  stable.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 

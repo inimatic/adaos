@@ -48,6 +48,21 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,
   clarification, feedback, idempotency, scope, response policy, and MCP
   capability profile contracts
+- `conversation.output.v1.schema.json` - semantic conversation output before
+  channel-specific `ResponseEnvelope` materialization
+- `conversational.package_manifest.v1.schema.json` - git-versioned
+  `conversational/manifest.yaml` contract for skill/scenario conversational
+  sources and compiled output refs
+- `conversational.input.v1.schema.json`,
+  `conversational.affordances.v1.schema.json`,
+  `conversational.repair.v1.schema.json`,
+  `conversational.output.v1.schema.json`, and
+  `conversational.story.v1.schema.json` - design-time conversational package
+  sources for IntentProposal inputs, workflow-facing affordances, repair
+  behavior, semantic output templates, and executable conversation stories
+- `conversational.validation_report.v1.schema.json` - Builder/SDK validation
+  report for package schema checks, workflow cross-checks, and story runner
+  evidence
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, skill-owned UI view interfaces, modal address contracts, and
