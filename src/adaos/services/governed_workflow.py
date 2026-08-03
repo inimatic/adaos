@@ -198,6 +198,8 @@ def normalize_transition_descriptor(
     effect = descriptor.setdefault("effect", {})
     effect.setdefault("input_schema", copy.deepcopy(dict(descriptor.get("trigger") or {}).get("input_schema") or {}))
     effect.setdefault("output_schema", {"type": "object"})
+    effect.setdefault("activity_params", {})
+    effect.setdefault("compensation_params", {})
     effect.setdefault(
         "transaction_boundary",
         {
@@ -434,6 +436,8 @@ def new_instance(
     instance_id: str,
     *,
     context: Mapping[str, Any] | None = None,
+    package_digest: str | None = None,
+    binding_digest: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     compiled = definition if isinstance(definition, CompiledWorkflowDefinition) else compile_definition(definition)
@@ -441,7 +445,7 @@ def new_instance(
     if not token:
         raise WorkflowResolutionError("instance_id is required")
     timestamp = now or _now()
-    return {
+    instance = {
         "schema": WORKFLOW_INSTANCE_SCHEMA,
         "instance_id": token,
         "workflow_type": compiled.workflow_type,
@@ -455,6 +459,12 @@ def new_instance(
         "created_at": timestamp,
         "updated_at": timestamp,
     }
+    if package_digest is not None:
+        instance["package_digest"] = str(package_digest).strip()
+    if binding_digest is not None:
+        instance["binding_digest"] = str(binding_digest).strip()
+    _validate(WORKFLOW_INSTANCE_SCHEMA, instance)
+    return instance
 
 
 def workflow_ref(
@@ -1052,6 +1062,8 @@ def migrate_workflow_instance(
     require_verified_principal: bool = False,
     expected_generation: int,
     idempotency_key: str,
+    target_package_digest: str | None = None,
+    target_binding_digest: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     """Create a pure, generation-guarded definition migration decision."""
@@ -1074,6 +1086,14 @@ def migrate_workflow_instance(
         raise WorkflowResolutionError("definition migration target version mismatch")
     if source.definition_version == target.definition_version:
         raise WorkflowResolutionError("definition migration must advance to a different version")
+    if current.get("package_digest") is not None and target_package_digest is None:
+        raise WorkflowResolutionError(
+            "package-pinned definition migration requires target_package_digest"
+        )
+    if current.get("binding_digest") is not None and target_binding_digest is None:
+        raise WorkflowResolutionError(
+            "binding-pinned definition migration requires target_binding_digest"
+        )
     allowed_states = set(record["allowed_source_states"])
     if not allowed_states.issubset(source.states):
         raise WorkflowDefinitionError("definition migration names an unknown source state")
@@ -1113,6 +1133,10 @@ def migrate_workflow_instance(
     updated = copy.deepcopy(current)
     updated["definition_version"] = target.definition_version
     updated["definition_digest"] = workflow_definition_digest(target)
+    if target_package_digest is not None:
+        updated["package_digest"] = str(target_package_digest).strip()
+    if target_binding_digest is not None:
+        updated["binding_digest"] = str(target_binding_digest).strip()
     updated["state"] = str(state_map[current["state"]])
     updated["generation"] = int(current["generation"]) + 1
     updated["updated_at"] = timestamp

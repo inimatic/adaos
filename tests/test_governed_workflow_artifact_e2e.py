@@ -276,6 +276,7 @@ def test_non_builder_artifact_uses_same_package_roles_invocation_migration_and_r
     store.put(v2.archive_bytes)
     active = _activate(manager, _plan(v1), idempotency_key="guided-checklist:v1")
     assert active.workspace_lock.components[0].workflow_binding_digest == v1.ref.workflow_binding_digest
+    active_component = active.workspace_lock.components[0]
 
     workspace_artifact = tmp_path / "workspace" / "scenarios" / "guided_checklist"
     artifact = load_manifest_bound_workflow(workspace_artifact, manifest_name="scenario.yaml")
@@ -285,7 +286,11 @@ def test_non_builder_artifact_uses_same_package_roles_invocation_migration_and_r
         compiled,
         "guided-checklist:interactive",
         context={"target_ref": workflow_ref("aggregate", "guided_checklist")},
+        package_digest=active_component.digest,
+        binding_digest=active_component.workflow_binding_digest,
     )
+    assert instance["package_digest"] == v1.ref.digest
+    assert instance["binding_digest"] == v1.ref.workflow_binding_digest
     guest_description = WorkflowResolver(require_verified_principal=True).describe(
         compiled,
         instance,
@@ -349,7 +354,12 @@ def test_non_builder_artifact_uses_same_package_roles_invocation_migration_and_r
     assert invoked["accepted"] is True
     assert invoked["decision"]["after"]["state"] == "completed"
 
-    in_flight = new_instance(compiled, "guided-checklist:in-flight")
+    in_flight = new_instance(
+        compiled,
+        "guided-checklist:in-flight",
+        package_digest=active_component.digest,
+        binding_digest=active_component.workflow_binding_digest,
+    )
     workflow_persistence.create_instance(in_flight)
     checkpoint = workflow_persistence.export_instance(in_flight["instance_id"])
     migration_contract = {
@@ -394,7 +404,11 @@ def test_non_builder_artifact_uses_same_package_roles_invocation_migration_and_r
             require_verified_principal=True,
             expected_generation=0,
             idempotency_key="guided-checklist:migrate:1.1.0",
+            target_package_digest=v2.ref.digest,
+            target_binding_digest=v2.ref.workflow_binding_digest,
         )
+        assert decision["after"]["package_digest"] == v2.ref.digest
+        assert decision["after"]["binding_digest"] == v2.ref.workflow_binding_digest
         workflow_persistence.commit_decision(
             decision,
             idempotency_key="guided-checklist:migrate:1.1.0",

@@ -229,7 +229,7 @@ and release-lock admission.
   `adaos.workflow.definition.v1` object, no arbitrary path, inline governed
   definition, multiple file, or role-specific variants. Absence remains an
   explicit no-workflow case.
-- [ ] `[must]` `GWR1-19` Make the existing `src/adaos/abi/workflow.*` family a
+- [x] `[must]` `GWR1-19` Make the existing `src/adaos/abi/workflow.*` family a
   self-contained authoring ABI: `definition.transitions[]` references the full
   transition schema; stable schema resolution works outside the Python
   process; registry refs and typed parameters cover guards, effects,
@@ -241,35 +241,35 @@ and release-lock admission.
   definition digest. Raw formatting and object-key order cannot change the
   semantic digest; semantic array order and transition priority remain
   deliberate data.
-- [ ] `[must]` `GWR1-21` Publish typed
+- [x] `[must]` `GWR1-21` Publish typed
   `workflow.definition_artifact`, `workflow.validation_report`,
   `workflow.registry_entry`, and `workflow.admission` records. Keep mutable
   candidate/review/activation state and LLM provenance outside the pure
   definition while binding every decision to exact definition, policy,
   registry-contract, source, and package digests.
-- [ ] `[must]` `GWR1-22` Implement the registered-code trust model: distinguish
+- [x] `[must]` `GWR1-22` Implement the registered-code trust model: distinguish
   platform-, package-, and dependency-owned adapters; validate typed input/
   output, side effect, permission ceiling, sandbox policy, owner package, and
   contract digest; reject mutable global-name resolution and any definition
   that broadens its registered contract.
-- [ ] `[must]` `GWR1-23` Bootstrap one-graph role policy with verified `guest`
+- [x] `[must]` `GWR1-23` Bootstrap one-graph role policy with verified `guest`
   and `registered` role claims. Generate role-dependent `allowed_actions` from
   the same resolver, default unknown roles/permissions to deny, prohibit role
   self-assignment, and prove that authentication alone grants no privileged
   effect. Advanced role/zone approval remains GWR8.
-- [ ] `[must]` `GWR1-24` Add one structured authoring validation surface for
+- [x] `[must]` `GWR1-24` Add one structured authoring validation surface for
   humans, Builder, and LLM repair. Its stable diagnostics cover JSON/schema
   paths, unknown or incompatible registry refs, ambiguity/reachability,
   missing outcomes/explanations, unsafe authority/risk, migration, complexity,
   and generated conformance failures without weakening policy to obtain a
   pass.
-- [ ] `[must]` `GWR1-25` Bind `workflow.json` to the existing artifact pipeline:
+- [x] `[must]` `GWR1-25` Bind `workflow.json` to the existing artifact pipeline:
   package file record plus canonical `workflow_lock`; validation evidence and
   required adapter contract locks; ProjectRelease adapter resolution and
   `workflow_binding_digest`; inspectable WorkspaceLock definition/binding
   digests. Changing code or workflow produces a new package and component
   version; neither can be delivered independently.
-- [ ] `[must]` `GWR1-26` Make activation atomic across code and definition:
+- [x] `[must]` `GWR1-26` Make activation atomic across code and definition:
   stage the complete release, build the candidate adapter registry, compile and
   validate migrations, health-check, then switch one WorkspaceLock/runtime
   generation through CAS. Pin exact definition/package/binding digests in each
@@ -281,16 +281,19 @@ and release-lock admission.
 
 Checked local evidence for the completed authoring slice:
 `tests/test_workflow_artifacts.py`, `tests/test_manifest_abi.py`,
-`tests/test_governed_workflow.py`, `tests/test_artifact_package_store.py`, and
-`tests/test_builder_governed_workflow.py`. The loader rejects missing,
+`tests/test_governed_workflow.py`, `tests/test_workflow_registry.py`,
+`tests/test_workflow_admission.py`, `tests/test_artifact_package_store.py`,
+`tests/test_workflow_persistence.py`, `tests/test_builder_governed_workflow.py`,
+and `tests/test_governed_workflow_artifact_e2e.py`. The loader rejects missing,
 unreferenced, wrongly named, duplicate-key, multi-value, unsupported-schema,
-and over-limit inputs. Package verification recomputes the canonical
-definition digest, while ProjectRelease and WorkspaceLock preserve the exact
-component `workflow_lock`. `GWR1-23`, `GWR1-25`, and `GWR1-26` stay open:
-local `guest`/`registered` resolver enforcement and definition-digest instance
-pinning are implemented, but verified identity claims, adapter-contract /
-`workflow_binding_digest` resolution, candidate-generation migration, and
-atomic runtime activation are not yet complete.
+and over-limit inputs. ABI validation resolves the workflow schema family from
+published schema files, package verification recomputes canonical definition,
+validation, adapter, and binding locks, ProjectRelease/WorkspaceLock preserve
+those locks, activation produces a typed `workflow.admission` candidate, and
+runtime instances pin definition/package/binding digests when they are created
+from an activated package. `GWR1-27` remains open: the exact LLM authoring
+context, model provenance, and bounded repair-history persistence are not yet
+implemented.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 

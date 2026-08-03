@@ -78,6 +78,20 @@ def validate_adapter_contract(value: Mapping[str, Any]) -> dict[str, Any]:
     return contract
 
 
+def create_registry_entry(
+    contract: Mapping[str, Any],
+    *,
+    status: str = "active",
+) -> dict[str, Any]:
+    entry = {
+        "schema": WORKFLOW_REGISTRY_ENTRY_SCHEMA,
+        "contract": validate_adapter_contract(contract),
+        "status": str(status),
+    }
+    validate_workflow_record(WORKFLOW_REGISTRY_ENTRY_SCHEMA, entry)
+    return copy.deepcopy(entry)
+
+
 def _builder_input_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -198,6 +212,7 @@ class WorkflowAdapterRegistry:
                     "activity",
                     str(effect["activity"]),
                     transition,
+                    params=dict(effect.get("activity_params") or {}),
                 )
             if effect.get("compensation"):
                 self._admit_usage(
@@ -205,6 +220,7 @@ class WorkflowAdapterRegistry:
                     "compensation",
                     str(effect["compensation"]),
                     transition,
+                    params=dict(effect.get("compensation_params") or {}),
                 )
         adapters = [
             {
@@ -260,22 +276,28 @@ class WorkflowAdapterRegistry:
                 f"workflow {kind} adapter is not registered: {adapter_id}"
             )
         descriptor = transition.descriptor
-        if kind == "guard":
-            errors = sorted(
-                Draft202012Validator(contract["params_schema"]).iter_errors(dict(params or {})),
-                key=lambda item: list(item.absolute_path),
+        errors = sorted(
+            Draft202012Validator(contract["params_schema"]).iter_errors(dict(params or {})),
+            key=lambda item: list(item.absolute_path),
+        )
+        if errors:
+            raise WorkflowAdapterRegistryError(
+                f"{kind} {adapter_id} params violate its registered contract: {errors[0].message}"
             )
-            if errors:
-                raise WorkflowAdapterRegistryError(
-                    f"guard {adapter_id} params violate its registered contract: {errors[0].message}"
-                )
-        else:
+        if kind != "guard":
             input_schema = descriptor["trigger"]["input_schema"]
             if canonical_payload_digest(input_schema) != canonical_payload_digest(
                 contract["input_schema"]
             ):
                 raise WorkflowAdapterRegistryError(
                     f"{kind} {adapter_id} input schema differs from its registered contract"
+                )
+            output_schema = descriptor["effect"]["output_schema"]
+            if canonical_payload_digest(output_schema) != canonical_payload_digest(
+                contract["output_schema"]
+            ):
+                raise WorkflowAdapterRegistryError(
+                    f"{kind} {adapter_id} output schema differs from its registered contract"
                 )
             risk = descriptor["risk"]
             if risk["side_effect"] not in contract["side_effects"]:
@@ -305,6 +327,7 @@ __all__ = [
     "WorkflowAdapterRegistry",
     "WorkflowAdapterRegistryError",
     "create_adapter_contract",
+    "create_registry_entry",
     "platform_workflow_adapter_contracts",
     "platform_workflow_adapter_registry",
     "validate_adapter_contract",

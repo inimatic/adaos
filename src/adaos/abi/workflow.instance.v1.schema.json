@@ -3,13 +3,21 @@
   "$id": "adaos.workflow.instance.v1",
   "title": "AdaOS Governed Workflow Instance",
   "type": "object",
-  "required": ["schema", "instance_id", "workflow_type", "definition_version", "state", "generation", "context", "history", "idempotency"],
+  "required": ["schema", "instance_id", "workflow_type", "definition_version", "definition_digest", "state", "generation", "context", "history", "idempotency"],
   "properties": {
     "schema": { "const": "adaos.workflow.instance.v1" },
     "instance_id": { "type": "string", "minLength": 1, "maxLength": 200 },
     "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
     "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
     "definition_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "package_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "binding_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },

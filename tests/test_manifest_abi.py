@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
+from referencing import Registry, Resource
+
+from adaos.services.builder.governed import builder_change_definition
 
 
 def _load_schema(name: str) -> dict:
@@ -54,6 +57,21 @@ def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name:
 
 def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
     Draft202012Validator.check_schema(_load_schema("workflow.validation_report.v1.schema.json"))
+
+
+def test_workflow_definition_schema_resolves_transition_refs_from_abi_files() -> None:
+    abi_root = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
+    registry = Registry()
+    for path in sorted(abi_root.glob("workflow.*.schema.json")):
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        resource = Resource.from_contents(schema)
+        registry = registry.with_resource(path.name, resource)
+        registry = registry.with_resource(str(schema["$id"]), resource)
+
+    Draft202012Validator(
+        _load_schema("workflow.definition.v1.schema.json"),
+        registry=registry,
+    ).validate(builder_change_definition())
 
 
 @pytest.mark.parametrize(

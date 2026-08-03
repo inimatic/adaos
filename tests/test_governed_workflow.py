@@ -532,6 +532,35 @@ def test_definition_migration_is_explicit_generation_guarded_and_replayable() ->
     assert rebuilt["context"] == decision["after"]["context"]
     assert rebuilt["history"] == decision["after"]["history"]
 
+    pinned = copy.deepcopy(approved["after"])
+    pinned["package_digest"] = "sha256:" + "1" * 64
+    pinned["binding_digest"] = "sha256:" + "2" * 64
+    with pytest.raises(WorkflowResolutionError, match="target_package_digest"):
+        migrate_workflow_instance(
+            source,
+            target,
+            pinned,
+            migration,
+            actor="user:local",
+            permissions=("workflow.definition.migrate",),
+            expected_generation=1,
+            idempotency_key="migration:pinned:missing-target",
+        )
+    pinned_decision = migrate_workflow_instance(
+        source,
+        target,
+        pinned,
+        migration,
+        actor="user:local",
+        permissions=("workflow.definition.migrate",),
+        expected_generation=1,
+        idempotency_key="migration:pinned:with-target",
+        target_package_digest="sha256:" + "3" * 64,
+        target_binding_digest="sha256:" + "4" * 64,
+    )
+    assert pinned_decision["after"]["package_digest"] == "sha256:" + "3" * 64
+    assert pinned_decision["after"]["binding_digest"] == "sha256:" + "4" * 64
+
     with pytest.raises(Exception, match="stale generation"):
         migrate_workflow_instance(
             source,

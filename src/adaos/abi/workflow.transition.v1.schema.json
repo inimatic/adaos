@@ -165,12 +165,14 @@
       "required": ["activity", "transaction", "retry", "compensation"],
       "properties": {
         "activity": { "type": ["string", "null"], "maxLength": 200 },
+        "activity_params": { "type": "object" },
         "input_schema": { "type": "object" },
         "output_schema": { "type": "object" },
         "transaction": { "enum": ["none", "atomic", "outbox"] },
         "transaction_boundary": { "enum": ["none", "aggregate", "aggregate_and_outbox", "external_saga"] },
         "retry": { "enum": ["never", "bounded", "operator"] },
-        "compensation": { "type": ["string", "null"], "maxLength": 200 }
+        "compensation": { "type": ["string", "null"], "maxLength": 200 },
+        "compensation_params": { "type": "object" }
       },
       "additionalProperties": false
     },

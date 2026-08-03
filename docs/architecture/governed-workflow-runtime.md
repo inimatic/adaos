@@ -627,22 +627,27 @@ release binding, never through a mutable global name alone.
 
 The existing `src/adaos/abi/workflow.*` contracts remain the normative
 foundation and evolve in place under normal schema-version rules. The
-definition schema references the complete transition schema; the compiler
-validates all guard, effect, activity, compensation, policy, evidence, and
-projection registry refs plus their typed parameters.
+definition schema references the complete transition schema and resolves from
+the published ABI files without relying on private Python globals. The compiler
+and registry validate guard params, activity and compensation params, declared
+input/output schemas, side-effect/risk class, permission ceilings, owner
+scope/package, sandbox class, and immutable contract digests.
 
 Authoring and activation add records around, not inside, the pure definition:
 
 - `adaos.workflow.definition_artifact.v1` binds the canonical definition,
-  semantic digest, source/package refs, authoring provenance, and timestamps;
+  package digest, validation lock, adapter locks, binding digest, definition
+  change flag, binding change flag, and required migration id;
 - `adaos.workflow.validation_report.v1` carries structured schema/compiler/
-  registry/conformance diagnostics and coverage;
+  registry diagnostics, graph diffs, bounded metrics, and repair-facing paths;
 - `adaos.workflow.registry_entry.v1` describes a registered adapter's owner,
-  trust class, typed input/output, side effects, permissions, compatibility,
-  and contract digest;
-- `adaos.workflow.admission.v1` records `candidate`, `validated`, `reviewed`,
-  `admitted`, `active`, `rejected`, `superseded`, or `rolled_back`, with the
-  actor, policy version, evidence, and exact digests supporting the decision.
+  implementation identity, typed input/output, params schema, side effects,
+  permissions, sandbox, and contract digest;
+- `adaos.workflow.admission.v1` records the exact WorkspaceLock digest,
+  ProjectRelease digest, admitted workflow artifacts, required migrations, and
+  candidate-generation digest. The first admission record has `admitted` and
+  `not_required` statuses; longer candidate/review/rollback lifecycle state
+  remains in activation history and Builder evidence.
 
 `WorkflowDefinition` remains deterministic process data. Mutable review state,
 LLM provenance, package installation state, and activation pointers do not
@@ -695,10 +700,11 @@ The locally validated first package slice serializes the same identity as an
 `workflow:<workflow_type>@<definition_version>` and `digest` is the canonical
 definition digest. Package verification derives that lock again from the
 packaged manifest and `workflow.json`; ProjectRelease and WorkspaceLock retain
-it inside the immutable component PackageRef. Validation-report digests,
-registered-adapter contract locks, and the aggregate
-`workflow_binding_digest` remain the next admission slice and are not implied
-by this compact v1 projection.
+it inside the immutable component PackageRef. Package verification also derives
+the validation-report lock, resolves registered adapter contract locks, and
+recomputes the aggregate `workflow_binding_digest` against the active registry.
+Activation records those fields in the workflow admission candidate before a
+WorkspaceLock switch can proceed.
 
 The package digest already covers the manifest, executable code, schemas, and
 every file, so changing either code or `workflow.json` creates a different
@@ -709,8 +715,11 @@ definition version remains independently meaningful for instance migration.
 or an exact component `PackageRef` and records a `workflow_binding_digest`.
 `WorkspaceLock` pins the ProjectRelease/package digests and projects, for
 inspection, the workflow definition and binding digests selected for each
-component. A runtime instance pins the exact definition, package, and binding
-digests. A mutable registry lookup cannot reinterpret an existing instance.
+component. Runtime instances pin the exact definition digest and may additionally
+pin the selected package and binding digests when they are created from an
+activated package. Definition migration must provide replacement package and
+binding pins for already pinned instances. A mutable registry lookup cannot
+reinterpret an existing instance.
 
 Activation stages the complete ProjectRelease, verifies all package and
 workflow locks, builds a candidate adapter registry, compiles the definitions,

@@ -63,6 +63,15 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
 - `conversational.validation_report.v1.schema.json` - Builder/SDK validation
   report for package schema checks, workflow cross-checks, and story runner
   evidence
+- `workflow.definition.v1.schema.json`, `workflow.transition.v1.schema.json`,
+  `workflow.validation_report.v1.schema.json`, `workflow.registry_entry.v1.schema.json`,
+  `workflow.binding.v1.schema.json`, `workflow.definition_artifact.v1.schema.json`,
+  and `workflow.admission.v1.schema.json` - data-driven governed workflow
+  authoring, validation, adapter trust, package binding, and activation
+  admission contracts. `workflow.definition.v1` references the full transition
+  schema from the ABI folder; registry/admission records stay outside the pure
+  definition so LLM provenance, review state, and activation pointers cannot
+  alter the definition digest.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, skill-owned UI view interfaces, modal address contracts, and

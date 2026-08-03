@@ -9,6 +9,7 @@ from adaos.services.workflow_registry import (
     WorkflowAdapterRegistry,
     WorkflowAdapterRegistryError,
     create_adapter_contract,
+    create_registry_entry,
     platform_workflow_adapter_contracts,
     platform_workflow_adapter_registry,
 )
@@ -82,3 +83,81 @@ def test_platform_contract_set_has_unique_kind_and_identity() -> None:
     contracts = platform_workflow_adapter_contracts()
     keys = {(item["kind"], item["adapter_id"]) for item in contracts}
     assert len(keys) == len(contracts)
+
+
+def test_registry_entry_and_activity_params_are_schema_bound() -> None:
+    definition = builder_change_definition()
+    transition = next(item for item in definition["transitions"] if item["effect"]["activity"])
+    transition["effect"]["activity"] = "demo.activity"
+    transition["effect"]["compensation"] = None
+    transition["effect"]["activity_params"] = {"mode": "trial"}
+    transition["effect"]["output_schema"] = {
+        "type": "object",
+        "required": ["ok"],
+        "properties": {"ok": {"type": "boolean"}},
+        "additionalProperties": False,
+    }
+    contract = create_adapter_contract(
+        "demo.activity",
+        "activity",
+        implementation="demo:activity",
+        input_schema=transition["trigger"]["input_schema"],
+        output_schema=transition["effect"]["output_schema"],
+        params_schema={
+            "type": "object",
+            "required": ["mode"],
+            "properties": {"mode": {"const": "trial"}},
+            "additionalProperties": False,
+        },
+        side_effects=(transition["risk"]["side_effect"],),
+        risk_classes=(transition["risk"]["class"],),
+        permission_ceiling=transition["authority"]["permissions"],
+        sandbox="isolated",
+    )
+    entry = create_registry_entry(contract)
+    registry = WorkflowAdapterRegistry([*platform_workflow_adapter_contracts(), entry["contract"]])
+
+    binding = registry.bind(definition)
+
+    assert entry["schema"] == "adaos.workflow.registry_entry.v1"
+    assert any(item["adapter_id"] == "demo.activity" for item in binding["adapters"])
+
+    missing_params = copy.deepcopy(definition)
+    missing_transition = next(
+        item
+        for item in missing_params["transitions"]
+        if item["transition_id"] == transition["transition_id"]
+    )
+    missing_transition["effect"]["activity_params"] = {}
+    with pytest.raises(WorkflowAdapterRegistryError, match="params violate"):
+        registry.bind(missing_params)
+
+    mismatched_output = create_adapter_contract(
+        "demo.output_mismatch",
+        "activity",
+        implementation="demo:activity",
+        input_schema=transition["trigger"]["input_schema"],
+        output_schema={"type": "object"},
+        params_schema={
+            "type": "object",
+            "required": ["mode"],
+            "properties": {"mode": {"const": "trial"}},
+            "additionalProperties": False,
+        },
+        side_effects=(transition["risk"]["side_effect"],),
+        risk_classes=(transition["risk"]["class"],),
+        permission_ceiling=transition["authority"]["permissions"],
+        sandbox="isolated",
+    )
+    output_definition = copy.deepcopy(definition)
+    output_transition = next(
+        item
+        for item in output_definition["transitions"]
+        if item["transition_id"] == transition["transition_id"]
+    )
+    output_transition["effect"]["activity"] = "demo.output_mismatch"
+    output_registry = WorkflowAdapterRegistry(
+        [*platform_workflow_adapter_contracts(), mismatched_output]
+    )
+    with pytest.raises(WorkflowAdapterRegistryError, match="output schema"):
+        output_registry.bind(output_definition)
