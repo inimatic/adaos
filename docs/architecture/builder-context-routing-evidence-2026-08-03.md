@@ -73,7 +73,7 @@ runtime browser surfaces use exact topology resolution.
 
 ## Local activation and publication status
 
-`builder_skill` version `0.3.37` is validated and activated in the local DEV
+`builder_skill` version `0.3.38` is validated and activated in the local DEV
 runtime. It is intentionally not pushed or published by this change set. The
 AdaOS core commits are local. Only the client repository is authorized for
 remote push in this iteration.
