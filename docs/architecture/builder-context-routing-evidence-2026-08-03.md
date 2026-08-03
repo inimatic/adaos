@@ -66,8 +66,13 @@ runtime browser surfaces use exact topology resolution.
   `Builder: dev1 -> Preview dev1-dev`, current project `test04_recipes`, and
   project-choice controls.
 - [x] `[must]` Publish the validated skill locally to Workspace version
-  `0.3.31`, activate slot `A`, and run a Workspace Telegram-route smoke that
+  `0.3.32`, activate slot `B`, and run a Workspace Telegram-route smoke that
   returns `builder_context_required` with `builder.context.select` controls.
+- [x] `[must]` Bind the local API/Telegram runtime to the current checkout;
+  the previous core slot `0.1.604` predated the Builder host-discovery ABI.
+- [x] `[must]` Distinguish an empty Builder inventory from an unavailable or
+  incompatible discovery runtime; a discovery failure can no longer be
+  reported as "no active Builder".
 - [ ] `[must]` Human Telegram acceptance with the real conversation buttons.
 - [ ] `[must]` Human browser acceptance of a generated Preview link after the
   updated client is deployed.
@@ -77,8 +82,11 @@ runtime browser surfaces use exact topology resolution.
 ## Local activation and publication status
 
 `builder_skill` version `0.3.38` is validated and activated in the local DEV
-runtime. The same content is locally published as Workspace version `0.3.31`
-and activated on slot `A`, so the Workspace-backed Telegram route no longer
-uses version `0.3.30`. The registry publication commit is local and was not
-pushed. The AdaOS core commits are also local. Only the client repository is
-authorized for remote push in this iteration.
+runtime. The hardened content is locally published as Workspace version
+`0.3.32` and activated on slot `B`, so the Workspace-backed Telegram route no
+longer uses version `0.3.30`. Its core compatibility floor is the explicit
+Builder-context ABI commit `e4f794b8` (`0.1.660+4316`). The local API reports
+the current checkout commit and an HTTP `/api/tools/call` smoke discovers both
+`desktop` and `dev1` with a button presentation plan. The registry publication
+commits are local and were not pushed. The AdaOS core commits are also local.
+Only the client repository is authorized for remote push in this iteration.
