@@ -81,6 +81,27 @@ def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
     return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
 
 
+def list_builder_hosts() -> list[dict[str, Any]]:
+    """List active Builder Webspaces without provisioning Preview topology."""
+
+    return [dict(item) for item in _service().list_builder_hosts()]
+
+
+def resolve_builder_context(
+    builder_webspace_id: str,
+    *,
+    require_ready: bool = True,
+) -> dict[str, Any]:
+    """Resolve an explicit Builder host and its unique Preview Webspace."""
+
+    return _plain(
+        _service().resolve_builder_context(
+            builder_webspace_id,
+            require_ready=require_ready,
+        )
+    )
+
+
 def set_active_draft(
     *,
     source_webspace_id: str = "desktop",
@@ -650,6 +671,7 @@ __all__ = [
     "get_binding",
     "get_workspace_binding",
     "invalidate_scenario_caches",
+    "list_builder_hosts",
     "list_development_skills",
     "materialize_revision",
     "materialize_revision_async",
@@ -659,6 +681,7 @@ __all__ = [
     "open_dev_webspace",
     "reload",
     "reload_async",
+    "resolve_builder_context",
     "refresh_follow_active_target",
     "select_project",
     "select_target",

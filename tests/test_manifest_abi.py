@@ -37,6 +37,7 @@ def _load_service_skill_schema() -> dict:
         "builder.semantic_ui_change.v1.schema.json",
         "builder.review_anchor.v1.schema.json",
         "builder.acceptance_constraint.v1.schema.json",
+        "builder.context_ref.v1.schema.json",
     ],
 )
 def test_conversational_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:

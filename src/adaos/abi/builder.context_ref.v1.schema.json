@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.context_ref.v1",
+  "title": "AdaOS Builder Context Reference",
+  "description": "An explicitly selected Builder host and its topology-bound Preview Webspace.",
+  "type": "object",
+  "required": [
+    "schema", "builder_webspace_id", "builder_title", "builder_space_kind",
+    "builder_source_mode", "builder_scenario_id", "preview_webspace_id",
+    "preview_relation_id", "preview_relation_generation", "status",
+    "selectable", "reason"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.context_ref.v1" },
+    "builder_webspace_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "builder_title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "builder_space_kind": { "enum": ["workspace", "dev"] },
+    "builder_source_mode": { "enum": ["workspace", "dev"] },
+    "builder_scenario_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "preview_webspace_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 160 },
+    "preview_relation_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 160 },
+    "preview_relation_generation": { "type": ["integer", "null"], "minimum": 1 },
+    "status": {
+      "enum": [
+        "ready", "builder_degraded", "preview_relation_missing",
+        "preview_webspace_missing", "preview_webspace_invalid"
+      ]
+    },
+    "selectable": { "type": "boolean" },
+    "reason": { "type": ["string", "null"], "minLength": 1, "maxLength": 500 }
+  },
+  "additionalProperties": false
+}

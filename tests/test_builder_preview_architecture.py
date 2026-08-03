@@ -18,6 +18,7 @@ from adaos.services.workspaces.relations import (
     BUILDER_SELF_HOST,
     WebspaceRelationshipRegistry,
 )
+from adaos.services.builder.workbench import BuilderWorkbenchService
 
 
 class _Sql:
@@ -26,6 +27,96 @@ class _Sql:
 
     def connect(self):
         return sqlite3.connect(self.path)
+
+
+class _Webspaces:
+    def __init__(self, *items) -> None:
+        self.items = list(items)
+
+    def list(self, *, mode: str = "mixed"):
+        assert mode == "mixed"
+        return list(self.items)
+
+
+def _webspace(
+    webspace_id: str,
+    *,
+    current: str,
+    kind: str = "workspace",
+    exists: bool = True,
+    degraded: bool = False,
+):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=webspace_id,
+        title=webspace_id.replace("-", " ").title(),
+        kind=kind,
+        source_mode=kind,
+        home_scenario=current,
+        current_scenario=current,
+        current_scenario_exists=exists,
+        degraded=degraded,
+        validation_reason="scenario_missing" if not exists else None,
+        recommended_action=None,
+    )
+
+
+def test_builder_host_discovery_uses_active_scenario_and_existing_topology_only(tmp_path: Path) -> None:
+    registry = WebspaceRelationshipRegistry(_Sql(tmp_path / "relations.db"))
+    valid_relation, _created = registry.ensure(
+        "dev1",
+        purpose=BUILDER_SELF_HOST,
+        scenario_id="builder",
+        legacy_target_webspace_id="dev1-dev",
+    )
+    registry.ensure(
+        "default",
+        purpose=BUILDER_PROJECT_PREVIEW,
+        scenario_id="test05_recipes",
+        legacy_target_webspace_id="default-dev",
+    )
+    service = BuilderWorkbenchService(
+        state_dir=tmp_path / "state",
+        relationship_registry=registry,
+        webspace_service=_Webspaces(
+            _webspace("default", current="web_desktop"),
+            _webspace("default-dev", current="test05_recipes", kind="dev"),
+            _webspace("dev1", current="builder"),
+            _webspace("dev1-dev", current="test04_recipes", kind="dev"),
+            _webspace("lab", current="builder"),
+            _webspace("broken", current="builder", exists=False, degraded=True),
+        ),
+    )
+
+    before = registry.list()
+    contexts = service.list_builder_hosts()
+    after = registry.list()
+
+    assert [item["builder_webspace_id"] for item in contexts] == ["dev1", "broken", "lab"]
+    assert contexts[0] == {
+        "schema": "adaos.builder.context_ref.v1",
+        "builder_webspace_id": "dev1",
+        "builder_title": "Dev1",
+        "builder_space_kind": "workspace",
+        "builder_source_mode": "workspace",
+        "builder_scenario_id": "builder",
+        "preview_webspace_id": "dev1-dev",
+        "preview_relation_id": valid_relation.relation_id,
+        "preview_relation_generation": valid_relation.generation,
+        "status": "ready",
+        "selectable": True,
+        "reason": None,
+    }
+    assert contexts[1]["status"] == "builder_degraded"
+    assert contexts[2]["status"] == "preview_relation_missing"
+    assert before == after
+    assert not (tmp_path / "state" / "builder" / "workbench" / "bindings" / "lab.json").exists()
+    assert service.resolve_builder_context("dev1") == contexts[0]
+    with pytest.raises(ValueError, match="not active"):
+        service.resolve_builder_context("default")
+    with pytest.raises(ValueError, match="not ready"):
+        service.resolve_builder_context("lab")
 
 
 @pytest.mark.parametrize(
