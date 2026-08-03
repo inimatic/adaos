@@ -274,7 +274,7 @@ and release-lock admission.
   validate migrations, health-check, then switch one WorkspaceLock/runtime
   generation through CAS. Pin exact definition/package/binding digests in each
   instance and roll back only to a prior complete generation.
-- [ ] `[should]` `GWR1-27` Supply LLM authoring with the exact ABI, registered
+- [x] `[should]` `GWR1-27` Supply LLM authoring with the exact ABI, registered
   adapter catalogue, role/policy ceilings, domain invariants, examples, and
   current definition digest; persist model/context provenance and a bounded
   diagnostic repair history without treating model output as admission.
@@ -291,9 +291,11 @@ published schema files, package verification recomputes canonical definition,
 validation, adapter, and binding locks, ProjectRelease/WorkspaceLock preserve
 those locks, activation produces a typed `workflow.admission` candidate, and
 runtime instances pin definition/package/binding digests when they are created
-from an activated package. `GWR1-27` remains open: the exact LLM authoring
-context, model provenance, and bounded repair-history persistence are not yet
-implemented.
+from an activated package. `workflow.authoring_context` now exports the exact
+workflow ABI digests, active adapter catalogue, role-policy floor, domain
+invariants, examples, and limits; `WorkflowAuthoringHistoryStore` persists
+model/context provenance, validation-report digests, candidate digests,
+diagnostics, and bounded repair history outside the pure definition.
 
 ## GWR2. Explanation, Projections, and Semantic Affordances
 

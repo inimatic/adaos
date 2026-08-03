@@ -184,6 +184,18 @@ class WorkflowAdapterRegistry:
         value = self._contracts.get((str(kind), str(adapter_id)))
         return copy.deepcopy(value) if value is not None else None
 
+    def contracts_snapshot(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            copy.deepcopy(contract)
+            for _key, contract in sorted(self._contracts.items())
+        )
+
+    def registry_entries(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            create_registry_entry(contract)
+            for contract in self.contracts_snapshot()
+        )
+
     def bind(
         self,
         definition: CompiledWorkflowDefinition | Mapping[str, Any],

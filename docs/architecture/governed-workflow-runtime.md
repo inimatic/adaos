@@ -511,12 +511,15 @@ package, or model response.
 The authoring pipeline is:
 
 ```text
-candidate definition
+current definition + ABI + adapter catalogue + role/policy ceilings
+  -> workflow.authoring_context
+  -> LLM/human candidate definition
   -> ABI schema validation
   -> compile_definition()
   -> registered guard/effect/activity/policy lookup
   -> definition review report
   -> generated conformance cases
+  -> workflow.authoring_attempt provenance + bounded repair history
   -> domain activation or rejection
 ```
 
@@ -525,6 +528,9 @@ unknown code, create ambiguous edges, omit required outcomes, broaden
 authority, lack explanations, or cannot prove representative legal and illegal
 paths. A domain may offer higher-level templates or macros to reduce authoring
 noise, but the activated artifact is the expanded `WorkflowDefinition`.
+Authoring context and attempt provenance remain separate records, so model
+identity, prompt/context digest, diagnostics, and repair history cannot change
+the definition digest.
 
 ### Artifact Location And Manifest Binding
 
@@ -648,6 +654,12 @@ Authoring and activation add records around, not inside, the pure definition:
   candidate-generation digest. The first admission record has `admitted` and
   `not_required` statuses; longer candidate/review/rollback lifecycle state
   remains in activation history and Builder evidence.
+- `adaos.workflow.authoring_context.v1` gives an LLM or human author the exact
+  schema digests, registered adapter catalogue, role-policy floor, domain
+  invariants, examples, and complexity limits for one candidate.
+- `adaos.workflow.authoring_attempt.v1` persists model identity,
+  prompt/context digests, candidate digest, validation-report digest,
+  diagnostics, status, and bounded repair history.
 
 `WorkflowDefinition` remains deterministic process data. Mutable review state,
 LLM provenance, package installation state, and activation pointers do not
