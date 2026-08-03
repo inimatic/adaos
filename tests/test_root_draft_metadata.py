@@ -137,7 +137,7 @@ def test_root_draft_archive_replaces_existing_artifact_transactionally(tmp_path)
     assert not list(tmp_path.glob(".artifact.backup-*"))
 
 
-def test_root_draft_archive_keeps_existing_artifact_when_backup_rename_fails(tmp_path, monkeypatch) -> None:
+def test_root_draft_archive_uses_file_atomic_fallback_when_backup_rename_fails(tmp_path, monkeypatch) -> None:
     target = tmp_path / "artifact"
     target.mkdir()
     (target / "previous.txt").write_text("previous", encoding="utf-8")
@@ -153,17 +153,13 @@ def test_root_draft_archive_keeps_existing_artifact_when_backup_rename_fails(tmp
 
     monkeypatch.setattr(type(target), "replace", locked_replace)
 
-    try:
-        _extract_zip_bytes(buffer.getvalue(), target)
-    except PermissionError as exc:
-        assert "target is locked" in str(exc)
-    else:
-        raise AssertionError("locked target must reject the update")
+    _extract_zip_bytes(buffer.getvalue(), target)
 
-    assert (target / "previous.txt").read_text(encoding="utf-8") == "previous"
-    assert not (target / "current.txt").exists()
+    assert not (target / "previous.txt").exists()
+    assert (target / "current.txt").read_text(encoding="utf-8") == "current"
     assert not list(tmp_path.glob(".artifact.update-*"))
     assert not list(tmp_path.glob(".artifact.backup-*"))
+    assert not list(tmp_path.glob(".artifact.rollback-*"))
 
 
 def test_root_draft_archive_rolls_back_when_staged_activation_fails(tmp_path, monkeypatch) -> None:

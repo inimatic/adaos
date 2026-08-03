@@ -672,8 +672,24 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
     activated = False
     try:
         if target.exists():
-            target.replace(backup)
-            target_moved = True
+            try:
+                target.replace(backup)
+                target_moved = True
+            except PermissionError as exc:
+                # Windows refuses to rename a directory while an IDE, shell,
+                # or read-only observer retains a handle below it. Individual
+                # files are normally still replaceable. Keep publication
+                # transactional by synchronizing staged files atomically with
+                # a complete rollback copy instead of asking callers to copy
+                # a live artifact by hand.
+                _log.warning(
+                    "artifact directory swap is locked; using file-atomic activation target=%s: %s",
+                    target,
+                    exc,
+                )
+                _replace_directory_contents_transactionally(staged, target)
+                activated = True
+                return
         try:
             staged.replace(target)
             activated = True
@@ -702,6 +718,95 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
     finally:
         if not activated and staged.exists():
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def _replace_directory_contents_transactionally(staged: Path, target: Path) -> None:
+    """Activate staged contents when a live directory cannot be renamed.
+
+    Every regular file is installed with ``os.replace``. A sibling rollback
+    tree is created before the first write and retained if rollback itself
+    cannot complete. Runtime/cache directories excluded from artifact packages
+    are left untouched.
+    """
+
+    staged = staged.expanduser().resolve()
+    target = target.expanduser().resolve()
+    if staged.parent != target.parent:
+        raise RootServiceError("Staged artifact must be on the same filesystem as its target")
+    if not target.exists() or not target.is_dir():
+        raise RootServiceError("File-atomic activation requires an existing target directory")
+
+    rollback = target.parent / f".{target.name}.rollback-{os.getpid()}-{uuid4().hex}"
+    try:
+        shutil.copytree(
+            target,
+            rollback,
+            ignore=shutil.ignore_patterns(*_SKIP_DIRS, *_SKIP_FILES, "*.pyc", "*.pyo"),
+        )
+        try:
+            _synchronize_directory_files(staged, target)
+        except Exception as activation_error:
+            try:
+                _synchronize_directory_files(rollback, target)
+            except Exception as rollback_error:
+                raise RootServiceError(
+                    "Artifact activation failed and rollback could not restore the previous files; "
+                    f"backup retained at {rollback}: {type(rollback_error).__name__}: {rollback_error}"
+                ) from activation_error
+            raise
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+        if rollback.exists():
+            try:
+                shutil.rmtree(rollback)
+            except OSError as cleanup_error:
+                _log.warning(
+                    "Artifact file-atomic activation finished but rollback cleanup failed; "
+                    "backup retained at %s: %s",
+                    rollback,
+                    cleanup_error,
+                )
+
+
+def _synchronize_directory_files(source: Path, target: Path) -> None:
+    """Synchronize one artifact tree using atomic replacement per file."""
+
+    source = source.expanduser().resolve()
+    target = target.expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    source_files = {
+        path.relative_to(source)
+        for path in source.rglob("*")
+        if path.is_file() and not _should_skip(path.relative_to(source))
+    }
+
+    for relative in sorted(source_files, key=lambda item: item.as_posix()):
+        src = source / relative
+        dst = target / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        temporary = dst.with_name(f".{dst.name}.publish-{os.getpid()}-{uuid4().hex}")
+        try:
+            shutil.copy2(src, temporary)
+            os.replace(temporary, dst)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    existing = sorted(
+        target.rglob("*"),
+        key=lambda item: (len(item.relative_to(target).parts), item.as_posix()),
+        reverse=True,
+    )
+    for path in existing:
+        relative = path.relative_to(target)
+        if any(part in _SKIP_DIRS for part in relative.parts):
+            continue
+        if path.is_file() and relative not in source_files:
+            path.unlink()
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
 
 
 def _extract_zip_bytes(data: bytes, target: Path) -> None:
@@ -3622,43 +3727,51 @@ class RootDeveloperService:
                 warnings=tuple(warnings),
             )
 
-        backup: Path | None = None
-        if target.exists():
-            backup = target.parent / f".{target.name}.publish-backup"
-            if backup.exists():
-                shutil.rmtree(backup)
-            target.rename(backup)
-
         scaffold = scaffold_skill_create if kind == "skills" else scaffold_scenario_create
         created = False
         manifest_meta: dict[str, str] | None = None
+        staged: Path | None = None
         try:
-            scaffold(name, template=str(source), version=new_version, register=True, push=False)
-            created = True
-            manifest_meta = self._update_manifest(
-                kind,
-                target,
-                name,
-                None,
-                version_bump_index=None,
-                set_prototype=False,
-                explicit_version=new_version,
-            )
+            if target.exists():
+                staged = target.parent / f".{target.name}.publish-{os.getpid()}-{uuid4().hex}"
+                shutil.copytree(
+                    source,
+                    staged,
+                    ignore=shutil.ignore_patterns(*_SKIP_DIRS, *_SKIP_FILES, "*.pyc", "*.pyo"),
+                )
+                manifest_meta = self._update_manifest(
+                    kind,
+                    staged,
+                    name,
+                    None,
+                    version_bump_index=None,
+                    set_prototype=False,
+                    explicit_version=new_version,
+                )
+                self._validate_artifact_preflight(kind, name, staged)
+                _replace_directory_transactionally(staged, target)
+                staged = None
+            else:
+                scaffold(name, template=str(source), version=new_version, register=True, push=False)
+                created = True
+                manifest_meta = self._update_manifest(
+                    kind,
+                    target,
+                    name,
+                    None,
+                    version_bump_index=None,
+                    set_prototype=False,
+                    explicit_version=new_version,
+                )
         except Exception:
+            if staged and staged.exists():
+                shutil.rmtree(staged, ignore_errors=True)
             if created and target.exists():
                 try:
                     shutil.rmtree(target)
                 except OSError:
                     pass
-            if backup and backup.exists():
-                try:
-                    backup.rename(target)
-                except OSError:
-                    pass
             raise
-        else:
-            if backup and backup.exists():
-                shutil.rmtree(backup)
 
         updated_at = (manifest_meta or {}).get("updated_at") or _current_timestamp()
         try:
