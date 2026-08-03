@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/navigation.resolution.v1.schema.json",
+  "title": "AdaOS Navigation Resolution v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "action", "reason", "destination"],
+  "properties": {
+    "schema": { "const": "adaos.navigation.resolution.v1" },
+    "status": { "enum": ["ready", "input_required", "waiting", "blocked"] },
+    "action": {
+      "enum": [
+        "open",
+        "register",
+        "login",
+        "authenticate",
+        "switch_zone",
+        "switch_subnet",
+        "switch_webspace",
+        "wait_for_sync",
+        "confirm_scenario",
+        "unsupported"
+      ]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "destination": { "$ref": "navigation.destination.v1.schema.json" },
+    "current": { "type": "object" },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "mutating": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
