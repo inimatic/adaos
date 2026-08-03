@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from adaos.domain.artifact_release import canonical_payload_digest
@@ -92,3 +93,49 @@ def test_workflow_authoring_history_persists_bounded_attempts_and_repairs(tmp_pa
     assert len(records[-1]["repair_history"]) == 3
     assert records[-1]["repair_history"][0]["repair_id"] == "repair:2"
     assert records[-1]["validation_report_digest"].startswith("sha256:")
+
+
+def test_workflow_authoring_records_invalid_then_valid_proposal_convergence(tmp_path: Path) -> None:
+    context = workflow_authoring_context(
+        generated_at="2026-08-03T00:00:00+00:00",
+        context_id="workflow-authoring:convergence",
+    )
+    store = WorkflowAuthoringHistoryStore(tmp_path / "history.json")
+    invalid = builder_change_definition()
+    invalid["transitions"][0]["target"] = "missing_state"
+    invalid_report = validate_workflow_definition_report(
+        json.dumps(invalid).encode("utf-8")
+    ).report
+    invalid_attempt = store.record_attempt(
+        context=context,
+        attempt_id="attempt:invalid:target",
+        model={"provider": "openai", "model": "gpt-test"},
+        validation_report=invalid_report,
+        candidate_definition=invalid,
+        repair_history=[_repair(1)],
+        recorded_at="2026-08-03T00:00:01+00:00",
+    )
+    valid = builder_change_definition()
+    valid_report = validate_workflow_definition_report(
+        json.dumps(valid).encode("utf-8")
+    ).report
+    valid_attempt = store.record_attempt(
+        context=context,
+        attempt_id="attempt:valid",
+        model={"provider": "openai", "model": "gpt-test"},
+        validation_report=valid_report,
+        candidate_definition=valid,
+        repair_history=[_repair(1), _repair(2)],
+        recorded_at="2026-08-03T00:00:02+00:00",
+    )
+
+    records = store.load()
+
+    assert invalid_attempt["status"] == "validation_failed"
+    assert invalid_attempt["diagnostics"]
+    assert valid_attempt["status"] == "validation_passed"
+    assert valid_attempt["candidate_definition_digest"] == valid_report["definition_digest"]
+    assert [item["attempt_id"] for item in records] == [
+        "attempt:invalid:target",
+        "attempt:valid",
+    ]

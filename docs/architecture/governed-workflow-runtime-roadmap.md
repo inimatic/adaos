@@ -555,16 +555,20 @@ tests cover all legal and representative illegal paths.
   as the generic loader/compiler/cache plus registered guard/effect/activity
   adapter registry and bounded compatibility projection; the Builder scenario
   must not contain a duplicate Change definition.
-- [ ] `[must]` `GWR4-21` Retire direct dependence on legacy
+- [x] `[must]` `GWR4-21` Retire direct dependence on legacy
   `scenario.yaml.workflow.states.actions.next_state` for governed workflows.
   Simple scenario workflows may remain as compatibility projections or be
   translated into `adaos.workflow.definition.v1`, but any mutating governed
   process must use the shared compiler/resolver and registered adapters.
-- [ ] `[must]` `GWR4-22` Implement a deterministic legacy-to-governed translator
+- [x] `[must]` `GWR4-22` Implement a deterministic legacy-to-governed translator
   and inventory every Builder and scenario reader/writer. During migration run
   one write authority and shadow-compare compiled state, commands, targets,
   explanations, and role projections; divergence blocks cutover rather than
   repairing either source silently.
+  `scenario.workflow_translation` translates legacy inline state/action data,
+  inventories legacy/governed/no-workflow manifests, and shadow-compares state
+  and edge projections. `ScenarioWorkflowRuntime` rejects legacy `next_state`
+  mutation for manifest-bound governed workflows.
 - [ ] `[must]` `GWR4-23` Cut Builder over by immutable candidate package and
   feature-gated WorkspaceLock activation. Preserve the prior complete package,
   workflow binding, and runtime generation as the rollback target; remove the
@@ -696,23 +700,23 @@ lineage, evidence, and final Publication agree without direct state repair.
   admission: missing referenced file, unreferenced workflow, wrong filename,
   duplicate keys, unsupported schema, multiple definitions, or exceeded limits
   fail before package visibility.
-- [ ] `[must]` `GWR5-25` Prove registry trust and role policy: unknown/mutable or
+- [x] `[must]` `GWR5-25` Prove registry trust and role policy: unknown/mutable or
   permission-broadening adapters fail compilation; `guest` and `registered`
   receive different allowed controls from one snapshot where declared, and a
   forged role or direct unauthorized command still fails at commit.
-- [ ] `[must]` `GWR5-26` Prove package atomicity: code-only, definition-only, and
+- [x] `[must]` `GWR5-26` Prove package atomicity: code-only, definition-only, and
   adapter-contract changes create new package/release/binding digests; a mixed
   old/new set cannot activate; injected failure leaves the prior complete
   WorkspaceLock/runtime generation authoritative.
-- [ ] `[must]` `GWR5-27` Prove LLM authoring convergence with one valid proposal
+- [x] `[must]` `GWR5-27` Prove LLM authoring convergence with one valid proposal
   and representative invalid proposals. Structured diagnostics permit bounded
   repair of structural errors while authority, risk, policy, and validation
   gates remain unchanged and every attempt retains provenance.
-- [ ] `[must]` `GWR5-28` Prove definition upgrade and rollback with an in-flight
+- [x] `[must]` `GWR5-28` Prove definition upgrade and rollback with an in-flight
   instance: pin compatible old code or apply an explicit migration, reject
   silent reinterpretation, and restore the prior complete package/binding
   without repeating an external effect.
-- [ ] `[must]` `GWR5-29` Migrate one small non-Builder skill or scenario through
+- [x] `[must]` `GWR5-29` Migrate one small non-Builder skill or scenario through
   the same manifest, ABI, role, package, activation, explanation, and rollback
   contracts to demonstrate that the model is not Builder-specific.
 - [x] `[must]` `GWR5-30` Define and run the first workflow-facing conversation
@@ -725,6 +729,19 @@ lineage, evidence, and final Publication agree without direct state repair.
   fixtures unless an explicit integration-trial profile admits them, and every
   live-effect story records its risk and environment. First runner records
   activities as mocked timeline entries and makes no provider calls.
+
+Checked local evidence for the workflow proof slice:
+`tests/test_workflow_registry.py`, `tests/test_governed_workflow.py`,
+`tests/test_workflow_authoring.py`, `tests/test_artifact_package_store.py`,
+`tests/test_artifact_workspace_activation.py`,
+`tests/test_governed_workflow_artifact_e2e.py`,
+`tests/test_scenario_workflow_translation.py`, and
+`tests/test_scenario_workflow_runtime.py`. The suite covers immutable adapter
+contracts, role-claim derivation and forged-role rejection, package workflow
+locks and binding digests, failed-health rollback to the prior WorkspaceLock,
+authoring invalid-to-valid convergence with persisted provenance, explicit
+definition migration with package/binding pins, non-Builder scenario activation
+and rollback, and legacy inline workflow translation/shadow comparison.
 - [ ] `[should]` `GWR5-32` Generate static statechart, story, and coverage
   reports from admitted workflow/conversational package sources for human
   review, Builder context packets, and trial evidence.
