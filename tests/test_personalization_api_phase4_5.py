@@ -130,8 +130,8 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(mon
 
         def read(self) -> bytes:
             return (
-                b'{"ok":true,"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru",'
-                b'"invite":{"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"}}'
+                b'{"ok":true,"claim_url":"https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=DF0B-2729",'
+                b'"invite":{"claim_url":"https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=DF0B-2729"}}'
             )
 
     monkeypatch.setattr(personalization, "urlopen", lambda *args, **kwargs: _FakeRootResponse())
@@ -146,7 +146,9 @@ def test_phase5_guest_invite_preview_claim_and_revoke_cuts_browser_admission(mon
     invite = created.json()["invite"]
     invite_id = invite["invite_id"]
     assert invite["kind"] == "guest_join_link"
-    assert invite["claim_url"] == "https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"
+    assert invite["claim_url"] == (
+        "https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=DF0B-2729"
+    )
     assert "adaos_invite=" not in invite["claim_url"]
     assert "target_subnet=" not in invite["claim_url"]
     assert "adaos_hub_base=" not in invite["claim_url"]
@@ -215,7 +217,7 @@ def test_phase5_revoked_guest_invite_is_not_reregistered_for_qr(
             return None
 
         def read(self) -> bytes:
-            return b'{"ok":true,"claim_url":"https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru"}'
+            return b'{"ok":true,"claim_url":"https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=DF0B-2729"}'
 
     def _fake_urlopen(*args: object, **kwargs: object) -> _FakeRootResponse:
         register_calls.append(args[0] if args else None)
