@@ -120,17 +120,42 @@ def _coverage(
     story_reports: Sequence[Mapping[str, Any]],
     stories: Sequence[Mapping[str, Any]],
     outputs: Sequence[Mapping[str, Any]] | Sequence[str],
+    repair_policies: Sequence[Mapping[str, Any]],
+    affordances: Sequence[Mapping[str, Any]],
+    locales: Sequence[str],
 ) -> dict[str, Any]:
     declared_states = _ids_from_mapping(compiled.states)
     declared_transitions = _sorted_ids(transition.transition_id for transition in compiled.transitions)
     declared_commands = _ids_from_mapping(compiled.commands)
     declared_outputs = _output_id_list(outputs)
+    declared_output_kinds = _sorted_ids(
+        item.get("kind") for item in outputs if isinstance(item, Mapping)
+    )
+    declared_repairs = _sorted_ids(
+        item.get("id") for item in repair_policies if isinstance(item, Mapping)
+    )
+    repair_kind_to_id = {
+        str(item.get("kind") or ""): str(item.get("id") or "")
+        for item in repair_policies
+        if isinstance(item, Mapping) and item.get("kind") and item.get("id")
+    }
+    declared_risks = _sorted_ids(
+        dict(item.get("action_policy") or {}).get("risk_class")
+        for item in affordances
+        if isinstance(item, Mapping) and isinstance(item.get("action_policy"), Mapping)
+    )
 
     covered_states: list[str] = []
     covered_transitions: list[str] = []
     covered_commands: list[str] = []
     story_step_count = 0
     covered_outputs_actual: list[str] = []
+    covered_output_kinds: list[str] = []
+    covered_repairs: list[str] = []
+    covered_risks: list[str] = []
+    covered_locales: list[str] = []
+    covered_channels: list[str] = []
+    story_kinds: list[str] = []
     for report in story_reports:
         story_step_count += int(report.get("steps") or 0)
         final_state = str(report.get("final_state") or "").strip()
@@ -154,6 +179,29 @@ def _coverage(
                 output_ref = str(output.get("source_output_ref") or "").strip()
                 if output_ref:
                     covered_outputs_actual.append(output_ref)
+
+    for story in stories:
+        if not isinstance(story, Mapping):
+            continue
+        covered_locales.append(str(story.get("locale") or ""))
+        covered_channels.append(str(story.get("channel") or ""))
+        story_kinds.append(str(story.get("story_kind") or ""))
+        for step in story.get("steps") or []:
+            if not isinstance(step, Mapping):
+                continue
+            given = step.get("given") if isinstance(step.get("given"), Mapping) else {}
+            proposal = given.get("proposal") if isinstance(given.get("proposal"), Mapping) else {}
+            policy = proposal.get("action_policy") if isinstance(proposal.get("action_policy"), Mapping) else {}
+            covered_risks.append(str(policy.get("risk_class") or ""))
+            expect = step.get("expect") if isinstance(step.get("expect"), Mapping) else {}
+            output = expect.get("output") if isinstance(expect.get("output"), Mapping) else {}
+            covered_output_kinds.append(str(output.get("kind") or ""))
+            repair = expect.get("repair") if isinstance(expect.get("repair"), Mapping) else {}
+            reason = str(repair.get("reason_code") or "")
+            if reason:
+                covered_repairs.append(
+                    reason if reason in declared_repairs else repair_kind_to_id.get(reason, reason)
+                )
 
     covered_states_sorted = _sorted_ids(covered_states)
     covered_transitions_sorted = _sorted_ids(covered_transitions)
@@ -179,6 +227,28 @@ def _coverage(
         "outputs_declared": declared_outputs,
         "outputs_covered_by_stories": covered_outputs,
         "outputs_missing_story_coverage": sorted(set(declared_outputs) - set(covered_outputs)),
+        "output_kinds_declared": declared_output_kinds,
+        "output_kinds_covered_by_stories": _sorted_ids(covered_output_kinds),
+        "output_kinds_missing_story_coverage": sorted(
+            set(declared_output_kinds) - set(_sorted_ids(covered_output_kinds))
+        ),
+        "repair_policies_declared": declared_repairs,
+        "repair_policies_covered_by_stories": _sorted_ids(covered_repairs),
+        "repair_policies_missing_story_coverage": sorted(
+            set(declared_repairs) - set(_sorted_ids(covered_repairs))
+        ),
+        "risk_classes_declared": declared_risks,
+        "risk_classes_covered_by_stories": _sorted_ids(covered_risks),
+        "risk_classes_missing_story_coverage": sorted(
+            set(declared_risks) - set(_sorted_ids(covered_risks))
+        ),
+        "locales_declared": _sorted_ids(locales),
+        "locales_covered_by_stories": _sorted_ids(covered_locales),
+        "locales_missing_story_coverage": sorted(
+            set(_sorted_ids(locales)) - set(_sorted_ids(covered_locales))
+        ),
+        "channels_covered_by_stories": _sorted_ids(covered_channels),
+        "story_kinds_covered": _sorted_ids(story_kinds),
     }
 
 
@@ -188,6 +258,9 @@ def workflow_static_report(
     stories: Sequence[Mapping[str, Any]] = (),
     story_reports: Sequence[Mapping[str, Any]] = (),
     outputs: Sequence[Mapping[str, Any]] | Sequence[str] = (),
+    repair_policies: Sequence[Mapping[str, Any]] = (),
+    affordances: Sequence[Mapping[str, Any]] = (),
+    locales: Sequence[str] = (),
     package_id: str | None = None,
     package_digest: str | None = None,
     report_id: str | None = None,
@@ -225,6 +298,9 @@ def workflow_static_report(
             story_reports=story_summaries,
             stories=stories,
             outputs=outputs,
+            repair_policies=repair_policies,
+            affordances=affordances,
+            locales=locales,
         ),
         "story_reports": story_summaries,
     }
@@ -266,11 +342,24 @@ def conversational_package_static_report(
         for item in list(package.output_source.get("outputs") or [])
         if isinstance(item, Mapping)
     )
+    repair_policies = tuple(
+        dict(item)
+        for item in list(package.repair_source.get("policies") or [])
+        if isinstance(item, Mapping)
+    )
+    affordances = tuple(
+        dict(item)
+        for item in list(package.affordances_source.get("affordances") or [])
+        if isinstance(item, Mapping)
+    )
     return workflow_static_report(
         package.workflow_artifact.compiled,
         stories=package.stories,
         story_reports=story_reports,
         outputs=outputs,
+        repair_policies=repair_policies,
+        affordances=affordances,
+        locales=tuple(str(item) for item in package.manifest.get("locales") or []),
         package_id=str(package.manifest.get("package_id") or "") or None,
         package_digest=package.package_digest,
         report_id=report_id,
@@ -349,6 +438,28 @@ def workflow_static_report_markdown(report: Mapping[str, Any]) -> str:
                 f"{len(coverage.get('outputs_declared') or [])} | "
                 f"{_markdown_cell(', '.join(coverage.get('outputs_missing_story_coverage') or []))} |"
             ),
+            (
+                f"| Output kinds | {len(coverage.get('output_kinds_covered_by_stories') or [])} | "
+                f"{len(coverage.get('output_kinds_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('output_kinds_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Repair policies | {len(coverage.get('repair_policies_covered_by_stories') or [])} | "
+                f"{len(coverage.get('repair_policies_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('repair_policies_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Risk classes | {len(coverage.get('risk_classes_covered_by_stories') or [])} | "
+                f"{len(coverage.get('risk_classes_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('risk_classes_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Locales | {len(coverage.get('locales_covered_by_stories') or [])} | "
+                f"{len(coverage.get('locales_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('locales_missing_story_coverage') or []))} |"
+            ),
+            "",
+            f"Channels covered: {_markdown_cell(', '.join(coverage.get('channels_covered_by_stories') or []))}",
             "",
             "## Conversation Stories",
             "",

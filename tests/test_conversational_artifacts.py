@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from adaos.services.conversational_artifacts import (
@@ -501,6 +502,44 @@ def test_conversational_package_rejects_invalid_regex_matcher(tmp_path: Path) ->
     assert "conversational.matcher.regex_invalid" in {
         item["code"] for item in result.report["diagnostics"]
     }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    (
+        ("remove_example", "conversational.intent.example_unknown"),
+        ("remove_output", "conversational.affordance.output_ref_unknown"),
+        ("unknown_repair", "conversational.story.repair_policy_unknown"),
+    ),
+)
+def test_conversational_package_mutations_fail_closed(
+    tmp_path: Path,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    _write_package(tmp_path)
+    conversational = tmp_path / "conversational"
+    if mutation == "remove_example":
+        source = yaml.safe_load((conversational / "examples.yaml").read_text(encoding="utf-8"))
+        source["examples"] = []
+        _write_yaml(conversational / "examples.yaml", source)
+    elif mutation == "remove_output":
+        source = yaml.safe_load((conversational / "output.yaml").read_text(encoding="utf-8"))
+        source["outputs"] = [item for item in source["outputs"] if item["id"] != "prototype_approved"]
+        _write_yaml(conversational / "output.yaml", source)
+    else:
+        story_path = conversational / "tests" / "stories" / "approve.yaml"
+        source = yaml.safe_load(story_path.read_text(encoding="utf-8"))
+        source["steps"][0]["expect"]["repair"] = {
+            "reason_code": "missing_policy",
+            "next_expected_input": "text",
+        }
+        _write_yaml(story_path, source)
+
+    result = validate_conversational_package(tmp_path, manifest_name="skill.yaml")
+
+    assert result.report["valid"] is False
+    assert expected_code in {item["code"] for item in result.report["diagnostics"]}
 
 
 def test_conversational_package_rejects_unknown_workflow_command(tmp_path: Path) -> None:

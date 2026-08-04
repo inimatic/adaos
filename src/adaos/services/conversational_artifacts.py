@@ -734,6 +734,13 @@ def _cross_check_package(
                 )
             )
 
+    repair_policy_ids = set(_id_index(repair_source.get("policies")))
+    repair_policy_kinds = {
+        str(policy.get("kind") or "")
+        for policy in list(repair_source.get("policies") or [])
+        if isinstance(policy, Mapping) and str(policy.get("kind") or "").strip()
+    }
+
     for story_index, story in enumerate(stories):
         path_label = (
             str(story_paths[story_index].relative_to(story_paths[story_index].parents[2]))
@@ -749,6 +756,7 @@ def _cross_check_package(
                     "workflow story requires an admitted workflow definition",
                 )
             )
+
         if story_kind == "workflow" and compiled is not None and story.get("workflow_type") != compiled.workflow_type:
             diagnostics.append(
                 _diagnostic(
@@ -827,6 +835,16 @@ def _cross_check_package(
                         "conversational.story.output_ref_unknown",
                         f"{path_label}.steps[{step_index}].expect.output.output_ref",
                         f"story expects unknown output {expected_output_ref}",
+                    )
+                )
+            repair_expect = expect.get("repair") if isinstance(expect.get("repair"), Mapping) else {}
+            repair_reason = str(repair_expect.get("reason_code") or "").strip()
+            if repair_reason and repair_reason not in repair_policy_ids | repair_policy_kinds:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.story.repair_policy_unknown",
+                        f"{path_label}.steps[{step_index}].expect.repair.reason_code",
+                        f"story references unknown repair policy or kind {repair_reason}",
                     )
                 )
             if given_proposal.get("kind") == "skill_invocation":

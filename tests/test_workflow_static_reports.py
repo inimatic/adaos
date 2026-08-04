@@ -414,6 +414,12 @@ def test_conversational_package_static_report_covers_story_without_chat_prose(tm
     assert report["coverage"]["commands_covered_by_stories"] == ["approve"]
     assert report["coverage"]["outputs_covered_by_stories"] == ["prototype_approved"]
     assert report["coverage"]["outputs_missing_story_coverage"] == ["repair_no_match"]
+    assert report["coverage"]["output_kinds_covered_by_stories"] == ["result"]
+    assert report["coverage"]["output_kinds_missing_story_coverage"] == ["repair"]
+    assert report["coverage"]["repair_policies_missing_story_coverage"] == ["no_match"]
+    assert report["coverage"]["risk_classes_covered_by_stories"] == ["isolated_write"]
+    assert report["coverage"]["locales_covered_by_stories"] == ["en"]
+    assert report["coverage"]["channels_covered_by_stories"] == ["web"]
     assert report["story_reports"][0]["timeline"][0]["output"]["workflow_event_id"]
     assert "approve it" not in json.dumps(report, ensure_ascii=False)
 

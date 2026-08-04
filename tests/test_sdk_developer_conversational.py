@@ -31,6 +31,13 @@ def test_developer_sdk_exports_human_readable_static_evidence(tmp_path: Path) ->
     result = export_package(package_root, kind="skill", output_dir=output_dir)
 
     assert result["valid"] is True
+    coverage = result["static_report"]["coverage"]
+    assert coverage["output_kinds_covered_by_stories"] == ["repair", "result"]
+    assert coverage["repair_policies_covered_by_stories"] == ["no_match"]
+    assert coverage["repair_policies_missing_story_coverage"] == []
+    assert coverage["risk_classes_covered_by_stories"] == ["isolated_write"]
+    assert coverage["locales_covered_by_stories"] == ["en"]
+    assert coverage["channels_covered_by_stories"] == ["text", "web"]
     assert set(result["artifacts"]) == {
         "conversational-validation.json",
         "workflow-static-report.json",
