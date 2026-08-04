@@ -6,7 +6,9 @@ from adaos.services.governed_workflow import (
     workflow_contract_snapshot,
 )
 from adaos.services.workflow_metrics import (
+    WORKFLOW_METRICS_EVIDENCE_SCHEMA,
     WORKFLOW_METRICS_REPORT_SCHEMA,
+    workflow_metrics_evidence,
     workflow_metrics_report,
 )
 
@@ -150,6 +152,8 @@ def test_workflow_metrics_report_records_complexity_context_stories_and_cycle_ti
             "timeline": [
                 {
                     "command": "approve",
+                    "retry_of_step": 0,
+                    "action_failure": True,
                     "output": {"kind": "clarification"},
                     "presentation": {
                         "mode": "numbered_text",
@@ -228,6 +232,8 @@ def test_workflow_metrics_report_records_complexity_context_stories_and_cycle_ti
     assert report["story_outcomes"]["valid_story_count"] == 0
     assert report["story_outcomes"]["clarification_rate"] == 0.5
     assert report["story_outcomes"]["repair_rate"] == 0.5
+    assert report["story_outcomes"]["retry_rate"] == 1.0
+    assert report["story_outcomes"]["action_failure_rate"] == 1.0
     assert report["story_outcomes"]["action_mismatch_defect_count"] == 1
     assert report["story_outcomes"]["repeated_correction_count"] == 1
     assert report["story_outcomes"]["presentation_fallback_count"] == 1
@@ -240,6 +246,17 @@ def test_workflow_metrics_report_records_complexity_context_stories_and_cycle_ti
         "diagnosis_effort_steps": -3.0,
     }
     assert report["diagnostics"] == []
+
+    evidence = workflow_metrics_evidence(report)
+    validate_workflow_record(WORKFLOW_METRICS_EVIDENCE_SCHEMA, evidence)
+    assert evidence["rates"] == {
+        "clarification": 0.5,
+        "repair": 0.5,
+        "retry": 1.0,
+        "action_failure": 1.0,
+    }
+    assert evidence["definition_complexity"] == report["definition_complexity"]
+    assert evidence["context_sufficiency"] == report["context_sufficiency"]
 
 
 def test_workflow_metrics_report_warns_when_cycle_measurements_are_missing() -> None:

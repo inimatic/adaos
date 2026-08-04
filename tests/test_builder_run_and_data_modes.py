@@ -60,6 +60,21 @@ def test_experiment_does_not_advance_prototype_until_explicit_adoption(
             "revision": "EXP-1",
             "base_revision": "001",
             "purpose": "experiment",
+            "story_reports": [
+                {
+                    "valid": True,
+                    "diagnostics": [],
+                    "timeline": [
+                        {
+                            "command": "inspect",
+                            "retry_of_step": 0,
+                            "action_failure": True,
+                            "output": {"kind": "clarification"},
+                            "presentation": None,
+                        }
+                    ],
+                }
+            ],
         },
     )["workflow"]
 
@@ -68,6 +83,13 @@ def test_experiment_does_not_advance_prototype_until_explicit_adoption(
     run = experimented["change"]["runs"][-1]
     assert run["purpose"] == "experiment"
     assert run["adoption_status"] == "pending"
+    assert run["workflow_metrics"]["definition_complexity"]["state_count"] > 0
+    assert run["workflow_metrics"]["rates"] == {
+        "clarification": 1.0,
+        "repair": 0.0,
+        "retry": 1.0,
+        "action_failure": 1.0,
+    }
 
     with pytest.raises(BuilderWorkflowError, match="confirmation"):
         service.transition(

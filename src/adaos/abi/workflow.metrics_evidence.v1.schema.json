@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.metrics_evidence.v1",
+  "title": "AdaOS Workflow Metrics Evidence",
+  "type": "object",
+  "required": [
+    "schema",
+    "report_id",
+    "definition_digest",
+    "definition_complexity",
+    "context_sufficiency",
+    "rates",
+    "counts",
+    "evidence_digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.metrics_evidence.v1" },
+    "report_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "definition_digest": { "$ref": "#/$defs/digest" },
+    "definition_complexity": { "type": "object" },
+    "context_sufficiency": { "type": "object" },
+    "rates": {
+      "type": "object",
+      "required": ["clarification", "repair", "retry", "action_failure"],
+      "properties": {
+        "clarification": { "type": "number", "minimum": 0 },
+        "repair": { "type": "number", "minimum": 0 },
+        "retry": { "type": "number", "minimum": 0 },
+        "action_failure": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "required": ["story", "step", "workflow_command", "retry", "action_failure"],
+      "properties": {
+        "story": { "type": "integer", "minimum": 0 },
+        "step": { "type": "integer", "minimum": 0 },
+        "workflow_command": { "type": "integer", "minimum": 0 },
+        "retry": { "type": "integer", "minimum": 0 },
+        "action_failure": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "evidence_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

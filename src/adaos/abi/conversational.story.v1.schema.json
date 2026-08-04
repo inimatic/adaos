@@ -102,7 +102,31 @@
                   }
                 ]
               },
-              "output_ref": { "type": ["string", "null"], "maxLength": 160 }
+              "output_ref": { "type": ["string", "null"], "maxLength": 160 },
+              "runtime": {
+                "type": "object",
+                "required": ["expected_generation", "executor_available", "retry_of_step", "concurrent_command"],
+                "properties": {
+                  "expected_generation": { "type": ["integer", "null"], "minimum": 0 },
+                  "executor_available": { "type": ["boolean", "null"] },
+                  "retry_of_step": { "type": ["integer", "null"], "minimum": 0 },
+                  "concurrent_command": {
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "required": ["command", "input"],
+                        "properties": {
+                          "command": { "$ref": "#/$defs/id" },
+                          "input": { "type": "object" }
+                        },
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
             },
             "additionalProperties": false
           },
@@ -129,6 +153,9 @@
               "transition_id": { "type": ["string", "null"], "maxLength": 160 },
               "state": { "type": ["string", "null"], "maxLength": 160 },
               "reason_code": { "type": ["string", "null"], "maxLength": 240 },
+              "accepted": { "type": ["boolean", "null"] },
+              "generation": { "type": ["integer", "null"], "minimum": 0 },
+              "idempotent_replay": { "type": ["boolean", "null"] },
               "output": {
                 "type": "object",
                 "required": ["kind", "output_ref", "summary", "actions", "next_expected_input"],

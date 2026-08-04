@@ -51,6 +51,7 @@
         "required": ["story_id", "valid", "steps", "final_state", "diagnostics", "timeline"],
         "properties": {
           "story_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "runner_version": { "type": "integer", "minimum": 1 },
           "valid": { "type": "boolean" },
           "steps": { "type": "integer", "minimum": 0 },
           "final_state": { "type": ["string", "null"], "maxLength": 160 },

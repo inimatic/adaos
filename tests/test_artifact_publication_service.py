@@ -269,8 +269,45 @@ def test_workflow_publication_admission_precedes_channel_and_binds_all_locks(
         artifact_id="recipes",
         artifact_dir=dev,
         change_ids=("change-workflow-admission",),
-        validation_evidence={"suite": "workflow-validation", "status": "passed"},
+        validation_evidence={
+            "suite": "workflow-validation",
+            "status": "passed",
+            "context_packet": {
+                "digest": "sha256:" + "0" * 64,
+                "coverage": {
+                    "required": ["workflow_definition"],
+                    "present": ["workflow_definition"],
+                    "missing": [],
+                    "ambiguous": [],
+                    "ready": True,
+                },
+            },
+            "story_reports": [
+                {
+                    "valid": True,
+                    "diagnostics": [],
+                    "timeline": [
+                        {
+                            "command": "inspect",
+                            "retry_of_step": 0,
+                            "action_failure": True,
+                            "output": {"kind": "clarification"},
+                            "presentation": None,
+                        }
+                    ],
+                }
+            ],
+        },
     )
+    trial_metrics = prepared.candidate.trials[0].workflow_metrics
+    assert trial_metrics is not None
+    assert trial_metrics["context_sufficiency"]["ready"] is True
+    assert trial_metrics["rates"] == {
+        "clarification": 1.0,
+        "repair": 0.0,
+        "retry": 1.0,
+        "action_failure": 1.0,
+    }
     service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
 
     _promote(service, prepared.candidate.candidate_id)

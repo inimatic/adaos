@@ -69,6 +69,12 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.workflow_artifacts import load_manifest_bound_workflow
+from adaos.services.workflow_metrics import (
+    workflow_metrics_evidence,
+    workflow_metrics_report,
+)
 from adaos.services.workspace_registry import (
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
@@ -1144,6 +1150,68 @@ class ArtifactPublicationService:
                 "rebase DEV on the installed/stable release before creating a trial"
             )
 
+    @staticmethod
+    def _trial_workflow_metrics(
+        artifact_dir: Path,
+        *,
+        kind: str,
+        validation_evidence: Mapping[str, Any],
+        generated_at: str,
+    ) -> dict[str, Any] | None:
+        manifest_name = "skill.yaml" if kind == "skill" else "scenario.yaml"
+        workflow = load_manifest_bound_workflow(
+            artifact_dir,
+            manifest_name=manifest_name,
+            allow_legacy_inline=False,
+        )
+        if workflow is None:
+            return None
+        manifest = yaml.safe_load(
+            (Path(artifact_dir) / manifest_name).read_text(encoding="utf-8")
+        ) or {}
+        story_reports: tuple[Mapping[str, Any], ...] = tuple(
+            dict(item)
+            for item in validation_evidence.get("story_reports") or []
+            if isinstance(item, Mapping)
+        )
+        if isinstance(manifest, Mapping) and isinstance(
+            manifest.get("conversational"), Mapping
+        ):
+            conversational = compile_conversational_package(
+                artifact_dir,
+                manifest_name=manifest_name,
+                run_stories=True,
+                build_static_report=False,
+                require_operation_catalog=False,
+            )
+            story_reports = tuple(
+                dict(item)
+                for item in conversational.validation.report.get("story_reports") or []
+                if isinstance(item, Mapping)
+            )
+        context_packet = (
+            dict(validation_evidence["context_packet"])
+            if isinstance(validation_evidence.get("context_packet"), Mapping)
+            else None
+        )
+        measurement = (
+            dict(validation_evidence["workflow_measurement"])
+            if isinstance(validation_evidence.get("workflow_measurement"), Mapping)
+            else None
+        )
+        return workflow_metrics_evidence(
+            workflow_metrics_report(
+                workflow.compiled,
+                story_reports=story_reports,
+                context_packet=context_packet,
+                measurement=measurement,
+                report_id=(
+                    f"workflow-metrics:trial:{kind}:{workflow.definition_digest[-24:]}"
+                ),
+                generated_at=generated_at,
+            )
+        )
+
     def prepare_candidate(
         self,
         *,
@@ -1253,17 +1321,24 @@ class ArtifactPublicationService:
                 "mode": "empty",
                 "reason": "isolated trial Workspace has no seeded data",
             }
+        trial_started_at = _now()
         candidate = begin_trial(
             candidate,
             trial_id=f"trial-{candidate_id}",
             audience=audience,
             data_mode=data_mode,  # type: ignore[arg-type]
             lock_digest=trial_activation.workspace_lock.to_dict()["lock_digest"],
-            now=_now(),
+            now=trial_started_at,
             data_ref=data_ref,
             isolation_evidence=isolation_evidence,
             reload_receipt=trial_operation.get("reload_receipt"),
             health_receipt=trial_operation.get("health_receipt"),
+            workflow_metrics=self._trial_workflow_metrics(
+                artifact_dir,
+                kind=kind,
+                validation_evidence=validation_evidence,
+                generated_at=trial_started_at,
+            ),
         )
         self.candidate_store.save(candidate)
         return PreparedCandidate(candidate, plan, trial_workspace)

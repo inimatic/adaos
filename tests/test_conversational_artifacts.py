@@ -10,7 +10,11 @@ from adaos.services.conversational_artifacts import (
     run_conversation_story,
     validate_conversational_package,
 )
-from adaos.services.governed_workflow import compile_definition, new_instance
+from adaos.services.governed_workflow import (
+    compile_definition,
+    new_instance,
+    validate_workflow_record,
+)
 
 
 def _transition(
@@ -825,6 +829,167 @@ def test_story_runner_asserts_repair_without_workflow_command() -> None:
     output = report["timeline"][0]["output"]
     assert output["kind"] == "repair"
     assert output["reason"]["code"] == "no_match"
+
+
+def test_story_runner_v2_covers_retry_concurrency_stale_and_executor_unavailable() -> None:
+    workflow = compile_definition(_fallback_definition())
+    action_policy = {
+        "schema": "adaos.conversation.action_policy.v1",
+        "risk_class": "read",
+        "side_effect": "none",
+        "confirmation": "none",
+    }
+
+    def step(
+        command: str,
+        *,
+        runtime: dict[str, object],
+        accepted: bool,
+        reason_code: str | None,
+        generation: int,
+        transition_id: str | None,
+        idempotent_replay: bool,
+        output_kind: str,
+        output_summary: str,
+    ) -> dict[str, object]:
+        return {
+            "given": {
+                "proposal": {
+                    "kind": "workflow_command",
+                    "intent_id": command,
+                    "command": command,
+                    "skill_id": None,
+                    "operation_id": None,
+                    "arguments": {},
+                    "confidence": 1.0,
+                    "action_policy": action_policy,
+                },
+                "event": None,
+                "skill_result": None,
+                "output_ref": None,
+                "runtime": runtime,
+            },
+            "expect": {
+                "proposal": {
+                    "kind": "workflow_command",
+                    "command": command,
+                    "confidence_at_least": 1.0,
+                },
+                "command": command,
+                "transition_id": transition_id,
+                "state": "choice",
+                "reason_code": reason_code,
+                "accepted": accepted,
+                "generation": generation,
+                "idempotent_replay": idempotent_replay,
+                "output": {
+                    "kind": output_kind,
+                    "output_ref": None,
+                    "summary": output_summary,
+                    "actions": [],
+                    "next_expected_input": "none",
+                },
+            },
+        }
+
+    story = {
+        "schema": "adaos.conversational.story.v1",
+        "id": "runtime.negative.story",
+        "title": "Runtime negative paths",
+        "story_kind": "workflow",
+        "workflow_type": "builder.choice",
+        "locale": "en",
+        "channel": "text",
+        "actor": {
+            "id": "user:local",
+            "permissions": ["builder.change"],
+            "roles": [],
+        },
+        "start": {
+            "instance_id": "choice:negative",
+            "state": "choice",
+            "generation": 0,
+            "context": {},
+        },
+        "steps": [
+            step(
+                "inspect_0",
+                runtime={
+                    "expected_generation": 0,
+                    "executor_available": True,
+                    "retry_of_step": None,
+                    "concurrent_command": None,
+                },
+                accepted=True,
+                reason_code=None,
+                generation=1,
+                transition_id="choose_0",
+                idempotent_replay=False,
+                output_kind="accepted",
+                output_summary="inspect_0 completed",
+            ),
+            step(
+                "inspect_0",
+                runtime={
+                    "expected_generation": 0,
+                    "executor_available": True,
+                    "retry_of_step": 0,
+                    "concurrent_command": None,
+                },
+                accepted=True,
+                reason_code="already_applied",
+                generation=1,
+                transition_id="choose_0",
+                idempotent_replay=True,
+                output_kind="accepted",
+                output_summary="inspect_0 completed",
+            ),
+            step(
+                "inspect_1",
+                runtime={
+                    "expected_generation": 1,
+                    "executor_available": True,
+                    "retry_of_step": None,
+                    "concurrent_command": {"command": "inspect_2", "input": {}},
+                },
+                accepted=False,
+                reason_code="stale_generation",
+                generation=2,
+                transition_id=None,
+                idempotent_replay=False,
+                output_kind="repair",
+                output_summary="stale generation",
+            ),
+            step(
+                "inspect_3",
+                runtime={
+                    "expected_generation": 2,
+                    "executor_available": False,
+                    "retry_of_step": None,
+                    "concurrent_command": None,
+                },
+                accepted=False,
+                reason_code="executor_unavailable",
+                generation=2,
+                transition_id=None,
+                idempotent_replay=False,
+                output_kind="repair",
+                output_summary="The workflow executor is unavailable.",
+            ),
+        ],
+        "metadata": {"negative": True},
+    }
+
+    validate_workflow_record("adaos.conversational.story.v1", story)
+    report = run_conversation_story(story, workflow)
+
+    assert report["valid"] is True
+    assert report["runner_version"] == 2
+    assert report["timeline"][1]["idempotent_replay"] is True
+    assert report["timeline"][2]["concurrent_decision"]["accepted"] is True
+    assert report["timeline"][2]["reason_code"] == "stale_generation"
+    assert report["timeline"][3]["reason_code"] == "executor_unavailable"
+    assert sum(item["action_failure"] for item in report["timeline"]) == 2
 
 
 def test_story_runner_executes_skill_invocation_without_workflow() -> None:

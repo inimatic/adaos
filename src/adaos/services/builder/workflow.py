@@ -54,6 +54,7 @@ from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
     compile_definition,
     migrate_workflow_instance,
+    validate_workflow_record,
     verified_workflow_principal,
     workflow_definition_digest,
 )
@@ -71,6 +72,10 @@ from adaos.services.workflow_authoring import (
 from adaos.services.workflow_registry import (
     WorkflowAdapterRegistryError,
     platform_workflow_adapter_registry,
+)
+from adaos.services.workflow_metrics import (
+    workflow_metrics_evidence,
+    workflow_metrics_report,
 )
 from adaos.services.workflow_static_reports import workflow_static_report
 from adaos.services.workflow_execution import (
@@ -390,6 +395,17 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
         raise BuilderWorkflowError("invalid Builder Run adoption status")
     if purpose != "experiment" and adoption_status != "not_applicable":
         raise BuilderWorkflowError("only Experiment Runs have adoption state")
+    workflow_metrics = value.get("workflow_metrics")
+    if workflow_metrics is not None and not isinstance(workflow_metrics, Mapping):
+        raise BuilderWorkflowError("Builder Run workflow_metrics must be an object")
+    if isinstance(workflow_metrics, Mapping):
+        try:
+            validate_workflow_record(
+                "adaos.workflow.metrics_evidence.v1",
+                workflow_metrics,
+            )
+        except ValueError as exc:
+            raise BuilderWorkflowError(f"invalid Builder Run workflow_metrics: {exc}") from exc
     return {
         "schema": BUILDER_RUN_SCHEMA,
         "run_id": run_id,
@@ -404,6 +420,7 @@ def _normalize_run(value: Any, *, change_id: str) -> dict[str, Any]:
         "input_refs": [str(item).strip() for item in value.get("input_refs") or [] if str(item).strip()][-100:],
         "output_refs": [str(item).strip() for item in value.get("output_refs") or [] if str(item).strip()][-100:],
         "evidence_refs": [str(item).strip() for item in value.get("evidence_refs") or [] if str(item).strip()][-100:],
+        "workflow_metrics": copy.deepcopy(dict(workflow_metrics or {})) or None,
         "started_at": str(value.get("started_at") or "").strip() or None,
         "completed_at": str(value.get("completed_at") or "").strip() or None,
         "error": str(value.get("error") or "").strip() or None,
@@ -2685,8 +2702,8 @@ class BuilderWorkflowService:
             "workflow": projection,
         }
 
-    @staticmethod
     def _record_transition_run(
+        self,
         workflow: dict[str, Any],
         *,
         action: str,
@@ -2773,6 +2790,35 @@ class BuilderWorkflowService:
         else:
             adoption_status = "not_applicable"
         context_packet = workflow.get("context_packet") if isinstance(workflow.get("context_packet"), Mapping) else {}
+        supplied_metrics = metadata.get("workflow_metrics")
+        if supplied_metrics is not None and not isinstance(supplied_metrics, Mapping):
+            raise BuilderWorkflowError("workflow_metrics must be an object")
+        if isinstance(supplied_metrics, Mapping):
+            metrics_evidence = validate_workflow_record(
+                "adaos.workflow.metrics_evidence.v1",
+                supplied_metrics,
+            )
+        else:
+            story_reports = tuple(
+                dict(item)
+                for item in metadata.get("story_reports") or []
+                if isinstance(item, Mapping)
+            )
+            measurement = (
+                dict(metadata["workflow_measurement"])
+                if isinstance(metadata.get("workflow_measurement"), Mapping)
+                else None
+            )
+            metrics_evidence = workflow_metrics_evidence(
+                workflow_metrics_report(
+                    self._governed_definition(),
+                    story_reports=story_reports,
+                    context_packet=context_packet,
+                    measurement=measurement,
+                    report_id=f"workflow-metrics:builder-run:{run_id}",
+                    generated_at=changed_at,
+                )
+            )
         run = {
             "schema": BUILDER_RUN_SCHEMA,
             "run_id": run_id,
@@ -2804,6 +2850,7 @@ class BuilderWorkflowService:
                 for item in metadata.get("evidence_refs") or []
                 if str(item).strip()
             ][-100:],
+            "workflow_metrics": metrics_evidence,
             "started_at": changed_at,
             "completed_at": None if status == "running" else changed_at,
             "error": str(metadata.get("error") or "").strip() or None,

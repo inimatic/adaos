@@ -955,6 +955,7 @@ def _cross_check_package(
             given = dict(step.get("given") or {})
             given_proposal = dict(given.get("proposal") or {})
             given_event = dict(given.get("event") or {})
+            runtime = dict(given.get("runtime") or {})
             expect = dict(step.get("expect") or {})
             command_id = str(given_proposal.get("command") or given_event.get("command") or "").strip()
             if command_id and compiled is not None and command_id not in commands:
@@ -1001,6 +1002,25 @@ def _cross_check_package(
                         "conversational.story.output_ref_unknown",
                         f"{path_label}.steps[{step_index}].given.output_ref",
                         f"story references unknown output {output_ref}",
+                    )
+                )
+            concurrent = dict(runtime.get("concurrent_command") or {})
+            concurrent_command = str(concurrent.get("command") or "").strip()
+            if concurrent_command and compiled is not None and concurrent_command not in commands:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.story.concurrent_command_unknown",
+                        f"{path_label}.steps[{step_index}].given.runtime.concurrent_command",
+                        f"story references undeclared concurrent command {concurrent_command}",
+                    )
+                )
+            retry_of_step = runtime.get("retry_of_step")
+            if retry_of_step is not None and int(retry_of_step) >= step_index:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.story.retry_reference_invalid",
+                        f"{path_label}.steps[{step_index}].given.runtime.retry_of_step",
+                        "retry_of_step must reference an earlier story step",
                     )
                 )
             expected_output_ref = str(output.get("output_ref") or "").strip()
@@ -1442,17 +1462,19 @@ def run_conversation_story(
         step = dict(raw_step or {})
         given = dict(step.get("given") or {})
         expect = dict(step.get("expect") or {})
-        given_proposal = dict(given.get("proposal") or expect.get("proposal") or {})
+        given_proposal = dict(given.get("proposal") or {})
         given_event = dict(given.get("event") or {})
+        runtime = dict(given.get("runtime") or {})
         expected_proposal = dict(expect.get("proposal") or {})
         before_state = str(instance.get("state")) if instance is not None else None
         proposal: dict[str, Any] | None = None
         invocation: dict[str, Any] | None = None
         decision: dict[str, Any] | None = None
         activity_mock: dict[str, Any] | None = None
+        concurrent_decision: dict[str, Any] | None = None
         workflow_event_id: str | None = None
         command_id = str(
-            given_proposal.get("command") or given_event.get("command") or expect.get("command") or ""
+            given_proposal.get("command") or given_event.get("command") or ""
         ).strip() or None
         timestamp = f"2026-01-01T00:{index:02d}:00+00:00"
         fixed_trace = {
@@ -1479,11 +1501,16 @@ def run_conversation_story(
         proposal_kind = str(given_proposal.get("kind") or "")
         if proposal_kind == "workflow_command" and workflow is not None and instance is not None:
             policy = dict(given_proposal.get("action_policy") or action_policy_from_workflow_risk("read"))
+            invocation_generation = (
+                int(runtime["expected_generation"])
+                if runtime.get("expected_generation") is not None
+                else int(instance["generation"])
+            )
             exact_ref = workflow_ref(
                 "workflow",
                 str(instance["instance_id"]),
                 version=workflow.definition_version,
-                generation=int(instance["generation"]),
+                generation=invocation_generation,
                 digest=str(instance.get("definition_digest") or "") or None,
             )
             proposal = build_workflow_intent_proposal(
@@ -1503,24 +1530,92 @@ def run_conversation_story(
                 trace=fixed_trace,
                 now=timestamp,
             )
+            idempotency_key = f"story:{story_id}:{index}:{command_id}"
+            retry_of_step = runtime.get("retry_of_step")
+            if retry_of_step is not None:
+                retry_index = int(retry_of_step)
+                previous = (
+                    timeline[retry_index]
+                    if 0 <= retry_index < len(timeline)
+                    else None
+                )
+                previous_invocation = dict(
+                    dict(previous or {}).get("invocation") or {}
+                )
+                previous_command = dict(previous_invocation.get("command") or {})
+                previous_key = str(previous_command.get("idempotency_key") or "").strip()
+                if previous_key:
+                    idempotency_key = previous_key
+                else:
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.story.retry_reference_invalid",
+                            f"{story_id}.steps[{index}].given.runtime.retry_of_step",
+                            "retry_of_step has no earlier workflow invocation",
+                        )
+                    )
             invocation = workflow_invocation_from_intent_proposal(
                 proposal,
                 actor_id=actor_id,
-                idempotency_key=f"story:{story_id}:{index}:{command_id}",
+                idempotency_key=idempotency_key,
                 now=timestamp,
             )
-            decision = resolver.apply(
-                workflow,
-                instance,
-                str(command_id or ""),
-                input_value=dict(invocation["command"]["input"]),
-                actor=actor_id,
-                permissions=permissions,
-                roles=roles,
-                expected_generation=int(invocation["command"]["expected_generation"]),
-                idempotency_key=str(invocation["command"]["idempotency_key"]),
-                now=timestamp,
+            concurrent = dict(runtime.get("concurrent_command") or {})
+            if concurrent:
+                concurrent_command = str(concurrent.get("command") or "").strip()
+                concurrent_decision = resolver.apply(
+                    workflow,
+                    instance,
+                    concurrent_command,
+                    input_value=dict(concurrent.get("input") or {}),
+                    actor=actor_id,
+                    permissions=permissions,
+                    roles=roles,
+                    expected_generation=int(instance["generation"]),
+                    idempotency_key=f"story:{story_id}:{index}:concurrent:{concurrent_command}",
+                    now=timestamp,
+                )
+                if concurrent_decision.get("accepted"):
+                    instance = copy.deepcopy(concurrent_decision["after"])
+            transition = workflow.by_source_command.get(
+                (str(instance.get("state") or ""), str(command_id or ""))
             )
+            executor_available = runtime.get("executor_available")
+            activity = (
+                str(transition.descriptor["effect"].get("activity") or "").strip()
+                if transition is not None
+                else ""
+            )
+            if executor_available is False and activity:
+                decision = {
+                    "schema": "adaos.workflow.decision.v1",
+                    "accepted": False,
+                    "status": "rejected",
+                    "reason_code": "executor_unavailable",
+                    "command": str(command_id or ""),
+                    "transition_id": None,
+                    "before": copy.deepcopy(instance),
+                    "after": copy.deepcopy(instance),
+                    "activity": None,
+                    "events": [],
+                    "event_records": [],
+                    "async_reply": {"mode": "none", "reply_route": "none"},
+                    "explanation": "The workflow executor is unavailable.",
+                    "decided_at": timestamp,
+                }
+            else:
+                decision = resolver.apply(
+                    workflow,
+                    instance,
+                    str(command_id or ""),
+                    input_value=dict(invocation["command"]["input"]),
+                    actor=actor_id,
+                    permissions=permissions,
+                    roles=roles,
+                    expected_generation=int(invocation["command"]["expected_generation"]),
+                    idempotency_key=str(invocation["command"]["idempotency_key"]),
+                    now=timestamp,
+                )
             instance = copy.deepcopy(decision["after"])
             event_records = [dict(item) for item in decision.get("event_records") or []]
             workflow_event_id = str(event_records[0].get("event_id") or "") if event_records else None
@@ -1592,7 +1687,16 @@ def run_conversation_story(
             if expect.get("reason_code") is None and not decision.get("accepted"):
                 diagnostics.append(_diagnostic("conversational.story.command_rejected", f"{story_id}.steps[{index}].given", f"command {command_id} was rejected: {decision.get('reason_code')}"))
             _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.transition_id", code="conversational.story.transition_mismatch", expected=expect.get("transition_id"), actual=decision.get("transition_id"))
+            _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.accepted", code="conversational.story.acceptance_mismatch", expected=expect.get("accepted"), actual=bool(decision.get("accepted")))
+            _assert_story_value(
+                diagnostics,
+                path=f"{story_id}.steps[{index}].expect.idempotent_replay",
+                code="conversational.story.replay_mismatch",
+                expected=expect.get("idempotent_replay"),
+                actual=decision.get("status") == "duplicate",
+            )
         _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.state", code="conversational.story.state_mismatch", expected=expect.get("state"), actual=str(instance.get("state")) if instance is not None else None)
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.generation", code="conversational.story.generation_mismatch", expected=expect.get("generation"), actual=int(instance.get("generation")) if instance is not None else None)
         actual_act = dict((proposal or {}).get("semantic_acts", [{}])[0]) if proposal else {}
         _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.proposal.kind", code="conversational.story.proposal_kind_mismatch", expected=expected_proposal.get("kind"), actual=actual_act.get("kind"))
         _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.proposal.command", code="conversational.story.proposal_command_mismatch", expected=expected_proposal.get("command"), actual=actual_act.get("command"))
@@ -1684,6 +1788,15 @@ def run_conversation_story(
                 "accepted": None if decision is None else bool(decision.get("accepted")),
                 "reason_code": None if decision is None else decision.get("reason_code"),
                 "transition_id": None if decision is None else decision.get("transition_id"),
+                "idempotent_replay": bool(
+                    decision is not None and decision.get("status") == "duplicate"
+                ),
+                "action_failure": bool(
+                    command_id and decision is not None and not decision.get("accepted")
+                ),
+                "retry_of_step": runtime.get("retry_of_step"),
+                "executor_available": runtime.get("executor_available"),
+                "concurrent_decision": copy.deepcopy(concurrent_decision),
                 "activity": activity_mock,
                 "output": output,
                 "response_envelope": envelope,
@@ -1694,6 +1807,7 @@ def run_conversation_story(
 
     return {
         "story_id": story_id,
+        "runner_version": 2,
         "valid": not diagnostics,
         "steps": len(list(story.get("steps") or [])),
         "final_state": str(instance.get("state")) if instance is not None else None,

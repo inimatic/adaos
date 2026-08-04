@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from adaos.domain.artifact_release import canonical_payload_digest
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
     compile_definition,
@@ -14,6 +15,7 @@ from adaos.services.governed_workflow import (
 
 
 WORKFLOW_METRICS_REPORT_SCHEMA = "adaos.workflow.metrics_report.v1"
+WORKFLOW_METRICS_EVIDENCE_SCHEMA = "adaos.workflow.metrics_evidence.v1"
 
 
 def _now() -> str:
@@ -141,6 +143,8 @@ def _story_outcomes(story_reports: Sequence[Mapping[str, Any]]) -> dict[str, Any
     workflow_command_step_count = 0
     clarification_output_count = 0
     repair_output_count = 0
+    retry_count = 0
+    action_failure_count = 0
     presentation_fallback_count = 0
     unsupported_presentation_count = 0
     semantic_equivalence_failure_count = 0
@@ -158,6 +162,10 @@ def _story_outcomes(story_reports: Sequence[Mapping[str, Any]]) -> dict[str, Any
             step_count += 1
             if str(item.get("command") or "").strip():
                 workflow_command_step_count += 1
+            if item.get("retry_of_step") is not None:
+                retry_count += 1
+            if item.get("action_failure") is True:
+                action_failure_count += 1
             output = dict(item.get("output") or {})
             output_kind = str(output.get("kind") or "")
             if output_kind == "clarification":
@@ -197,6 +205,8 @@ def _story_outcomes(story_reports: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "workflow_command_step_count": workflow_command_step_count,
         "clarification_output_count": clarification_output_count,
         "repair_output_count": repair_output_count,
+        "retry_count": retry_count,
+        "action_failure_count": action_failure_count,
         "action_mismatch_defect_count": action_mismatch_defect_count,
         "repeated_correction_count": repeated_correction_count,
         "presentation_fallback_count": presentation_fallback_count,
@@ -208,6 +218,10 @@ def _story_outcomes(story_reports: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "distinct_diagnostic_codes": codes,
         "clarification_rate": round(_rate(clarification_output_count, step_count), 4),
         "repair_rate": round(_rate(repair_output_count, step_count), 4),
+        "retry_rate": round(_rate(retry_count, workflow_command_step_count), 4),
+        "action_failure_rate": round(
+            _rate(action_failure_count, workflow_command_step_count), 4
+        ),
         "action_mismatch_rate": round(_rate(action_mismatch_defect_count, step_count), 4),
         "presentation_fallback_rate": round(_rate(presentation_fallback_count, step_count), 4),
     }
@@ -283,7 +297,39 @@ def workflow_metrics_report(
     return validate_workflow_record(WORKFLOW_METRICS_REPORT_SCHEMA, report)
 
 
+def workflow_metrics_evidence(report: Mapping[str, Any]) -> dict[str, Any]:
+    validated = validate_workflow_record(WORKFLOW_METRICS_REPORT_SCHEMA, report)
+    outcomes = dict(validated["story_outcomes"])
+    unsigned = {
+        "schema": WORKFLOW_METRICS_EVIDENCE_SCHEMA,
+        "report_id": validated["report_id"],
+        "definition_digest": validated["definition_digest"],
+        "definition_complexity": copy.deepcopy(validated["definition_complexity"]),
+        "context_sufficiency": copy.deepcopy(validated["context_sufficiency"]),
+        "rates": {
+            "clarification": outcomes["clarification_rate"],
+            "repair": outcomes["repair_rate"],
+            "retry": outcomes["retry_rate"],
+            "action_failure": outcomes["action_failure_rate"],
+        },
+        "counts": {
+            "story": outcomes["story_count"],
+            "step": outcomes["step_count"],
+            "workflow_command": outcomes["workflow_command_step_count"],
+            "retry": outcomes["retry_count"],
+            "action_failure": outcomes["action_failure_count"],
+        },
+    }
+    evidence = {
+        **unsigned,
+        "evidence_digest": canonical_payload_digest(unsigned),
+    }
+    return validate_workflow_record(WORKFLOW_METRICS_EVIDENCE_SCHEMA, evidence)
+
+
 __all__ = [
+    "WORKFLOW_METRICS_EVIDENCE_SCHEMA",
     "WORKFLOW_METRICS_REPORT_SCHEMA",
+    "workflow_metrics_evidence",
     "workflow_metrics_report",
 ]

@@ -18,6 +18,7 @@
     "input_refs": { "$ref": "#/$defs/refs" },
     "output_refs": { "$ref": "#/$defs/refs" },
     "evidence_refs": { "$ref": "#/$defs/refs" },
+    "workflow_metrics": { "type": ["object", "null"] },
     "started_at": { "type": ["string", "null"], "format": "date-time" },
     "completed_at": { "type": ["string", "null"], "format": "date-time" },
     "error": { "type": ["string", "null"], "maxLength": 4000 }

@@ -12,6 +12,7 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.storage import atomic_write_json
+from adaos.services.governed_workflow import validate_workflow_record
 
 
 CandidateStatus = Literal["draft", "validated", "trial", "accepted", "rejected", "stale"]
@@ -42,6 +43,7 @@ class TrialEvidence:
     reload_receipt: Mapping[str, Any] | None = None
     health_receipt: Mapping[str, Any] | None = None
     rollback_receipt: Mapping[str, Any] | None = None
+    workflow_metrics: Mapping[str, Any] | None = None
     duration_seconds: int | None = None
 
     def __post_init__(self) -> None:
@@ -64,6 +66,14 @@ class TrialEvidence:
             raise CandidateError(f"trial data mode {self.data_mode} requires data_ref")
         if self.duration_seconds is not None and self.duration_seconds < 0:
             raise CandidateError("trial duration_seconds must not be negative")
+        if self.workflow_metrics is not None:
+            try:
+                validate_workflow_record(
+                    "adaos.workflow.metrics_evidence.v1",
+                    self.workflow_metrics,
+                )
+            except ValueError as exc:
+                raise CandidateError(f"invalid trial workflow_metrics: {exc}") from exc
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -89,6 +99,8 @@ class TrialEvidence:
             payload["health_receipt"] = dict(self.health_receipt)
         if self.rollback_receipt is not None:
             payload["rollback_receipt"] = dict(self.rollback_receipt)
+        if self.workflow_metrics is not None:
+            payload["workflow_metrics"] = dict(self.workflow_metrics)
         if self.duration_seconds is not None:
             payload["duration_seconds"] = self.duration_seconds
         return payload
@@ -111,6 +123,7 @@ class TrialEvidence:
             "reload_receipt",
             "health_receipt",
             "rollback_receipt",
+            "workflow_metrics",
             "duration_seconds",
         }
         required = {
@@ -146,6 +159,7 @@ class TrialEvidence:
             "reload_receipt",
             "health_receipt",
             "rollback_receipt",
+            "workflow_metrics",
         ):
             if value.get(field) is not None and not isinstance(value.get(field), Mapping):
                 raise CandidateError(f"trial {field} must be an object")
@@ -164,6 +178,7 @@ class TrialEvidence:
             reload_receipt=value.get("reload_receipt"),
             health_receipt=value.get("health_receipt"),
             rollback_receipt=value.get("rollback_receipt"),
+            workflow_metrics=value.get("workflow_metrics"),
             duration_seconds=value.get("duration_seconds"),
         )
 
@@ -420,6 +435,7 @@ def begin_trial(
     isolation_evidence: Mapping[str, Any] | None = None,
     reload_receipt: Mapping[str, Any] | None = None,
     health_receipt: Mapping[str, Any] | None = None,
+    workflow_metrics: Mapping[str, Any] | None = None,
     real_data_read_only: bool = False,
     real_data_reversible: bool = False,
 ) -> CandidateRecord:
@@ -451,6 +467,7 @@ def begin_trial(
         isolation_evidence=isolation_evidence,
         reload_receipt=reload_receipt,
         health_receipt=health_receipt,
+        workflow_metrics=workflow_metrics,
     )
     return replace(candidate, status="trial", trials=(*candidate.trials, trial), updated_at=now)
 
