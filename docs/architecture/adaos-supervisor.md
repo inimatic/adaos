@@ -762,6 +762,18 @@ This makes warm-switch a strict availability boundary. Constrained or
 unhealthy cases remain on the proven old runtime until a candidate can pass the
 barrier, unless an operator explicitly accepts a cold cutover.
 
+Candidate readiness is slow-start tolerant but bounded. Each readiness pass
+waits up to 60 seconds by default (`ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC`),
+and a still-starting candidate receives the same bounded refresh window before
+the supervisor decides. Strict warm-switch mode allows one automatic deferral
+by default (`ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS`). The durable attempt
+records the current and maximum deferral counts. If the candidate still cannot
+become ready, or repeatedly exceeds the memory gate, the update terminates as
+`failed / prewarm` with a stable reason and cleanup evidence. It does not loop
+through slot preparation indefinitely and it does not silently downgrade to a
+cold cutover. An operator may explicitly change the cutover policy and start a
+new attempt after examining that evidence.
+
 Recommended per-skill diagnostic fields:
 
 - `skill`

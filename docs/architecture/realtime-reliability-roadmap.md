@@ -95,7 +95,19 @@ transport-only `/ws` and `/yws` handoff as ready.
   that self-heal only when the replacement runtime is ready and the active
   manifest matches the original immutable target. The reconciler records a
   terminal validation instead of replaying the update or silently claiming
-  rollback. Live `.30` rollout acceptance remains required.
+  rollback.
+- The one-shot `.30` recovery advanced from slot B to slot A at exact target
+  `bf8ba37edfc743e85a1a62baefd17e808147ff78` (`0.1.665`) and reached
+  `succeeded / validate` without redispatching the state-changing command. The
+  replacement supervisor reconciled root restart completion and adopted the
+  already-ready slot A runtime.
+- That rollout also exposed an unbounded `candidate_not_ready` loop. Candidate
+  startup completed in the same second that the old 12-second readiness windows
+  expired and the supervisor stopped it; the scheduled attempt then rebuilt the
+  inactive slot from scratch. The current tree uses 60-second readiness windows,
+  persists a deferral counter, permits one automatic retry by default, and then
+  fails explicitly in `prewarm` with public evidence instead of repeating
+  preparation forever or silently violating strict warm-switch policy.
 - The hub-root bridge now has two independent recovery rails. Child transport
   cleanup cancellation is classified separately from owner-requested task
   cancellation, so an abnormal sidecar EOF cannot silently terminate the
@@ -894,6 +906,9 @@ lifecycle and update attempt state.
 - [x] `[must]` Automatically prewarm passive candidate runtime when warm-switch
   is admitted, surface its readiness/failure in supervisor/browser-safe status,
   and keep the candidate passive until supervisor explicitly commits cutover.
+- [x] `[must]` Bound slow-candidate readiness and automatic warm-switch
+  deferrals; expose their count and terminate exhausted attempts as an explicit
+  `failed / prewarm` outcome rather than an infinite prepare loop.
 - [x] `[must]` Harden fast-cutover authority handoff so promoted candidate
   runtime becomes the sole live root/browser traffic owner without ambiguous
   overlap. Promotion now waits for route authority before retiring the old
@@ -958,9 +973,10 @@ lifecycle and update attempt state.
 - [x] `[must]` Root/browser diagnostics can distinguish concurrent `active`
   and `candidate` runtimes by explicit runtime instance identity instead of
   only `hub_id`.
-- [ ] `[must]` When warm-switch is admitted and candidate prewarm succeeds,
+- [x] `[must]` When warm-switch is admitted and candidate prewarm succeeds,
   supervisor can promote/adopt that candidate without ambiguous overlap, while
-  fallback to stop-and-switch remains deterministic.
+  fallback to stop-and-switch remains deterministic. Live `.30` recovery
+  promoted the second bounded candidate attempt and completed root validation.
 
 ## Phase 4: Hub-member semantic channels
 

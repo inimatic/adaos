@@ -851,9 +851,9 @@ def _warm_switch_rss_multiplier() -> float:
 
 def _warm_switch_candidate_ready_timeout_sec() -> float:
     try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC") or "12").strip()))
+        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC") or "60").strip()))
     except Exception:
-        return 12.0
+        return 60.0
 
 
 def _warm_switch_strict_cutover_enabled() -> bool:
@@ -880,6 +880,16 @@ def _warm_switch_defer_sec() -> float:
         return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_DEFER_SEC") or "60").strip()))
     except Exception:
         return 60.0
+
+
+def _warm_switch_max_deferrals() -> int:
+    try:
+        return max(
+            0,
+            int(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS") or "1").strip()),
+        )
+    except Exception:
+        return 1
 
 
 def _sidecar_code_change_debounce_sec() -> float:
@@ -1153,6 +1163,14 @@ def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] 
         "candidate_prewarm_state": str(source.get("candidate_prewarm_state") or "").strip() or None,
         "candidate_prewarm_message": str(source.get("candidate_prewarm_message") or "").strip() or None,
         "candidate_prewarm_ready_at": _epoch(source.get("candidate_prewarm_ready_at")) or None,
+        "candidate_prewarm_deferral_count": max(
+            0,
+            int(_epoch(source.get("candidate_prewarm_deferral_count"))),
+        ),
+        "candidate_prewarm_max_deferrals": max(
+            0,
+            int(_epoch(source.get("candidate_prewarm_max_deferrals"))),
+        ),
         "prepare_lease_path": str(source.get("prepare_lease_path") or "").strip() or None,
         "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip() or None,
         "prepare_timeout_sec": _epoch(source.get("prepare_timeout_sec")) or None,
@@ -1395,7 +1413,7 @@ def _transition_request_payload(
 
 def _request_from_attempt(attempt: dict[str, Any] | None) -> dict[str, Any]:
     data = attempt if isinstance(attempt, dict) else {}
-    return _transition_request_payload(
+    payload = _transition_request_payload(
         action=str(data.get("action") or "update"),
         target_rev=str(data.get("target_rev") or ""),
         target_version=str(data.get("target_version") or ""),
@@ -1405,6 +1423,16 @@ def _request_from_attempt(attempt: dict[str, Any] | None) -> dict[str, Any]:
         signal_delay_sec=float(data.get("signal_delay_sec") or 0.25),
         requested_at=_epoch(data.get("requested_at")) or time.time(),
     )
+    try:
+        candidate_prewarm_deferral_count = max(
+            0,
+            int(data.get("candidate_prewarm_deferral_count") or 0),
+        )
+    except Exception:
+        candidate_prewarm_deferral_count = 0
+    if candidate_prewarm_deferral_count:
+        payload["candidate_prewarm_deferral_count"] = candidate_prewarm_deferral_count
+    return payload
 
 
 def _subsequent_transition_request(attempt: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1671,6 +1699,22 @@ def _build_attempt_payload(*, action: str, request: dict[str, Any], status: dict
             request.get("candidate_prewarm_message") or current_status.get("candidate_prewarm_message") or ""
         ).strip()
         or None,
+        "candidate_prewarm_deferral_count": max(
+            0,
+            int(
+                request.get("candidate_prewarm_deferral_count")
+                or current_status.get("candidate_prewarm_deferral_count")
+                or 0
+            ),
+        ),
+        "candidate_prewarm_max_deferrals": max(
+            0,
+            int(
+                request.get("candidate_prewarm_max_deferrals")
+                or current_status.get("candidate_prewarm_max_deferrals")
+                or 0
+            ),
+        ),
         "last_status": current_status,
         "updated_at": now,
     }
@@ -2296,6 +2340,9 @@ def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, A
         "candidate_prewarm_state": str(status.get("candidate_prewarm_state") or "").strip() or None,
         "candidate_prewarm_message": str(status.get("candidate_prewarm_message") or "").strip() or None,
         "candidate_prewarm_ready_at": status.get("candidate_prewarm_ready_at"),
+        "candidate_prewarm_deferral_count": status.get("candidate_prewarm_deferral_count"),
+        "candidate_prewarm_max_deferrals": status.get("candidate_prewarm_max_deferrals"),
+        "failure_reason": str(status.get("failure_reason") or "").strip() or None,
         "restart_mode": str(status.get("restart_mode") or "").strip() or None,
         "restart_requested_at": status.get("restart_requested_at"),
         "updated_at": status.get("updated_at"),
@@ -2315,6 +2362,9 @@ def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, A
             "subsequent_transition_requested_at": attempt.get("subsequent_transition_requested_at"),
             "candidate_prewarm_state": str(attempt.get("candidate_prewarm_state") or "").strip() or None,
             "candidate_prewarm_message": str(attempt.get("candidate_prewarm_message") or "").strip() or None,
+            "candidate_prewarm_deferral_count": attempt.get("candidate_prewarm_deferral_count"),
+            "candidate_prewarm_max_deferrals": attempt.get("candidate_prewarm_max_deferrals"),
+            "completion_reason": str(attempt.get("completion_reason") or "").strip() or None,
             "restart_mode": str(attempt.get("restart_mode") or "").strip() or None,
             "restart_requested_at": attempt.get("restart_requested_at"),
             "updated_at": attempt.get("updated_at"),
@@ -9160,6 +9210,13 @@ class SupervisorManager:
 
     def _begin_prepare_transition(self, request: dict[str, Any]) -> dict[str, Any]:
         started_at = time.time()
+        try:
+            candidate_prewarm_deferral_count = max(
+                0,
+                int(request.get("candidate_prewarm_deferral_count") or 0),
+            )
+        except Exception:
+            candidate_prewarm_deferral_count = 0
         prepare_lease_token = uuid.uuid4().hex
         prepare_lease_path = _prepare_lease_path(prepare_lease_token)
         prepare_timeout_sec = _update_prepare_timeout_sec()
@@ -9190,6 +9247,8 @@ class SupervisorManager:
                 "prepare_timeout_sec": prepare_timeout_sec,
                 "prepare_lease_path": str(prepare_lease_path),
                 "prepare_lease_token": prepare_lease_token,
+                "candidate_prewarm_deferral_count": candidate_prewarm_deferral_count,
+                "candidate_prewarm_max_deferrals": _warm_switch_max_deferrals(),
             }
         )
         attempt_payload = dict(request)
@@ -9220,6 +9279,7 @@ class SupervisorManager:
                 prepare_lease_path=str(prepare_lease_path),
                 prepare_lease_token=prepare_lease_token,
                 prepare_timeout_sec=prepare_timeout_sec,
+                candidate_prewarm_deferral_count=candidate_prewarm_deferral_count,
             ),
             name=f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
         )
@@ -9675,6 +9735,7 @@ class SupervisorManager:
         prepare_lease_path: str = "",
         prepare_lease_token: str = "",
         prepare_timeout_sec: float | None = None,
+        candidate_prewarm_deferral_count: int = 0,
     ) -> None:
         cancel_phase = "prepare"
         failure_phase = "prepare"
@@ -9805,6 +9866,8 @@ class SupervisorManager:
                     "candidate_prewarm_message": candidate_prewarm_message or None,
                     "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                     "candidate_memory_guard": candidate_memory_guard,
+                    "candidate_prewarm_deferral_count": candidate_prewarm_deferral_count,
+                    "candidate_prewarm_max_deferrals": _warm_switch_max_deferrals(),
                     "message": (
                         (
                             f"slot {target_slot} prepared; passive candidate blocked by memory gate; countdown started"
@@ -9875,6 +9938,57 @@ class SupervisorManager:
                 if blocked_by_memory:
                     cleanup_kwargs["graceful"] = False
                 candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
+                next_deferral_count = max(0, int(candidate_prewarm_deferral_count)) + 1
+                max_deferrals = _warm_switch_max_deferrals()
+                if next_deferral_count > max_deferrals:
+                    failure_reason = (
+                        "candidate_memory_blocked" if blocked_by_memory else "candidate_not_ready"
+                    )
+                    terminal_candidate_state = (
+                        "failed_memory_blocked" if blocked_by_memory else "failed_not_ready"
+                    )
+                    clear_core_update_plan()
+                    status = write_core_update_status(
+                        {
+                            "state": "failed",
+                            "phase": "prewarm",
+                            "action": action,
+                            "target_rev": target_rev,
+                            "target_version": target_version,
+                            "requested_target_version": requested_target_version,
+                            "reason": reason,
+                            "target_slot": target_slot,
+                            "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                            "prepare_elapsed_s": prepare_elapsed_s,
+                            "install_elapsed_s": install_elapsed_s,
+                            "install_installer": install_installer,
+                            "venv_seed_source": venv_seed_source,
+                            "venv_seeded": venv_seeded,
+                            "failure_reason": failure_reason,
+                            "candidate_prewarm_state": terminal_candidate_state,
+                            "candidate_prewarm_message": candidate_prewarm_message or None,
+                            "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
+                            "candidate_memory_guard": candidate_memory_guard,
+                            "candidate_cleanup": candidate_cleanup,
+                            "candidate_prewarm_deferral_count": next_deferral_count,
+                            "candidate_prewarm_max_deferrals": max_deferrals,
+                            "message": (
+                                "core update stopped after the passive candidate repeatedly exceeded the "
+                                "warm-switch memory gate"
+                                if blocked_by_memory
+                                else "core update stopped after the passive candidate repeatedly failed to "
+                                "become ready within the warm-switch deadline"
+                            ),
+                            "manifest": manifest,
+                            "finished_at": time.time(),
+                        }
+                    )
+                    _complete_update_attempt(
+                        state="failed",
+                        status=status,
+                        reason=f"{failure_reason}: automatic warm-switch deferrals exhausted",
+                    )
+                    return
                 scheduled_for = time.time() + _warm_switch_defer_sec()
                 self._schedule_planned_transition(
                     {
@@ -9885,6 +9999,7 @@ class SupervisorManager:
                         "countdown_sec": countdown_sec,
                         "drain_timeout_sec": drain_timeout_sec,
                         "signal_delay_sec": signal_delay_sec,
+                        "candidate_prewarm_deferral_count": next_deferral_count,
                     },
                     scheduled_for=scheduled_for,
                     planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_not_ready",
@@ -9910,6 +10025,8 @@ class SupervisorManager:
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                         "candidate_memory_guard": candidate_memory_guard,
+                        "candidate_prewarm_deferral_count": next_deferral_count,
+                        "candidate_prewarm_max_deferrals": max_deferrals,
                         "candidate_cleanup": candidate_cleanup,
                         "manifest": manifest,
                     },
@@ -9919,6 +10036,8 @@ class SupervisorManager:
                         "candidate_prewarm_message": candidate_prewarm_message or None,
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                         "candidate_memory_guard": candidate_memory_guard,
+                        "candidate_prewarm_deferral_count": next_deferral_count,
+                        "candidate_prewarm_max_deferrals": max_deferrals,
                     },
                 )
                 return

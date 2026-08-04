@@ -2030,6 +2030,14 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
     assert promote_calls == [("B", "supervisor.fast_cutover")]
 
 
+def test_warm_switch_candidate_readiness_defaults_cover_slow_startup(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", raising=False)
+
+    assert supervisor._warm_switch_candidate_ready_timeout_sec() == 60.0
+    assert supervisor._warm_switch_max_deferrals() == 1
+
+
 def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
@@ -2101,9 +2109,82 @@ def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path
     assert status["phase"] == "scheduled"
     assert status["planned_reason"] == "candidate_not_ready"
     assert status["candidate_prewarm_state"] == "deferred_not_ready"
+    assert status["candidate_prewarm_deferral_count"] == 1
+    assert status["candidate_prewarm_max_deferrals"] == 1
     assert attempt["state"] == "planned"
+    assert attempt["candidate_prewarm_deferral_count"] == 1
+    assert attempt["candidate_prewarm_max_deferrals"] == 1
     assert lifecycle_calls == []
     assert activated_slots == []
+    assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
+
+
+def test_prepare_worker_fails_after_candidate_prewarm_deferrals_are_exhausted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setattr(
+        supervisor,
+        "prepare_pending_update",
+        lambda plan: {
+            "state": "prepared",
+            "phase": "prepare",
+            "target_slot": "B",
+            "manifest": {"slot": "B"},
+            "plan": {"target_slot": "B"},
+            "finished_at": 222.0,
+        },
+    )
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    cleanup_calls: list[tuple[str, str | None]] = []
+
+    async def _candidate_prewarm(*, target_slot: str | None):
+        return {
+            "attempted": True,
+            "state": "starting",
+            "message": "passive candidate runtime is still warming on http://127.0.0.1:8778",
+        }
+
+    async def _refresh_starting_candidate_prewarm(*, target_slot: str | None):
+        return {
+            "state": "starting",
+            "message": "passive candidate runtime is still warming on http://127.0.0.1:8778",
+        }
+
+    async def _cleanup_candidate_runtime(*, reason: str, slot: str | None = None):
+        cleanup_calls.append((reason, slot))
+        return {"ok": True, "stopped": True, "slot": slot}
+
+    monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
+    monkeypatch.setattr(manager, "_refresh_starting_candidate_prewarm", _refresh_starting_candidate_prewarm)
+    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(
+        manager._prepare_and_countdown_update_worker(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    status = read_status()
+    attempt = supervisor._read_update_attempt()
+    assert status["state"] == "failed"
+    assert status["phase"] == "prewarm"
+    assert status["failure_reason"] == "candidate_not_ready"
+    assert status["candidate_prewarm_state"] == "failed_not_ready"
+    assert status["candidate_prewarm_deferral_count"] == 1
+    assert status["candidate_prewarm_max_deferrals"] == 0
+    assert attempt["state"] == "failed"
+    assert attempt["completion_reason"] == "candidate_not_ready: automatic warm-switch deferrals exhausted"
     assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
 
 
