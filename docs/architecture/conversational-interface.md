@@ -514,6 +514,12 @@ turn_trace_id
   -> delivery_attempt_id
 ```
 
+Semantic response presentation preserves this chain. A `ConversationOutput` can
+be normalized directly for chat rendering, or first wrapped in a durable
+`ResponseEnvelope`; both paths keep the semantic output id, reason, risk,
+provenance, trace, envelope id, and response status in response metadata rather
+than reducing the output to display text.
+
 Minimum metrics:
 
 - proposal accept/abstain/reject rates by source, locale, provider, and skill;
@@ -582,8 +588,11 @@ for their detailed gates and evidence.
 - [ ] `[must]` Preserve runtime specialization as scoped runtime data with
   provenance, privacy, rollback, and promotion state; prevent silent public
   promotion.
-- [ ] `[must]` Persist trace continuity from turn through proposal,
+- [x] `[must]` Persist trace continuity from turn through proposal,
   interaction, command, Run/activity, semantic output, and delivery attempt.
+  `adaos.workflow.trace_identity.v1` proves the cross-record chain, and response
+  normalization preserves semantic output identity through direct
+  `ConversationOutput` rendering and durable `ResponseEnvelope` rendering.
 
 ### Should
 

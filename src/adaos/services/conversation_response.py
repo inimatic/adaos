@@ -248,7 +248,11 @@ def normalize_response_envelope(
     if value is None:
         text = str(response or "").strip()
         value = {"content": [{"type": "text", "text": text}]} if text else {}
-    if "response_envelope" in value and isinstance(value.get("response_envelope"), Mapping):
+    if value.get("schema") == "adaos.conversation.output.v1":
+        value = _presentation_from_conversation_output(value)
+    elif value.get("schema") == "adaos.conversation.response_envelope.v1":
+        value = _presentation_from_durable_envelope(value)
+    elif "response_envelope" in value and isinstance(value.get("response_envelope"), Mapping):
         value = dict(value["response_envelope"])
     elif "response" in value and isinstance(value.get("response"), Mapping):
         value = dict(value["response"])
@@ -275,6 +279,71 @@ def normalize_response_envelope(
     value["render_targets"] = tuple(response_plan["targets"])
     value["response_plan"] = response_plan
     return value
+
+
+def _semantic_content_parts(value: Mapping[str, Any]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw in value.get("content_parts") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        kind = str(raw.get("kind") or "text")
+        part: dict[str, Any] = {"type": "text" if kind == "text" else kind}
+        if raw.get("text") is not None:
+            part["text"] = str(raw.get("text") or "")
+        if isinstance(raw.get("data"), Mapping):
+            part["data"] = dict(raw["data"])
+        if raw.get("artifact_ref") is not None:
+            part["artifact_ref"] = dict(raw["artifact_ref"])
+        parts.append(part)
+    if not any(str(item.get("type") or "") == "text" for item in parts):
+        summary = str(value.get("summary") or "").strip()
+        if summary:
+            parts.insert(0, {"type": "text", "text": summary})
+    return parts
+
+
+def _semantic_meta(value: Mapping[str, Any]) -> dict[str, Any]:
+    reason = value.get("reason") if isinstance(value.get("reason"), Mapping) else {}
+    return {
+        **dict(value.get("metadata") if isinstance(value.get("metadata"), Mapping) else {}),
+        "semantic_output_id": value.get("output_id") or value.get("semantic_output_id"),
+        "semantic_output_kind": value.get("kind"),
+        "semantic_output_reason": dict(reason),
+        "semantic_output_risk": value.get("risk_level"),
+        "semantic_output_provenance": dict(value.get("provenance") or {}),
+        "trace": dict(value.get("trace") or {}),
+    }
+
+
+def _presentation_from_conversation_output(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "message_id": value.get("output_id"),
+        "conversation_id": value.get("conversation_id"),
+        "content": _semantic_content_parts(value),
+        "actions": [dict(item) for item in value.get("actions") or [] if isinstance(item, Mapping)],
+        "meta": _semantic_meta(value),
+    }
+
+
+def _presentation_from_durable_envelope(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    semantic = {
+        **dict(data),
+        "output_id": data.get("semantic_output_id"),
+        "conversation_id": value.get("conversation_id"),
+        "summary": data.get("summary") or payload.get("text"),
+    }
+    presentation = _presentation_from_conversation_output(semantic)
+    presentation["message_id"] = value.get("envelope_id")
+    presentation["meta"] = {
+        **dict(presentation.get("meta") or {}),
+        "response_envelope_id": value.get("envelope_id"),
+        "response_category": value.get("category"),
+        "response_sequence": value.get("sequence"),
+        "response_status": value.get("status"),
+    }
+    return presentation
 
 
 def plan_response_targets(

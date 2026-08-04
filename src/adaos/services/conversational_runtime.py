@@ -1350,11 +1350,20 @@ def response_envelope_from_conversation_output(
     data = {
         "semantic_output_id": record["output_id"],
         "kind": record["kind"],
+        "audience": record["audience"],
+        "risk_level": record["risk_level"],
+        "reason": copy.deepcopy(record["reason"]),
+        "summary": record["summary"],
+        "content_parts": copy.deepcopy(record["content_parts"]),
         "details": copy.deepcopy(record["details"]),
         "actions": copy.deepcopy(record["actions"]),
         "fields": copy.deepcopy(record["fields"]),
         "evidence_refs": copy.deepcopy(record["evidence_refs"]),
         "next_expected_input": copy.deepcopy(record["next_expected_input"]),
+        "handoff_target": copy.deepcopy(record["handoff_target"]),
+        "lifecycle": copy.deepcopy(record["lifecycle"]),
+        "provenance": copy.deepcopy(record["provenance"]),
+        "trace": copy.deepcopy(record["trace"]),
         "metadata": copy.deepcopy(record.get("metadata") or {}),
     }
     envelope = {

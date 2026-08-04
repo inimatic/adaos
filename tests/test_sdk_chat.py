@@ -3,6 +3,10 @@ from __future__ import annotations
 from adaos.domain import Event
 from adaos.sdk import chat
 from adaos.services import conversation_interactions, conversation_response, conversation_store
+from adaos.services.conversational_runtime import (
+    build_conversation_output,
+    response_envelope_from_conversation_output,
+)
 from adaos.services.eventbus import LocalEventBus
 
 
@@ -275,3 +279,38 @@ def test_response_planner_adds_speech_for_voice_policy() -> None:
     assert result["envelope"]["response_plan"]["reason"] == "text_content+voice_policy:ask"
     assert chat_events and chat_events[0].payload["text"] == "Need one detail"
     assert say_events and say_events[0].payload["text"] == "Need one detail"
+
+
+def test_response_normalizer_preserves_semantic_output_identity() -> None:
+    output = build_conversation_output(
+        output_id="output.semantic.1",
+        conversation_id="conv.semantic",
+        kind="result",
+        summary="The workflow completed.",
+        risk_level="low",
+        reason={
+            "code": "workflow_completed",
+            "explanation": "The terminal state was reached.",
+            "retryable": False,
+            "source": "workflow",
+        },
+        now="2026-01-01T00:00:00+00:00",
+    )
+
+    direct = conversation_response.normalize_response_envelope(
+        output,
+        conversation_id="conv.semantic",
+    )
+    durable = conversation_response.normalize_response_envelope(
+        response_envelope_from_conversation_output(
+            output,
+            now="2026-01-01T00:00:01+00:00",
+        ),
+        conversation_id="conv.semantic",
+    )
+
+    assert direct["content"] == [{"type": "text", "text": "The workflow completed."}]
+    assert direct["meta"]["semantic_output_id"] == "output.semantic.1"
+    assert direct["meta"]["semantic_output_reason"]["code"] == "workflow_completed"
+    assert durable["meta"]["semantic_output_id"] == "output.semantic.1"
+    assert durable["meta"]["response_envelope_id"].startswith("response:")
