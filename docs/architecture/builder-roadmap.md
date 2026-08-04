@@ -1490,6 +1490,10 @@ Autonomy, evidence, and acceptance:
   bounded state. The exact two-tab local trace reached `test04_recipes` in
   5.8 seconds with no Builder or mismatch overlay; 271/271 client tests and the
   production build pass.
+- [x] Client commit `734023b` is deployed as package `0.0.264`; Firebase Hosting
+  `30929921556` and Notify Infra `30929921213` succeeded, and the live hashed
+  bundle contains all three startup-preparation markers. This does not close
+  the separate core transport release gate.
 - [x] The same investigation identifies reconnect amplification rather than a
   merely large Webspace: one 296,101-byte Yjs update was sent 170 times in
   about 36 seconds by leaked WebRTC adapters. Core now uses page-scoped peer

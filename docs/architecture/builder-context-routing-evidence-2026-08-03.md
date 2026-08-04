@@ -128,6 +128,14 @@ tests, the production build, and the exact unmodified local raw-link route
 passed. The release path also keeps component and conversational manifest
 versions atomic and rejects drift during validation.
 
+Client commit `734023b` was pushed to `main`; CI advanced the package to
+`0.0.264` at `081be46`. Firebase Hosting run `30929921556` and Notify Infra run
+`30929921213` completed successfully. The live `inimatic.com` bundle
+`main.d50fadbff2a5a975.js` contains the startup preparation event, the single
+`desktop.scenario.set` path, and the bounded Preview hold. This proves client
+deployment only; the routed multi-tab transport gate remains open until core
+commit `d59ab80a` is released.
+
 The final DEV draft receipt is Forge commit `2177a2129e8587a1a881213d97feeedbf8c50f4d`
 and the Workspace registry commit is
 `fb866846664fe197a433dc73d86f8082af2896ee`. Firebase Hosting run
