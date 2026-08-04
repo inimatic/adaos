@@ -264,7 +264,7 @@ def _is_empty_ystore(exc: BaseException) -> bool:
 
 def _run_blocking(coro: Awaitable[T], *, timeout_s: float | None = None) -> T:
     """
-    Execute an async SQLiteYStore operation from synchronous code.
+    Execute an async YStore operation from synchronous code.
     Falls back to asyncio.run when no loop is active.
     """
     async def _await_coro() -> T:

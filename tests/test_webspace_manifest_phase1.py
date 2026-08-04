@@ -539,6 +539,7 @@ def test_get_workspace_repairs_stale_ystore_path() -> None:
     webspace_id = "legacy-path-manifest"
     ctx = get_ctx()
     expected_path = str(workspace_index_module.ystore_path_for_webspace(webspace_id))
+    assert expected_path.endswith(".ysnap")
 
     with ctx.sql.connect() as con:
         workspace_index_module._ensure_schema(con)

@@ -35,8 +35,9 @@ UI architecture.
 ## Architecture Overview
 
 1. **Webspace** - each browser session attaches to a named Yjs document
-   (default: `desktop`). The doc is stored in an SQLite YStore under
-   `.adaos/state/ystores/<webspace>.sqlite3`.
+   (default: `desktop`). The live doc is kept in memory and periodically
+   backed up as a raw encoded YDoc snapshot under
+   `.adaos/state/ystores/<webspace>.ysnap`.
 2. **Scenario** - declarative JSON (`scenario.json`) defines desktop UI
    building blocks (apps, widgets, registry). During migration the hub may
    still seed compatibility caches in `ui.scenarios.*`, `data.scenarios.*`,
@@ -72,7 +73,7 @@ UI architecture.
    dev-only surfaces remain filtered by policy.
 
 ```text
-Browser <--y-websocket--> Hub y_gateway <--YDoc--> SQLiteYStore
+Browser <--y-websocket--> Hub y_gateway <--YDoc--> in-memory YStore
             events/ws             ^               ^
               |                   |               |
     (desktop.*, webio.stream.*)   |      WebspaceScenarioRuntime + skills

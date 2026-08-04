@@ -57,6 +57,7 @@ _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
 _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
+_YSTORE_SNAPSHOT_SUFFIX = ".ysnap"
 
 
 def _is_fatal_base_exception(exc: BaseException) -> bool:
@@ -337,7 +338,7 @@ def _persist_snapshot(path: Path, snapshot: bytes) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_bytes(snapshot)
         tmp.replace(path)
-        _log.debug("YStore snapshot written for webspace=%s path=%s", path.name.removesuffix(".sqlite3"), path)
+        _log.debug("YStore snapshot written for webspace=%s path=%s", path.name.removesuffix(_YSTORE_SNAPSHOT_SUFFIX), path)
         return len(snapshot)
     except Exception as exc:
         _log.warning("failed to write YStore snapshot %s: %s", path, exc, exc_info=True)
@@ -359,12 +360,10 @@ def ystores_root() -> Path:
 
 def ystore_path_for_webspace(webspace_id: str) -> Path:
     """
-    Map a webspace id to a filesystem path for its snapshot.
+    Map a webspace id to a filesystem path for its raw Yjs snapshot.
     """
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in webspace_id)
-    # We keep the historical .sqlite3 suffix even though the file now contains
-    # a single encoded YDoc snapshot, to avoid surprising existing tooling.
-    return ystores_root() / f"{safe}.sqlite3"
+    return ystores_root() / f"{safe}{_YSTORE_SNAPSHOT_SUFFIX}"
 
 
 def ystore_snapshot_exists(webspace_id: str) -> bool:

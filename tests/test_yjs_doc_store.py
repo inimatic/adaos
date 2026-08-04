@@ -75,7 +75,7 @@ async def test_async_get_ydoc_discards_corrupt_replay_before_write(monkeypatch) 
 
 async def test_ystore_quarantines_corrupt_persisted_snapshot_before_y_py_load(monkeypatch, tmp_path) -> None:
     webspace_id = _webspace_id("corrupt-persisted")
-    path = tmp_path / f"{webspace_id}.sqlite3"
+    path = tmp_path / f"{webspace_id}.ysnap"
     path.write_bytes(b"not-a-valid-yjs-update")
 
     class _PreflightResult:
