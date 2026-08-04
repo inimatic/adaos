@@ -8840,11 +8840,33 @@ async def process_events_command(
             await _ack(False, error="webspace_id required")
             return None
         new_webspace = _coerce_gateway_webspace_id(target)
+        target_scenario = str(payload.get("scenario_id") or "").strip()
         try:
-            await ensure_webspace_ready(new_webspace, scenario_id=payload.get("scenario_id"))
+            switch_result: dict[str, Any] | None = None
+            if target_scenario:
+                from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
+
+                switch_result = await switch_webspace_scenario(
+                    new_webspace,
+                    target_scenario,
+                    set_home=False,
+                    wait_for_rebuild=True,
+                    request_source="gateway_ws.desktop.webspace.use",
+                    request_client=str(client_label or "").strip() or None,
+                )
+                if not bool(switch_result.get("accepted", switch_result.get("ok", True))):
+                    await _ack(False, error=str(switch_result.get("error") or "scenario_unavailable"))
+                    return None
+            else:
+                await ensure_webspace_ready(new_webspace)
             await _update_device_presence(new_webspace, device_id or "dev-unknown")
             _publish_bus("desktop.webspace.refresh", {"webspace_id": new_webspace})
-            await _ack(data={"webspace_id": new_webspace})
+            ack_data: dict[str, Any] = {"webspace_id": new_webspace}
+            if target_scenario:
+                ack_data["scenario_id"] = target_scenario
+                if switch_result is not None:
+                    ack_data["scenario_switch"] = switch_result
+            await _ack(data=ack_data)
             return new_webspace
         except Exception:
             await _ack(False, error="webspace_unavailable")

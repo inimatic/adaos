@@ -60,6 +60,15 @@ runtime browser surfaces use exact topology resolution.
 - [x] `[must]` Generate Preview links from the selected Builder relation.
 - [x] `[must]` Make confirmed client Webspace navigation canonical across the
   intent reload and fail closed when the runtime rejects the switch.
+- [x] `[must]` Treat a Preview deep link as one destination: prepare its
+  expected scenario before reloading into the target Webspace, instead of
+  materializing the persisted home scenario and asking for a second switch.
+- [x] `[must]` Keep compatibility with an older runtime whose
+  `desktop.webspace.use` acknowledgement does not prove live-room scenario
+  preparation; complete `desktop.scenario.set` before browser reload.
+- [x] `[must]` Make the runtime `desktop.webspace.use` transition update the
+  live room through the canonical scenario-switch transaction and return the
+  prepared `scenario_id` as evidence.
 - [x] `[must]` Run Builder workbench/SDK/ABI tests and the complete Builder
   skill test suite.
 - [x] `[must]` Run a local DEV runtime smoke: choose `dev1`, then observe
@@ -76,6 +85,14 @@ runtime browser surfaces use exact topology resolution.
 - [ ] `[must]` Human Telegram acceptance with the real conversation buttons.
 - [ ] `[must]` Human browser acceptance of a generated Preview link after the
   updated client is deployed.
+- [x] `[must]` Automated local browser acceptance from `desktop` with
+  `dev1-dev` deliberately set to `builder`: the deep link reached
+  `test04_recipes`, cleared the intent, and never presented
+  `scenario_context_mismatch`.
+- [ ] `[should]` Reduce the remaining cold-start latency before the Webspace
+  decision and target first paint; correctness no longer depends on this
+  latency, but the current development build still spends most of the route
+  time in hub/Yjs bootstrap.
 - [ ] `[should]` Add lifecycle management for stale smoke Builder Webspaces so
   the selection surface does not accumulate inactive test hosts.
 

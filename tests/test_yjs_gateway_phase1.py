@@ -3478,6 +3478,51 @@ def test_process_events_command_ensure_dev_returns_webspace_id(monkeypatch) -> N
     }
 
 
+def test_process_events_command_switches_scenario_before_using_webspace(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    responses: list[dict[str, object]] = []
+    calls: list[tuple[str, object]] = []
+
+    async def _fake_switch(
+        webspace_id: str,
+        scenario_id: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append(("switch", (webspace_id, scenario_id, kwargs)))
+        return {"ok": True, "accepted": True, "webspace_id": webspace_id, "scenario_id": scenario_id}
+
+    async def _fake_presence(webspace_id: str, device_id: str) -> None:
+        calls.append(("presence", (webspace_id, device_id)))
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    monkeypatch.setattr(webspace_runtime_module, "switch_webspace_scenario", _fake_switch)
+    monkeypatch.setattr(gateway_module, "_update_device_presence", _fake_presence)
+    monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda *_args, **_kwargs: None))
+
+    selected = asyncio.run(
+        gateway_module.process_events_command(
+            kind="desktop.webspace.use",
+            cmd_id="cmd-navigation",
+            payload={"webspace_id": "dev1-dev", "scenario_id": "test04_recipes"},
+            device_id="browser-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+            client_label="navigation-e2e",
+        )
+    )
+
+    assert selected == "dev1-dev"
+    assert calls[0][0] == "switch"
+    assert calls[0][1][0:2] == ("dev1-dev", "test04_recipes")
+    assert calls[0][1][2]["wait_for_rebuild"] is True
+    assert calls[1] == ("presence", ("dev1-dev", "browser-1"))
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["scenario_id"] == "test04_recipes"
+
+
 def test_process_events_command_publishes_device_registered(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
