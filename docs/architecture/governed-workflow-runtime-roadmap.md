@@ -126,9 +126,12 @@ already selected.
   subordinate adapters evaluated only after the semantic model proof.
 - [x] `[must]` `GWR0-05` Register this roadmap in the architecture navigation
   and roadmap authority map.
-- [ ] `[should]` `GWR0-06` Inventory every current durable/ad-hoc workflow,
+- [x] `[should]` `GWR0-06` Inventory every current durable/ad-hoc workflow,
   pending response, retry loop, background task registry, and state file with
-  an owner and migration disposition.
+  an owner and migration disposition. The source inventory is maintained in
+  [Governed Workflow Runtime Inventory](governed-workflow-runtime-inventory.md)
+  and classifies each surface as canonical workflow, separate canonical model,
+  compatibility, projection/evidence, or open reliability gap.
 - [ ] `[could]` `GWR0-07` Produce diagrams generated from the future canonical
   workflow definitions for architecture review.
 - [x] `[deferred]` `GWR0-08` Do not harmonize all historical documentation in

@@ -13,6 +13,9 @@ skill, channel, and UI from inventing an incompatible workflow. Persistence
 and durable execution support that model but do not define it. The
 implementation sequence is owned by the
 [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md).
+The current durable/ad-hoc state, retry, pending-response, background-task, and
+transport inventory is tracked in
+[Governed Workflow Runtime Inventory](governed-workflow-runtime-inventory.md).
 
 Domain documents continue to own their business vocabulary and state
 transitions. In particular:
