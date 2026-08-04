@@ -264,7 +264,17 @@ def _assert_publishable_file(
 
 
 def _excluded(relative: PurePosixPath) -> bool:
-    if any(part in _EXCLUDED_DIRS for part in relative.parts):
+    # Component test suites are development-only, but conversational stories
+    # are executable release contracts and are referenced by the packaged
+    # conversational manifest.  Keep only the canonical, flat
+    # ``conversational/tests/stories/*.yaml`` exception; all other ``tests``
+    # trees remain excluded from release packages.
+    is_conversational_story = (
+        len(relative.parts) == 4
+        and tuple(relative.parts[:3]) == ("conversational", "tests", "stories")
+        and relative.suffix.lower() in {".yaml", ".yml"}
+    )
+    if any(part in _EXCLUDED_DIRS for part in relative.parts) and not is_conversational_story:
         return True
     if relative.name in _EXCLUDED_FILES:
         return True

@@ -207,6 +207,113 @@ def test_package_locks_and_revalidates_conversational_sources(tmp_path: Path) ->
     assert verified.ref == built.ref
 
 
+def test_package_includes_manifest_bound_conversational_stories(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _add_empty_conversational_package(scenario)
+    package = scenario / "conversational"
+    manifest_path = package / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["stories"] = ["tests/stories/no-match.yaml"]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    repair_path = package / "repair.yaml"
+    repair = yaml.safe_load(repair_path.read_text(encoding="utf-8"))
+    repair["policies"] = [
+        {
+            "id": "no_match",
+            "kind": "no_match",
+            "max_attempts": 2,
+            "output_ref": "repair_no_match",
+            "terminal_outcome": "clarification",
+        }
+    ]
+    repair_path.write_text(yaml.safe_dump(repair, sort_keys=False), encoding="utf-8")
+    output_path = package / "output.yaml"
+    output = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    output["outputs"] = [
+        {
+            "id": "repair_no_match",
+            "kind": "repair",
+            "audience": "user",
+            "risk_level": "none",
+            "reason_code": "no_match",
+            "explanation": "The request did not match.",
+            "summary": "Please rephrase the request.",
+            "content_parts": [],
+            "details": [],
+            "actions": [],
+            "next_expected_input": "text",
+            "handoff_target": None,
+        }
+    ]
+    output_path.write_text(yaml.safe_dump(output, sort_keys=False), encoding="utf-8")
+    story = {
+        "schema": "adaos.conversational.story.v1",
+        "id": "recipes.no_match.en",
+        "story_kind": "dialog",
+        "workflow_type": None,
+        "locale": "en",
+        "channel": "text",
+        "actor": {"id": "user:local", "permissions": [], "roles": []},
+        "start": None,
+        "steps": [
+            {
+                "user": "Show the weather",
+                "given": {
+                    "proposal": {
+                        "kind": "unrelated",
+                        "intent_id": None,
+                        "command": None,
+                        "skill_id": None,
+                        "operation_id": None,
+                        "arguments": {},
+                        "confidence": 0.99,
+                        "action_policy": {
+                            "schema": "adaos.conversation.action_policy.v1",
+                            "risk_class": "read",
+                            "side_effect": "none",
+                            "confirmation": "none",
+                        },
+                    },
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": "repair_no_match",
+                },
+                "expect": {
+                    "proposal": {
+                        "kind": "unrelated",
+                        "command": None,
+                        "confidence_at_least": 0.99,
+                    },
+                    "command": None,
+                    "transition_id": None,
+                    "state": None,
+                    "reason_code": None,
+                    "output": {
+                        "kind": "repair",
+                        "output_ref": "repair_no_match",
+                        "summary": "Please rephrase the request.",
+                        "actions": [],
+                        "next_expected_input": "text",
+                    },
+                    "repair": {
+                        "reason_code": "no_match",
+                        "next_expected_input": "text",
+                    },
+                },
+            }
+        ],
+    }
+    story_path = package / "tests" / "stories" / "no-match.yaml"
+    story_path.parent.mkdir(parents=True)
+    story_path.write_text(yaml.safe_dump(story, sort_keys=False), encoding="utf-8")
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert "conversational/tests/stories/no-match.yaml" in verified.file_names
+    assert "tests/test_contract.py" not in verified.file_names
+
+
 def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path) -> None:
     scenario = _scenario(tmp_path)
     (scenario / "scenario.yaml").write_text(
