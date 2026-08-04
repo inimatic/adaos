@@ -1,0 +1,19 @@
+schema: adaos.conversational.input.v1
+package_id: conversational_release_skill
+intents:
+  - id: submit_release
+    description: Submit the current release for governed review.
+    kind: workflow_command
+    affordance_id: submit_release
+    workflow:
+      workflow_type: example.release
+      command_id: submit
+      transition_id: submit_release
+    skill_invocation: null
+    example_ids:
+      - submit_release.example.1
+    slots: []
+policy:
+  default_confidence: 0.8
+  abstain_below: 0.55
+  protected_action_confirmation: true

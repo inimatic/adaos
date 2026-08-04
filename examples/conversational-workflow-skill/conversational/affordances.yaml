@@ -1,0 +1,23 @@
+schema: adaos.conversational.affordances.v1
+package_id: conversational_release_skill
+affordances:
+  - id: submit_release
+    kind: workflow_command
+    label: Submit for review
+    description: Submit the current release through the governed workflow.
+    workflow:
+      workflow_type: example.release
+      command_id: submit
+      transition_id: submit_release
+    skill_invocation: null
+    action_policy:
+      schema: adaos.conversation.action_policy.v1
+      risk_class: isolated_write
+      side_effect: reversible
+      confirmation: none
+    required_capabilities: []
+    presentation:
+      hint: button
+      priority: 10
+    output_refs:
+      - release_submitted

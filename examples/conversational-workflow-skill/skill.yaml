@@ -1,0 +1,6 @@
+name: conversational_release_skill
+version: 0.1.0
+workflow:
+  manifest: workflow.json
+conversational:
+  manifest: conversational/manifest.yaml

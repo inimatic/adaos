@@ -1,0 +1,27 @@
+schema: adaos.conversational.output.v1
+package_id: conversational_release_skill
+outputs:
+  - id: release_submitted
+    kind: result
+    audience: user
+    risk_level: medium
+    reason_code: release_submitted
+    explanation: The governed workflow accepted the submission command.
+    summary: Release submitted for review.
+    content_parts: []
+    details: []
+    actions: []
+    next_expected_input: none
+    handoff_target: null
+  - id: repair_no_match
+    kind: repair
+    audience: user
+    risk_level: none
+    reason_code: no_match
+    explanation: The request did not match an available release command.
+    summary: Please rephrase the release request.
+    content_parts: []
+    details: []
+    actions: []
+    next_expected_input: text
+    handoff_target: null

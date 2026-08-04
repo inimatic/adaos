@@ -1,0 +1,4 @@
+schema: adaos.conversational.locale.v1
+package_id: conversational_release_skill
+locale: en
+messages: {}

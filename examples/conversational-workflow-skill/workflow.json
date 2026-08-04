@@ -1,0 +1,161 @@
+{
+  "schema": "adaos.workflow.definition.v1",
+  "workflow_type": "example.release",
+  "definition_version": "1.0.0",
+  "aggregate_type": "example.release",
+  "initial_state": "draft",
+  "states": [
+    {
+      "id": "draft",
+      "label": "Draft",
+      "terminal": false
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "terminal": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "submit",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "confirmed": {
+            "type": "boolean"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "schema": "adaos.workflow.transition.v1",
+      "transition_id": "submit_release",
+      "source": "draft",
+      "target": "review",
+      "trigger": {
+        "kind": "command",
+        "command": "submit",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "confirmed": {
+              "type": "boolean"
+            },
+            "evidence_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "context": {
+        "target_resolution": "instance",
+        "command_context_required": false
+      },
+      "authority": {
+        "actors": [
+          "user"
+        ],
+        "permissions": [
+          "release.submit"
+        ]
+      },
+      "guards": [
+        {
+          "id": "always",
+          "params": {},
+          "reason_code": "release_not_ready"
+        }
+      ],
+      "concurrency": {
+        "conflict_scope": "release",
+        "requires_generation": true,
+        "idempotency": "required"
+      },
+      "risk": {
+        "class": "isolated_write",
+        "side_effect": "reversible",
+        "confirmation": "none"
+      },
+      "effect": {
+        "activity": "release.submit",
+        "transaction": "outbox",
+        "retry": "bounded",
+        "compensation": "release.withdraw"
+      },
+      "recovery": {
+        "timeout_seconds": 900,
+        "heartbeat_seconds": 30,
+        "cancellation": "cooperative",
+        "reconciliation": "required_on_unknown"
+      },
+      "outcomes": {
+        "success": "target",
+        "failure": "source",
+        "input_required": "source",
+        "cancelled": "source",
+        "unknown": "source"
+      },
+      "evidence": {
+        "required": false,
+        "minimum": 0
+      },
+      "approval": {
+        "required": false,
+        "policy_refs": []
+      },
+      "async_reply": {
+        "mode": "progress_and_terminal",
+        "reply_route": "origin"
+      },
+      "capability_requirements": {
+        "required": [],
+        "optional": [
+          "buttons",
+          "progress"
+        ],
+        "fallback": "numbered_text"
+      },
+      "explanations": {
+        "allowed": "The release can be submitted for review.",
+        "rejected": "The release is not ready for review.",
+        "completed": "The release was submitted for review."
+      },
+      "events": {
+        "emitted": [
+          "release.submitted"
+        ],
+        "outbox": true
+      },
+      "observability": {
+        "audit_event": "release.submit.audit",
+        "redaction": "policy",
+        "metrics": [
+          "workflow_transition_total"
+        ],
+        "trace": true
+      },
+      "migration": {
+        "introduced_in": "1.0.0",
+        "aliases": []
+      }
+    }
+  ],
+  "subworkflows": [],
+  "metadata": {
+    "example": "conversational-workflow-skill"
+  }
+}
