@@ -187,6 +187,27 @@ not recreate the originating Yjs update. These rules prevent reconnect churn
 from multiplying a single materialization update by the number of historical
 bindings.
 
+Runtime diagnostics identify a browser transport by the complete
+`webspace_id + page peer/session id`, never only by the stable device id. A
+device may legitimately own several tabs; each live tab has one attempt and one
+adapter. Capacity warnings count those live tabs, while reconnect-storm rules
+count repeated attempts by the same page session. This distinction is required
+both for enforcement and for trustworthy incident evidence.
+
+The client uses a bounded two-phase DataChannel admission deadline. If ICE or
+the peer connection is not connected at the normal deadline, the attempt fails.
+If the peer is connected but SCTP/DataChannels are still opening, the client
+keeps that peer for one bounded grace period. Every success, timeout, cancel,
+and close removes the temporary `open` listeners. A timeout must therefore not
+destroy a healthy connected peer or leave callbacks that trigger a later
+renegotiation storm.
+
+On a source checkout, `python -m adaos api serve` and `api restart` are
+development commands and must keep running that checkout. Core slot selection
+is reserved for the installed/global runtime. Otherwise a local restart can
+silently execute an older slot and invalidate both page-peer isolation and
+adapter-cleanup verification.
+
 ## Acceptance Evidence
 
 The 2026-08-03 local slice includes:
@@ -249,3 +270,32 @@ suite passes 271/271 and the production build succeeds. Core tests cover
 adapter cleanup under cancellation, failed-recipient pruning, page-scoped peer
 identity, authoritative selector repair, and atomic materialization ordering.
 Core deployment remains a separate release gate from the client deployment.
+
+The 2026-08-04 transport follow-up activated source build
+`0.1.667+4391.89ec14a3` under the repository `.venv`, without Supervisor or a
+core slot. Two controlled `dev1-dev` switches
+(`test04_recipes -> builder -> test04_recipes`) completed with one Yjs update
+per transition, one send per live room client, no YWS reconnect, no peer
+replacement, and idle post-transition load. Exact telemetry reported five
+live YWS page sessions rather than the earlier aggregate of fourteen attempts;
+each `bs_*` session had exactly one attempt id. Two simultaneous tabs from one
+device also received different `rp_*` peer ids, so neither replaced the other.
+
+Client `0.0.265` adds the bounded connected-peer DataChannel grace and removes
+all temporary channel listeners on every outcome. Its focused transport suite
+passes 10/10. The remaining cold-start delay is a separate startup-performance
+item: synchronous skill loading can delay readiness, but it must not be treated
+as a Preview transition or repaired by replaying a state-changing command.
+
+Initial Yjs admission is likewise a protocol exchange, not a reason to replay
+the complete document speculatively. The server sends its sync vector, answers
+the browser's `SYNC_STEP1` with one authoritative `SYNC_STEP2`, and ignores the
+browser's initial state under the server-authoritative policy without sending a
+second copy. Full effective-state replay is an exceptional malformed/preflight
+recovery mechanism. This removes the observed same-peer triple delivery while
+preserving standard Yjs synchronization semantics.
+
+The final restart evidence reports three connected WebRTC peers with open Yjs
+channels, six exact YWS sessions with one attempt each, one initial document
+send per direct peer, zero eager effective-state replays, six rejected-state
+dedupes, and no reconnect storm or peer replacement.

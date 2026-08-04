@@ -1500,10 +1500,35 @@ Autonomy, evidence, and acceptance:
   identity, cancellation-safe adapter removal, failed-recipient pruning, and
   an authoritative selector lease around materialization. Focused WebRTC/Yjs
   tests pass.
-- [ ] `[must]` Release the core WebRTC/Yjs lifecycle hardening and confirm in a
-  routed multi-tab soak that room client count returns to the number of live
-  page peers, fan-out is bounded, memory remains stable, and no induced
-  1006/1012 or relay fallback occurs.
+- [x] `[must]` Activate the core WebRTC/Yjs lifecycle hardening from the source
+  runtime and confirm in a routed multi-tab smoke that room client count maps
+  to exact live page sessions, fan-out is bounded, memory remains stable, and
+  scenario switching induces no 1006/1012 or relay fallback. Two controlled
+  `dev1-dev` transitions emitted one update and one send per live client with
+  no reconnect. Final source build `0.1.667+4391.89ec14a3` also exposes exact
+  `bs_* -> attempt` and `rp_*` peer identities.
+- [x] `[must]` Keep checkout-local `api serve`/`api restart` on the checkout
+  runtime. Installed/global startup remains slot-bound; development restart no
+  longer silently reactivates an obsolete slot.
+- [x] `[must]` Add bounded connected-peer DataChannel grace and deterministic
+  listener cleanup in client `0.0.265`; the focused suite passes 10/10.
+- [x] `[must]` Remove triple initial full-state delivery from the Yjs protocol
+  path. Normal admission has one authoritative `SYNC_STEP1 -> SYNC_STEP2`;
+  rejected browser initial state does not trigger another server replay, while
+  malformed/preflight recovery remains explicit (`cd36f88c`). Expose the
+  replay/dedupe counters in the selected-room diagnostics (`89ec14a3`). The
+  final live restart reports three connected/open direct peers, one initial
+  document send per peer, zero effective initial replays, six dedupes, and no
+  storm.
+- [ ] `[should]` Move synchronous cold-start inventory and skill readiness work
+  off the API event-loop critical path. It currently delays first readiness
+  and may cause multi-second event-loop lag, but is not a Preview switch and
+  must not be repaired by replaying state-changing commands.
+- [ ] `[could]` Evaluate a browser SharedWorker or equivalent per-Webspace
+  multi-tab broker after the lifecycle fix so legitimate open tabs can share a
+  transport. Do not collapse page identities in the server merely to reduce
+  fan-out; authorization, cancellation, and per-tab delivery evidence must
+  remain explicit.
 - [x] The 2026-08-04 data-driven workflow increment adds the four-channel
   ingress/executor proof and full trace spine (`5e0ed333`), strict active-
   WorkspaceLock Builder package cutover with restart-safe instance migration

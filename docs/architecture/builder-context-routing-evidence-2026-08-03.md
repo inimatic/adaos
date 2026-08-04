@@ -101,9 +101,19 @@ runtime browser surfaces use exact topology resolution.
 - [x] `[must]` Add cancellation-safe adapter cleanup, failed-client pruning,
   page-scoped peer identity, and authoritative scenario-selector repair; pass
   the focused core suites.
-- [ ] `[must]` Deploy the core transport hardening and verify on the routed
+- [x] `[must]` Activate the core transport hardening and verify on the routed
   runtime that one update is delivered only to currently live page peers,
   with no memory-pressure restart, 1006/1012 cascade, or induced relay fallback.
+- [x] `[must]` Keep repository `api serve` and `api restart` on the source
+  checkout rather than silently selecting an older core slot.
+- [x] `[must]` Preserve an already connected WebRTC peer while its
+  DataChannels finish opening, with a bounded grace deadline and deterministic
+  listener cleanup on success, timeout, cancellation, and close.
+- [x] `[must]` Collapse the initial Yjs handshake to one authoritative
+  `SYNC_STEP1 -> SYNC_STEP2` exchange. Do not add an eager full-state replay or
+  replay again when the server-authoritative gateway rejects the browser's
+  initial state; retain explicit full replay only for malformed/preflight
+  recovery.
 - [x] `[must]` Reopen the same exact target after it is current: no Webspace or
   scenario command is repeated and no navigation overlay is rendered.
 - [ ] `[should]` Reduce full-page cold-start time for links opened in a new tab.
@@ -116,25 +126,56 @@ runtime browser surfaces use exact topology resolution.
 
 `builder_skill` version `0.3.41` is validated, pushed, and activated in the
 local DEV runtime. The hardened content is locally published as Workspace
-version `0.3.34` and activated on slot `B`. Its core compatibility floor is the explicit
+version `0.3.34`. Its core compatibility floor is the explicit
 Builder-context ABI commit `e4f794b8` (`0.1.660+4316`). The local API reports
-the current checkout commit and an HTTP `/api/tools/call` smoke discovers both
+source build `0.1.667+4391.89ec14a3`, not a core slot, and an HTTP
+`/api/tools/call` smoke discovers both
 `desktop` and `dev1` with a button presentation plan. The registry publication
 commits are local and were not pushed. The AdaOS core commits are also local.
 Only the client repository was pushed remotely in this iteration. Client
-commits after `eb053fe` contain the topology-confirmed startup room,
+commits through `b8b4c68` contain the topology-confirmed startup room,
 single-command scenario preparation, and stale-render hold; 271/271 client
-tests, the production build, and the exact unmodified local raw-link route
-passed. The release path also keeps component and conversational manifest
+navigation tests, the focused 10/10 WebRTC transport suite, the production
+build, and the exact unmodified local raw-link route passed. The release path
+also keeps component and conversational manifest
 versions atomic and rejects drift during validation.
 
-Client commit `734023b` was pushed to `main`; CI advanced the package to
-`0.0.264` at `081be46`. Firebase Hosting run `30929921556` and Notify Infra run
-`30929921213` completed successfully. The live `inimatic.com` bundle
-`main.d50fadbff2a5a975.js` contains the startup preparation event, the single
-`desktop.scenario.set` path, and the bounded Preview hold. This proves client
-deployment only; the routed multi-tab transport gate remains open until core
-commit `d59ab80a` is released.
+The live transport proof used two controlled transitions in `dev1-dev`:
+`test04_recipes -> builder -> test04_recipes`. Each transition produced one
+Yjs update and one send per live room client, without a YWS reconnect, peer
+replacement, runtime restart, or post-transition load. Exact session telemetry
+reduced the apparent `client_count=14` to five live YWS page sessions, each with
+one `bs_*` identity and one attempt id. Separate tabs on the same device used
+separate `rp_*` WebRTC peer ids. Client `0.0.265` additionally keeps a connected
+peer through a bounded DataChannel-opening grace period and removes all wait
+listeners on every outcome.
+
+The remaining same-peer `3x` payload was separately traced to protocol
+redundancy, not leaked clients: the gateway sent an eager effective-state
+replay, answered the client's `SYNC_STEP1`, and replayed once more after
+rejecting the browser's initial `SYNC_STEP2`. Build `cd36f88c` removes both
+redundant replays. A normal admission now sends the authoritative full state
+once; recovery replay is reserved for a malformed/preflight path. The focused
+gateway test exercises this invariant, and the post-restart YWS log contains
+the expected ignored browser-state evidence without an eager effective-state
+replay.
+
+The final controlled restart loaded `89ec14a3` from the checkout. Runtime
+telemetry then reported three connected WebRTC peers with three open Yjs
+DataChannels, six exact YWS page sessions with one attempt each, and
+`storm_detected=false`. Each WebRTC peer received one initial chunked document
+message. The selected `dev1-dev` room reported
+`effective_initial_replay_total=0` and
+`effective_initial_replay_dedupe_total=6`; the log contained no peer
+replacement, DataChannel timeout, unexpected 1006, or eager full-state replay.
+
+Client commit `734023b` was first pushed to `main`; CI advanced the package to
+`0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
+pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra
+notification run `30940054591` completed successfully. Public
+`https://inimatic.com/version.json` reports `0.0.265+b8b4c68`. The AdaOS core
+transport commits remain local, as requested; the routed proof above runs the
+source checkout directly rather than an obsolete core slot.
 
 The final DEV draft receipt is Forge commit `2177a2129e8587a1a881213d97feeedbf8c50f4d`
 and the Workspace registry commit is
