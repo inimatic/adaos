@@ -1471,6 +1471,18 @@ Autonomy, evidence, and acceptance:
   `sn_6acf0c01` mismatch, keeps destination `webspace_id` out of Yjs bootstrap
   until consent, passes 228/228 Navigation/App/YDoc tests, and builds for
   production.
+- [x] The 2026-08-04 same-Webspace correction preserves the subnet-scoped
+  current Webspace when a raw intent has no canonical `webspace` query, so an
+  already open `dev1-dev` no longer silently boots `desktop`. Destination
+  completion is gated by complete scenario-consistent materialization rather
+  than live transport connection state: `builder -> test04_recipes` is applied
+  once, and reopening the current target is a no-op. Client commit `eb053fe`
+  passes 238/238 tests, a production build, and the exact local browser route.
+  Builder DEV `0.3.41` is pushed/active and Workspace `0.3.34` is
+  published/active. Package release
+  now retains only manifest-bound `conversational/tests/stories/*.yaml` while
+  continuing to exclude ordinary component test suites; component and
+  conversational manifest versions update and roll back atomically.
 - [x] The 2026-08-04 data-driven workflow increment adds the four-channel
   ingress/executor proof and full trace spine (`5e0ed333`), strict active-
   WorkspaceLock Builder package cutover with restart-safe instance migration

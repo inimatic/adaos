@@ -82,28 +82,33 @@ runtime browser surfaces use exact topology resolution.
 - [x] `[must]` Distinguish an empty Builder inventory from an unavailable or
   incompatible discovery runtime; a discovery failure can no longer be
   reported as "no active Builder".
-- [ ] `[must]` Human Telegram acceptance with the real conversation buttons.
+- [x] `[must]` Human Telegram acceptance with the real conversation buttons.
 - [ ] `[must]` Human browser acceptance of a generated Preview link after the
   updated client is deployed.
-- [x] `[must]` Automated local browser acceptance from `desktop` with
-  `dev1-dev` deliberately set to `builder`: the deep link reached
-  `test04_recipes`, cleared the intent, and never presented
-  `scenario_context_mismatch`.
-- [ ] `[should]` Reduce the remaining cold-start latency before the Webspace
-  decision and target first paint; correctness no longer depends on this
-  latency, but the current development build still spends most of the route
-  time in hub/Yjs bootstrap.
+- [x] `[must]` Automated local browser acceptance with subnet-scoped current
+  Webspace `dev1-dev` and scenario `builder`: the raw intent without a
+  canonical `webspace` hint remained in `dev1-dev`, presented only the real
+  scenario mismatch, switched once to `test04_recipes`, and cleared the
+  overlay after materialization.
+- [x] `[must]` Reopen the same exact target after it is current: no Webspace or
+  scenario command is repeated and no navigation overlay is rendered.
+- [ ] `[should]` Reduce full-page cold-start time for links opened in a new tab.
+  This is client boot/transport restoration, not Preview switching. Navigation
+  of an already materialized target is now a deterministic no-op.
 - [ ] `[should]` Add lifecycle management for stale smoke Builder Webspaces so
   the selection surface does not accumulate inactive test hosts.
 
 ## Local activation and publication status
 
-`builder_skill` version `0.3.38` is validated and activated in the local DEV
-runtime. The hardened content is locally published as Workspace version
-`0.3.32` and activated on slot `B`, so the Workspace-backed Telegram route no
-longer uses version `0.3.30`. Its core compatibility floor is the explicit
+`builder_skill` version `0.3.41` is validated, pushed, and activated in the
+local DEV runtime. The hardened content is locally published as Workspace
+version `0.3.34` and activated on slot `B`. Its core compatibility floor is the explicit
 Builder-context ABI commit `e4f794b8` (`0.1.660+4316`). The local API reports
 the current checkout commit and an HTTP `/api/tools/call` smoke discovers both
 `desktop` and `dev1` with a button presentation plan. The registry publication
 commits are local and were not pushed. The AdaOS core commits are also local.
-Only the client repository is authorized for remote push in this iteration.
+Only the client repository was pushed remotely in this iteration. Client
+commit `eb053fe` contains the same-Webspace startup and materialization gate;
+238/238 client tests, the production build, and the exact local browser route
+passed. The release path also keeps component and conversational manifest
+versions atomic and rejects drift during validation.

@@ -1,7 +1,7 @@
 # Navigation Intent And Location Architecture
 
-Status: target contract with the first local implementation slice validated on
-2026-08-03.
+Status: target contract with the same-Webspace navigation correction validated
+locally on 2026-08-04.
 
 This document defines cross-zone, cross-subnet, cross-Webspace navigation for
 AdaOS. It covers links produced by AdaOS Connect, Builder, notifications, chat
@@ -69,7 +69,9 @@ the authoritative Webspace registry supplies `kind` and `source_mode`.
 
 The destination is an expectation, not an authority token. The client still
 has to authenticate, pass authorization, connect to the requested subnet,
-obtain a fresh synchronized state, and verify materialization.
+obtain a complete scenario-consistent materialization, and verify it. Live Yjs
+transport freshness remains part of runtime availability, but is not a reason
+to repeat or indefinitely delay a destination that has already materialized.
 
 ## Ordered Resolution
 
@@ -80,7 +82,9 @@ obtain a fresh synchronized state, and verify materialization.
 3. Compare `subnet_id` and propose an explicit subnet switch.
 4. Compare `webspace_id` and propose an explicit Webspace switch.
 5. Verify the authoritative Webspace source boundary.
-6. Wait for fresh synchronized state; stale Yjs state cannot confirm success.
+6. Wait until the target Webspace has a complete, scenario-consistent
+   materialization. A reconnecting transport alone does not invalidate an
+   already complete materialization.
 7. Compare the expected scenario and, when observable, revision.
 8. Open the destination or explain the remaining mismatch.
 
@@ -92,8 +96,12 @@ it was opened.
 
 `webspace_id` inside `webspace.open` is a destination, not a bootstrap query.
 The Yjs client must not enter that room while zone/subnet resolution is still
-pending. It starts from the current safe context and calls the normal Webspace
-switch command only after the user accepts the preceding topology decisions.
+pending. A canonical `webspace` URL location is the first startup source; when
+it is absent, the client resumes the subnet-scoped preferred current Webspace,
+and falls back to `desktop` only if neither source exists. An unresolved
+navigation intent must therefore never discard a known `dev1-dev` current
+location or silently bootstrap `desktop`. The normal Webspace switch command
+is called only after the required topology decision.
 
 If authentication is absent, the client presents login but preserves the
 complete `webspace.open` destination. Successful login continues resolution;
@@ -117,11 +125,14 @@ Opening it from another subnet first explains the mismatch. A user may switch
 to the referenced subnet, cancel, or keep the current context. The link does
 not assume that the Telegram-bound subnet is also the browser's active subnet.
 
-Builder also reports the source Webspace and its related Preview Webspace in
-project/current/Preview-link responses. A Telegram conversation without an
-explicit trusted Webspace binding is labelled as a persisted dialog scope;
-selecting a Project changes that conversation focus but does not silently
-claim or switch a browser Webspace.
+Builder also reports the selected Builder host and its related Preview
+Webspace in project/current/Preview-link responses. Telegram stores a selected
+Builder host per chat/thread. Within it, selecting a Project changes the
+Builder working context; it does not change the already open Preview target.
+`Show prototype`, `Show implementation`, or `Show publication` selects that
+target. `Preview link` then opens the stored target in the related Preview
+Webspace and may request an explicit scenario switch in the browser, without
+changing the Builder Project or workflow state.
 
 ## Address Bar And Browser History
 
@@ -160,7 +171,7 @@ The 2026-08-03 local slice includes:
 - Builder SDK tests proving full Preview expectations in the URL;
 - AdaOS Connect tests proving SDK-owned registration destinations;
 - backend TypeScript compilation after removal of legacy `mode` generation;
-- client Navigation/App/YDoc regression tests (228/228), including the exact
+- client Navigation/App/YDoc regression tests (238/238), including the exact
   `ruhub` to `sn_6acf0c01` same-zone mismatch, and a successful Ionic build;
 - localized English/Russian navigation explanations; no new shell-written
   Cyrillic fixtures;
@@ -189,3 +200,13 @@ and falls back to file-atomic replacement when either removal of the live
 directory or installation of the staged directory is denied by an open handle.
 It never retries the remote push or another state-changing command; a partial
 local activation rolls back from the sibling copy.
+
+The 2026-08-04 same-Webspace correction is client commit `eb053fe`. Opening an
+unresolved `webspace.open` intent while the subnet-scoped current Webspace is
+already `dev1-dev` no longer boots `desktop` and no longer reports a false
+Webspace mismatch. If `builder` is open, the resolver asks once whether to
+switch to `test04_recipes`; after that materialization completes, the overlay
+closes even while the Yjs transport is reconnecting. Reopening the same target
+is a no-op at the navigation layer. A new browser tab can still spend time on
+the client's cold boot and transport restoration, but it performs no repeated
+Project or scenario transition.
