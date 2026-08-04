@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.static_report.v1",
+  "title": "AdaOS Workflow Static Review Report",
+  "type": "object",
+  "required": [
+    "schema",
+    "report_id",
+    "generated_at",
+    "workflow_type",
+    "definition_version",
+    "definition_digest",
+    "package_id",
+    "package_digest",
+    "statechart",
+    "definition_review",
+    "conformance",
+    "coverage",
+    "story_reports"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.static_report.v1" },
+    "report_id": { "$ref": "#/$defs/id" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "definition_digest": { "$ref": "#/$defs/digest" },
+    "package_id": { "type": ["string", "null"], "maxLength": 160 },
+    "package_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "statechart": {
+      "type": "object",
+      "required": [
+        "schema",
+        "workflow_type",
+        "definition_version",
+        "initial_state",
+        "states",
+        "edges",
+        "authoritative"
+      ],
+      "properties": {
+        "schema": { "const": "adaos.workflow.statechart_projection.v1" },
+        "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "initial_state": { "$ref": "#/$defs/id" },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["transition_id", "source", "target", "command"],
+            "properties": {
+              "transition_id": { "$ref": "#/$defs/id" },
+              "source": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "$ref": "#/$defs/id" }
+              },
+              "target": { "$ref": "#/$defs/id" },
+              "command": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "authoritative": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "definition_review": {
+      "type": "object",
+      "required": [
+        "schema",
+        "workflow_type",
+        "definition_version",
+        "state_count",
+        "transition_count",
+        "command_count",
+        "reachable_states",
+        "unreachable_states",
+        "terminal_states",
+        "waiting_states",
+        "cycle_edge_count",
+        "unused_commands",
+        "conflict_scopes"
+      ],
+      "properties": {
+        "schema": { "const": "adaos.workflow.definition_review.v1" },
+        "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "state_count": { "type": "integer", "minimum": 0 },
+        "transition_count": { "type": "integer", "minimum": 0 },
+        "command_count": { "type": "integer", "minimum": 0 },
+        "reachable_states": { "$ref": "#/$defs/idList" },
+        "unreachable_states": { "$ref": "#/$defs/idList" },
+        "terminal_states": { "$ref": "#/$defs/idList" },
+        "waiting_states": { "$ref": "#/$defs/idList" },
+        "cycle_edge_count": { "type": "integer", "minimum": 0 },
+        "unused_commands": { "$ref": "#/$defs/idList" },
+        "conflict_scopes": { "$ref": "#/$defs/idList" }
+      },
+      "additionalProperties": false
+    },
+    "conformance": {
+      "type": "object",
+      "required": [
+        "case_count",
+        "state_case_count",
+        "transition_case_count",
+        "cases"
+      ],
+      "properties": {
+        "case_count": { "type": "integer", "minimum": 0 },
+        "state_case_count": { "type": "integer", "minimum": 0 },
+        "transition_case_count": { "type": "integer", "minimum": 0 },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["case_id", "kind"],
+            "properties": {
+              "case_id": { "$ref": "#/$defs/id" },
+              "kind": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "state_total",
+        "transition_total",
+        "command_total",
+        "story_count",
+        "story_step_count",
+        "valid_story_count",
+        "states_declared",
+        "states_reachable",
+        "states_covered_by_stories",
+        "states_missing_story_coverage",
+        "transitions_declared",
+        "transitions_covered_by_stories",
+        "transitions_missing_story_coverage",
+        "commands_declared",
+        "commands_covered_by_stories",
+        "commands_missing_story_coverage",
+        "outputs_declared",
+        "outputs_covered_by_stories",
+        "outputs_missing_story_coverage"
+      ],
+      "properties": {
+        "state_total": { "type": "integer", "minimum": 0 },
+        "transition_total": { "type": "integer", "minimum": 0 },
+        "command_total": { "type": "integer", "minimum": 0 },
+        "story_count": { "type": "integer", "minimum": 0 },
+        "story_step_count": { "type": "integer", "minimum": 0 },
+        "valid_story_count": { "type": "integer", "minimum": 0 },
+        "states_declared": { "$ref": "#/$defs/idList" },
+        "states_reachable": { "$ref": "#/$defs/idList" },
+        "states_covered_by_stories": { "$ref": "#/$defs/idList" },
+        "states_missing_story_coverage": { "$ref": "#/$defs/idList" },
+        "transitions_declared": { "$ref": "#/$defs/idList" },
+        "transitions_covered_by_stories": { "$ref": "#/$defs/idList" },
+        "transitions_missing_story_coverage": { "$ref": "#/$defs/idList" },
+        "commands_declared": { "$ref": "#/$defs/idList" },
+        "commands_covered_by_stories": { "$ref": "#/$defs/idList" },
+        "commands_missing_story_coverage": { "$ref": "#/$defs/idList" },
+        "outputs_declared": { "$ref": "#/$defs/idList" },
+        "outputs_covered_by_stories": { "$ref": "#/$defs/idList" },
+        "outputs_missing_story_coverage": { "$ref": "#/$defs/idList" }
+      },
+      "additionalProperties": false
+    },
+    "story_reports": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["story_id", "valid", "steps", "final_state", "diagnostics", "timeline"],
+        "properties": {
+          "story_id": { "$ref": "#/$defs/id" },
+          "valid": { "type": "boolean" },
+          "steps": { "type": "integer", "minimum": 0 },
+          "final_state": { "type": ["string", "null"], "maxLength": 160 },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["code", "severity", "path", "message"],
+              "properties": {
+                "code": { "$ref": "#/$defs/id" },
+                "severity": { "enum": ["error", "warning", "info"] },
+                "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                "details": { "type": "object" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "step",
+                "command",
+                "before_state",
+                "after_state",
+                "accepted",
+                "reason_code",
+                "transition_id",
+                "output"
+              ],
+              "properties": {
+                "step": { "type": "integer", "minimum": 0 },
+                "command": { "type": ["string", "null"], "maxLength": 160 },
+                "before_state": { "type": ["string", "null"], "maxLength": 160 },
+                "after_state": { "type": ["string", "null"], "maxLength": 160 },
+                "accepted": { "type": ["boolean", "null"] },
+                "reason_code": { "type": ["string", "null"], "maxLength": 240 },
+                "transition_id": { "type": ["string", "null"], "maxLength": 160 },
+                "output": {
+                  "type": "object",
+                  "required": [
+                    "output_id",
+                    "kind",
+                    "next_expected_input",
+                    "turn_trace_id",
+                    "workflow_event_id",
+                    "command_id"
+                  ],
+                  "properties": {
+                    "output_id": { "$ref": "#/$defs/id" },
+                    "kind": { "type": "string", "minLength": 1, "maxLength": 80 },
+                    "next_expected_input": { "type": "string", "minLength": 1, "maxLength": 80 },
+                    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+                    "workflow_event_id": { "type": ["string", "null"], "maxLength": 240 },
+                    "command_id": { "type": ["string", "null"], "maxLength": 160 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "idList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    }
+  },
+  "additionalProperties": false
+}

@@ -660,6 +660,11 @@ Authoring and activation add records around, not inside, the pure definition:
 - `adaos.workflow.authoring_attempt.v1` persists model identity,
   prompt/context digests, candidate digest, validation-report digest,
   diagnostics, status, and bounded repair history.
+- `adaos.workflow.static_report.v1` projects an admitted definition and,
+  when present, its conversational package into a non-authoritative statechart,
+  definition review, generated conformance cases, story summaries, and
+  state/command/transition/output coverage. Story summaries intentionally keep
+  semantic command/output/correlation evidence and omit exact user prose.
 
 `WorkflowDefinition` remains deterministic process data. Mutable review state,
 LLM provenance, package installation state, and activation pointers do not

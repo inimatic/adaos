@@ -729,29 +729,42 @@ lineage, evidence, and final Publication agree without direct state repair.
   fixtures unless an explicit integration-trial profile admits them, and every
   live-effect story records its risk and environment. First runner records
   activities as mocked timeline entries and makes no provider calls.
+- [x] `[must]` `GWR5-32` Add the pure conversational runtime ABI bridge that
+  connects proposed workflow acts to canonical workflow invocation and workflow
+  execution results to semantic `ConversationOutput` plus `ResponseEnvelope`
+  refs, without durable store writes, provider calls, or hidden workflow
+  dispatch.
 
 Checked local evidence for the workflow proof slice:
 `tests/test_workflow_registry.py`, `tests/test_governed_workflow.py`,
 `tests/test_workflow_authoring.py`, `tests/test_artifact_package_store.py`,
 `tests/test_artifact_workspace_activation.py`,
 `tests/test_governed_workflow_artifact_e2e.py`,
-`tests/test_scenario_workflow_translation.py`, and
+`tests/test_scenario_workflow_translation.py`,
+`tests/test_conversational_runtime.py`,
+`tests/test_workflow_static_reports.py`, and
 `tests/test_scenario_workflow_runtime.py`. The suite covers immutable adapter
 contracts, role-claim derivation and forged-role rejection, package workflow
 locks and binding digests, failed-health rollback to the prior WorkspaceLock,
 authoring invalid-to-valid convergence with persisted provenance, explicit
 definition migration with package/binding pins, non-Builder scenario activation
-and rollback, and legacy inline workflow translation/shadow comparison.
-- [ ] `[should]` `GWR5-32` Generate static statechart, story, and coverage
+and rollback, legacy inline workflow translation/shadow comparison, and static
+workflow/conversational review reports with statechart, conformance cases,
+story summaries, and state/command/transition/output coverage.
+- [x] `[should]` `GWR5-33` Generate static statechart, story, and coverage
   reports from admitted workflow/conversational package sources for human
-  review, Builder context packets, and trial evidence.
-- [ ] `[should]` `GWR5-33` Preserve trace identity across turn, proposal,
+  review, Builder context packets, and trial evidence. The first report ABI is
+  `adaos.workflow.static_report.v1`; `workflow_static_report` and
+  `conversational_package_static_report` generate non-authoritative statechart,
+  definition review, conformance, story summary, and coverage sections from
+  compiled workflow and package sources while omitting exact chat prose.
+- [ ] `[should]` `GWR5-34` Preserve trace identity across turn, proposal,
   dialog frame, interaction, response, command, workflow event, Run/activity,
   semantic output, and delivery attempt.
-- [ ] `[must]` `GWR5-34` Extend story assertions to full dialog repair,
+- [ ] `[must]` `GWR5-35` Extend story assertions to full dialog repair,
   `ConversationInteraction`, and channel fallback coverage once the workflow
   contract slice is stable.
-- [x] `[deferred]` `GWR5-35` Defer an interactive workflow/conversation studio
+- [x] `[deferred]` `GWR5-36` Defer an interactive workflow/conversation studio
   until static graph/story exports, runner evidence, and package admission are
   stable.
 
