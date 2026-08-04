@@ -531,7 +531,7 @@ def test_story_runner_asserts_interaction_and_channel_fallback() -> None:
                     "proposal": None,
                     "event": None,
                     "skill_result": None,
-                    "output_ref": None,
+                    "output_ref": "choose_inspection",
                 },
                 "expect": {
                     "proposal": None,
@@ -541,7 +541,7 @@ def test_story_runner_asserts_interaction_and_channel_fallback() -> None:
                     "reason_code": None,
                     "output": {
                         "kind": "clarification",
-                        "output_ref": None,
+                        "output_ref": "choose_inspection",
                         "summary": "Choose an inspection.",
                         "actions": [],
                         "next_expected_input": "action",
@@ -563,7 +563,25 @@ def test_story_runner_asserts_interaction_and_channel_fallback() -> None:
         ],
     }
 
-    report = run_conversation_story(story, workflow)
+    output_source = {
+        "outputs": [
+            {
+                "id": "choose_inspection",
+                "kind": "clarification",
+                "audience": "user",
+                "risk_level": "none",
+                "reason_code": "choose_inspection",
+                "explanation": "Choose an inspection.",
+                "summary": "Choose an inspection.",
+                "content_parts": [],
+                "details": [],
+                "actions": [],
+                "next_expected_input": "action",
+                "handoff_target": None,
+            }
+        ]
+    }
+    report = run_conversation_story(story, workflow, output_source=output_source)
 
     assert report["valid"] is True
     presentation = report["timeline"][0]["presentation"]
@@ -588,7 +606,7 @@ def test_story_runner_asserts_repair_without_workflow_command() -> None:
                     "proposal": None,
                     "event": None,
                     "skill_result": None,
-                    "output_ref": None,
+                    "output_ref": "repair_no_match",
                 },
                 "expect": {
                     "proposal": None,
@@ -598,7 +616,7 @@ def test_story_runner_asserts_repair_without_workflow_command() -> None:
                     "reason_code": None,
                     "output": {
                         "kind": "repair",
-                        "output_ref": None,
+                        "output_ref": "repair_no_match",
                         "summary": "Please rephrase.",
                         "actions": [],
                         "next_expected_input": "text",
@@ -612,9 +630,161 @@ def test_story_runner_asserts_repair_without_workflow_command() -> None:
         ],
     }
 
-    report = run_conversation_story(story, workflow)
+    output_source = {
+        "outputs": [
+            {
+                "id": "repair_no_match",
+                "kind": "repair",
+                "audience": "user",
+                "risk_level": "none",
+                "reason_code": "no_match",
+                "explanation": "The input did not match an available intent.",
+                "summary": "Please rephrase.",
+                "content_parts": [],
+                "details": [],
+                "actions": [],
+                "next_expected_input": "text",
+                "handoff_target": None,
+            }
+        ]
+    }
+    report = run_conversation_story(story, workflow, output_source=output_source)
 
     assert report["valid"] is True
     output = report["timeline"][0]["output"]
     assert output["kind"] == "repair"
     assert output["reason"]["code"] == "no_match"
+
+
+def test_story_runner_executes_skill_invocation_without_workflow() -> None:
+    story = {
+        "id": "skill.story",
+        "story_kind": "skill",
+        "workflow_type": None,
+        "locale": "en",
+        "channel": "text",
+        "actor": {"id": "user:local", "permissions": [], "roles": []},
+        "start": None,
+        "steps": [
+            {
+                "user": "Find the current release",
+                "given": {
+                    "proposal": {
+                        "kind": "skill_invocation",
+                        "intent_id": "find_release",
+                        "command": None,
+                        "skill_id": "catalog",
+                        "operation_id": "find_release",
+                        "arguments": {"project": "adaos"},
+                        "confidence": 0.98,
+                        "action_policy": {
+                            "schema": "adaos.conversation.action_policy.v1",
+                            "risk_class": "read",
+                            "side_effect": "none",
+                            "confirmation": "none",
+                        },
+                    },
+                    "event": None,
+                    "skill_result": {"version": "1.2.3"},
+                    "output_ref": "release_found",
+                },
+                "expect": {
+                    "proposal": {"kind": "skill_invocation", "command": None, "confidence_at_least": 0.9},
+                    "command": None,
+                    "transition_id": None,
+                    "state": None,
+                    "reason_code": None,
+                    "output": {
+                        "kind": "result",
+                        "output_ref": "release_found",
+                        "summary": "Release found.",
+                        "actions": [],
+                        "next_expected_input": "none",
+                    },
+                },
+            }
+        ],
+    }
+    output_source = {
+        "outputs": [
+            {
+                "id": "release_found",
+                "kind": "result",
+                "audience": "user",
+                "risk_level": "none",
+                "reason_code": "release_found",
+                "explanation": "The catalog returned a release.",
+                "summary": "Release found.",
+                "content_parts": [],
+                "details": [],
+                "actions": [],
+                "next_expected_input": "none",
+                "handoff_target": None,
+            }
+        ]
+    }
+
+    report = run_conversation_story(story, output_source=output_source)
+
+    assert report["valid"] is True
+    timeline = report["timeline"][0]
+    assert timeline["invocation"]["schema"] == "adaos.skill.invocation.v1"
+    assert timeline["activity"]["activity"]["result"] == {"version": "1.2.3"}
+    assert timeline["output"]["metadata"]["source_output_ref"] == "release_found"
+
+
+def test_story_expectations_do_not_drive_workflow_execution() -> None:
+    workflow = compile_definition(_definition())
+    story = {
+        "id": "expectation.mutation",
+        "story_kind": "workflow",
+        "workflow_type": "builder.change",
+        "actor": {"id": "user:local", "permissions": ["builder.change"], "roles": []},
+        "start": {"instance_id": "change:mutation", "state": "prototype", "generation": 0, "context": {}},
+        "steps": [
+            {
+                "given": {
+                    "proposal": {
+                        "kind": "workflow_command",
+                        "intent_id": "approve_prototype",
+                        "command": "approve",
+                        "skill_id": None,
+                        "operation_id": None,
+                        "arguments": {},
+                        "confidence": 1.0,
+                        "action_policy": {
+                            "schema": "adaos.conversation.action_policy.v1",
+                            "risk_class": "isolated_write",
+                            "side_effect": "reversible",
+                            "confirmation": "none",
+                        },
+                    },
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": None,
+                },
+                "expect": {
+                    "proposal": {"kind": "workflow_command", "command": "reject", "confidence_at_least": 1.0},
+                    "command": "reject",
+                    "transition_id": "reject_prototype",
+                    "state": "prototype",
+                    "reason_code": None,
+                    "output": {
+                        "kind": "repair",
+                        "output_ref": None,
+                        "summary": "Rejected.",
+                        "actions": [],
+                        "next_expected_input": "text",
+                    },
+                },
+            }
+        ],
+    }
+
+    report = run_conversation_story(story, workflow)
+
+    assert report["valid"] is False
+    timeline = report["timeline"][0]
+    assert timeline["command"] == "approve"
+    assert timeline["after_state"] == "automation"
+    assert timeline["output"]["kind"] == "accepted"

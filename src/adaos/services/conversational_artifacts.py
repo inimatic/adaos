@@ -924,76 +924,6 @@ def _catalog_output(
     )
 
 
-def _conversation_output_from_story(
-    *,
-    story_id: str,
-    step_index: int,
-    conversation_id: str,
-    output_spec: Mapping[str, Any],
-    instance: Mapping[str, Any],
-    workflow_type: str,
-    definition_version: str,
-    command_id: str | None,
-    workflow_event_id: str | None,
-) -> dict[str, Any]:
-    kind = str(output_spec.get("kind") or "result")
-    summary = str(output_spec.get("summary") or kind.replace("_", " "))
-    actions = [
-        {
-            "action_id": str(action_id),
-            "label": str(action_id).replace("_", " "),
-            "command": None,
-            "risk_level": "none",
-            "target_refs": [],
-            "requires_confirmation": False,
-            "presentation_hint": "secondary",
-        }
-        for action_id in list(output_spec.get("actions") or [])
-    ]
-    return build_conversation_output(
-        output_id=f"story:{story_id}:step:{step_index}",
-        conversation_id=conversation_id,
-        kind=kind,
-        summary=summary,
-        risk_level="none",
-        reason={
-            "code": str(output_spec.get("reason_code") or kind),
-            "explanation": summary,
-            "retryable": kind in {"clarification", "repair", "confirmation"},
-            "source": "conversation",
-        },
-        actions=actions,
-        correlation={
-            "turn_trace_id": f"story:{story_id}:turn:{step_index}",
-            "intent_proposal_id": None,
-            "interaction_id": None,
-            "workflow_ref": workflow_ref(
-                "workflow",
-                str(instance["instance_id"]),
-                version=definition_version,
-                generation=int(instance["generation"]),
-            ),
-            "workflow_event_id": workflow_event_id,
-            "command_id": command_id,
-            "run_ref": None,
-            "reply_route_ref": None,
-        },
-        next_expected_input={
-            "kind": str(output_spec.get("next_expected_input") or "none"),
-            "interaction_id": None,
-            "fields": [],
-        },
-        channel_constraints={
-            "preferred": None,
-            "fallbacks": [],
-            "requires_rich_view": False,
-        },
-        response_envelope_ref=None,
-        metadata={"workflow_type": workflow_type, "story_id": story_id},
-        now=f"2026-01-01T00:{step_index:02d}:30+00:00",
-    )
-
-
 def _story_projection_ref(
     instance: Mapping[str, Any],
     *,
@@ -1217,224 +1147,6 @@ def _assert_story_repair(
             )
         )
     return diagnostics
-
-
-def _run_conversation_story_legacy(
-    story: Mapping[str, Any],
-    workflow: CompiledWorkflowDefinition,
-    *,
-    resolver: WorkflowResolver | None = None,
-    output_source: Mapping[str, Any] | None = None,
-    affordances_source: Mapping[str, Any] | None = None,
-    package_id: str | None = None,
-    package_digest: str | None = None,
-) -> dict[str, Any]:
-    """Run a deterministic conversation story without LLM calls or live effects."""
-
-    resolver = resolver or WorkflowResolver()
-    diagnostics: list[dict[str, Any]] = []
-    timeline: list[dict[str, Any]] = []
-    story_id = str(story.get("id") or "story")
-    actor = dict(story.get("actor") or {})
-    actor_id = str(actor.get("id") or "user:local")
-    permissions = tuple(str(item) for item in list(actor.get("permissions") or []))
-    roles = tuple(str(item) for item in list(actor.get("roles") or []))
-    start = dict(story.get("start") or {})
-    instance = new_instance(
-        workflow,
-        str(start.get("instance_id") or f"story:{story_id}"),
-        context=dict(start.get("context") or {}),
-        now="2026-01-01T00:00:00+00:00",
-    )
-    if str(start.get("state") or workflow.initial_state) in workflow.states:
-        instance["state"] = str(start.get("state") or workflow.initial_state)
-    instance["generation"] = int(start.get("generation") or 0)
-    conversation_id = f"story:{story_id}"
-
-    for index, raw_step in enumerate(list(story.get("steps") or [])):
-        step = dict(raw_step or {})
-        given = dict(step.get("given") or {})
-        expect = dict(step.get("expect") or {})
-        proposal = dict(given.get("proposal") or expect.get("proposal") or {})
-        command_id = str(expect.get("command") or proposal.get("command") or "").strip()
-        input_value = dict(proposal.get("arguments") or {})
-        if "confirmed" not in input_value and command_id:
-            input_value["confirmed"] = True
-        before_state = str(instance.get("state"))
-        decision: dict[str, Any] | None = None
-        workflow_event_id: str | None = None
-        activity_mock: dict[str, Any] | None = None
-        if command_id:
-            decision = resolver.apply(
-                workflow,
-                instance,
-                command_id,
-                input_value=input_value,
-                actor=actor_id,
-                permissions=permissions,
-                roles=roles,
-                expected_generation=int(instance["generation"]),
-                idempotency_key=f"story:{story_id}:{index}:{command_id}",
-                now=f"2026-01-01T00:{index:02d}:00+00:00",
-            )
-            instance = copy.deepcopy(decision["after"])
-            event_records = list(decision.get("event_records") or [])
-            if event_records:
-                workflow_event_id = str(event_records[0].get("event_id") or "")
-            if decision.get("accepted") and decision.get("activity"):
-                activity_mock = {
-                    "mocked": True,
-                    "side_effect_isolated": True,
-                    "activity": copy.deepcopy(decision["activity"]),
-                }
-            expected_reason = expect.get("reason_code")
-            if expected_reason is not None and decision.get("reason_code") != expected_reason:
-                diagnostics.append(
-                    _diagnostic(
-                        "conversational.story.reason_mismatch",
-                        f"{story_id}.steps[{index}].expect.reason_code",
-                        f"expected reason {expected_reason!r}, got {decision.get('reason_code')!r}",
-                    )
-                )
-            elif expected_reason is None and not decision.get("accepted"):
-                diagnostics.append(
-                    _diagnostic(
-                        "conversational.story.command_rejected",
-                        f"{story_id}.steps[{index}].expect.command",
-                        f"command {command_id} was rejected: {decision.get('reason_code')}",
-                    )
-                )
-            expected_transition = str(expect.get("transition_id") or "").strip()
-            if expected_transition and decision.get("transition_id") != expected_transition:
-                diagnostics.append(
-                    _diagnostic(
-                        "conversational.story.transition_mismatch",
-                        f"{story_id}.steps[{index}].expect.transition_id",
-                        f"expected transition {expected_transition}, got {decision.get('transition_id')}",
-                    )
-                )
-
-        expected_state = str(expect.get("state") or "").strip()
-        if expected_state and str(instance.get("state")) != expected_state:
-            diagnostics.append(
-                _diagnostic(
-                    "conversational.story.state_mismatch",
-                    f"{story_id}.steps[{index}].expect.state",
-                    f"expected state {expected_state}, got {instance.get('state')}",
-                )
-            )
-        output_spec = dict(expect.get("output") or {})
-        repair_expect = dict(expect.get("repair") or {})
-        if (
-            output_spec.get("kind") == "repair"
-            and "reason_code" not in output_spec
-            and repair_expect.get("reason_code") is not None
-        ):
-            output_spec["reason_code"] = repair_expect.get("reason_code")
-        output_ref = str(output_spec.get("output_ref") or given.get("output_ref") or "").strip()
-        try:
-            if output_ref and isinstance(output_source, Mapping):
-                output = _catalog_output(
-                    output_ref=output_ref,
-                    output_source=output_source,
-                    affordances_source=affordances_source or {},
-                    story_id=story_id,
-                    step_index=index,
-                    conversation_id=conversation_id,
-                    proposal=proposal,
-                    instance=instance,
-                    command_id=command_id or None,
-                    workflow_event_id=workflow_event_id,
-                    package_id=package_id,
-                    package_digest=package_digest,
-                )
-            else:
-                output = _conversation_output_from_story(
-                    story_id=story_id,
-                    step_index=index,
-                    conversation_id=conversation_id,
-                    output_spec=output_spec,
-                    instance=instance,
-                    workflow_type=workflow.workflow_type,
-                    definition_version=workflow.definition_version,
-                    command_id=command_id or None,
-                    workflow_event_id=workflow_event_id,
-                )
-        except Exception as exc:
-            diagnostics.append(
-                _diagnostic(
-                    "conversational.story.output_projection_failed",
-                    f"{story_id}.steps[{index}].expect.output",
-                    str(exc),
-                )
-            )
-            output = _conversation_output_from_story(
-                story_id=story_id,
-                step_index=index,
-                conversation_id=conversation_id,
-                output_spec=output_spec,
-                instance=instance,
-                workflow_type=workflow.workflow_type,
-                definition_version=workflow.definition_version,
-                command_id=command_id or None,
-                workflow_event_id=workflow_event_id,
-            )
-        output_errors = _schema_diagnostics(
-            CONVERSATION_OUTPUT_SCHEMA,
-            output,
-            f"{story_id}.steps[{index}].output",
-        )
-        diagnostics.extend(output_errors)
-        diagnostics.extend(
-            _assert_story_repair(
-                story_id=story_id,
-                step_index=index,
-                expect=expect,
-                output=output,
-                command_id=command_id or None,
-            )
-        )
-        interaction, presentation, interaction_diagnostics = _story_interaction_projection(
-            story_id=story_id,
-            step_index=index,
-            story_channel=str(story.get("channel") or "text"),
-            workflow=workflow,
-            resolver=resolver,
-            instance=instance,
-            actor_id=actor_id,
-            permissions=permissions,
-            roles=roles,
-            expect=expect,
-            conversation_id=conversation_id,
-        )
-        diagnostics.extend(interaction_diagnostics)
-        timeline.append(
-            {
-                "step": index,
-                "user": step.get("user"),
-                "event": copy.deepcopy(step.get("event")),
-                "command": command_id or None,
-                "before_state": before_state,
-                "after_state": str(instance.get("state")),
-                "accepted": None if decision is None else bool(decision.get("accepted")),
-                "reason_code": None if decision is None else decision.get("reason_code"),
-                "transition_id": None if decision is None else decision.get("transition_id"),
-                "activity": activity_mock,
-                "output": output,
-                "interaction": interaction,
-                "presentation": presentation,
-            }
-        )
-
-    report = {
-        "story_id": story_id,
-        "valid": not diagnostics,
-        "steps": len(list(story.get("steps") or [])),
-        "final_state": str(instance.get("state")),
-        "diagnostics": diagnostics,
-        "timeline": timeline,
-    }
-    return report
 
 
 def _assert_story_value(
@@ -1664,7 +1376,7 @@ def run_conversation_story(
             and repair_expect.get("reason_code") is not None
         ):
             expected_output["reason_code"] = repair_expect.get("reason_code")
-        output_ref = str(given.get("output_ref") or expected_output.get("output_ref") or "").strip()
+        output_ref = str(given.get("output_ref") or "").strip()
         if output_ref:
             output = _catalog_output(
                 output_ref=output_ref,
@@ -1685,20 +1397,14 @@ def run_conversation_story(
                 {"accepted": decision.get("accepted"), "status": decision.get("status"), "reason_code": decision.get("reason_code"), "invocation": invocation, "decision": decision, "commit": None, "responses": []},
                 now=f"2026-01-01T00:{index:02d}:30+00:00",
             )
-        elif expected_output and workflow is not None and instance is not None:
-            output = _conversation_output_from_story(
-                story_id=story_id,
-                step_index=index,
-                conversation_id=conversation_id,
-                output_spec=expected_output,
-                instance=instance,
-                workflow_type=workflow.workflow_type,
-                definition_version=workflow.definition_version,
-                command_id=command_id,
-                workflow_event_id=workflow_event_id,
-            )
         else:
-            diagnostics.append(_diagnostic("conversational.story.output_source_missing", f"{story_id}.steps[{index}].given.output_ref", "non-workflow story step requires output_ref"))
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.output_source_missing",
+                    f"{story_id}.steps[{index}].given.output_ref",
+                    "step requires a catalog output_ref or an executed workflow result",
+                )
+            )
             continue
         envelope = response_envelope_from_conversation_output(output, sequence=index + 1, now=f"2026-01-01T00:{index:02d}:45+00:00")
         actual_action_ids = [str(item.get("action_id")) for item in output.get("actions") or []]
