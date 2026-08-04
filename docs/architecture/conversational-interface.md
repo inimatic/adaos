@@ -199,6 +199,14 @@ must point to the same semantic output identity. Delivery retry may repeat
 rendering and transport send; it must not re-run an LLM, tool, Codex task, or
 workflow effect.
 
+The current implementation exposes this as a pure ABI bridge in
+`adaos.services.conversational_runtime`: it validates `IntentProposal`,
+constructs workflow and skill invocation proposals, converts one proposed
+workflow act into the canonical `WorkflowInvocation`, builds
+`ConversationOutput` from workflow execution results, and derives a
+`ResponseEnvelope` ref/materialization record without touching durable stores or
+LLM providers.
+
 ## NLU Data Boundary
 
 NLU data must stop being scattered across runtime state, prompts, scenarios,
@@ -536,6 +544,9 @@ for their detailed gates and evidence.
   ABI linked to current `ResponseEnvelope` materialization.
 - [ ] `[must]` Align `ResponseEnvelope`/`InteractionPresentation` producers to
   the same semantic output identity.
+- [x] `[must]` Add a pure runtime ABI bridge for workflow/skill
+  `IntentProposal`, canonical workflow invocation, workflow execution result ->
+  `ConversationOutput`, and `ConversationOutput` -> `ResponseEnvelope` ref.
 - [x] `[must]` Define the `conversational/manifest.yaml` package contract for
   skill/scenario-owned input, output, affordance, repair, example, locale, and
   story sources.

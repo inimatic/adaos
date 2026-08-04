@@ -915,6 +915,11 @@ Conversational artifacts and learning:
   source schemas, checks affordance refs against the manifest-bound workflow,
   rejects affordance-owned workflow shape, and runs deterministic stories with
   mocked activities.
+- [x] `[must]` Land the pure runtime ABI bridge that Builder/SDK ports can call
+  before they own durable integration: workflow/skill `IntentProposal`
+  construction, proposed workflow act -> canonical workflow invocation,
+  workflow execution result -> `ConversationOutput`, and semantic output ->
+  `ResponseEnvelope` ref/materialization record.
 - [ ] `[must]` Compile conversational package sources into provider/runtime
   artifacts with source digests, rollout metadata, and rollback refs; compiled
   routers, embeddings, indexes, prompt packs, and model bundles must not become

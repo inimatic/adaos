@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 import yaml
 from jsonschema import Draft202012Validator
 
+from adaos.services.conversational_runtime import build_conversation_output
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
     WorkflowResolver,
@@ -644,19 +645,14 @@ def _conversation_output_from_story(
         }
         for action_id in list(output_spec.get("actions") or [])
     ]
-    return {
-        "schema": "adaos.conversation.output.v1",
-        "output_id": f"story:{story_id}:step:{step_index}",
-        "conversation_id": conversation_id,
-        "kind": kind,
-        "audience": "user",
-        "risk_level": "none",
-        "summary": summary,
-        "details": [],
-        "actions": actions,
-        "fields": [],
-        "evidence_refs": [],
-        "correlation": {
+    return build_conversation_output(
+        output_id=f"story:{story_id}:step:{step_index}",
+        conversation_id=conversation_id,
+        kind=kind,
+        summary=summary,
+        risk_level="none",
+        actions=actions,
+        correlation={
             "turn_trace_id": f"story:{story_id}:turn:{step_index}",
             "intent_proposal_id": None,
             "interaction_id": None,
@@ -671,20 +667,20 @@ def _conversation_output_from_story(
             "run_ref": None,
             "reply_route_ref": None,
         },
-        "next_expected_input": {
+        next_expected_input={
             "kind": str(output_spec.get("next_expected_input") or "none"),
             "interaction_id": None,
             "fields": [],
         },
-        "channel_constraints": {
+        channel_constraints={
             "preferred": None,
             "fallbacks": [],
             "requires_rich_view": False,
         },
-        "response_envelope_ref": None,
-        "metadata": {"workflow_type": workflow_type, "story_id": story_id},
-        "created_at": "2026-01-01T00:00:00+00:00",
-    }
+        response_envelope_ref=None,
+        metadata={"workflow_type": workflow_type, "story_id": story_id},
+        now="2026-01-01T00:00:00+00:00",
+    )
 
 
 def run_conversation_story(
