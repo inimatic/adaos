@@ -140,8 +140,10 @@ Implemented now:
   - `POST /api/nlu/teacher/{webspace_id}/example/save`
   - event: `nlp.teacher.example.save`
   - targets: `skill`, `scenario`, or `system_action`
-  - writes audit metadata into `data.nlu_teacher.dataset[]` and the owning
-    training artifact.
+  - writes a scoped `adaos.nlu.teacher_overlay_store.v1` runtime example with
+    provenance/privacy/rollback metadata; skill/scenario targets also create an
+    `adaos.nlu.teacher_promotion_candidate.v1` for a future Builder patch to
+    `conversational/examples.yaml`.
 - Stage trace persistence in `data.nlu_trace.items[]`.
 - Schema-driven NLU Teacher modal that shows missed requests, candidates, raw event payloads, and Apply actions.
 
@@ -175,11 +177,12 @@ and `ADAOS_NLU_NEURAL=0` keeps Rasa as the next stage.
    - `resolved_entities`, ambiguities, and unresolved spans are recorded in
      trace.
 3. `nlu.pipeline` tries regex rules:
-   - built-in rules (`nlu.pipeline`)
-   - dynamic rules loaded centrally from:
-     - workspace scenarios (`scenario.json:nlu.regex_rules`)
-     - workspace skills (`skill.yaml:nlu.regex_rules`)
-     - legacy per-webspace cache (`data.nlu.regex_rules`)
+   - scoped runtime Teacher overlays from Yjs `data.nlu.regex_rules` first;
+   - git-versioned deterministic `conversational/matchers.yaml` sources from
+     installed skills and the active scenario;
+   - legacy `scenario.json:nlu.regex_rules` and `skill.yaml:nlu.regex_rules` as
+     read-only compatibility baselines;
+   - built-in rules (`nlu.pipeline`).
 4. If regex does not match:
    - if Neuro Lite is enabled by runtime flag and policy, emits
      `nlp.intent.detect.neuro_lite`
@@ -218,6 +221,9 @@ and `ADAOS_NLU_NEURAL=0` keeps Rasa as the next stage.
    - can be disabled on weak devices if neural/regex coverage is sufficient.
 8. If an intent is found:
    - `nlp.intent.detected { intent, confidence, slots, text, webspace_id, request_id, via }`
+   - this event and direct `intent -> scenario.run` dispatch remain compatibility
+     projections. The target authority boundary emits an `IntentProposal` and
+     admits its workflow command or skill invocation before any protected effect.
 9. If intent is not obtained:
    - `nlp.intent.not_obtained { reason, text, via, webspace_id, request_id }`
    - Router emits a human-friendly `io.out.chat.append` and records the request for NLU Teacher.
@@ -288,10 +294,12 @@ The target architecture and roadmap are documented in
 
 Curated examples should live where the behavior is owned:
 
-- Skill-owned actions: the owning skill stores intent examples, slots, regex
-  rules, and training metadata.
-- Scenario-owned flows: the owning scenario stores scenario-level NLU examples
-  and routing hints.
+- Skill-owned actions: the owning skill stores reusable intents, entities,
+  examples, matchers, affordances, repair, and output contracts in its
+  git-versioned `conversational/` package.
+- Scenario-owned flows: the owning scenario stores the same source categories
+  in its package, with affordances bound to admitted scenario workflow/skill
+  operations rather than duplicating transitions.
 - Core/client actions such as opening, switching, reloading/resetting the
   desktop, and toggling installed apps are described in a versioned **system
   action catalog** with stable action ids, argument schemas, aliases, and
@@ -314,14 +322,13 @@ reviewable/rebuildable bundle under `state/interpreter/neural_training`; the
 active provider layout under `state/nlu/neural` is updated only by explicit
 artifact preparation or future governed rebuild/reindex tooling.
 
-NLU Teacher should write accepted corrections back to the owning artifact:
-
-- skill examples/rules for skill actions;
-- scenario examples/rules for scenario flows;
-- system action examples/templates for core/client commands, currently as an
-  audited overlay at `state/interpreter/system_action_feedback.jsonl` that is
-  consumed by Rasa and Neural export;
-- named-entity aliases through the governed named-entity write path.
+NLU Teacher writes accepted corrections only to scoped runtime overlays. For a
+skill or scenario owner it also records a bounded promotion candidate naming
+the target `conversational/examples.yaml` or `conversational/matchers.yaml`;
+Builder alone may turn that candidate into a reviewed source patch. System
+action feedback and named-entity aliases follow the same runtime-first,
+explicit-promotion rule; legacy JSONL and manifest fields are migration inputs,
+not current Teacher write targets.
 
 ## Rasa as a service-skill
 
@@ -367,9 +374,11 @@ When `regex` and `rasa` do not produce an intent, AdaOS calls an LLM teacher to:
 
 Teacher receives scenario + skill context, including:
 
-- current scenario NLU (`scenario.json:nlu`)
+- active conversational package input/examples/matchers and workflow-bound
+  affordances, when present
 - installed catalog (apps/widgets + origins)
-- existing dynamic regex rules (from scenarios/skills + legacy per-webspace cache)
+- active runtime overlays plus git-versioned package matchers
+- legacy scenario/skill regex rules as read-only compatibility evidence
 - built-in regex rules (`nlu.pipeline`)
 - selected skill-level NLU artifacts (e.g. `interpreter/intents.yml`)
 - intent routing hints (`intent_routes`: scenario intent -> callSkill topic -> skill)
@@ -405,13 +414,15 @@ In the default web desktop scenario the current NLU Teacher UI is a schema-drive
   - `nlp.teacher.candidate.apply`:
     - UI exposes one primary Apply action that uses the backend-resolved owner
       target
-    - for `regex_rule` candidates: persists the rule into a workspace owner (preferably a skill), then mirrors into
-      `data.nlu.regex_rules` as a runtime cache so the next request matches immediately (`via="regex.dynamic"`)
+    - for `regex_rule` candidates: applies a scoped runtime overlay to
+      `data.nlu.regex_rules` so the next request can match immediately, and
+      records a Builder promotion candidate for `conversational/matchers.yaml`
     - for `skill`/`scenario` candidates: creates a development plan item
-  - `nlp.teacher.example.save`: persists an operator-approved positive
-    example into a selected skill, scenario, or system-action feedback target
-    with audit metadata
-  - a successful apply emits `ui.notify` with the owner (skill/scenario) where the rule was installed
+  - `nlp.teacher.example.save`: persists an operator-approved positive example
+    in the node-local runtime overlay store and, for reusable skill/scenario
+    targets, records a Builder promotion candidate
+  - a successful apply emits `ui.notify` with runtime scope and promotion
+    candidate identity; it does not claim that package source was changed
 - Voice-originated regex candidates ask the user for confirmation before
   Apply. `да` applies the candidate; the first `нет` rejects it and triggers
   one retry with the rejected candidate in context; a second rejection asks for
@@ -428,17 +439,26 @@ Required UI expansion:
 Until this UI expansion lands, the current implementation is human-verifiable through API/CLI using
 [nlu-human-verification.md](./nlu-human-verification.md).
 
-## Dynamic regex rules (current contract)
+## Deterministic matcher storage (current contract)
 
-- Storage (source of truth):
-  - skill: `.adaos/workspace/skills/<skill>/skill.yaml` -> `nlu.regex_rules[]`
-  - scenario: `.adaos/workspace/scenarios/<scenario>/scenario.json` -> `nlu.regex_rules[]`
+- Reusable design-time source of truth:
+  - skill/scenario `conversational/matchers.yaml`, validated and promoted only
+    through Builder/package admission
+- Runtime specialization:
+  - Yjs `data.nlu.regex_rules[]` for active scoped matching
+  - node-local `state/interpreter/nlu_teacher_overlays.json` for governed
+    example overlays and promotion-candidate evidence
+- Compatibility input:
+  - `skill.yaml:nlu.regex_rules[]` and `scenario.json:nlu.regex_rules[]` are
+    still read by the runtime but are not Teacher write targets
 - Rule identity:
   - every rule has `id="rx.<uuid>"`
 - Observability:
   - every `regex.dynamic` match appends a JSONL record into `state/nlu/regex_usage.jsonl` (webspace_id, scenario_id, rule_id, intent, slots...)
 - Optional trust policy:
-  - `skill.yaml: llm_policy.autoapply_nlu_teacher=true` enables automatic Apply for teacher-proposed regex candidates targeting that skill
+  - `skill.yaml: llm_policy.autoapply_nlu_teacher=true` may auto-apply a
+    trusted runtime overlay; it never authorizes a direct package-source or
+    public-catalog mutation
 
 ## Later (not MVP)
 
