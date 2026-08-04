@@ -1321,6 +1321,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_initial_replay_total = 0
         self._diag_effective_initial_replay_bytes = 0
         self._diag_effective_initial_replay_skip_total = 0
+        self._diag_effective_initial_replay_dedupe_total = 0
         self._diag_effective_initial_replay_last_reason = ""
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_effective_last_full_check_mono = time.monotonic()
@@ -1402,6 +1403,9 @@ class DiagnosticYRoom(YRoom):
             "effective_initial_replay_total": int(self._diag_effective_initial_replay_total),
             "effective_initial_replay_bytes": int(self._diag_effective_initial_replay_bytes),
             "effective_initial_replay_skip_total": int(self._diag_effective_initial_replay_skip_total),
+            "effective_initial_replay_dedupe_total": int(
+                self._diag_effective_initial_replay_dedupe_total
+            ),
             "effective_initial_replay_last_reason": str(self._diag_effective_initial_replay_last_reason or ""),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
             "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
@@ -1904,20 +1908,20 @@ class DiagnosticYRoom(YRoom):
             reason="authoritative_selector_drift",
         )
 
-    async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> None:
+    async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> bool:
         if not _YROOM_EFFECTIVE_INITIAL_REPLAY:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "disabled"
-            return
+            return False
         try:
             if not _room_effective_top_level_ready(self.ydoc):
                 self._diag_effective_initial_replay_skip_total += 1
                 self._diag_effective_initial_replay_last_reason = "room_not_effective_ready"
-                return
+                return False
         except Exception as exc:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = f"ready_check_failed:{type(exc).__name__}"
-            return
+            return False
         try:
             import y_py as Y  # pylint: disable=import-outside-toplevel
 
@@ -1933,12 +1937,12 @@ class DiagnosticYRoom(YRoom):
                 exc,
                 exc_info=True,
             )
-            return
+            return False
         update_len = len(update or b"")
         if update_len <= 0:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "empty_update"
-            return
+            return False
         if update_len > _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "update_too_large"
@@ -1948,7 +1952,7 @@ class DiagnosticYRoom(YRoom):
                 update_len,
                 _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES,
             )
-            return
+            return False
         send_started = time.perf_counter()
         await websocket.send(create_update_message(update))
         send_ms = _elapsed_ms_since(send_started)
@@ -1964,6 +1968,7 @@ class DiagnosticYRoom(YRoom):
             send_ms,
             int(self._diag_effective_initial_replay_total),
         )
+        return True
 
     async def serve(self, websocket: YWebsocket):
         if sync is None or process_sync_message is None or read_sync_message is None:
@@ -1971,7 +1976,12 @@ class DiagnosticYRoom(YRoom):
         async with create_task_group() as tg:
             self.clients.append(websocket)
             await sync(self.ydoc, websocket, self.log)
-            await self._send_initial_effective_state_replay(websocket)
+            # Normal y-websocket/DataChannel providers always emit STEP1 and
+            # require the corresponding STEP2 to declare first sync complete.
+            # Sending a full effective replay here, before reading STEP1, used
+            # to transfer the same document three times during one handshake.
+            # Keep the replay only as an exceptional malformed/preflight
+            # recovery path below.
             initial_native_update_pending = True
             try:
                 async for message in websocket:
@@ -2070,7 +2080,13 @@ class DiagnosticYRoom(YRoom):
                                 int(YSyncMessageType.SYNC_UPDATE),
                             }:
                                 initial_native_update_pending = False
-                                await self._send_initial_effective_state_replay(websocket)
+                                # STEP1 is handled by process_sync_message and
+                                # returns the authoritative STEP2.  Replaying a
+                                # full update after discarding the browser's
+                                # initial state duplicated that same response.
+                                # A prior exceptional replay is already enough;
+                                # either way no additional payload is needed.
+                                self._diag_effective_initial_replay_dedupe_total += 1
                             _ylog.warning(
                                 "ignored initial browser Y sync payload in server-authoritative mode "
                                 "webspace=%s sync_type=%s bytes=%s digest=%s",
@@ -5987,7 +6003,7 @@ def _ws_client_str(websocket: WebSocket) -> str:
 
 class WorkspaceWebsocketServer(WebsocketServer):
     """
-    WebsocketServer that binds each room to a webspace-backed SQLiteYStore.
+    WebsocketServer that binds each room to a webspace-backed YStore snapshot.
 
     We use the websocket path as the webspace id (e.g. "default").
     """
