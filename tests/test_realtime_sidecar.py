@@ -1517,7 +1517,7 @@ async def test_realtime_sidecar_local_control_accepts_graceful_shutdown(
     monkeypatch.setenv("ADAOS_REALTIME_CONTROL_PORT", str(control_port))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
     monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
-    monkeypatch.setenv("ADAOS_REALTIME_DIAG", str(tmp_path / "sidecar.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "sidecar.jsonl"))
     monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
     server = RealtimeSidecarServer(host="127.0.0.1", port=nats_port)
     await server.start()
@@ -1529,6 +1529,80 @@ async def test_realtime_sidecar_local_control_accepts_graceful_shutdown(
         await server.close()
 
     assert accepted is True
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_control_shutdown_sends_normal_websocket_close(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    websockets = pytest.importorskip("websockets")
+    remote_port = _free_port()
+    nats_port = _free_port()
+    control_port = _free_port()
+    remote_connected = asyncio.Event()
+    remote_closed = asyncio.Event()
+    close_codes: list[int | None] = []
+
+    async def _remote(websocket, _path=None):
+        remote_connected.set()
+        try:
+            async for _message in websocket:
+                pass
+        finally:
+            close_codes.append(getattr(websocket, "close_code", None))
+            remote_closed.set()
+
+    upstream = await websockets.serve(
+        _remote,
+        "127.0.0.1",
+        remote_port,
+        max_size=None,
+        compression=None,
+    )
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_PORT", str(nats_port))
+    monkeypatch.setenv("ADAOS_REALTIME_CONTROL_PORT", str(control_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", f"ws://127.0.0.1:{remote_port}/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "sidecar.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    run_task = asyncio.create_task(
+        realtime_sidecar_mod.run_realtime_sidecar(host="127.0.0.1", port=nats_port)
+    )
+    reader = None
+    writer = None
+
+    try:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while writer is None and asyncio.get_running_loop().time() < deadline:
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", nats_port)
+            except OSError:
+                await asyncio.sleep(0.02)
+        assert reader is not None and writer is not None
+        writer.write(b"PING\r\n")
+        await writer.drain()
+        await asyncio.wait_for(remote_connected.wait(), timeout=1.0)
+
+        accepted = await realtime_sidecar_mod._request_realtime_sidecar_graceful_shutdown()
+        await asyncio.wait_for(run_task, timeout=2.0)
+        await asyncio.wait_for(remote_closed.wait(), timeout=1.0)
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        if not run_task.done():
+            run_task.cancel()
+            with contextlib.suppress(BaseException):
+                await run_task
+        upstream.close()
+        await upstream.wait_closed()
+
+    assert accepted is True
+    assert close_codes == [1000]
 
 
 @pytest.mark.asyncio
