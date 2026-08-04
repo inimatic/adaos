@@ -23,6 +23,7 @@ INTERACTION_PRESENTATION_SCHEMA = "adaos.conversation.interaction_presentation.v
 INTERACTION_PRESENTATION_PLAN_SCHEMA = "adaos.conversation.interaction_presentation_plan.v1"
 _PENDING_STATUSES = {"created", "projected", "awaiting_input", "partially_answered", "validation_failed"}
 _TERMINAL_STATUSES = {"completed", "expired", "cancelled", "superseded"}
+_NON_MUTATING_RISK_CLASSES = {"read", "none"}
 
 
 class ConversationInteractionError(ValueError):
@@ -109,6 +110,15 @@ def _validate(name: str, value: Mapping[str, Any]) -> dict[str, Any]:
             f"{name} validation failed at {location}: {errors[0].message}"
         )
     return record
+
+
+def _workflow_command_executor_ready(command: Mapping[str, Any]) -> bool:
+    risk = dict(command.get("risk") or {})
+    risk_class = str(risk.get("class") or "read").strip()
+    if risk_class in _NON_MUTATING_RISK_CLASSES:
+        return True
+    executor = command.get("executor")
+    return isinstance(executor, Mapping) and executor.get("available") is True
 
 
 def interaction_requirements(
@@ -411,6 +421,10 @@ def interaction_from_workflow_description(
     actions: list[dict[str, Any]] = []
     labels = {str(key): str(value) for key, value in dict(action_labels or {}).items() if str(value).strip()}
     for command in commands:
+        if not _workflow_command_executor_ready(command):
+            raise ConversationInteractionError(
+                f"executor_unavailable: workflow command {command.get('command')} cannot be presented"
+            )
         capabilities = dict(command.get("capability_requirements") or {})
         for capability in capabilities.get("required") or []:
             if str(capability) not in required:

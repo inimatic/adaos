@@ -370,6 +370,13 @@ def test_workflow_description_projects_bound_semantic_actions() -> None:
                     "transition_id": "approve_prototype",
                     "target_ref": {"kind": "aggregate", "id": "change:1"},
                     "risk": {"class": "isolated_write", "confirmation": "required"},
+                    "executor": {
+                        "available": True,
+                        "adapter_id": "builder.prototype.derive",
+                        "executor_id": "builder.prototype.worker",
+                        "contract_digest": "sha256:" + "0" * 64,
+                        "reason_code": None,
+                    },
                     "authority": {"actors": ["user"], "permissions": ["builder.change"]},
                     "capability_requirements": {
                         "required": [],
@@ -392,6 +399,40 @@ def test_workflow_description_projects_bound_semantic_actions() -> None:
     assert action["principal_scope"] == ["user"]
     assert action["target_ref"]["id"] == "change:1"
     assert action["confirmation_required"] is True
+
+
+def test_workflow_description_rejects_mutating_action_without_executor_readiness() -> None:
+    with pytest.raises(conversation_interactions.ConversationInteractionError, match="executor_unavailable"):
+        conversation_interactions.interaction_from_workflow_description(
+            {
+                "schema": "adaos.workflow.description.v1",
+                "workflow_type": "builder.change",
+                "definition_version": "1.0.0",
+                "instance_id": "change:missing-executor",
+                "state": "automation_ready",
+                "generation": 2,
+                "target": {"kind": "aggregate", "id": "change:missing-executor"},
+                "allowed_commands": [
+                    {
+                        "command": "start_automation",
+                        "transition_id": "start_automation",
+                        "target_ref": {"kind": "aggregate", "id": "change:missing-executor"},
+                        "risk": {"class": "isolated_write", "confirmation": "none"},
+                        "authority": {"actors": ["user"], "permissions": ["builder.change"]},
+                        "capability_requirements": {
+                            "required": [],
+                            "optional": ["buttons"],
+                            "fallback": "numbered_text",
+                        },
+                        "explanation": "Start automation",
+                    }
+                ],
+            },
+            conversation_id="conv.workflow.executor",
+            owner="skill:builder",
+            interaction_id="interaction.workflow.executor",
+            workflow_ref={"kind": "workflow", "id": "change:missing-executor", "generation": 2},
+        )
 
 
 def test_capability_action_limit_falls_back_without_dropping_commands() -> None:

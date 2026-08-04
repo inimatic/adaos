@@ -386,12 +386,16 @@ blocked.
   whose capability limits cannot represent the requested interaction. The
   local suite covers native buttons, numbered fallback, action limits,
   sensitive rejection, and profile-version renegotiation.
-- [ ] `[must]` `GWR2-18` Bind every presentable mutating command to a registered
+- [x] `[must]` `GWR2-18` Bind every presentable mutating command to a registered
   effect/activity executor and expose `executor_unavailable` from the same
   explanation resolver when it cannot be started or durably queued. The first
   Builder chat migration fails closed by filtering unadapted Codex, Trial, and
-  Publication controls; replace that bounded migration filter with the shared
-  executor-readiness guard before claiming full affordance equivalence.
+  Publication controls; the shared guard is now in
+  `description_with_executor_readiness` and
+  `interaction_from_workflow_description`: allowed mutating commands without a
+  ready executor are moved to `executor_unavailable` blockers, and any raw
+  workflow description that tries to present such a command fails closed before
+  Interaction/Presentation creation.
 
 ## GWR3. NLU Mediation and Informal Responses
 
@@ -621,13 +625,16 @@ lineage, evidence, and final Publication agree without direct state repair.
   Web client and Telegram bot for each executor-backed mutating class. The
   2026-07-31 live read-only control establishes the Telegram baseline; it does
   not replace the required mutating command/guard matrix.
-- [ ] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
+- [x] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
   returns a typed concurrency/policy change, never an unrelated handler rule.
   Generated resolver conformance plus the Builder ingress tests bind displayed
   `workflow_command` and generation back to the canonical resolver. The live
   defect showed that transition admission alone is insufficient when an
-  external activity executor is absent; GWR2-18 and negative executor tests
-  must close that gap.
+  external activity executor is absent; `tests/test_workflow_execution.py`,
+  `tests/test_conversation_interactions.py`, and
+  `tests/test_governed_workflow_artifact_e2e.py` now cover executor readiness,
+  negative `executor_unavailable` projection, and canonical interaction/SDK
+  invocation convergence.
 - [x] `[must]` `GWR5-04` Prove blocked commands expose the same reason code and
   semantically equivalent explanation across channels. Capability negotiation
   consumes one semantic Interaction and preserves resolver explanation facts;
