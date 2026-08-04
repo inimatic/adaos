@@ -90,6 +90,20 @@ runtime browser surfaces use exact topology resolution.
   canonical `webspace` hint remained in `dev1-dev`, presented only the real
   scenario mismatch, switched once to `test04_recipes`, and cleared the
   overlay after materialization.
+- [x] `[must]` Repeat acceptance from a new tab with the unmodified raw intent
+  and no legacy `webspace` query: after zone/subnet confirmation, startup
+  enters `dev1-dev`, runs one scenario preparation, renders a bounded
+  `Preparing requested preview` state, and then renders `test04_recipes`.
+  Builder and both mismatch overlays are absent from the trace.
+- [x] `[must]` Reproduce and diagnose Yjs amplification: one 296,101-byte
+  update was sent 170 times because cancelled WebRTC adapters remained in the
+  room client list.
+- [x] `[must]` Add cancellation-safe adapter cleanup, failed-client pruning,
+  page-scoped peer identity, and authoritative scenario-selector repair; pass
+  the focused core suites.
+- [ ] `[must]` Deploy the core transport hardening and verify on the routed
+  runtime that one update is delivered only to currently live page peers,
+  with no memory-pressure restart, 1006/1012 cascade, or induced relay fallback.
 - [x] `[must]` Reopen the same exact target after it is current: no Webspace or
   scenario command is repeated and no navigation overlay is rendered.
 - [ ] `[should]` Reduce full-page cold-start time for links opened in a new tab.
@@ -108,8 +122,9 @@ the current checkout commit and an HTTP `/api/tools/call` smoke discovers both
 `desktop` and `dev1` with a button presentation plan. The registry publication
 commits are local and were not pushed. The AdaOS core commits are also local.
 Only the client repository was pushed remotely in this iteration. Client
-commit `eb053fe` contains the same-Webspace startup and materialization gate;
-238/238 client tests, the production build, and the exact local browser route
+commits after `eb053fe` contain the topology-confirmed startup room,
+single-command scenario preparation, and stale-render hold; 271/271 client
+tests, the production build, and the exact unmodified local raw-link route
 passed. The release path also keeps component and conversational manifest
 versions atomic and rejects drift during validation.
 

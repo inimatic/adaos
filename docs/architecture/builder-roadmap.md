@@ -1483,6 +1483,23 @@ Autonomy, evidence, and acceptance:
   now retains only manifest-bound `conversational/tests/stories/*.yaml` while
   continuing to exclude ordinary component test suites; component and
   conversational manifest versions update and roll back atomically.
+- [x] The 2026-08-04 exact raw-link follow-up makes a topology-confirmed
+  `webspace.open` destination the startup room even without the legacy
+  `webspace` query. Startup runs one `desktop.scenario.set` before Yjs attach,
+  suppresses the persisted Builder render, and exposes preparation as a
+  bounded state. The exact two-tab local trace reached `test04_recipes` in
+  5.8 seconds with no Builder or mismatch overlay; 271/271 client tests and the
+  production build pass.
+- [x] The same investigation identifies reconnect amplification rather than a
+  merely large Webspace: one 296,101-byte Yjs update was sent 170 times in
+  about 36 seconds by leaked WebRTC adapters. Core now uses page-scoped peer
+  identity, cancellation-safe adapter removal, failed-recipient pruning, and
+  an authoritative selector lease around materialization. Focused WebRTC/Yjs
+  tests pass.
+- [ ] `[must]` Release the core WebRTC/Yjs lifecycle hardening and confirm in a
+  routed multi-tab soak that room client count returns to the number of live
+  page peers, fan-out is bounded, memory remains stable, and no induced
+  1006/1012 or relay fallback occurs.
 - [x] The 2026-08-04 data-driven workflow increment adds the four-channel
   ingress/executor proof and full trace spine (`5e0ed333`), strict active-
   WorkspaceLock Builder package cutover with restart-safe instance migration

@@ -94,14 +94,23 @@ choices. `input_required` never silently changes zone, subnet, Webspace, or
 scenario. A copied link therefore cannot mutate workflow state merely because
 it was opened.
 
-`webspace_id` inside `webspace.open` is a destination, not a bootstrap query.
-The Yjs client must not enter that room while zone/subnet resolution is still
-pending. A canonical `webspace` URL location is the first startup source; when
-it is absent, the client resumes the subnet-scoped preferred current Webspace,
-and falls back to `desktop` only if neither source exists. An unresolved
-navigation intent must therefore never discard a known `dev1-dev` current
-location or silently bootstrap `desktop`. The normal Webspace switch command
-is called only after the required topology decision.
+`webspace_id` inside `webspace.open` is a conditional startup destination. The
+Yjs client must not enter that room while zone/subnet resolution is pending.
+Once the selected zone and authenticated/stored subnet match the destination,
+however, the target Webspace becomes the startup room before device
+registration or Yjs attachment. A canonical `webspace` query is not required
+and must not be duplicated into Builder-generated ingress links. Deferring the
+intent target until the overlay layer would first boot `desktop` or a persisted
+home scenario and then perform an unnecessary second transition. If topology
+is not yet confirmed, the client resumes its current location only for the
+zone/subnet handoff and enters the destination after that decision.
+
+When `expected_scenario_id` is present on an already confirmed subnet, startup
+performs exactly one idempotent `desktop.scenario.set` before joining the Yjs
+room. Until that command has prepared a scenario-consistent materialization,
+the renderer shows a bounded preparation state and must not expose the
+persisted/home scenario. Failure releases the hold into the normal explainable
+resolver; it does not retry the state-changing command.
 
 If authentication is absent, the client presents login but preserves the
 complete `webspace.open` destination. Successful login continues resolution;
@@ -163,6 +172,21 @@ after use. Full `NavigationLocation`, `pushState`/`popstate`, and canonical
 share-link materialization are tracked as follow-up work rather than being
 mixed into the initial cross-topology safety slice.
 
+## Transport Lifecycle Invariants
+
+Opening a navigation target in another tab creates another page-scoped
+WebRTC/Yjs peer, not another logical device replacement. The device id remains
+stable for identity and authorization; the page peer id is unique for transport
+ownership. Closing, replacing, or cancelling a peer must remove its Yjs adapter
+from `YRoom.clients` before the binding is forgotten.
+
+A room broadcast is delivered at most once to each live adapter. A failed or
+closed adapter is removed immediately and its send failure is isolated from the
+room task group. It must not remain as a retry target, and retrying delivery must
+not recreate the originating Yjs update. These rules prevent reconnect churn
+from multiplying a single materialization update by the number of historical
+bindings.
+
 ## Acceptance Evidence
 
 The 2026-08-03 local slice includes:
@@ -210,3 +234,18 @@ closes even while the Yjs transport is reconnecting. Reopening the same target
 is a no-op at the navigation layer. A new browser tab can still spend time on
 the client's cold boot and transport restoration, but it performs no repeated
 Project or scenario transition.
+
+The 2026-08-04 exact raw-link follow-up found two additional defects. The early
+client resolver ignored intent `webspace_id` unless the legacy `webspace` query
+was also present, and cancelled WebRTC/Yjs bindings remained in
+`YRoom.clients`. The observed room sent the same 296,101-byte payload 170 times
+in about 36 seconds (up to 34 copies in one second), reached critical memory
+pressure, restarted the runtime, and consequently produced YWS disconnect and
+relay fallback symptoms. The corrected client boots a topology-confirmed
+`dev1-dev` destination directly, prepares only `test04_recipes`, and never
+renders Builder; the local raw-link trace reached the requested UI in 5.8 s
+without `webspace_mismatch` or `scenario_context_mismatch`. The focused client
+suite passes 271/271 and the production build succeeds. Core tests cover
+adapter cleanup under cancellation, failed-recipient pruning, page-scoped peer
+identity, authoritative selector repair, and atomic materialization ordering.
+Core deployment remains a separate release gate from the client deployment.
