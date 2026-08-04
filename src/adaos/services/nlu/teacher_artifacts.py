@@ -5,8 +5,17 @@ from typing import Any, Mapping
 
 
 PROMOTION_STATES = (
+    "observed",
+    "scoped_overlay_applied",
+    "replay_verified",
     "local_learned",
     "promotion_candidate",
+    "builder_change_created",
+    "package_patch_validated",
+    "trialed",
+    "released",
+    "rejected",
+    "rolled_back",
     "promoted_to_workspace",
     "pushed_to_repo",
     "published",

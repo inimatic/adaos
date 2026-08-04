@@ -59,6 +59,7 @@ source of truth.
 | Response outbox and delivery attempts | `durable_delivery.py` tables `conversation_reply_routes`, `conversation_response_outbox`, `conversation_delivery_attempts` | Conversational Interface / Durable Delivery | ReplyRoute, ResponseEnvelope, progress coalescing, terminal response, and transport delivery attempts | `separate canonical model`; delivery retry must never rerun workflow work |
 | Segment summary jobs | `conversation_store.py` table `conversation_segment_summary_jobs` | Conversation context | Bounded retry queue for summarizing conversation segments | `projection/evidence`; derived memory/context only |
 | Development changes and runs | `conversation_store.py` tables `conversation_development_changes`, `conversation_development_runs` | Conversational Interface / Builder | Candidate/change/run evidence for conversational development flows | `projection/evidence`; promotion must go through Builder Change |
+| NLU Teacher runtime overlays | `state/interpreter/nlu_teacher_overlays.json`, `nlu.teacher_overlay_store.v1`, `nlu.teacher_promotion_candidate.v1` | NLU Teacher / Conversational Interface | Scoped runtime examples plus Builder promotion candidates for git-versioned conversational package source | `separate canonical model`; runtime benefit is allowed, public/source promotion requires Builder review |
 
 ## Pending Actions And UI Projections
 

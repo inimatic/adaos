@@ -135,6 +135,7 @@ A conversational package publishes:
 | `repair.yaml` | no-match, no-input, correction, interruption, disambiguation, cancel, resume, slot-change, and retry policy | dialog runtime, story runner |
 | `output.yaml` | semantic response kinds, result modes, action groups, field templates, explanation slots, sensitivity, and channel fallback hints | response planner, channel adapters |
 | `examples.yaml` | positive, negative, ambiguous, locale, and STT-noisy examples with source/provenance | provider build, Teacher, evaluation |
+| `matchers.yaml` | optional deterministic exact, keyword, and regex matchers with intent, locale, slots, and provenance | deterministic NLU stage, Teacher promotion, evaluation |
 | `tests/stories/*.yaml` | expected dialog/workflow paths and semantic output assertions | CI, Builder validation, release gates |
 
 The SDK should expose stable ports rather than provider-specific internals:
@@ -225,10 +226,10 @@ skill-or-scenario/
     manifest.yaml
     input.yaml
     output.yaml
-    intents.yaml
     entities.yaml
     affordances.yaml
     examples.yaml
+    matchers.yaml            # optional deterministic baseline
     repair.yaml
     locale.en.yaml
     locale.ru.yaml
@@ -275,6 +276,14 @@ NLU Teacher records bridge runtime observation and design-time source:
 
 Teacher candidates are durable evidence. Builder decides whether a candidate
 becomes a git-versioned source patch.
+Operator-approved Teacher examples are first written to
+`adaos.nlu.teacher_overlay_store.v1` under node-local runtime state. For
+skill/scenario targets the same save creates an
+`adaos.nlu.teacher_promotion_candidate.v1` record that names the Builder Change
+request, an allowed `conversational/examples.yaml` or
+`conversational/matchers.yaml` patch, acceptance criteria, and source overlay
+evidence. Runtime overlays can improve local recognition before review, but
+git-versioned package source changes only through Builder.
 
 ### Candidate Lifecycle
 
@@ -562,11 +571,13 @@ for their detailed gates and evidence.
   `IntentProposal`, canonical workflow invocation, workflow execution result ->
   `ConversationOutput`, and `ConversationOutput` -> `ResponseEnvelope` ref.
 - [x] `[must]` Define the `conversational/manifest.yaml` package contract for
-  skill/scenario-owned input, output, affordance, repair, example, locale, and
-  story sources.
-- [ ] `[must]` Implement a Builder/SDK validation command that checks
+  skill/scenario-owned input, output, affordance, repair, example, optional
+  deterministic matcher, locale, and story sources.
+- [x] `[must]` Implement a Builder/SDK validation command that checks
   conversational source schemas, cross-file refs, locale coverage, side-effect
-  policy, and package cardinality.
+  policy, and package cardinality. Workspace admission, package build, archive
+  verification, Builder context assembly, and the developer SDK all use the
+  same `conversational_pipeline` service.
 - [ ] `[must]` Define the skill/scenario SDK ports for validation,
   compilation, proposal emission, semantic output, interactions, Teacher
   candidate capture, and Builder promotion.
@@ -582,12 +593,18 @@ for their detailed gates and evidence.
   explicit integration-trial profiles for live effects or provider calls.
   The first runner records workflow activities as mocked timeline entries and
   does not call providers.
-- [ ] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias, and
-  example candidates through Builder Changes before they can update
-  git-versioned conversational package source.
-- [ ] `[must]` Preserve runtime specialization as scoped runtime data with
+- [ ] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias,
+  example, and deterministic matcher candidates through Builder Changes before
+  they can update git-versioned conversational package source. Example and
+  regex matcher candidates now create Builder promotion-candidate records and
+  no longer mutate `scenario.json`, `skill.yaml`, or package source directly;
+  descriptor, development-task, alias, and execution of package patches remain
+  open.
+- [x] `[must]` Preserve runtime specialization as scoped runtime data with
   provenance, privacy, rollback, and promotion state; prevent silent public
-  promotion.
+  promotion. `adaos.nlu.teacher_overlay_store.v1` retains approved Teacher
+  examples as runtime overlays, and `adaos.nlu.teacher_promotion_candidate.v1`
+  records the explicit Builder promotion boundary for reusable package source.
 - [x] `[must]` Persist trace continuity from turn through proposal,
   interaction, command, Run/activity, semantic output, and delivery attempt.
   `adaos.workflow.trace_identity.v1` proves the cross-record chain, and response

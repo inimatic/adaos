@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.nlu.teacher_overlay_store.v1",
+  "title": "AdaOS NLU Teacher Overlay Store",
+  "type": "object",
+  "required": ["schema", "revision", "updated_at", "examples", "promotion_candidates"],
+  "properties": {
+    "schema": { "const": "adaos.nlu.teacher_overlay_store.v1" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": ["string", "null"], "format": "date-time" },
+    "examples": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["overlay_id", "target", "intent", "text", "slots", "action", "status", "promotion", "provenance", "privacy", "created_at", "updated_at"],
+        "properties": {
+          "overlay_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "target": { "$ref": "#/$defs/target" },
+          "intent": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
+          "slots": { "type": "object" },
+          "action": { "type": ["object", "null"] },
+          "status": { "enum": ["active", "superseded", "rolled_back", "promoted"] },
+          "promotion": { "type": "object" },
+          "provenance": { "type": "object" },
+          "privacy": { "type": "object" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "promotion_candidates": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "required": ["schema", "candidate_id", "source_overlay_id", "state", "target", "package_patch", "builder_change", "validation", "created_at", "updated_at"],
+        "properties": {
+          "schema": { "const": "adaos.nlu.teacher_promotion_candidate.v1" },
+          "candidate_id": { "type": "string", "minLength": 1 },
+          "source_overlay_id": { "type": "string", "minLength": 1 },
+          "state": { "type": "string", "minLength": 1 },
+          "target": { "type": "object" },
+          "package_patch": { "type": "object" },
+          "builder_change": { "type": "object" },
+          "validation": { "type": "object" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "enum": ["scenario", "skill", "system_action", "user", "webspace"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

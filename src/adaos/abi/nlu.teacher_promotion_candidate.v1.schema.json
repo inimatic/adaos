@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.nlu.teacher_promotion_candidate.v1",
+  "title": "AdaOS NLU Teacher Promotion Candidate",
+  "type": "object",
+  "required": ["schema", "candidate_id", "source_overlay_id", "state", "target", "package_patch", "builder_change", "validation", "created_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "adaos.nlu.teacher_promotion_candidate.v1" },
+    "candidate_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "source_overlay_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "state": { "enum": ["promotion_candidate", "builder_change_created", "package_patch_validated", "trialed", "released", "rejected", "rolled_back"] },
+    "target": {
+      "type": "object",
+      "required": ["type", "id", "package_manifest", "source_file"],
+      "properties": {
+        "type": { "enum": ["scenario", "skill"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "package_manifest": { "const": "conversational/manifest.yaml" },
+        "source_file": { "enum": ["conversational/examples.yaml", "conversational/matchers.yaml"] }
+      },
+      "additionalProperties": false
+    },
+    "package_patch": {
+      "type": "object",
+      "required": ["operation", "value"],
+      "properties": {
+        "operation": { "enum": ["upsert_example", "upsert_matcher"] },
+        "value": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "builder_change": {
+      "type": "object",
+      "required": ["change_id", "object_type", "object_id", "request", "allowed_paths", "acceptance_criteria", "evidence_refs"],
+      "properties": {
+        "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "object_type": { "enum": ["scenario", "skill"] },
+        "object_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "request": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "allowed_paths": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "acceptance_criteria": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "evidence_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "required": ["status", "report_digest", "diagnostics"],
+      "properties": {
+        "status": { "enum": ["pending", "valid", "invalid"] },
+        "report_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "diagnostics": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

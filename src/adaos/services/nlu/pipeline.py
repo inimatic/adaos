@@ -577,11 +577,11 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
     """
     Load compiled regex rules for the given webspace.
 
-    Primary storage (workspace):
+    Design-time baseline (git-versioned workspace sources; legacy layout):
       - scenario.json:nlu.regex_rules
       - skill.yaml:nlu.regex_rules
 
-    Backward-compatible storage (per-webspace/YJS):
+    Active runtime specialization overlay (per-webspace/YJS):
       - data.nlu.regex_rules
     """
     now = time.time()
@@ -604,7 +604,8 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
         rules.extend(_iter_rules_from_all_scenarios())
         rules.extend(_iter_rules_from_skills())
 
-        # Backward-compatible: per-webspace rules (will be deprecated).
+        # Runtime Teacher rules remain scoped to the webspace until Builder
+        # promotes them into a validated conversational package.
         try:
             async with async_read_ydoc(webspace_id) as ydoc:
                 data_map = ydoc.get_map("data")

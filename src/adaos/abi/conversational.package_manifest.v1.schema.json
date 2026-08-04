@@ -47,6 +47,7 @@
         "input": { "const": "input.yaml" },
         "entities": { "const": "entities.yaml" },
         "examples": { "const": "examples.yaml" },
+        "matchers": { "const": "matchers.yaml" },
         "affordances": { "const": "affordances.yaml" },
         "repair": { "const": "repair.yaml" },
         "output": { "const": "output.yaml" },

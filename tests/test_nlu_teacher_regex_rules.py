@@ -12,6 +12,7 @@ async def test_teacher_regex_rule_applies_to_scenario_and_pipeline_picks_it_up()
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.pipeline import _try_regex_intent
     from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -72,12 +73,10 @@ async def test_teacher_regex_rule_applies_to_scenario_and_pipeline_picks_it_up()
     assert via == "regex.dynamic"
     assert slots.get("city") == "Берлине"
 
-    # Verify it was persisted into scenario.json (workspace scope).
+    # Design-time sources remain immutable; the accepted rule is a scoped runtime overlay.
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
     rules = (saved.get("nlu") or {}).get("regex_rules") or []
-    matching = [r for r in rules if isinstance(r, dict) and r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern]
-    assert matching
-    assert any(isinstance(r.get("id"), str) and re.match(r"^rx\.[0-9a-f-]{36}$", r.get("id")) for r in matching)
+    assert rules == []
 
     # Also mirrored into per-webspace state as runtime cache.
     async with async_get_ydoc(webspace_id) as ydoc:
@@ -88,7 +87,33 @@ async def test_teacher_regex_rule_applies_to_scenario_and_pipeline_picks_it_up()
             stored = list((nlu_obj or {}).get("regex_rules") or [])
         except Exception:
             stored = []
-        assert any(isinstance(r, dict) and r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern for r in stored)
+        matching = [
+            r
+            for r in stored
+            if isinstance(r, dict)
+            and r.get("intent") == "desktop.open_weather"
+            and r.get("pattern") == pattern
+        ]
+        assert matching
+        assert matching[0]["provenance"]["target"] == {
+            "type": "scenario",
+            "id": scenario_id,
+        }
+        assert re.match(r"^rx\.[0-9a-f-]{36}$", str(matching[0].get("id") or ""))
+
+    promotion = next(
+        item
+        for item in read_store(ctx)["promotion_candidates"]
+        if item["source_overlay_id"] == f"yjs:{webspace_id}:regex:{matching[0]['id']}"
+    )
+    assert promotion["target"] == {
+        "type": "scenario",
+        "id": scenario_id,
+        "package_manifest": "conversational/manifest.yaml",
+        "source_file": "conversational/matchers.yaml",
+    }
+    assert promotion["package_patch"]["operation"] == "upsert_matcher"
+    assert promotion["package_patch"]["value"]["pattern"] == pattern
 
     # Regex usage journal should record dynamic hits (JSONL).
     usage_path = Path(ctx.paths.state_dir()) / "nlu" / "regex_usage.jsonl"

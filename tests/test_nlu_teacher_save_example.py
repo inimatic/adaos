@@ -8,9 +8,12 @@ import yaml
 
 
 @pytest.mark.anyio
-async def test_teacher_save_example_routes_to_scenario_artifact() -> None:
+async def test_teacher_save_example_routes_to_scenario_overlay_and_candidate() -> None:
     from adaos.services.agent_context import get_ctx
+    from adaos.services.interpreter.workspace import InterpreterWorkspace
+    from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
     from adaos.services.nlu.teacher_runtime import _on_example_save
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -41,8 +44,21 @@ async def test_teacher_save_example_routes_to_scenario_artifact() -> None:
     )
 
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
-    examples = saved["nlu"]["intents"]["desktop.open_modal"]["examples"]
-    assert examples == ["open diagnostics panel"]
+    assert saved["nlu"]["intents"] == {}
+    overlay = read_store(ctx)
+    example = next(
+        item for item in overlay["examples"] if item["text"] == "open diagnostics panel"
+    )
+    assert example["target"] == {"type": "scenario", "id": scenario_id}
+    promotion = next(
+        item
+        for item in overlay["promotion_candidates"]
+        if item["source_overlay_id"] == example["overlay_id"]
+    )
+    assert promotion["target"]["source_file"] == "conversational/examples.yaml"
+    assert promotion["builder_change"]["object_type"] == "scenario"
+    assert promotion["builder_change"]["object_id"] == scenario_id
+    assert "conversational/examples.yaml" in promotion["builder_change"]["allowed_paths"]
 
     async with async_get_ydoc(webspace_id) as ydoc:
         dataset = ((ydoc.get_map("data").get("nlu_teacher") or {}).get("dataset")) or []
@@ -55,13 +71,27 @@ async def test_teacher_save_example_routes_to_scenario_artifact() -> None:
     assert dataset[-1]["provenance"]["candidate_id"] == "cand-save-1"
     assert dataset[-1]["provenance"]["mcp_bearer_embedded"] is False
     assert dataset[-1]["privacy"]["public_promotion_requires_review"] is True
+    assert dataset[-1]["result"]["storage"] == "runtime_overlay"
+    assert dataset[-1]["result"]["promotion_candidate"]["source_overlay_id"] == example["overlay_id"]
     assert emitted[-1][0] == "nlp.teacher.example.saved"
+
+    sync_from_scenarios_and_skills(ctx)
+    ws = InterpreterWorkspace(ctx)
+    project = ws.build_rasa_project()
+    dataset_yaml = yaml.safe_load((project / "data" / "intents_from_config.yml").read_text(encoding="utf-8")) or {}
+    examples = ""
+    for entry in dataset_yaml.get("nlu") or []:
+        if isinstance(entry, dict) and entry.get("intent") == "desktop.open_modal":
+            examples = str(entry.get("examples") or "")
+            break
+    assert "open diagnostics panel" in examples
 
 
 @pytest.mark.anyio
-async def test_teacher_save_example_routes_to_skill_artifact() -> None:
+async def test_teacher_save_example_routes_to_skill_overlay_and_candidate() -> None:
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.teacher_runtime import _on_example_save
+    from adaos.services.nlu.teacher_overlay_store import read_store
 
     ctx = get_ctx()
     skill_name = "weather_skill"
@@ -93,7 +123,21 @@ async def test_teacher_save_example_routes_to_skill_artifact() -> None:
     saved = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
     intents = ((saved.get("nlu") or {}).get("intents")) or []
     weather = next(item for item in intents if item.get("intent") == "weather.lookup")
-    assert weather["examples"] == ["weather in Berlin", "forecast for Paris"]
+    assert weather["examples"] == ["weather in Berlin"]
+    overlay = next(
+        item
+        for item in read_store(ctx)["examples"]
+        if item["target"] == {"type": "skill", "id": skill_name}
+        and item["text"] == "forecast for Paris"
+    )
+    assert overlay["intent"] == "weather.lookup"
+    promotion = next(
+        item
+        for item in read_store(ctx)["promotion_candidates"]
+        if item["source_overlay_id"] == overlay["overlay_id"]
+    )
+    assert promotion["builder_change"]["object_type"] == "skill"
+    assert promotion["builder_change"]["object_id"] == skill_name
 
 
 @pytest.mark.anyio
@@ -101,7 +145,7 @@ async def test_teacher_save_example_routes_to_system_action_feedback_and_exports
     from adaos.services.agent_context import get_ctx
     from adaos.services.interpreter.workspace import InterpreterWorkspace
     from adaos.services.nlu.data_registry import sync_from_scenarios_and_skills
-    from adaos.services.nlu.feedback_examples import system_action_feedback_path
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.nlu.teacher_runtime import _on_example_save
 
     ctx = get_ctx()
@@ -117,14 +161,17 @@ async def test_teacher_save_example_routes_to_system_action_feedback_and_exports
         }
     )
 
-    feedback_path = system_action_feedback_path(ctx)
-    rows = [json.loads(line) for line in feedback_path.read_text(encoding="utf-8").splitlines()]
-    assert rows[-1]["target"] == {"type": "system_action", "id": "host.desktop.webspace.reload"}
-    assert rows[-1]["audit"]["request_id"] == "rid-save-system"
-    assert rows[-1]["promotion"]["state"] == "local_learned"
-    assert rows[-1]["promotion"]["portability"] == "system-global"
-    assert rows[-1]["provenance"]["request_id"] == "rid-save-system"
-    assert rows[-1]["privacy"]["public_promotion_requires_review"] is True
+    row = next(
+        item
+        for item in read_store(ctx)["examples"]
+        if item["text"] == "reload this workspace now"
+    )
+    assert row["target"] == {"type": "system_action", "id": "host.desktop.webspace.reload"}
+    assert row["provenance"]["request_id"] == "rid-save-system"
+    assert row["provenance"]["audit"]["request_id"] == "rid-save-system"
+    assert row["promotion"]["state"] == "local_learned"
+    assert row["promotion"]["portability"] == "system-global"
+    assert row["privacy"]["public_promotion_requires_review"] is True
 
     sync_from_scenarios_and_skills(ctx)
     ws = InterpreterWorkspace(ctx)

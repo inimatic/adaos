@@ -15,11 +15,30 @@ from adaos.services.nlu.baseline_content import (
     merge_default_desktop_nlu,
 )
 from adaos.services.nlu.feedback_examples import collect_system_action_feedback_examples
+from adaos.services.nlu.teacher_overlay_store import list_example_overlays
 
 _log = logging.getLogger("adaos.nlu.registry")
 
 
-def _sync_skill_nlu_metadata(ctx: AgentContext) -> int:
+def _overlay_index(ctx: AgentContext) -> dict[tuple[str, str, str], list[str]]:
+    index: dict[tuple[str, str, str], list[str]] = {}
+    for item in list_example_overlays(ctx):
+        target = item.get("target") if isinstance(item.get("target"), Mapping) else {}
+        key = (
+            str(target.get("type") or "").strip(),
+            str(target.get("id") or "").strip(),
+            str(item.get("intent") or "").strip(),
+        )
+        text = str(item.get("text") or "").strip()
+        if all(key) and text and text not in index.setdefault(key, []):
+            index[key].append(text)
+    return index
+
+
+def _sync_skill_nlu_metadata(
+    ctx: AgentContext,
+    overlays: Mapping[tuple[str, str, str], list[str]],
+) -> int:
     """
     Project skill-level ``skill.yaml["nlu"]`` sections into interpreter
     metadata files (``<skill>/interpreter/intents.yml``) so that
@@ -73,7 +92,14 @@ def _sync_skill_nlu_metadata(ctx: AgentContext) -> int:
             if not isinstance(name, str) or not name.strip():
                 continue
             utterances = entry.get("utterances") or entry.get("examples") or []
-            if not isinstance(utterances, list) or not utterances:
+            if not isinstance(utterances, list):
+                utterances = []
+            utterances = [
+                *utterances,
+                *overlays.get(("skill", str(skill_name), str(name).strip()), []),
+            ]
+            utterances = list(dict.fromkeys(str(item).strip() for item in utterances if str(item).strip()))
+            if not utterances:
                 continue
             intents_doc.append(
                 {
@@ -128,7 +154,10 @@ def _intent_mappings_from_nlu(scenario_id: str, nlu_section: Mapping[str, Any]) 
     return mappings
 
 
-def _collect_scenario_intents(ctx: AgentContext) -> List[IntentMapping]:
+def _collect_scenario_intents(
+    ctx: AgentContext,
+    overlays: Mapping[tuple[str, str, str], list[str]],
+) -> List[IntentMapping]:
     mappings: List[IntentMapping] = []
     seen_scenarios: set[str] = set()
     scenarios_root = Path(ctx.paths.scenarios_dir())
@@ -152,7 +181,17 @@ def _collect_scenario_intents(ctx: AgentContext) -> List[IntentMapping]:
             continue
         nlu_section = content.get("nlu") or {}
         nlu_section = merge_default_desktop_nlu(scenario_id, nlu_section if isinstance(nlu_section, Mapping) else {})
-        mappings.extend(_intent_mappings_from_nlu(scenario_id, nlu_section))
+        scenario_mappings = _intent_mappings_from_nlu(scenario_id, nlu_section)
+        for mapping in scenario_mappings:
+            mapping.examples = list(
+                dict.fromkeys(
+                    [
+                        *mapping.examples,
+                        *overlays.get(("scenario", scenario_id, mapping.intent), []),
+                    ]
+                )
+            )
+        mappings.extend(scenario_mappings)
 
     if DEFAULT_DESKTOP_SCENARIO_ID not in seen_scenarios:
         mappings.extend(_intent_mappings_from_nlu(DEFAULT_DESKTOP_SCENARIO_ID, default_desktop_nlu()))
@@ -166,8 +205,9 @@ def sync_from_scenarios_and_skills(ctx: AgentContext) -> Dict[str, Any]:
     This is pure-Python and does not depend on a particular NLU engine.
     """
     ws = InterpreterWorkspace(ctx)
-    skill_count = _sync_skill_nlu_metadata(ctx)
-    scenario_mappings = _collect_scenario_intents(ctx)
+    overlays = _overlay_index(ctx)
+    skill_count = _sync_skill_nlu_metadata(ctx, overlays)
+    scenario_mappings = _collect_scenario_intents(ctx, overlays)
     system_feedback = collect_system_action_feedback_examples(ctx)
     if system_feedback:
         for mapping in scenario_mappings:
@@ -207,5 +247,6 @@ def sync_from_scenarios_and_skills(ctx: AgentContext) -> Dict[str, Any]:
         "skills_intents": skill_count,
         "scenario_intents": len(scenario_mappings),
         "system_action_intents": system_action_count,
+        "teacher_overlay_examples": sum(len(items) for items in overlays.values()),
     }
 

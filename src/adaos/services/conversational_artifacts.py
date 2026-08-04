@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -43,6 +44,7 @@ PACKAGE_MANIFEST_SCHEMA = "conversational.package_manifest.v1.schema.json"
 INPUT_SCHEMA = "conversational.input.v1.schema.json"
 ENTITIES_SCHEMA = "conversational.entities.v1.schema.json"
 EXAMPLES_SCHEMA = "conversational.examples.v1.schema.json"
+MATCHERS_SCHEMA = "conversational.matchers.v1.schema.json"
 AFFORDANCES_SCHEMA = "conversational.affordances.v1.schema.json"
 REPAIR_SCHEMA = "conversational.repair.v1.schema.json"
 OUTPUT_SOURCE_SCHEMA = "conversational.output.v1.schema.json"
@@ -96,6 +98,7 @@ class ConversationalPackage:
     input_source: dict[str, Any]
     entities_source: dict[str, Any]
     examples_source: dict[str, Any]
+    matchers_source: dict[str, Any]
     affordances_source: dict[str, Any]
     repair_source: dict[str, Any]
     output_source: dict[str, Any]
@@ -292,6 +295,7 @@ def _cross_check_package(
     input_source: Mapping[str, Any],
     entities_source: Mapping[str, Any],
     examples_source: Mapping[str, Any],
+    matchers_source: Mapping[str, Any],
     affordances_source: Mapping[str, Any],
     repair_source: Mapping[str, Any],
     output_source: Mapping[str, Any],
@@ -308,6 +312,7 @@ def _cross_check_package(
         ("input.yaml", input_source),
         ("entities.yaml", entities_source),
         ("examples.yaml", examples_source),
+        ("matchers.yaml", matchers_source),
         ("affordances.yaml", affordances_source),
         ("repair.yaml", repair_source),
         ("output.yaml", output_source),
@@ -327,6 +332,7 @@ def _cross_check_package(
         ("entities.yaml entities", entities_source.get("entities")),
         ("examples.yaml examples", examples_source.get("examples")),
         ("examples.yaml hard_negatives", examples_source.get("hard_negatives")),
+        ("matchers.yaml matchers", matchers_source.get("matchers")),
         ("affordances.yaml affordances", affordances_source.get("affordances")),
         ("repair.yaml policies", repair_source.get("policies")),
         ("output.yaml outputs", output_source.get("outputs")),
@@ -344,6 +350,7 @@ def _cross_check_package(
     intents = _id_index(input_source.get("intents"))
     entities = _id_index(entities_source.get("entities"))
     examples = _id_index(examples_source.get("examples"))
+    matchers = _id_index(matchers_source.get("matchers"))
     outputs = _id_index(output_source.get("outputs"))
     output_actions = {
         str(action.get("action_id"))
@@ -662,6 +669,38 @@ def _cross_check_package(
                         "conversational.example.entity_unknown",
                         f"examples.yaml.examples[{index}].entities[{entity_index}].entity_id",
                         f"example {example_id} references unknown entity {entity_id}",
+                    )
+                )
+
+    for index, matcher in enumerate(matchers.values()):
+        matcher_id = str(matcher.get("id") or f"#{index}")
+        intent_id = str(matcher.get("intent_id") or "")
+        if intent_id not in intents:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.matcher.intent_unknown",
+                    f"matchers.yaml.matchers[{index}].intent_id",
+                    f"matcher {matcher_id} references unknown intent {intent_id}",
+                )
+            )
+        locale_id = str(matcher.get("locale") or "")
+        if locale_id not in manifest_locales and locale_id != "und":
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.matcher.locale_unknown",
+                    f"matchers.yaml.matchers[{index}].locale",
+                    f"matcher {matcher_id} uses undeclared locale {locale_id}",
+                )
+            )
+        if matcher.get("kind") == "regex":
+            try:
+                re.compile(str(matcher.get("pattern") or ""))
+            except re.error as exc:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.matcher.regex_invalid",
+                        f"matchers.yaml.matchers[{index}].pattern",
+                        f"matcher {matcher_id} has invalid regex: {exc}",
                     )
                 )
 
@@ -1487,6 +1526,7 @@ def validate_conversational_package(
     input_source: dict[str, Any] = {}
     entities_source: dict[str, Any] = {}
     examples_source: dict[str, Any] = {}
+    matchers_source: dict[str, Any] = {}
     affordances_source: dict[str, Any] = {}
     repair_source: dict[str, Any] = {}
     output_source: dict[str, Any] = {}
@@ -1585,6 +1625,11 @@ def validate_conversational_package(
         ("repair", str(files.get("repair") or "repair.yaml"), REPAIR_SCHEMA),
         ("output", str(files.get("output") or "output.yaml"), OUTPUT_SOURCE_SCHEMA),
     ]
+    if files.get("matchers"):
+        source_specs.insert(
+            3,
+            ("matchers", str(files["matchers"]), MATCHERS_SCHEMA),
+        )
     loaded: dict[str, dict[str, Any]] = {}
     for key, rel, schema_name in source_specs:
         value = _load_source(package_dir, rel, schema_name, diagnostics)
@@ -1593,6 +1638,7 @@ def validate_conversational_package(
     input_source = loaded.get("input", {})
     entities_source = loaded.get("entities", {})
     examples_source = loaded.get("examples", {})
+    matchers_source = loaded.get("matchers", {})
     affordances_source = loaded.get("affordances", {})
     repair_source = loaded.get("repair", {})
     output_source = loaded.get("output", {})
@@ -1651,6 +1697,7 @@ def validate_conversational_package(
             str(files.get("input") or "input.yaml"),
             str(files.get("entities") or "entities.yaml"),
             str(files.get("examples") or "examples.yaml"),
+            *(str(files["matchers"]) for _ in (0,) if files.get("matchers")),
             str(files.get("affordances") or "affordances.yaml"),
             str(files.get("repair") or "repair.yaml"),
             str(files.get("output") or "output.yaml"),
@@ -1683,6 +1730,7 @@ def validate_conversational_package(
             input_source=input_source,
             entities_source=entities_source,
             examples_source=examples_source,
+            matchers_source=matchers_source,
             affordances_source=affordances_source,
             repair_source=repair_source,
             output_source=output_source,
@@ -1702,6 +1750,7 @@ def validate_conversational_package(
                 "input": input_source,
                 "entities": entities_source,
                 "examples": examples_source,
+                "matchers": matchers_source,
                 "affordances": affordances_source,
                 "repair": repair_source,
                 "output": output_source,
@@ -1739,6 +1788,7 @@ def validate_conversational_package(
         "intents": len(list(input_source.get("intents") or [])),
         "entities": len(list(entities_source.get("entities") or [])),
         "examples": len(list(examples_source.get("examples") or [])),
+        "matchers": len(list(matchers_source.get("matchers") or [])),
         "affordances": len(list(affordances_source.get("affordances") or [])),
         "repair_policies": len(list(repair_source.get("policies") or [])),
         "outputs": len(list(output_source.get("outputs") or [])),
@@ -1784,6 +1834,7 @@ def validate_conversational_package(
             input_source=copy.deepcopy(input_source),
             entities_source=copy.deepcopy(entities_source),
             examples_source=copy.deepcopy(examples_source),
+            matchers_source=copy.deepcopy(matchers_source),
             affordances_source=copy.deepcopy(affordances_source),
             repair_source=copy.deepcopy(repair_source),
             output_source=copy.deepcopy(output_source),
