@@ -170,6 +170,14 @@ transport-only `/ws` and `/yws` handoff as ready.
   `transport_ready=false` to `ready` and `true`, with a new remote session and
   active NATS traffic. The routed node-status endpoint changed from transport
   `503` to the expected authentication boundary (`401` without credentials).
+- After loading the patch locally, a managed `POST /api/node/sidecar/restart`
+  closed session `rt-60c8c88921` with WebSocket `1000` at the Root proxy,
+  opened `rt-02f4d1481b`, and restored the hub route subscriptions on the next
+  one-second status sample. The operation completed in 7.85 seconds including
+  process replacement; public ingress remained at the expected unauthenticated
+  `401`, sidecar-originated NATS ping counters remained zero, and Root NATS had
+  no new parser error. This closes the controlled-restart `1006` case; injected
+  abnormal-close and long-duration large-payload soak remain open.
 - Root cause: cleanup-level cancellation was interpreted as cancellation of
   the entire supervisor, and no in-process invariant repaired the missing
   bridge. The initiating protocol defect was sidecar-originated NATS keepalive
