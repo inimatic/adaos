@@ -51,10 +51,15 @@ from adaos.services.workflow_artifacts import (
     load_manifest_bound_workflow,
     validate_workflow_definition_report,
 )
+from adaos.services.workflow_authoring import (
+    default_workflow_role_policy,
+    workflow_abi_schema_records,
+)
 from adaos.services.workflow_registry import (
     WorkflowAdapterRegistryError,
     platform_workflow_adapter_registry,
 )
+from adaos.services.workflow_static_reports import workflow_static_report
 from adaos.services.workflow_execution import (
     WorkflowExecutorRegistry,
     description_with_executor_readiness,
@@ -2627,6 +2632,15 @@ class BuilderWorkflowService:
             workflow_inspection = _mapping(
                 self._workflow_inspection(kind, project_id).get("project")
             )
+            project_workflow_artifact = None
+            try:
+                project_workflow_artifact = load_manifest_bound_workflow(
+                    root,
+                    manifest_name=manifest_name,
+                    allow_legacy_inline=kind == "scenario",
+                )
+            except WorkflowArtifactError:
+                project_workflow_artifact = None
             inspection_status = str(workflow_inspection.get("status") or "not_declared")
             workflow_validation = _mapping(workflow_inspection.get("validation"))
             workflow_binding = _mapping(workflow_inspection.get("binding"))
@@ -2637,6 +2651,10 @@ class BuilderWorkflowService:
                 if inspection_status == "not_declared"
                 else "ambiguous"
             )
+            workflow_adapter_catalog = [
+                dict(item)
+                for item in platform_workflow_adapter_registry().registry_entries()
+            ]
             workflow_definition = {
                 "status": workflow_definition_status,
                 "inspection_status": inspection_status,
@@ -2649,8 +2667,48 @@ class BuilderWorkflowService:
                 "diagnostics": copy.deepcopy(
                     list(workflow_validation.get("diagnostics") or [])[:50]
                 ),
+                "graph_diff": copy.deepcopy(
+                    _mapping(workflow_validation.get("graph_diff"))
+                ),
                 "binding_digest": workflow_binding.get("binding_digest"),
+                "authoring": {
+                    "status": "present",
+                    "context_schema": "adaos.workflow.authoring_context.v1",
+                    "attempt_schema": "adaos.workflow.authoring_attempt.v1",
+                    "definition_schema_ref": "abi:workflow.definition.v1.schema.json",
+                    "definition_path": "workflow.json",
+                    "definition_authority": "component_root_workflow_json_only",
+                    "abi_schemas": [dict(item) for item in workflow_abi_schema_records()],
+                    "adapter_catalog": workflow_adapter_catalog,
+                    "adapter_catalog_digest": _stable_digest(
+                        {"adapter_catalog": workflow_adapter_catalog}
+                    ),
+                    "role_policy": default_workflow_role_policy(),
+                    "activation_boundary": "package_admission",
+                    "publish_policy": {
+                        "code_definition_atomic": True,
+                        "role_policy_source": "workflow_authoring_context",
+                        "role_policy_mismatch": "reject",
+                    },
+                },
             }
+            if project_workflow_artifact is not None:
+                static_review = workflow_static_report(
+                    project_workflow_artifact.compiled,
+                    generated_at="1970-01-01T00:00:00+00:00",
+                    report_id=f"workflow-static:{kind}:{project_id}",
+                )
+                workflow_definition["static_review"] = {
+                    "schema": static_review["schema"],
+                    "report_digest": _stable_digest(static_review),
+                    "definition_digest": static_review["definition_digest"],
+                    "state_count": static_review["definition_review"]["state_count"],
+                    "transition_count": static_review["definition_review"]["transition_count"],
+                    "command_count": static_review["definition_review"]["command_count"],
+                    "conformance_case_count": static_review["conformance"]["case_count"],
+                    "statechart_edge_count": len(static_review["statechart"]["edges"]),
+                    "coverage": copy.deepcopy(static_review["coverage"]),
+                }
             facets: dict[str, Any] = {
                 "target_structure": target_structure,
                 "abi": {

@@ -585,9 +585,12 @@ tests cover all legal and representative illegal paths.
   worker slice now preserves the exact governed context packet in task evidence,
   places its bounded Issue/acceptance/facet projection in Codex `task.md`, adds
   project workflow inspection to context facets, and compiles every
-  manifest-bound definition before accepting worker output. Template authoring,
-  graph-diff presentation, role-policy mismatch, and publication-lock proof keep
-  this item open.
+  manifest-bound definition before accepting worker output. Context packets now
+  carry stable workflow authoring ABI digests, the registered adapter catalogue,
+  default fail-closed role policy, validation `graph_diff`, and a static review
+  summary derived from `adaos.workflow.static_report.v1`; Codex task projection
+  retains that facet through the governed context packet. Publication-lock proof
+  keeps this item open.
 - [x] `[must]` `GWR4-25` Route workflow-definition corrections to the isolated
   Automation/Codex lane while keeping visual process-layout requests in
   Prototype and process inspection read-only. DEV Builder regression tests

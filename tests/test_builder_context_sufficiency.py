@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from adaos.services.builder.governed import builder_change_definition
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService
 
 
@@ -129,3 +130,42 @@ def test_context_packet_digest_covers_purpose_facets_and_review_constraints(
     assert iteration["run"]["purpose"] == "iteration"
     assert experiment["run"]["purpose"] == "experiment"
     assert iteration["digest"] != experiment["digest"]
+
+
+def test_context_packet_carries_workflow_authoring_and_static_review(
+    service: BuilderWorkflowService,
+) -> None:
+    root = service.dev_scenarios_root / "recipes"
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (root / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _plan(service, "widget:recipe-title")
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        required_facets=["workflow_definition"],
+        enforce_context_coverage=True,
+    )
+
+    workflow = packet["facets"]["workflow_definition"]
+    assert workflow["status"] == "present"
+    assert workflow["graph_diff"]["baseline_digest"] is None
+    assert workflow["static_review"]["schema"] == "adaos.workflow.static_report.v1"
+    assert workflow["static_review"]["conformance_case_count"] > 0
+    assert workflow["authoring"]["context_schema"] == "adaos.workflow.authoring_context.v1"
+    assert any(
+        item["schema_id"] == "adaos.workflow.definition.v1"
+        for item in workflow["authoring"]["abi_schemas"]
+    )
+    assert {
+        item["contract"]["adapter_id"]
+        for item in workflow["authoring"]["adapter_catalog"]
+    } >= {"builder.codex.run", "builder.trial.activate", "builder.publication.publish"}
+    assert workflow["authoring"]["role_policy"]["unknown_role_policy"] == "deny"
+    assert workflow["authoring"]["publish_policy"]["role_policy_mismatch"] == "reject"
