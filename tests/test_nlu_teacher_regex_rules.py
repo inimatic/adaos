@@ -323,3 +323,93 @@ async def test_lookup_slot_normalization_falls_back_when_live_lookup_times_out(m
         "lookup": "modal_id",
         "matched": "label",
     }
+
+
+@pytest.mark.anyio
+async def test_conversational_package_matcher_is_loaded_by_runtime() -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.pipeline import _try_regex_intent, invalidate_dynamic_regex_cache
+
+    ctx = get_ctx()
+    skill_root = Path(ctx.paths.skills_dir()) / "test_conversational_matcher_skill"
+    conversation_root = skill_root / "conversational"
+    conversation_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: test_conversational_matcher_skill\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (conversation_root / "manifest.yaml").write_text(
+        "package_id: test_conversational_matcher_skill\nfiles:\n  matchers: matchers.yaml\n",
+        encoding="utf-8",
+    )
+    (conversation_root / "matchers.yaml").write_text(
+        "\n".join(
+            (
+                "schema: adaos.conversational.matchers.v1",
+                "package_id: test_conversational_matcher_skill",
+                "matchers:",
+                "  - id: reference.matcher.exact",
+                "    kind: exact",
+                "    intent_id: reference.package_match",
+                "    locale: en",
+                "    pattern: Package matcher phrase 9472",
+                "    flags: [ignore_case, unicode]",
+                "    slots: {}",
+                "    source: authored",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    webspace_id = "ws-package-matcher-runtime"
+    invalidate_dynamic_regex_cache(webspace_id=webspace_id)
+
+    intent, slots, via, raw = await _try_regex_intent(
+        "package matcher phrase 9472",
+        webspace_id=webspace_id,
+    )
+
+    assert intent == "reference.package_match"
+    assert slots == {}
+    assert via == "regex.dynamic"
+    assert raw["matcher_kind"] == "exact"
+    assert raw["source"] == "conversational_package"
+    assert raw["source_package_id"] == "test_conversational_matcher_skill"
+    assert str(raw["source_digest"]).startswith("sha256:")
+
+
+@pytest.mark.anyio
+async def test_runtime_overlay_precedes_conversational_package_matcher() -> None:
+    from adaos.services.nlu.pipeline import _try_regex_intent, invalidate_dynamic_regex_cache
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-package-matcher-overlay-precedence"
+    async with async_get_ydoc(webspace_id) as ydoc:
+        data_map = ydoc.get_map("data")
+        with ydoc.begin_transaction() as txn:
+            data_map.set(
+                txn,
+                "nlu",
+                {
+                    "regex_rules": [
+                        {
+                            "id": "rx.overlay.precedence",
+                            "intent": "reference.overlay_match",
+                            "pattern": "^package matcher phrase 9472$",
+                            "enabled": True,
+                            "source": "teacher",
+                        }
+                    ]
+                },
+            )
+    invalidate_dynamic_regex_cache(webspace_id=webspace_id)
+
+    intent, _slots, via, raw = await _try_regex_intent(
+        "package matcher phrase 9472",
+        webspace_id=webspace_id,
+    )
+
+    assert intent == "reference.overlay_match"
+    assert via == "regex.dynamic"
+    assert raw["rule_id"] == "rx.overlay.precedence"
+    assert raw["source"] == "teacher"

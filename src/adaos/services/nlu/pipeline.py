@@ -530,6 +530,60 @@ def _iter_rules_from_scenario(scenario_id: str) -> list[dict[str, Any]]:
     return [dict(x) for x in rules if isinstance(x, dict)] if isinstance(rules, list) else []
 
 
+def _iter_conversational_matchers(
+    artifact_root: Path,
+    *,
+    scenario_id: str | None = None,
+) -> list[dict[str, Any]]:
+    package_dir = artifact_root / "conversational"
+    manifest_path = package_dir / "manifest.yaml"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(manifest, Mapping):
+            return []
+        files = manifest.get("files")
+        matcher_name = files.get("matchers") if isinstance(files, Mapping) else None
+        if not isinstance(matcher_name, str) or not matcher_name.strip():
+            return []
+        matcher_path = (package_dir / matcher_name).resolve()
+        if package_dir.resolve() not in matcher_path.parents or not matcher_path.is_file():
+            return []
+        raw = matcher_path.read_bytes()
+        source = yaml.safe_load(raw.decode("utf-8")) or {}
+    except Exception:
+        return []
+    if not isinstance(source, Mapping):
+        return []
+    package_id = str(source.get("package_id") or manifest.get("package_id") or "").strip()
+    source_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    out: list[dict[str, Any]] = []
+    for item in source.get("matchers") or []:
+        if not isinstance(item, Mapping):
+            continue
+        intent = str(item.get("intent_id") or "").strip()
+        pattern = str(item.get("pattern") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        if not intent or not pattern or kind not in {"exact", "keyword", "regex"}:
+            continue
+        out.append(
+            {
+                "id": item.get("id"),
+                "intent": intent,
+                "pattern": pattern,
+                "matcher_kind": kind,
+                "matcher_flags": list(item.get("flags") or []),
+                "slots": dict(item.get("slots") or {}) if isinstance(item.get("slots"), Mapping) else {},
+                "scenario_id": scenario_id,
+                "source": "conversational_package",
+                "source_package_id": package_id,
+                "source_digest": source_digest,
+            }
+        )
+    return out
+
+
 def _iter_rules_from_all_scenarios() -> list[dict[str, Any]]:
     ctx = get_ctx()
     root = Path(ctx.paths.scenarios_dir())
@@ -540,6 +594,7 @@ def _iter_rules_from_all_scenarios() -> list[dict[str, Any]]:
         return out
     for d in dirs:
         sid = d.name
+        out.extend(_iter_conversational_matchers(d, scenario_id=sid))
         for rule in _iter_rules_from_scenario(sid):
             out.append({**dict(rule), "scenario_id": sid})
     return out
@@ -555,6 +610,7 @@ def _iter_rules_from_skills() -> list[dict[str, Any]]:
         return out
 
     for path in candidates:
+        out.extend(_iter_conversational_matchers(path.parent))
         try:
             payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -596,13 +652,14 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
 
         compiled: list[dict[str, Any]] = []
 
-        rules: list[dict[str, Any]] = []
+        baseline_rules: list[dict[str, Any]] = []
+        overlay_rules: list[dict[str, Any]] = []
 
         # Collect scenario rules from all installed workspace scenarios. If we can
         # resolve the active scenario for this webspace, we'll use it to scope
         # scenario-owned rules during matching.
-        rules.extend(_iter_rules_from_all_scenarios())
-        rules.extend(_iter_rules_from_skills())
+        baseline_rules.extend(_iter_rules_from_all_scenarios())
+        baseline_rules.extend(_iter_rules_from_skills())
 
         # Runtime Teacher rules remain scoped to the webspace until Builder
         # promotes them into a validated conversational package.
@@ -612,10 +669,11 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
                 nlu_obj = data_map.get("nlu")
                 nlu_obj = coerce_dict(nlu_obj)
                 for item in iter_mappings(nlu_obj.get("regex_rules")):
-                    rules.append(dict(item))
+                    overlay_rules.append(dict(item))
         except Exception:
             pass
 
+        rules = [*overlay_rules, *baseline_rules]
         for item in rules:
             if not item.get("enabled", True):
                 continue
@@ -625,8 +683,26 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
                 continue
             if not isinstance(pattern, str) or not pattern.strip():
                 continue
+            matcher_kind = str(item.get("matcher_kind") or "regex")
+            matcher_pattern = pattern
+            flags = re.IGNORECASE | re.UNICODE
+            if item.get("matcher_kind") is not None:
+                matcher_flags = {str(flag) for flag in item.get("matcher_flags") or []}
+                flags = 0
+                if "ignore_case" in matcher_flags:
+                    flags |= re.IGNORECASE
+                if "multiline" in matcher_flags:
+                    flags |= re.MULTILINE
+                if "dotall" in matcher_flags:
+                    flags |= re.DOTALL
+                if "unicode" in matcher_flags:
+                    flags |= re.UNICODE
+                if matcher_kind == "exact":
+                    matcher_pattern = rf"\A{re.escape(pattern)}\Z"
+                elif matcher_kind == "keyword":
+                    matcher_pattern = re.escape(pattern)
             try:
-                rx = re.compile(pattern, re.IGNORECASE | re.UNICODE)
+                rx = re.compile(matcher_pattern, flags)
             except re.error:
                 continue
             compiled.append(
@@ -635,8 +711,12 @@ async def _load_dynamic_regex_rules(webspace_id: str) -> list[dict[str, Any]]:
                     "intent": intent.strip(),
                     "pattern": pattern,
                     "rx": rx,
+                    "matcher_kind": matcher_kind,
                     "scenario_id": item.get("scenario_id"),
                     "slots": dict(item.get("slots") or {}) if isinstance(item.get("slots"), Mapping) else {},
+                    "source": item.get("source"),
+                    "source_package_id": item.get("source_package_id"),
+                    "source_digest": item.get("source_digest"),
                 }
             )
 
@@ -655,7 +735,7 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
     current_scenario = await _resolve_current_scenario_id(webspace_id)
     for rule in await _load_dynamic_regex_rules(webspace_id):
         scoped = rule.get("scenario_id")
-        if isinstance(scoped, str) and scoped and current_scenario and scoped != current_scenario:
+        if isinstance(scoped, str) and scoped and scoped != current_scenario:
             continue
         rx = rule.get("rx")
         if not isinstance(rx, re.Pattern):
@@ -671,7 +751,15 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
         if static_slots:
             slots.update(_clean_slots(static_slots))
         slots, slot_normalization = await _normalize_lookup_slots(slots, webspace_id=webspace_id)
-        raw = {"rule_id": rule.get("id"), "pattern": rule.get("pattern"), "slots": slots}
+        raw = {
+            "rule_id": rule.get("id"),
+            "pattern": rule.get("pattern"),
+            "matcher_kind": rule.get("matcher_kind"),
+            "source": rule.get("source"),
+            "source_package_id": rule.get("source_package_id"),
+            "source_digest": rule.get("source_digest"),
+            "slots": slots,
+        }
         if slot_normalization:
             raw["slot_normalization"] = slot_normalization
         try:
