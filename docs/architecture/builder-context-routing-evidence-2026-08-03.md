@@ -112,3 +112,11 @@ commit `eb053fe` contains the same-Webspace startup and materialization gate;
 238/238 client tests, the production build, and the exact local browser route
 passed. The release path also keeps component and conversational manifest
 versions atomic and rejects drift during validation.
+
+The final DEV draft receipt is Forge commit `2177a2129e8587a1a881213d97feeedbf8c50f4d`
+and the Workspace registry commit is
+`fb866846664fe197a433dc73d86f8082af2896ee`. Firebase Hosting run
+`30915825983`, client Notify Infra run `30915825873`, and infra Build and
+Deploy run `30915835673` all completed successfully. CI then advanced the
+client package version to `0.0.263` at `5e08451` without changing the routing
+implementation.
