@@ -67,6 +67,9 @@ def _package(
             ),
         ),
         workflow_binding_digest=_digest(f"binding:{version}:{definition_digest}"),
+        workflow_role_policy_digest=_digest(
+            f"role-policy:{version}:{definition_digest}"
+        ),
     )
 
 
@@ -115,6 +118,10 @@ def test_workflow_admission_record_binds_definition_validation_and_adapters() ->
     assert admission["schema"] == "adaos.workflow.admission.v1"
     assert admission["status"] == "admitted"
     assert admission["candidate_generation_digest"].startswith("sha256:")
+    assert (
+        admission["workflows"][0]["role_policy_digest"]
+        == package.workflow_role_policy_digest
+    )
     assert admission["workflows"] == [
         workflow_definition_artifact_record(package, previous=None)
     ]

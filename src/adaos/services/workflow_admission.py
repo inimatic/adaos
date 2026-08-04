@@ -47,6 +47,7 @@ def workflow_definition_artifact_record(
             else None
         ),
         "binding_digest": package.workflow_binding_digest,
+        "role_policy_digest": package.workflow_role_policy_digest,
         "adapter_locks": [item.to_dict() for item in package.workflow_adapter_locks],
         "definition_changed": definition_changed,
         "binding_changed": binding_changed,

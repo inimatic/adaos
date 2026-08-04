@@ -34,6 +34,7 @@ from adaos.services.workflow_artifacts import (
     validate_workflow_definition_bytes,
     workflow_manifest_reference,
 )
+from adaos.services.workflow_authoring import workflow_role_policy_digest
 from adaos.services.workflow_registry import (
     WorkflowAdapterRegistry,
     WorkflowAdapterRegistryError,
@@ -406,6 +407,7 @@ def build_artifact_package(
     workflow_binding = None
     workflow_validation_lock = None
     workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
+    role_policy_digest = None
     if workflow is not None:
         try:
             workflow_binding = (workflow_registry or platform_workflow_adapter_registry()).bind(
@@ -424,6 +426,7 @@ def build_artifact_package(
             WorkflowAdapterLock.from_mapping(item)
             for item in workflow_binding["adapters"]
         )
+        role_policy_digest = workflow_role_policy_digest(workflow.compiled)
     materialization_path = (
         f"skills/{artifact_id}" if kind == "skill" else f"scenarios/{artifact_id}"
     )
@@ -446,6 +449,7 @@ def build_artifact_package(
             item.to_dict() for item in workflow_adapter_locks
         ]
         package_manifest["workflow_binding_digest"] = workflow_binding["binding_digest"]
+        package_manifest["workflow_role_policy_digest"] = role_policy_digest
     if conversational_lock is not None:
         package_manifest["conversational_lock"] = conversational_lock.to_dict()
     manifest_bytes = canonical_json_bytes(package_manifest)
@@ -497,6 +501,7 @@ def build_artifact_package(
                 if workflow_binding is not None
                 else None
             ),
+            workflow_role_policy_digest=role_policy_digest,
         )
     except ArtifactReleaseContractError as exc:
         raise PackageBuildError(str(exc)) from exc
@@ -534,6 +539,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         "workflow_validation_lock",
         "workflow_adapter_locks",
         "workflow_binding_digest",
+        "workflow_role_policy_digest",
     }
     unknown = sorted(set(value) - core_fields - attestation_fields - optional_fields)
     if unknown:
@@ -668,6 +674,9 @@ def _verify_artifact_package(
         raw_workflow_validation_lock = package_manifest.get("workflow_validation_lock")
         raw_workflow_adapter_locks = package_manifest.get("workflow_adapter_locks") or []
         raw_workflow_binding_digest = package_manifest.get("workflow_binding_digest")
+        raw_workflow_role_policy_digest = package_manifest.get(
+            "workflow_role_policy_digest"
+        )
         if not isinstance(raw_schema_locks, list) or any(
             not isinstance(item, Mapping) for item in raw_schema_locks
         ):
@@ -682,6 +691,7 @@ def _verify_artifact_package(
             "workflow_validation_lock",
             "workflow_adapter_locks",
             "workflow_binding_digest",
+            "workflow_role_policy_digest",
         }
         present_binding_fields = binding_fields.intersection(package_manifest)
         if present_binding_fields and present_binding_fields != binding_fields:
@@ -814,6 +824,13 @@ def _verify_artifact_package(
                 raise PackageVerificationError(
                     "workflow_binding_digest does not match the resolved adapter registry"
                 )
+            expected_role_policy_digest = workflow_role_policy_digest(
+                workflow_payload.compiled
+            )
+            if raw_workflow_role_policy_digest != expected_role_policy_digest:
+                raise PackageVerificationError(
+                    "workflow_role_policy_digest does not match the active role policy"
+                )
         try:
             ref = ArtifactPackageRef(
                 kind=package_manifest.get("kind"),
@@ -834,6 +851,11 @@ def _verify_artifact_package(
                 workflow_adapter_locks=expected_workflow_adapter_locks,
                 workflow_binding_digest=(
                     str(expected_workflow_binding["binding_digest"])
+                    if expected_workflow_binding is not None
+                    else None
+                ),
+                workflow_role_policy_digest=(
+                    workflow_role_policy_digest(workflow_payload.compiled)
                     if expected_workflow_binding is not None
                     else None
                 ),

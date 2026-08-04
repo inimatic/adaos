@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from adaos.services.artifact_pipeline import (
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline import packages as package_module
+from adaos.services import workflow_authoring
+from adaos.services.builder.governed import builder_change_definition
 
 
 class _Remote:
@@ -112,6 +115,20 @@ def _scenario(root: Path) -> Path:
         encoding="utf-8",
     )
     (scenario / "webui.json").write_text('{"ui": {}}\n', encoding="utf-8")
+    return scenario
+
+
+def _workflow_scenario(root: Path) -> Path:
+    scenario = _scenario(root)
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ntitle: Recipes\n"
+        "workflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (scenario / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return scenario
 
 
@@ -227,6 +244,95 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert service.subscriptions.load()["recipes"].installed_digest == result.pointer.release_digest
     registry = (workspace / "registry.json").read_text(encoding="utf-8")
     assert '"stable"' in registry
+
+
+def test_workflow_publication_admission_precedes_channel_and_binds_all_locks(
+    tmp_path: Path,
+) -> None:
+    dev = _workflow_scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-workflow-admission",),
+        validation_evidence={"suite": "workflow-validation", "status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    _promote(service, prepared.candidate.candidate_id)
+
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    phases = [item["phase"] for item in operation["events"]]
+    assert phases.index("workflow_admitted") < phases.index("channel_moved")
+    admission = operation["receipts"]["workflow_admitted"]["admission"]
+    package = admission["packages"][0]
+    workflow = admission["workflow_admission"]["workflows"][0]
+    assert package["package_digest"] == prepared.plan.packages[0].digest
+    assert package["definition_digest"] == workflow["definition"]["digest"]
+    assert package["validation_digest"] == workflow["validation"]["digest"]
+    assert package["binding_digest"] == workflow["binding_digest"]
+    assert package["role_policy_digest"] == workflow["role_policy_digest"]
+    assert workflow["adapter_locks"]
+
+
+def test_workflow_role_policy_mismatch_blocks_channel_in_publication_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _workflow_scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-role-policy",),
+        validation_evidence={"suite": "workflow-validation", "status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    changed_policy = workflow_authoring.default_workflow_role_policy()
+    changed_policy["roles"][1]["permission_ceiling"] = ["workflow.changed"]
+    monkeypatch.setattr(
+        workflow_authoring,
+        "default_workflow_role_policy",
+        lambda: changed_policy,
+    )
+
+    with pytest.raises(PublicationError, match="role policy"):
+        _promote(service, prepared.candidate.candidate_id)
+
+    assert remote.channel_writes == 0
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    assert "workflow_admitted" not in operation["receipts"]
+    assert "channel_moved" not in operation["receipts"]
 
 
 def test_paused_promotion_recovers_failed_activation_with_new_identity(

@@ -40,6 +40,10 @@
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
+    "workflow_role_policy_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "source_ref": {
       "type": "object",
       "additionalProperties": false,
@@ -80,9 +84,10 @@
     "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"],
     "workflow_lock": ["builder_id", "build_policy_digest", "materialization_path", "schema_locks"],
     "conversational_lock": ["builder_id", "build_policy_digest", "materialization_path", "schema_locks"],
-    "workflow_validation_lock": ["workflow_lock", "workflow_adapter_locks", "workflow_binding_digest"],
-    "workflow_adapter_locks": ["workflow_lock", "workflow_validation_lock", "workflow_binding_digest"],
-    "workflow_binding_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks"]
+    "workflow_validation_lock": ["workflow_lock", "workflow_adapter_locks", "workflow_binding_digest", "workflow_role_policy_digest"],
+    "workflow_adapter_locks": ["workflow_lock", "workflow_validation_lock", "workflow_binding_digest", "workflow_role_policy_digest"],
+    "workflow_binding_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks", "workflow_role_policy_digest"],
+    "workflow_role_policy_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks", "workflow_binding_digest"]
   },
   "$defs": {
     "contractLock": {

@@ -326,6 +326,7 @@ class ArtifactPackageRef:
     workflow_validation_lock: ArtifactContractLock | None = None
     workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
     workflow_binding_digest: str | None = None
+    workflow_role_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in {"skill", "scenario"}:
@@ -388,14 +389,17 @@ class ArtifactPackageRef:
             self.workflow_validation_lock is not None
             or bool(self.workflow_adapter_locks)
             or self.workflow_binding_digest is not None
+            or self.workflow_role_policy_digest is not None
         )
         if binding_present and self.workflow_lock is None:
             raise ArtifactReleaseContractError("workflow binding requires workflow_lock")
         if binding_present and (
-            self.workflow_validation_lock is None or self.workflow_binding_digest is None
+            self.workflow_validation_lock is None
+            or self.workflow_binding_digest is None
+            or self.workflow_role_policy_digest is None
         ):
             raise ArtifactReleaseContractError(
-                "workflow validation lock and binding digest must be supplied together"
+                "workflow validation, binding, and role-policy locks must be supplied together"
             )
         if self.workflow_validation_lock is not None:
             if not self.workflow_validation_lock.lock_id.startswith("workflow-validation:"):
@@ -406,6 +410,14 @@ class ArtifactPackageRef:
                 self,
                 "workflow_binding_digest",
                 _digest(self.workflow_binding_digest, field="workflow_binding_digest"),
+            )
+            object.__setattr__(
+                self,
+                "workflow_role_policy_digest",
+                _digest(
+                    self.workflow_role_policy_digest,
+                    field="workflow_role_policy_digest",
+                ),
             )
         if any(not isinstance(item, WorkflowAdapterLock) for item in self.workflow_adapter_locks):
             raise ArtifactReleaseContractError(
@@ -453,6 +465,7 @@ class ArtifactPackageRef:
                 item.to_dict() for item in self.workflow_adapter_locks
             ]
             payload["workflow_binding_digest"] = self.workflow_binding_digest
+            payload["workflow_role_policy_digest"] = self.workflow_role_policy_digest
         return payload
 
     @classmethod
@@ -477,6 +490,7 @@ class ArtifactPackageRef:
                 "workflow_validation_lock",
                 "workflow_adapter_locks",
                 "workflow_binding_digest",
+                "workflow_role_policy_digest",
             },
             required={
                 "schema",
@@ -559,6 +573,7 @@ class ArtifactPackageRef:
                 for item in raw_workflow_adapter_locks
             ),
             workflow_binding_digest=value.get("workflow_binding_digest"),
+            workflow_role_policy_digest=value.get("workflow_role_policy_digest"),
         )
 
 

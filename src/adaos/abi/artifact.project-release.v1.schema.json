@@ -125,7 +125,8 @@
           "type": "array",
           "items": { "$ref": "#/$defs/workflowAdapterLock" }
         },
-        "workflow_binding_digest": { "$ref": "#/$defs/digest" }
+        "workflow_binding_digest": { "$ref": "#/$defs/digest" },
+        "workflow_role_policy_digest": { "$ref": "#/$defs/digest" }
       },
       "additionalProperties": false,
       "dependentRequired": {
@@ -135,9 +136,10 @@
         "schema_locks": ["builder_id", "build_policy_digest", "materialization_path"],
         "workflow_lock": ["builder_id", "build_policy_digest", "materialization_path", "schema_locks"],
         "conversational_lock": ["builder_id", "build_policy_digest", "materialization_path", "schema_locks"],
-        "workflow_validation_lock": ["workflow_lock", "workflow_adapter_locks", "workflow_binding_digest"],
-        "workflow_adapter_locks": ["workflow_lock", "workflow_validation_lock", "workflow_binding_digest"],
-        "workflow_binding_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks"]
+        "workflow_validation_lock": ["workflow_lock", "workflow_adapter_locks", "workflow_binding_digest", "workflow_role_policy_digest"],
+        "workflow_adapter_locks": ["workflow_lock", "workflow_validation_lock", "workflow_binding_digest", "workflow_role_policy_digest"],
+        "workflow_binding_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks", "workflow_role_policy_digest"],
+        "workflow_role_policy_digest": ["workflow_lock", "workflow_validation_lock", "workflow_adapter_locks", "workflow_binding_digest"]
       }
     },
     "workflowAdapterLock": {

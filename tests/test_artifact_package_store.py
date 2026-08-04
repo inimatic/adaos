@@ -225,6 +225,7 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
     assert built.ref.workflow_lock.lock_id == "workflow:builder.change@1.0.0"
     assert built.ref.workflow_validation_lock is not None
     assert built.ref.workflow_binding_digest is not None
+    assert built.ref.workflow_role_policy_digest is not None
     assert {item.adapter_id for item in built.ref.workflow_adapter_locks} == {
         "always",
         "builder.codex.run",
@@ -240,6 +241,9 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
     )
     assert built.package_manifest["workflow_binding_digest"] == (
         built.ref.workflow_binding_digest
+    )
+    assert built.package_manifest["workflow_role_policy_digest"] == (
+        built.ref.workflow_role_policy_digest
     )
     assert verified.ref == built.ref
 

@@ -3,7 +3,7 @@
   "$id": "adaos.workflow.definition_artifact.v1",
   "title": "AdaOS Workflow Definition Artifact Binding",
   "type": "object",
-  "required": ["schema", "component", "package_digest", "definition", "validation", "binding_digest", "adapter_locks", "definition_changed", "binding_changed", "migration_id"],
+  "required": ["schema", "component", "package_digest", "definition", "validation", "binding_digest", "role_policy_digest", "adapter_locks", "definition_changed", "binding_changed", "migration_id"],
   "properties": {
     "schema": { "const": "adaos.workflow.definition_artifact.v1" },
     "component": { "type": "string", "minLength": 1, "maxLength": 240 },
@@ -11,6 +11,7 @@
     "definition": { "$ref": "#/$defs/contractLock" },
     "validation": { "oneOf": [{ "$ref": "#/$defs/contractLock" }, { "type": "null" }] },
     "binding_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "role_policy_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
     "adapter_locks": {
       "type": "array",
       "items": { "$ref": "workflow.binding.v1.schema.json#/$defs/adapterLock" }

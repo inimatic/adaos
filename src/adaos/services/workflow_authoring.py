@@ -81,6 +81,31 @@ def default_workflow_role_policy() -> dict[str, Any]:
     }
 
 
+def workflow_role_policy_digest(
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+    *,
+    role_policy: Mapping[str, Any] | None = None,
+) -> str:
+    compiled = (
+        definition
+        if isinstance(definition, CompiledWorkflowDefinition)
+        else compile_definition(definition)
+    )
+    payload = {
+        "role_policy": copy.deepcopy(
+            dict(role_policy or default_workflow_role_policy())
+        ),
+        "transition_authorities": [
+            {
+                "transition_id": item.transition_id,
+                "authority": copy.deepcopy(dict(item.descriptor["authority"])),
+            }
+            for item in sorted(compiled.transitions, key=lambda value: value.transition_id)
+        ],
+    }
+    return canonical_payload_digest(payload)
+
+
 def workflow_authoring_context(
     *,
     current_definition: CompiledWorkflowDefinition | Mapping[str, Any] | None = None,
@@ -218,4 +243,5 @@ __all__ = [
     "default_workflow_role_policy",
     "workflow_abi_schema_records",
     "workflow_authoring_context",
+    "workflow_role_policy_digest",
 ]

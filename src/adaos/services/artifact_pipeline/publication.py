@@ -17,6 +17,7 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.activation import (
+    ActivationError,
     ActivationResult,
     WorkspaceActivationManager,
 )
@@ -1493,6 +1494,45 @@ class ArtifactPublicationService:
         self._write_promotion(operation)
         receipts = operation.setdefault("receipts", {})
         try:
+            activation_manager = WorkspaceActivationManager(
+                workspace_root=self.workspace_root,
+                package_store=self.package_store,
+                state_root=self.state_root / "activation",
+                attestation_admission=self.attestation_admission,
+            )
+            slot_id = self._workspace_slot_id(
+                candidate.project_id,
+                activation_manager=activation_manager,
+            )
+            workflow_receipt = receipts.get("workflow_admitted")
+            try:
+                if isinstance(workflow_receipt, Mapping):
+                    raw_admission = workflow_receipt.get("admission")
+                    if not isinstance(raw_admission, Mapping):
+                        raise PublicationError(
+                            "promotion workflow admission receipt has no admission record"
+                        )
+                    activation_manager.validate_release_admission(
+                        plan,
+                        raw_admission,
+                        slot_id=slot_id,
+                    )
+                else:
+                    admission = activation_manager.admit_release_candidate(
+                        plan,
+                        slot_id=slot_id,
+                        fetch_package=self.remote.fetch_package,
+                    )
+                    self._promotion_receipt(
+                        operation,
+                        "workflow_admitted",
+                        {"admission": admission},
+                    )
+            except ActivationError as exc:
+                raise PublicationError(
+                    f"workflow publication admission failed: {exc}"
+                ) from exc
+
             published_result: AttestationPublicationResult | None = None
             attestation_receipt = receipts.get("attestations_published")
             if isinstance(attestation_receipt, Mapping):
@@ -1647,12 +1687,6 @@ class ArtifactPublicationService:
                     idempotent_replay=True,
                 )
             else:
-                activation_manager = WorkspaceActivationManager(
-                    workspace_root=self.workspace_root,
-                    package_store=self.package_store,
-                    state_root=self.state_root / "activation",
-                    attestation_admission=self.attestation_admission,
-                )
                 activation_key = f"stable:{candidate.release_digest}"
                 recovery_receipt = receipts.get("activation_recovered")
                 if isinstance(recovery_receipt, Mapping):
@@ -1666,10 +1700,7 @@ class ArtifactPublicationService:
                 activation = activation_manager.activate(
                     plan,
                     idempotency_key=activation_key,
-                    slot_id=self._workspace_slot_id(
-                        candidate.project_id,
-                        activation_manager=activation_manager,
-                    ),
+                    slot_id=slot_id,
                     fetch_package=self.remote.fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,
