@@ -1022,7 +1022,12 @@ class HubPeer:
         self._touch()
         if previous_channel is not None and previous_channel is not channel:
             self._close_data_channel(previous_channel)
-        self._yjs_adapter = DataChannelYjsAdapter(channel, self.webspace_id, device_id=self.device_id)
+        self._yjs_adapter = DataChannelYjsAdapter(
+            channel,
+            self.webspace_id,
+            device_id=self.device_id,
+            peer_id=self.peer_id,
+        )
         self._yjs_task = asyncio.ensure_future(
             self._yjs_adapter.serve(),
             # name kwarg is py3.11+ for asyncio.ensure_future but Task() accepts it.

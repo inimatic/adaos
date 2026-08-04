@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def test_checkout_target_version_ignores_non_sha(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
@@ -512,6 +514,17 @@ def test_strip_repo_vcs_metadata_removes_git_dir(tmp_path: Path) -> None:
     mod._strip_repo_vcs_metadata(repo_dir)
 
     assert not git_dir.exists()
+
+
+def test_strip_repo_vcs_metadata_fails_closed_when_cleanup_survives(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    git_dir = tmp_path / "repo" / ".git"
+    git_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "_force_remove_tree", lambda _path: None)
+
+    with pytest.raises(RuntimeError, match="retains VCS metadata"):
+        mod._strip_repo_vcs_metadata(tmp_path / "repo")
 
 
 def test_clone_local_repo_copy_mode_skips_git_metadata(monkeypatch, tmp_path: Path) -> None:

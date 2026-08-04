@@ -118,7 +118,7 @@ def test_should_reexec_active_slot_venv_when_current_python_differs(monkeypatch,
     assert cli_app._should_reexec_active_slot_venv() is True
 
 
-def test_api_restart_from_repo_venv_preserves_selected_runtime(monkeypatch, tmp_path: Path) -> None:
+def test_api_commands_from_repo_venv_preserve_selected_runtime(monkeypatch, tmp_path: Path) -> None:
     repo_python = tmp_path / ".venv" / "Scripts" / "python.exe"
     slot_python = tmp_path / "slot" / "venv" / "Scripts" / "python.exe"
     repo_python.parent.mkdir(parents=True)
@@ -133,9 +133,11 @@ def test_api_restart_from_repo_venv_preserves_selected_runtime(monkeypatch, tmp_
     monkeypatch.setattr(cli_app, "_active_slot_manifest_payload", lambda: (str(slot_python), {}, None))
     monkeypatch.setattr(cli_app.sys, "executable", str(repo_python))
 
-    assert cli_app._should_preserve_repo_runtime_for_api_restart(["api", "restart"])
+    assert cli_app._should_preserve_repo_runtime_for_api_command(["api", "restart"])
+    assert cli_app._should_preserve_repo_runtime_for_api_command(["api", "serve"])
     assert not cli_app._should_reexec_active_slot_venv(["api", "restart"])
-    assert cli_app._should_reexec_active_slot_venv(["api", "serve"])
+    assert not cli_app._should_reexec_active_slot_venv(["api", "serve"])
+    assert cli_app._should_reexec_active_slot_venv(["api", "stop"])
 
 
 def test_windows_wrapper_reexec_does_not_block_active_slot_reexec(monkeypatch, tmp_path: Path) -> None:

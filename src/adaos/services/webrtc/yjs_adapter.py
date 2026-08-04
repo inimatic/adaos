@@ -45,10 +45,21 @@ _MAX_CHUNKS_PER_MESSAGE = (_MAX_MESSAGE_BYTES + max(1, _CHUNK_PAYLOAD_BYTES) - 1
 class DataChannelYjsAdapter:
     """ypy-websocket ``Websocket`` interface backed by a WebRTC DataChannel."""
 
-    def __init__(self, dc: RTCDataChannel, webspace_id: str, *, device_id: str | None = None) -> None:
+    def __init__(
+        self,
+        dc: RTCDataChannel,
+        webspace_id: str,
+        *,
+        device_id: str | None = None,
+        peer_id: str | None = None,
+    ) -> None:
         self._dc = dc
         self._path = webspace_id
         self._device_id = str(device_id or "").strip() or "webrtc"
+        # One device may have several browser tabs.  The peer identity is the
+        # lifecycle key for a single RTCPeerConnection/Yjs adapter, while the
+        # stable device identity remains available for presence and policy.
+        self._peer_id = str(peer_id or self._device_id).strip() or self._device_id
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._queued_bytes = 0
         self._closed = False
@@ -137,8 +148,10 @@ class DataChannelYjsAdapter:
         chunk_id = self._next_chunk_id
         self._next_chunk_id = 1 if self._next_chunk_id >= 0x7FFFFFFF else self._next_chunk_id + 1
         _log.info(
-            "sending chunked yjs datachannel message webspace=%s bytes=%s chunks=%s chunk_bytes=%s",
+            "sending chunked yjs datachannel message webspace=%s device=%s peer=%s bytes=%s chunks=%s chunk_bytes=%s",
             self._path,
+            self._device_id,
+            self._peer_id,
             len(payload),
             total,
             chunk_size,
@@ -382,7 +395,7 @@ class DataChannelYjsAdapter:
                 room = await acquire_room(
                     self._path,
                     self._device_id,
-                    yws_attempt_id=f"webrtc-yjs:{self._device_id}",
+                    yws_attempt_id=f"webrtc-yjs:{self._peer_id}",
                 )
                 await room.serve(self)
             else:  # pragma: no cover - compatibility with older gateway modules.
@@ -404,4 +417,9 @@ class DataChannelYjsAdapter:
             if isinstance(clients, list):
                 room.clients = [client for client in clients if client is not self]
             self.close()
-            _log.info("yjs datachannel closed webspace=%s", self._path)
+            _log.info(
+                "yjs datachannel closed webspace=%s device=%s peer=%s",
+                self._path,
+                self._device_id,
+                self._peer_id,
+            )

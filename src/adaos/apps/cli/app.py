@@ -124,20 +124,20 @@ def _should_reexec_repo_venv() -> bool:
     return not _same_executable_path(preferred, sys.executable)
 
 
-def _should_preserve_repo_runtime_for_api_restart(
+def _should_preserve_repo_runtime_for_api_command(
     argv: list[str] | tuple[str, ...] | None = None,
 ) -> bool:
-    """Keep an explicitly selected source checkout bound across ``api restart``.
+    """Keep an explicitly selected source checkout bound for development API commands.
 
     Production entry points still bind to the active core slot.  The exception
-    is deliberately narrow: a restart invoked by the checkout's own virtual
-    environment must restart that same development runtime, not silently swap
-    it for a potentially older active slot.
+    is deliberately narrow: ``api serve`` and ``api restart`` invoked by the
+    checkout's own virtual environment must keep using that development
+    runtime, not silently swap it for a potentially older active slot.
     """
 
     if os.getenv("ADAOS_CLI_SLOT_BOUND") == "1":
         return False
-    if _cli_command_tokens(argv)[:2] != ["api", "restart"]:
+    if _cli_command_tokens(argv)[:2] not in (["api", "serve"], ["api", "restart"]):
         return False
     repo_python = _repo_venv_python()
     return bool(repo_python and _same_executable_path(repo_python, sys.executable))
@@ -151,7 +151,7 @@ def _should_reexec_active_slot_venv(
         return False
     if os.getenv("ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC") == "1":
         return False
-    if _should_preserve_repo_runtime_for_api_restart(argv):
+    if _should_preserve_repo_runtime_for_api_command(argv):
         return False
     preferred, _, _ = _active_slot_manifest_payload()
     if not preferred:

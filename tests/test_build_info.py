@@ -58,7 +58,7 @@ def test_compute_version_uses_pyproject_base(monkeypatch, tmp_path: Path) -> Non
     assert build_info._compute_version() == "2.3.4+42.abc1234"
 
 
-def test_build_info_falls_back_to_active_slot_manifest(monkeypatch, tmp_path: Path) -> None:
+def test_build_info_uses_active_slot_manifest_without_parent_git_discovery(monkeypatch, tmp_path: Path) -> None:
     _clear_build_env(monkeypatch)
     slot_dir = tmp_path / "state" / "core_slots" / "slots" / "B"
     slot_dir.mkdir(parents=True)
@@ -75,7 +75,11 @@ def test_build_info_falls_back_to_active_slot_manifest(monkeypatch, tmp_path: Pa
     package_root.mkdir(parents=True)
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT_DIR", str(slot_dir))
     monkeypatch.setattr(build_info, "_repo_root", lambda: package_root)
-    monkeypatch.setattr(build_info, "_git", lambda *args: None)
+    monkeypatch.setattr(
+        build_info,
+        "_git",
+        lambda *args: (_ for _ in ()).throw(AssertionError("slot identity must not probe parent Git")),
+    )
     monkeypatch.setattr(build_info, "_installed_distribution_version", lambda: None)
 
     assert build_info.base_version() == "0.1.391"

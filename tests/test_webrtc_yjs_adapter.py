@@ -313,6 +313,21 @@ def test_datachannel_yjs_adapter_serves_acquired_yws_room_when_enabled(monkeypat
     assert called["room"].clients == []
 
 
+def test_datachannel_yjs_adapter_uses_page_peer_for_attempt_identity(monkeypatch) -> None:
+    yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="1")
+
+    adapter = yjs_adapter.DataChannelYjsAdapter(
+        _DummyDataChannel(),
+        "dev1-dev",
+        device_id="shared-device",
+        peer_id="page-peer-b",
+    )
+    asyncio.run(adapter.serve())
+
+    assert called["last_dev_id"] == "shared-device"
+    assert called["last_attempt_id"] == "webrtc-yjs:page-peer-b"
+
+
 def test_datachannel_yjs_adapter_removes_cancelled_binding_from_room(monkeypatch) -> None:
     yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="1", block_room_serve=True)
 

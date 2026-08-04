@@ -80,10 +80,11 @@ def _load_peer_module(monkeypatch):
     fake_yjs_adapter = ModuleType("adaos.services.webrtc.yjs_adapter")
 
     class DummyDataChannelYjsAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
+            self.peer_id = peer_id
 
         def close(self) -> None:
             return None
@@ -434,10 +435,11 @@ def test_setup_yjs_channel_replaces_previous_adapter_and_channel(monkeypatch) ->
     peer_mod = _load_peer_module(monkeypatch)
 
     class TrackingAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
+            self.peer_id = peer_id
             self.closed = False
 
         def close(self) -> None:
@@ -501,10 +503,11 @@ def test_events_webspace_change_closes_existing_yjs_binding(monkeypatch) -> None
     seen_commands: list[dict[str, object]] = []
 
     class TrackingAdapter:
-        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None):
+        def __init__(self, dc, webspace_id: str, *, device_id: str | None = None, peer_id: str | None = None):
             self.dc = dc
             self.webspace_id = webspace_id
             self.device_id = device_id
+            self.peer_id = peer_id
             self.closed = False
 
         def close(self) -> None:
