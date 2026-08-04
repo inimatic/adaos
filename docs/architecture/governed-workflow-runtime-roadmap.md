@@ -4,11 +4,13 @@ Status: domain roadmap for the AdaOS workflow metamodel, validation,
 explanation, interaction projection, NLU mediation, and optional durable
 execution adapters.
 
-Last reviewed: 2026-07-31.
+Last reviewed: 2026-08-04.
 
 This roadmap implements the
 [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
-The current local and live-channel proof ledger is
+The current local implementation ledger is
+[Governed Workflow Runtime Verification 2026-08-04](governed-workflow-runtime-verification-2026-08-04.md).
+Earlier live-channel evidence remains in
 [Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md).
 It owns sequencing and acceptance inside this domain. It does not replace the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md), Builder roadmap,
@@ -78,12 +80,12 @@ The current repository has useful but fragmented foundations:
 | Telegram actions | callback normalization, canonical keyboard projection, opaque token ingress, and idempotent response persistence | live read-only Builder turn with five inline actions validated 2026-07-31; mutating callbacks and provider receipts remain open |
 | Capability negotiation | renderer hints and channel-specific limits | no versioned effective profile or auditable presentation plan |
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
-| Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
+| Builder workflow | active package-bound definition, persisted Change projection/Runs, restart-safe migration checkpoints, trial/publication evidence | strict active-WorkspaceLock path validated locally behind a feature flag; global default rollout and final compatibility-store retirement remain open |
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
 | Conversation stories | shared package/story schemas, deterministic no-LLM runner, workflow/statechart and Markdown/Mermaid export, Builder context admission, and executable reference package | validated-local; provider-backed NLU parsing, candidate-to-story promotion, and interactive replay remain open |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing, bounded reconnect cleanup | at-most-once transport path; target-zone publish is not durable hub acceptance or a workflow journal |
-| Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow lock | validated-local artifact foundation; registry trust, complete adapter binding, and activation admission remain open |
+| Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow/validation/adapter/role locks | validated-local semantic, publication-admission, and activation foundation; live distributed ingress acceptance remains open |
 | External durable engine | none | optional later evaluation, not the objective |
 
 ## Milestone Sequence
@@ -94,8 +96,8 @@ The current repository has useful but fragmented foundations:
 | GWR1 | A canonical metamodel, definition compiler, pure resolver, and admitted `workflow.json` artifact contract exist | `validated-local` semantic core; data authoring/package admission open | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local`; DEV `builder_skill/workflow.json` is authority and the Python transition constructor is retired | next |
-| GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local` | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local`; active `builder_skill` package is strict authority when cutover is enabled, with restart/rollback/in-flight migration proof | next |
+| GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local`; live transport durability remains in GWR6 | next |
 | GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
 | GWR8 | Root/multi-user and cross-provider extensions are admitted by evidence | `deferred` | long-term |
@@ -131,7 +133,10 @@ already selected.
   an owner and migration disposition. The source inventory is maintained in
   [Governed Workflow Runtime Inventory](governed-workflow-runtime-inventory.md)
   and classifies each surface as canonical workflow, separate canonical model,
-  compatibility, projection/evidence, or open reliability gap.
+  compatibility, projection/evidence, or open reliability gap. The 2026-08-04
+  closure audit covers activation/publication journals, Builder migration and
+  executor state, operation/task registries, transport acknowledgements, and
+  process-local schedulers; it identifies no new external-provider admission.
 - [x] `[could]` `GWR0-07` Produce diagrams generated from the future canonical
   workflow definitions for architecture review. `workflow_static_report_markdown`
   renders the validated `adaos.workflow.static_report.v1` projection as
@@ -579,12 +584,18 @@ tests cover all legal and representative illegal paths.
   inventories legacy/governed/no-workflow manifests, and shadow-compares state
   and edge projections. `ScenarioWorkflowRuntime` rejects legacy `next_state`
   mutation for manifest-bound governed workflows.
-- [ ] `[must]` `GWR4-23` Cut Builder over by immutable candidate package and
-  feature-gated WorkspaceLock activation. Preserve the prior complete package,
-  workflow binding, and runtime generation as the rollback target; remove the
-  Python transition table only after restart, rollback, and in-flight instance
-  migration evidence passes.
-- [ ] `[must]` `GWR4-24` Update Builder templates, context packets, Specification,
+- [x] `[must]` `GWR4-23` Cut Builder over by immutable candidate package and
+  feature-gated WorkspaceLock activation. With
+  `ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE=true`, Builder requires the active
+  `skill:builder_skill` PackageRef, loads its materialized `workflow.json`, and
+  verifies definition, validation, and adapter-binding locks without a DEV or
+  Python-definition fallback. Instances pin package and binding digests;
+  restart-safe migration checkpoints restore or roll back the exact before/
+  after snapshot idempotently. The flag remains off by default for staged
+  rollout and isolated compatibility tests; making it the deployment default
+  and then deleting the bounded constructor is a rollout action, not an
+  unverified fallback inside the strict path.
+- [x] `[must]` `GWR4-24` Update Builder templates, context packets, Specification,
   artifact inspection, and publication evidence so an LLM can create or repair
   one `workflow.json`, see its structured validation report and graph diff, and
   cannot publish code/definition or role-policy mismatches. The 2026-08-01
@@ -599,8 +610,10 @@ tests cover all legal and representative illegal paths.
   `compile_conversational_package` pipeline now runs from Builder context
   packets, skill validation, scenario validation, and the developer SDK; context
   facets expose conversational package digest, validation diagnostics, bounded
-  story summaries, and static workflow-story coverage. Publication-lock proof
-  keeps this item open.
+  story summaries, and static workflow-story coverage. Publication now calls
+  one `adaos.workflow.publication_admission.v1` gate before channel mutation;
+  package code/manifest, definition, validation, adapter binding, role policy,
+  desired WorkspaceLock, and migration mismatches all fail closed.
 - [x] `[must]` `GWR4-25` Route workflow-definition corrections to the isolated
   Automation/Codex lane while keeping visual process-layout requests in
   Prototype and process inspection read-only. DEV Builder regression tests
@@ -612,6 +625,13 @@ tests cover all legal and representative illegal paths.
   The real `select_preview_target` CLI path now exits cleanly after restoring
   `proto: test04_recipes · UI 003`; persistent runtime materialization keeps
   its bounded executor, and ordinary DEV tools keep their timeout contract.
+
+- [ ] `[should]` `GWR4-27` After strict package mode is enabled and observed in
+  each accepted deployment class, make it the default, remove the bounded
+  Python-definition compatibility constructor, and migrate remaining Builder
+  projection persistence away from implicit `prompt_state.json` authority.
+  Keep an explicit rollback to the prior complete WorkspaceLock, not a silent
+  fallback to DEV source or a reconstructed transition catalogue.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -630,14 +650,14 @@ lineage, evidence, and final Publication agree without direct state repair.
   Automation -> verification -> Trial -> Publication through the canonical
   resolver. `test_builder_governed_e2e.py` takes a fresh empty scenario through
   all dependent gates and ends in the canonical `published` state.
-- [ ] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
-  and SDK commands invoke identical command identities and guards. All three
-  presentations retain the same semantic actions; token and intent responses
-  enter `invoke_interaction_response` through one compatibility adapter. The
-  deterministic control path is locally covered; repeat it through the live
-  Web client and Telegram bot for each executor-backed mutating class. The
-  2026-07-31 live read-only control establishes the Telegram baseline; it does
-  not replace the required mutating command/guard matrix.
+- [x] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
+  and SDK commands invoke identical command identities and guards.
+  `cross_channel_ingress_conformance` requires exactly `web`, `telegram`,
+  `text`, and `sdk` invocations and compares semantic digest, command,
+  expected generation, immutable target ref, guard result, executor readiness,
+  and execution result. The harness covers admitted and
+  `executor_unavailable` cases without executing effects. This is the local
+  semantic gate; live target-zone Telegram durability remains GWR6-16.
 - [x] `[must]` `GWR5-03` Prove every UI action shown by `explain()` succeeds or
   returns a typed concurrency/policy change, never an unrelated handler rule.
   Generated resolver conformance plus the Builder ingress tests bind displayed
@@ -701,7 +721,10 @@ lineage, evidence, and final Publication agree without direct state repair.
   mismatch rates. `workflow_metrics_report` derives complexity from the
   compiled definition, context sufficiency from the governed context packet
   coverage, and story outcomes from conversation-story reports under the
-  `adaos.workflow.metrics_report.v1` ABI.
+  `adaos.workflow.metrics_report.v1` ABI. The compact
+  `adaos.workflow.metrics_evidence.v1` projection adds clarification, repair,
+  retry, and action-failure rates/counts and is persisted automatically on
+  Builder Runs and artifact Trials.
 - [x] `[must]` `GWR5-19` Prove one Interaction preserves command identity,
   risk, confirmation, and target when negotiated as a Web form, Telegram
   choices, numbered text, or a cross-channel deep-link handoff.
@@ -796,20 +819,30 @@ coverage.
   dialog frame, interaction, response, command, workflow event, Run/activity,
   semantic output, and delivery attempt. The first proof ABI is
   `adaos.workflow.trace_identity.v1`; `workflow_trace_identity_report` links
-  `IntentProposal`, canonical `WorkflowInvocation`, workflow decision event,
-  semantic `ConversationOutput`, `ResponseEnvelope`, and delivery attempt IDs
-  and fails the report on command, workflow identity, event, envelope, or reply
-  route mismatches.
+  `IntentProposal`, `ConversationInteraction`, `InteractionResponse`, canonical
+  `WorkflowInvocation` and command, workflow decision event, claimed activity
+  run, semantic `ConversationOutput`, `ResponseEnvelope`, and delivery attempt.
+  Each record carries the same `turn_trace_id` and trace context; the report
+  fails on command, workflow, event, Run, envelope, or reply-route mismatches.
 - [x] `[must]` `GWR5-35` Extend story assertions to full dialog repair,
   `ConversationInteraction`, and channel fallback coverage once the workflow
   contract slice is stable. `run_conversation_story` now accepts
   `expect.repair`, `expect.interaction`, and `expect.presentation`, projects
   store-free `ConversationInteraction`/`InteractionPresentation` records, and
   fails the story on command identity, generation, presentation mode, reason,
-  semantic-equivalence, or repair next-input mismatches.
+  semantic-equivalence, or repair next-input mismatches. Runner v2 also drives,
+  rather than merely asserts, stale generation, a concurrent command, retry of
+  a prior step, executor readiness, and expected negative outcomes; its
+  timeline records those controls and decisions deterministically.
 - [x] `[deferred]` `GWR5-36` Defer an interactive workflow/conversation studio
   until static graph/story exports, runner evidence, and package admission are
   stable.
+
+The 2026-08-04 local increment is recorded in the linked verification ledger.
+Commits `5e0ed333`, `6dfd3442`, `b0dd4fae`, and `b72f2a7d` respectively close
+the cross-channel/trace, Builder package cutover, publication admission, and
+story/metrics evidence slices. The ledger keeps local semantic proof distinct
+from the still-open live Telegram acceptance boundary.
 
 ## GWR6. Durability Gap Assessment and Reference Persistence
 
@@ -852,7 +885,9 @@ is warranted.
 - [x] `[must]` `GWR6-08` Write an ADR: reference persistence sufficient, or
   external durable adapter evaluation admitted with named unmet requirements.
   The accepted decision keeps SQLite and postpones external adapters behind
-  five measurable admission conditions.
+  five measurable admission conditions. The completed 2026-08-04 ad-hoc
+  process inventory does not meet any condition; GWR6-16 is a transport inbox
+  and receipt gap rather than evidence for replacing the workflow provider.
 - [x] `[should]` `GWR6-09` Add bounded retention, compaction, redacted
   diagnostics, and operator describe/recover/cancel surfaces. Delivered outbox
   compaction retains the canonical journal; operator views expose only redacted
@@ -922,7 +957,7 @@ waits, upgrades, backup, privacy, observability, resource cost, license,
 maturity, and exit cost.
 
 - [x] `[deferred]` `GWR7-01` Implement no external adapter until GWR6 admits a
-  measured need. The 2026-07-30 decision admitted none.
+  measured need. The 2026-08-04 inventory recheck admitted none.
 - [ ] `[should]` `GWR7-02` If admitted, freeze a provider conformance suite from
   GWR5-GWR6 before choosing a product.
 - [ ] `[could]` `GWR7-03` Evaluate DBOS for an embedded Python/local and
@@ -936,8 +971,9 @@ maturity, and exit cost.
   back up, and roll back the adapter through AdaOS lifecycle rails.
 - [x] `[must]` `GWR7-08` Record an adoption/postponement/rejection ADR with
   measured benefit, operational cost, migration, and exit plan. The reference
-  persistence decision records postponement and provider-specific admission
-  conditions without selecting an implementation.
+  persistence decision was reaffirmed after the complete 2026-08-04 inventory:
+  it records postponement and provider-specific admission conditions without
+  selecting an implementation.
 - [x] `[deferred]` `GWR7-09` Do not maintain several production providers in
   parallel without separate proven deployment classes.
 

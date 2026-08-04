@@ -71,7 +71,10 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   `conversational.story.v1.schema.json` - design-time conversational package
   sources for IntentProposal inputs, deterministic matchers, workflow-facing
   affordances, repair behavior, semantic output templates, and executable
-  conversation stories
+  conversation stories. Optional runtime controls support expected generation,
+  executor readiness, retry-of-step, and an interleaved concurrent command;
+  runner v2 uses them for stale/concurrency/retry/executor-unavailable and
+  expected-negative proof without changing the source schema version.
 - `conversational.validation_report.v1.schema.json` - Builder/SDK validation
   report for package schema checks, workflow cross-checks, threat diagnostics,
   coverage, and deterministic story-runner evidence
@@ -87,11 +90,15 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   `workflow.admission.v1.schema.json`, `workflow.authoring_context.v1.schema.json`,
   `workflow.authoring_attempt.v1.schema.json`,
   `workflow.static_report.v1.schema.json`,
+  `workflow.ingress_conformance.v1.schema.json`,
   `workflow.trace_identity.v1.schema.json`, and
-  `workflow.metrics_report.v1.schema.json` - data-driven governed workflow
+  `workflow.metrics_report.v1.schema.json`,
+  `workflow.metrics_evidence.v1.schema.json`, and
+  `workflow.publication_admission.v1.schema.json` - data-driven governed workflow
   authoring, validation, adapter trust, package binding, activation admission,
-  LLM context, provenance, static review, cross-surface trace identity, and
-  measured acceptance contracts.
+  pre-channel publication admission, LLM context, provenance, static review,
+  cross-channel ingress equivalence, cross-surface trace identity, and measured
+  acceptance contracts.
   `workflow.definition.v1` references the full transition schema from the ABI
   folder; registry, admission, authoring provenance, static review evidence,
   trace reports, metrics, review state, and activation pointers stay outside

@@ -203,11 +203,12 @@ When a canonical `skill.yaml` or `scenario.yaml` declares
 package as its code and manifest. It is not a separately installable component.
 The package manifest records a `workflow_lock` with the exact path, workflow
 schema/type/version, canonical definition digest, validation report digest,
-and required registered-adapter contract locks. The ordinary package file list
-also records the raw file digest, and the package digest covers both code and
+required registered-adapter contract locks, and normalized platform plus
+transition-authority role-policy digest. The ordinary package file list also
+records the raw file digest, and the package digest covers both code and
 workflow bytes. A mismatch between the manifest reference, file inventory,
-semantic digest, adapter contract, or validation evidence rejects the package
-before visibility.
+semantic digest, adapter contract, validation evidence, or role policy rejects
+the package before visibility.
 
 `workflow.json` is the only governed workflow source file for v1. A component
 may omit it or contain exactly one. Role-specific variants and independent
@@ -290,11 +291,13 @@ workspace_lock:
       package_digest: sha256:...
       workflow_definition_digest: sha256:...
       workflow_binding_digest: sha256:...
+      workflow_role_policy_digest: sha256:...
     skill:shopping_list:
       version: 1.6.2
       package_digest: sha256:...
       workflow_definition_digest: sha256:...
       workflow_binding_digest: sha256:...
+      workflow_role_policy_digest: sha256:...
 
   bindings:
     scenario:recipes:
@@ -303,9 +306,9 @@ workspace_lock:
   previous_lock_revision: 16
 ```
 
-The two workflow digest fields are present only for components that declare a
-workflow manifest. They remain absent, rather than synthesized, for a component
-with no governed workflow.
+The three workflow digest fields are present only for components that declare
+a workflow manifest. They remain absent, rather than synthesized, for a
+component with no governed workflow.
 
 A `ProjectRelease` resolves every workflow activity to
 an exact platform contract or dependency `PackageRef` and includes the
@@ -316,6 +319,14 @@ activate new code with an old workflow, a new workflow with old code, or roll
 back only one of them. The projected workflow digests in WorkspaceLock are
 inspectable consistency witnesses; PackageRef and ProjectRelease digests remain
 the delivery authority.
+
+`WorkspaceActivationManager.admit_release_candidate` is shared by publication
+and activation. It verifies package archives and refs, then emits one
+`adaos.workflow.publication_admission.v1` record binding package/code,
+manifest, definition, validation, adapter binding, role policy, desired
+WorkspaceLock, and migration evidence. Stable publication persists this record
+before channel CAS. Any mismatch fails with zero channel writes; activation
+cannot construct a different admission for the same release candidate.
 
 Filesystem materialization, runtime reload, workflow dispatch, and browser
 projection are derived from this record. They are not independent sources of
@@ -626,8 +637,9 @@ If stable is unchanged:
 1. persist the exact candidate source tree in the public source;
 2. verify public source tree identity;
 3. persist the immutable candidate ProjectRelease;
-4. record publication evidence;
-5. move the stable channel pointer last.
+4. run and persist the shared workflow publication admission;
+5. record publication evidence;
+6. move the stable channel pointer last.
 
 The local continuation after the registry pointer moves is a separate durable
 promotion operation. It records receipts for admission, channel CAS,

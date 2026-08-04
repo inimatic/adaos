@@ -453,7 +453,10 @@ artifacts.
 
 ### Story Runner Contract
 
-The current story runner is deterministic and side-effect isolated:
+The current story runner is deterministic and side-effect isolated. Its report
+uses `runner_version: 2`; the authored source remains
+`adaos.conversational.story.v1` because the added runtime controls are backward-
+compatible optional fields:
 
 - run against a pinned workflow definition, conversational package, locale,
   channel profile, actor scope, and initial workflow snapshot;
@@ -463,6 +466,9 @@ The current story runner is deterministic and side-effect isolated:
   separate non-blocking evaluation profile;
 - compare expected and actual semantic records, not exact natural-language
   prose;
+- drive stale expected generation, an interleaved concurrent command, retry of
+  a prior step, and executor readiness from explicit story runtime controls;
+  expectations never supply the command that is executed;
 - report every command, state generation, interaction, output, activity mock,
   delivery attempt, and evidence ref in one static timeline;
 - produce coverage for states, transitions, guards, repair policies, output
@@ -552,6 +558,7 @@ turn_trace_id
   -> workflow_event_id
   -> run_id / activity_attempt_id
   -> conversation_output_id
+  -> response_envelope_id
   -> delivery_attempt_id
 ```
 
@@ -565,6 +572,9 @@ Minimum metrics:
 
 - proposal accept/abstain/reject rates by source, locale, provider, and skill;
 - clarification, correction, interruption, cancel, and repair success rates;
+- workflow retry and action-failure counts/rates by package and definition;
+- definition complexity and governed context-sufficiency evidence on Builder
+  Runs and Trials;
 - false-positive and hard-negative failures for risky actions;
 - story coverage and story failure rate by package version;
 - output delivery latency and missing/duplicated delivery attempts;
@@ -637,7 +647,9 @@ for their detailed gates and evidence.
   `ConversationInteraction`, and channel fallback coverage. Story expectations
   can now assert repair reason/next input, command-preserving
   `ConversationInteraction` projections, and channel `InteractionPresentation`
-  fallback mode, reason, command identity, and semantic equivalence.
+  fallback mode, reason, command identity, and semantic equivalence. Runner v2
+  additionally executes stale/concurrent/retry/executor-unavailable and
+  expected-negative stories deterministically.
 - [x] `[must]` Make the story runner side-effect isolated by default and require
   explicit integration-trial profiles for live effects or provider calls.
   The first runner records workflow activities as mocked timeline entries and
@@ -655,10 +667,11 @@ for their detailed gates and evidence.
   examples as runtime overlays, and `adaos.nlu.teacher_promotion_candidate.v1`
   records the explicit Builder promotion boundary for reusable package source.
 - [x] `[must]` Persist trace continuity from turn through proposal,
-  interaction, command, Run/activity, semantic output, and delivery attempt.
-  `adaos.workflow.trace_identity.v1` proves the cross-record chain, and response
-  normalization preserves semantic output identity through direct
-  `ConversationOutput` rendering and durable `ResponseEnvelope` rendering.
+  interaction/response, command/event, Run/activity, semantic output, envelope,
+  and delivery attempt. `adaos.workflow.trace_identity.v1` proves the
+  cross-record chain, and response normalization preserves semantic output
+  identity through direct `ConversationOutput` rendering and durable
+  `ResponseEnvelope` rendering.
 
 ### Should
 
@@ -674,6 +687,10 @@ for their detailed gates and evidence.
   output kinds, risky actions, locales, and channel fallbacks. Static reports
   distinguish declared, covered, and missing output kinds, repair policies,
   risk classes, and locales, and record covered channels and story kinds.
+- [x] `[should]` Persist bounded workflow metrics evidence in Builder Run and
+  artifact Trial records. `adaos.workflow.metrics_evidence.v1` carries
+  definition complexity, context sufficiency, and clarification, repair,
+  retry, and action-failure rates/counts derived from the full report.
 - [x] `[should]` Add conversational package threat-model checks. Validation
   rejects normalized alias collisions, embedded credential/MCP session fields,
   unreviewed Teacher/private data in public source, and understated output

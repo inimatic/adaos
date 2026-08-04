@@ -2,7 +2,7 @@
 
 Status: target architecture and system boundary.
 
-Last reviewed: 2026-07-31.
+Last reviewed: 2026-08-04.
 
 This document defines the AdaOS-wide governed data-driven model for explainable
 and validatable states, transitions, guards, effects, interactions, and
@@ -657,6 +657,11 @@ Authoring and activation add records around, not inside, the pure definition:
   candidate-generation digest. The first admission record has `admitted` and
   `not_required` statuses; longer candidate/review/rollback lifecycle state
   remains in activation history and Builder evidence.
+- `adaos.workflow.publication_admission.v1` is the pre-channel release gate. It
+  binds every verified package/code and manifest digest to definition,
+  validation, adapter-binding, role-policy, desired WorkspaceLock, migration,
+  and nested workflow-admission evidence. Publication and activation construct
+  this record through the same `admit_release_candidate` service.
 - `adaos.workflow.authoring_context.v1` gives an LLM or human author the exact
   schema digests, registered adapter catalogue, role-policy floor, domain
   invariants, examples, and complexity limits for one candidate.
@@ -671,11 +676,19 @@ Authoring and activation add records around, not inside, the pure definition:
   `workflow_static_report_markdown` can render the same validated projection as
   Markdown with a Mermaid statechart for human review; the JSON report remains
   the authoritative machine-readable evidence.
+- `adaos.workflow.ingress_conformance.v1` proves that Web, Telegram, numbered
+  text, and direct SDK input preserve the same command semantics, expected
+  generation, target refs, guard result, executor readiness, and execution
+  outcome. It is a deterministic semantic proof, not a transport receipt.
 - `adaos.workflow.metrics_report.v1` records the measured proof surface:
   definition complexity, governed context sufficiency, conversation-story
   outcomes, current/legacy cycle-time probes, diagnosis effort, and signed
   deltas. Metrics are evidence attached to a definition digest, not executable
   transition semantics.
+- `adaos.workflow.metrics_evidence.v1` is the bounded report projection stored
+  on Builder Runs and artifact Trials. It retains definition complexity,
+  context sufficiency, and clarification, repair, retry, and action-failure
+  rates/counts without copying the complete report timeline.
 
 `WorkflowDefinition` remains deterministic process data. Mutable review state,
 LLM provenance, package installation state, and activation pointers do not
@@ -700,7 +713,8 @@ package manifest additionally carries one enriched `workflow_lock` containing:
 - `path: workflow.json`, workflow schema, type, and definition version;
 - the canonical semantic `definition_digest`;
 - the validation-report/evidence digest;
-- the required registered adapter contract ids and digests.
+- the required registered adapter contract ids and digests;
+- the normalized platform plus transition-authority role-policy digest.
 
 Illustrative package-manifest projection:
 
@@ -713,6 +727,7 @@ Illustrative package-manifest projection:
     "definition_version": "1.0.0",
     "definition_digest": "sha256:...",
     "validation_report_digest": "sha256:...",
+    "role_policy_digest": "sha256:...",
     "required_adapter_contracts": [
       {
         "id": "builder.codex.run",
@@ -729,10 +744,11 @@ The locally validated first package slice serializes the same identity as an
 definition digest. Package verification derives that lock again from the
 packaged manifest and `workflow.json`; ProjectRelease and WorkspaceLock retain
 it inside the immutable component PackageRef. Package verification also derives
-the validation-report lock, resolves registered adapter contract locks, and
-recomputes the aggregate `workflow_binding_digest` against the active registry.
-Activation records those fields in the workflow admission candidate before a
-WorkspaceLock switch can proceed.
+the validation-report lock, resolves registered adapter contract locks,
+recomputes the aggregate `workflow_binding_digest` against the active registry,
+and recomputes `workflow_role_policy_digest` against platform policy plus
+transition authorities. Activation records those fields in the workflow
+admission candidate before a WorkspaceLock switch can proceed.
 
 The package digest already covers the manifest, executable code, schemas, and
 every file, so changing either code or `workflow.json` creates a different
@@ -757,6 +773,24 @@ leaves the prior generation authoritative. Failure after an uncertain external
 effect enters the declared reconciliation path; it never mixes old code with a
 new definition. Rollback selects the prior complete WorkspaceLock/runtime
 generation, not an individual workflow file.
+
+Stable publication invokes the same release-candidate admission before its
+first channel write. A candidate with mismatched package code/manifest,
+definition, validation evidence, adapter binding, or role policy therefore
+cannot become remotely visible and cannot later be interpreted differently by
+local activation. The durable promotion journal stores the exact admission
+record before channel CAS and resumes only subsequent idempotent phases.
+
+Builder's staged cutover uses `ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE`. When it
+is enabled, `BuilderWorkflowService` requires an active WorkspaceLock entry for
+`skill:builder_skill`, reads the materialized package definition, checks its
+definition/validation/binding pins, and has no DEV or Python-definition
+fallback. Existing instances carry package/binding pins. Explicit in-flight
+migration writes an exact before/after checkpoint under
+`state/builder/workflow_migrations`; restart completion and rollback are
+idempotent and reject a snapshot that matches neither side. The flag remains a
+deployment rollout boundary while isolated compatibility tests and legacy
+projection storage are retired.
 
 ### WorkflowInstance
 
@@ -1219,6 +1253,12 @@ accepts shared node-local SQLite for the bounded single-user Builder path and
 postpones every external provider until a named distributed, availability,
 scale, timer, or operator-cost requirement is measured. This decision does not
 expand the reference provider's claim to active-active or multi-user work.
+The 2026-08-04 source inventory rechecked activation/publication journals,
+Builder executor and migration state, operations and task registries,
+transport acknowledgements, and process-local schedulers. It found no new
+workflow-provider requirement. The open Telegram target-zone durable ingress
+receipt is a transport inbox gap, not evidence that the workflow journal must
+move to an external engine.
 
 ## Local-First and Root Topology
 
@@ -1355,23 +1395,32 @@ delivery attempt. Trace success is not acceptance evidence by itself.
 Cross-surface workflow traces can also be captured as
 `adaos.workflow.trace_identity.v1`: a compact report that links the turn trace,
 intent proposal, interaction/response when present, canonical invocation,
-workflow event, semantic conversation output, response envelope, and delivery
-attempt. The report is valid only when those records preserve the same command,
-workflow identity, event, envelope, and reply route lineage.
+workflow command/event, claimed activity run, semantic conversation output,
+response envelope, and delivery attempt. Every participating record carries
+the same `turn_trace_id` and trace context. The report is valid only when those
+records preserve command, workflow, event, Run, envelope, and reply-route
+lineage.
 
 Conversation stories are executable semantic tests, not transcript snapshots.
 They may assert repair behavior, store-free `ConversationInteraction`
 projection, and channel presentation fallback for the same workflow state.
 Those assertions fail when command identity, expected generation, fallback mode,
 reason code, semantic equivalence, or repair next-input semantics drift.
+Runner v2 additionally drives stale expected generation, an interleaved
+concurrent command, retry of an earlier step, executor readiness, and expected
+negative results. Assertions remain observations; they do not supply the
+command executed by the runner.
 
 Measured acceptance evidence can be captured as
 `adaos.workflow.metrics_report.v1`. A metrics report links one definition
 digest to definition complexity, context-packet coverage, clarification/repair
-rates, repeated corrections, action mismatch defects, presentation fallback,
+rates, retry and action-failure rates, repeated corrections, action mismatch
+defects, presentation fallback,
 unsupported presentation, semantic-equivalence failures, and current-versus-
 legacy cycle-time deltas. Missing current or legacy measurements are explicit
 warnings rather than implicit zeros.
+`adaos.workflow.metrics_evidence.v1` persists the bounded complexity, context,
+rate, and count projection in Builder Run and artifact Trial evidence.
 
 ## Builder Reference Workflow
 

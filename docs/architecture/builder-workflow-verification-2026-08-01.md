@@ -141,10 +141,12 @@ ordinary non-UI tools retain their bounded executor timeout.
 Prototype LLM receives the complete current `webui.json`, project memory,
 revision delta, runtime component contracts, a mechanically generated bounded
 WebUI ABI summary, and the governed context packet. The full ABI remains the
-post-response validator. The compact ABI intentionally removes descriptions
-and limits nested expansion, so it is useful but not semantically complete;
-the long hand-written system prompt currently compensates for common patterns.
-This remains a maintainability risk and is tracked by GWR1-27/GWR4-24.
+post-response validator. At this ledger's date the compact ABI intentionally
+removed descriptions and limited nested expansion, so the hand-written system
+prompt compensated for common patterns. The 2026-08-04 follow-up closed
+GWR4-24 by carrying exact workflow authoring ABI digests, adapter catalogue,
+role policy, graph diff, and static report into the governed context and shared
+publication admission; see the newer governed workflow verification ledger.
 
 Before `5c20e5fe`, Automation gave Codex the full project sparse checkout but
 lost the governed context packet when constructing `task.md`. It therefore had

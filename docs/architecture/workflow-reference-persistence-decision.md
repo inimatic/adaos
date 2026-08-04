@@ -5,6 +5,8 @@ engine adoption postponed.
 
 Decision date: 2026-07-30.
 
+Reaffirmed: 2026-08-04 after the complete durable/ad-hoc process inventory.
+
 Owners: Governed Data-Driven Workflow Model Roadmap GWR6/GWR7 and the AdaOS runtime.
 
 ## Decision
@@ -18,6 +20,15 @@ seam for a later adapter.
 This is a postponement based on the present evidence, not a permanent product
 selection. An external provider experiment is admitted only by a measured
 requirement in the admission table below.
+
+The 2026-08-04 inventory added publication/activation journals, Builder
+package-cutover migration checkpoints, Automation and Preview execution state,
+runtime operations, Skill Factory, Root MCP leases, hub-root acknowledgements,
+and process-local schedulers. These surfaces are either governed workflow
+evidence or separate canonical lifecycle/transport models. None satisfies an
+external-provider admission criterion. GWR6-16 remains open, but it requires a
+durable per-hub Telegram ingress inbox and target-zone receipt rather than a
+replacement workflow engine.
 
 ## Scope
 

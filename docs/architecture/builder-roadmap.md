@@ -938,14 +938,19 @@ Conversational artifacts and learning:
   routers, embeddings, indexes, prompt packs, and model bundles must not become
   independent source truth.
 - [x] `[must]` Preserve conversational trace continuity from user turn through
-  proposal, dialog/interaction, workflow command, Run/activity, semantic
-  output, and delivery attempt in Builder evidence. The trace-identity proof
-  and both direct/durable response normalization paths preserve the chain.
+  proposal, dialog/interaction/response, workflow command/event, Run/activity,
+  semantic output, envelope, and delivery attempt in Builder evidence. Every
+  record carries one `turn_trace_id` plus trace context; the trace-identity
+  report and both direct/durable response paths validate the complete chain.
 - [x] `[should]` Generate static workflow/statechart and conversation-story
   reports for Builder review, model context, and trial evidence. The shared
   conversational pipeline now returns validation JSON plus
   `adaos.workflow.static_report.v1`; the developer SDK can export both JSON
   reports and a Markdown/Mermaid human-review projection.
+- [x] `[should]` Persist workflow-quality evidence on Builder Runs and artifact
+  Trials. `adaos.workflow.metrics_evidence.v1` retains definition complexity,
+  context sufficiency, and clarification/repair/retry/action-failure rates and
+  counts derived from the canonical metrics report and story results.
 - [x] `[should]` Add conversational package threat-model checks for
   instruction-like authored descriptors, normalized alias hijacking,
   private/unreviewed Teacher data in public source, output/action risk
@@ -957,7 +962,9 @@ Conversational artifacts and learning:
   authored examples and matchers, Prototype workflow affordances and outputs,
   a deterministic multi-turn workflow story, and no-match repair coverage.
   This admits design-time scenario-development trials but does not mark live
-  canonical NLU ingress or unattended runtime activation complete.
+  canonical NLU ingress or unattended runtime activation complete. Story
+  runner v2 adds interaction/fallback, stale/concurrent, retry,
+  executor-unavailable, repair, and expected-negative cases.
 - [ ] `[could]` Export accepted conversation stories as user-facing learning or
   education-on-the-go material after they pass privacy and localization checks.
 - [ ] `[deferred]` Build an interactive workflow/conversation studio with trace
@@ -1464,6 +1471,13 @@ Autonomy, evidence, and acceptance:
   `sn_6acf0c01` mismatch, keeps destination `webspace_id` out of Yjs bootstrap
   until consent, passes 228/228 Navigation/App/YDoc tests, and builds for
   production.
+- [x] The 2026-08-04 data-driven workflow increment adds the four-channel
+  ingress/executor proof and full trace spine (`5e0ed333`), strict active-
+  WorkspaceLock Builder package cutover with restart-safe instance migration
+  (`6dfd3442`), one code/workflow/adapter/role publication admission
+  (`b0dd4fae`), and Story runner v2 plus Run/Trial metrics evidence
+  (`b72f2a7d`). The local verification ledger keeps these proofs distinct from
+  the open durable Telegram target-zone receipt and default cutover rollout.
 
 ## Cross-Document Anchors
 
@@ -1480,6 +1494,9 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Builder Governed Workflow Verification 2026-08-01](builder-workflow-verification-2026-08-01.md):
   local contract audit, live Web/Telegram/Preview evidence, model-context audit,
   and remaining proof gates
+- [Governed Workflow Runtime Verification 2026-08-04](governed-workflow-runtime-verification-2026-08-04.md):
+  local ingress, package cutover, publication admission, trace, story, metrics,
+  and provider-inventory evidence
 - [Builder SDK Boundary](builder-sdk-boundary.md): SDK ownership, functional
   Builder control architecture, migration checklist, and local proof record
 - [Skill Factory and Isolated Dev Nodes](skill-factory.md): target remote
@@ -1673,7 +1690,11 @@ observed projection matches the latest desired generation.
   `builder_skill@0.3.32` now owns the strict manifest-bound `workflow.json`;
   Builder loads it through the shared compiler/cache, pins instances by
   definition version and digest, and the existing generation plus payload-bound
-  idempotency key admits each transition once.
+  idempotency key admits each transition once. With
+  `ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE=true`, the service requires the active
+  WorkspaceLock package and validates definition/validation/binding pins with
+  no DEV/Python-definition fallback; restart-safe migration checkpoints prove
+  exact in-flight migration and rollback.
 - [ ] `[must]` Materialize only the latest desired generation and mark older
   queued/running generations `superseded`.
 - [ ] `[must]` Stream transition and observed-projection changes to the

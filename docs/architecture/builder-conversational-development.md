@@ -265,14 +265,16 @@ its UI and view projections and must not carry a duplicate Change workflow.
 activated, and rolled back as one immutable package; Builder instances pin the
 exact definition, package, and resolved adapter-binding digests.
 
-As of the 2026-08-01 local cutover, DEV `builder_skill@0.3.32` is the
-transition-catalogue authority and Workspace `builder_skill@0.3.27` contains
-the byte-identical handler, definition, and tests. Both runtimes are activated;
-instances pin definition version plus semantic digest. The skill push produced
-an immutable PackageRef with the same workflow lock. Complete per-instance
-package/adapter-binding pins and atomic WorkspaceLock admission remain open;
-the preceding paragraph is the target contract, not a claim that those later
-gates are closed.
+The 2026-08-04 strict cutover path is controlled by
+`ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE`. When enabled, Builder requires the
+active `skill:builder_skill` PackageRef from WorkspaceLock, loads only its
+materialized `workflow.json`, verifies definition/validation/adapter-binding
+locks, and pins package/binding identities on instances. There is no DEV or
+Python-definition fallback in that mode. Restart-safe in-flight migration and
+exact rollback use durable before/after checkpoints. The flag remains off by
+default for staged deployment and isolated compatibility tests; default rollout
+and final `prompt_state.json` projection migration remain explicit follow-up
+work.
 
 ```text
 intake -> clarification_required <-> ready
@@ -352,11 +354,12 @@ target and risk rather than by one broad keyword:
 The Prototype LLM receives no write authority over `workflow.json`. The current
 Automation slice receives the complete project source, definition ref/digest,
 validation diagnostics, governed Issue/acceptance context, and worker-side
-structural compilation. Supplying a self-contained exact ABI plus admitted
-adapter catalogue remains GWR1-27/GWR4-24 work and must not be inferred as
-complete. A valid JSON result is still only a candidate: package, policy,
-migration, conformance, release-lock, and atomic activation gates remain
-authoritative.
+structural compilation. It now also receives the self-contained workflow ABI,
+registered adapter catalogue, fail-closed role policy, graph diff, and static
+report. A valid JSON result is still only a candidate: publication runs one
+shared admission over package code/manifest, definition, validation, adapter
+binding, role policy, WorkspaceLock, and migrations before channel mutation;
+atomic activation remains authoritative.
 
 ## Development Capsule
 
@@ -763,6 +766,11 @@ Issue
 
 Evidence is linked by stable refs and digests. UI projections, chat summaries,
 Git trailers, and Yjs state must not become competing mutable copies.
+The executable trace spine carries one `turn_trace_id` and trace context through
+proposal, interaction/response, command/event, activity Run, semantic output,
+envelope, and DeliveryAttempt. Builder Run and Trial evidence also retain the
+bounded workflow metrics projection for definition complexity, context
+sufficiency, clarification/repair, retry, and action-failure rates.
 
 ## Multi-User Extension Seams
 
@@ -914,6 +922,9 @@ examples and deterministic matchers cover Prototype planning, review, and
 acceptance; a three-turn workflow story reaches `automation_ready`; and a
 no-match story proves repair without mutation. This package is trial evidence,
 not a claim that the live NLU dispatcher already uses the canonical ingress.
+Story runner v2 additionally covers dialog repair, semantic interactions,
+channel fallback, stale generation, an interleaved concurrent command, retry,
+executor unavailability, and expected negative results without live effects.
 
 Every pilot scenario-development Change must therefore follow this gate:
 
