@@ -109,6 +109,28 @@ def ping():
     assert conversation_codes == set()
 
 
+def test_skill_validation_admits_declared_conversational_package(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "conversational:",
+            "  manifest: conversational/manifest.yaml",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "conversational.manifest.missing" in {issue.code for issue in report.issues}
+
+
 def test_skill_validation_enforces_opt_in_sdk_only_imports(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

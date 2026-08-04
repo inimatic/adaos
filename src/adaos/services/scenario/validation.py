@@ -10,6 +10,7 @@ import yaml
 from jsonschema import Draft7Validator
 
 from adaos.sdk.scenarios.runtime import ActionRegistry, ScenarioModel, ScenarioRuntime, default_registry
+from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
 
 
@@ -98,6 +99,18 @@ def _skill_tools(skill_root: Path) -> set[str]:
         if name:
             tools.add(name)
     return tools
+
+
+def _dependency_operation_catalog(
+    dependency_ids: Iterable[str],
+    roots: Iterable[Path],
+) -> dict[str, tuple[str, ...]]:
+    catalog: dict[str, tuple[str, ...]] = {}
+    for dependency_id in dependency_ids:
+        skill_root, _complete = _resolve_skill_root(dependency_id, roots)
+        if skill_root is not None:
+            catalog[dependency_id] = tuple(sorted(_skill_tools(skill_root)))
+    return catalog
 
 
 def _resolve_skill_root(dependency_id: str, roots: Iterable[Path]) -> tuple[Path | None, bool]:
@@ -295,14 +308,31 @@ def validate_scenario_path(
             )
         )
 
+    roots = _dependency_roots(manifest, dependency_roots)
+    dependency_ids = _dependency_ids(payload)
+    if isinstance(payload.get("conversational"), Mapping):
+        conversational = compile_conversational_package(
+            manifest.parent,
+            manifest_name="scenario.yaml",
+            operation_catalog=_dependency_operation_catalog(dependency_ids, roots),
+        )
+        issues.extend(
+            ScenarioValidationIssue(
+                str(item.get("severity") or "error"),
+                str(item.get("code") or "conversational.invalid"),
+                str(item.get("message") or "conversational package validation failed"),
+                str(item.get("path") or "conversational"),
+            )
+            for item in conversational.validation.report.get("diagnostics") or []
+        )
+
     scenario_id = str(payload.get("id") or manifest.parent.name).strip() or manifest.parent.name
     model = ScenarioModel.from_payload(payload, fallback_id=scenario_id)
-    roots = _dependency_roots(manifest, dependency_roots)
-    registry = _registry_with_dependencies(_dependency_ids(payload), roots, issues)
+    registry = _registry_with_dependencies(dependency_ids, roots, issues)
     for message in ScenarioRuntime(registry=registry).validate(model):
         code = "scenario.route.unknown" if message.startswith("unknown route") else "scenario.steps.invalid"
         issues.append(ScenarioValidationIssue("error", code, message, "steps"))
-    issues.extend(_scenario_webui_contract_issues(manifest, _dependency_ids(payload), roots))
+    issues.extend(_scenario_webui_contract_issues(manifest, dependency_ids, roots))
 
     return ScenarioValidationReport(
         not any(issue.level == "error" for issue in issues),

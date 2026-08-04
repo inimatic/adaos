@@ -27,6 +27,7 @@ from adaos.domain.artifact_release import (
     sha256_digest,
 )
 from adaos.services.artifact_pipeline.storage import replace_with_retry
+from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
     load_manifest_bound_workflow,
@@ -345,7 +346,8 @@ def build_artifact_package(
     if kind not in _MANIFEST_BY_KIND:
         raise PackageBuildError("kind must be skill or scenario")
 
-    artifact_id, version, _ = _load_canonical_manifest(root, kind)
+    artifact_id, version, manifest_path = _load_canonical_manifest(root, kind)
+    component_manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     try:
         workflow = load_manifest_bound_workflow(
             root,
@@ -381,6 +383,26 @@ def build_artifact_package(
         if workflow is not None
         else None
     )
+    conversational_lock = None
+    if isinstance(component_manifest.get("conversational"), Mapping):
+        conversational = compile_conversational_package(
+            root,
+            manifest_name=_MANIFEST_BY_KIND[kind],
+            build_static_report=False,
+            require_operation_catalog=False,
+        )
+        if not conversational.valid or conversational.package is None:
+            diagnostics = conversational.validation.report.get("diagnostics") or []
+            detail = "; ".join(
+                f"{item.get('code')}: {item.get('message')}"
+                for item in diagnostics[:5]
+                if isinstance(item, Mapping)
+            )
+            raise PackageBuildError(f"invalid conversational package: {detail}")
+        conversational_lock = ArtifactContractLock(
+            lock_id=f"conversational:{kind}:{artifact_id}@{version}",
+            digest=conversational.package.package_digest,
+        )
     workflow_binding = None
     workflow_validation_lock = None
     workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
@@ -424,6 +446,8 @@ def build_artifact_package(
             item.to_dict() for item in workflow_adapter_locks
         ]
         package_manifest["workflow_binding_digest"] = workflow_binding["binding_digest"]
+    if conversational_lock is not None:
+        package_manifest["conversational_lock"] = conversational_lock.to_dict()
     manifest_bytes = canonical_json_bytes(package_manifest)
     manifest_digest = sha256_digest(manifest_bytes)
 
@@ -464,6 +488,7 @@ def build_artifact_package(
             build_policy_digest=PACKAGE_BUILD_POLICY_DIGEST,
             materialization_path=materialization_path,
             schema_locks=schema_locks,
+            conversational_lock=conversational_lock,
             workflow_lock=workflow_lock,
             workflow_validation_lock=workflow_validation_lock,
             workflow_adapter_locks=workflow_adapter_locks,
@@ -504,6 +529,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[dict[str, Any], bytes]:
         "schema_locks",
     }
     optional_fields = {
+        "conversational_lock",
         "workflow_lock",
         "workflow_validation_lock",
         "workflow_adapter_locks",
@@ -600,8 +626,7 @@ def _verify_artifact_package(
             expected_file_digest = str(record.get("digest") or "").strip().lower()
             if sha256_digest(raw) != expected_file_digest:
                 raise PackageVerificationError(f"package file digest mismatch: {name}")
-            if name in {*_MANIFEST_BY_KIND.values(), "workflow.json"}:
-                verified_file_bytes[name] = raw
+            verified_file_bytes[name] = raw
             if extract_to is not None:
                 destination = (extract_to / Path(name)).resolve()
                 if extract_to != destination and extract_to not in destination.parents:
@@ -638,6 +663,7 @@ def _verify_artifact_package(
         if not isinstance(source, Mapping):
             raise PackageVerificationError("package manifest source_ref must be an object")
         raw_schema_locks = package_manifest.get("schema_locks") or []
+        raw_conversational_lock = package_manifest.get("conversational_lock")
         raw_workflow_lock = package_manifest.get("workflow_lock")
         raw_workflow_validation_lock = package_manifest.get("workflow_validation_lock")
         raw_workflow_adapter_locks = package_manifest.get("workflow_adapter_locks") or []
@@ -648,6 +674,10 @@ def _verify_artifact_package(
             raise PackageVerificationError("schema_locks must be a list of objects")
         if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
             raise PackageVerificationError("workflow_lock must be an object")
+        if raw_conversational_lock is not None and not isinstance(
+            raw_conversational_lock, Mapping
+        ):
+            raise PackageVerificationError("conversational_lock must be an object")
         binding_fields = {
             "workflow_validation_lock",
             "workflow_adapter_locks",
@@ -702,6 +732,45 @@ def _verify_artifact_package(
         ):
             raise PackageVerificationError(
                 "package workflow_lock does not match packaged workflow definition"
+            )
+        expected_conversational_lock = None
+        if isinstance(manifest_payload.get("conversational"), Mapping):
+            with tempfile.TemporaryDirectory(prefix="adaos-conversational-verify-") as temp:
+                verification_root = Path(temp).resolve()
+                for name, raw in verified_file_bytes.items():
+                    destination = (verification_root / Path(name)).resolve()
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(raw)
+                conversational = compile_conversational_package(
+                    verification_root,
+                    manifest_name=manifest_name,
+                    build_static_report=False,
+                    require_operation_catalog=False,
+                )
+            if not conversational.valid or conversational.package is None:
+                diagnostics = conversational.validation.report.get("diagnostics") or []
+                detail = "; ".join(
+                    f"{item.get('code')}: {item.get('message')}"
+                    for item in diagnostics[:5]
+                    if isinstance(item, Mapping)
+                )
+                raise PackageVerificationError(
+                    f"invalid packaged conversational contract: {detail}"
+                )
+            expected_conversational_lock = ArtifactContractLock(
+                lock_id=(
+                    f"conversational:{package_manifest.get('kind')}:"
+                    f"{package_manifest.get('artifact_id')}@{package_manifest.get('version')}"
+                ),
+                digest=conversational.package.package_digest,
+            )
+        if raw_conversational_lock != (
+            expected_conversational_lock.to_dict()
+            if expected_conversational_lock is not None
+            else None
+        ):
+            raise PackageVerificationError(
+                "package conversational_lock does not match packaged conversational sources"
             )
         expected_workflow_validation_lock = None
         expected_workflow_binding = None
@@ -759,6 +828,7 @@ def _verify_artifact_package(
                 schema_locks=tuple(
                     ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
                 ),
+                conversational_lock=expected_conversational_lock,
                 workflow_lock=expected_workflow_lock,
                 workflow_validation_lock=expected_workflow_validation_lock,
                 workflow_adapter_locks=expected_workflow_adapter_locks,

@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from adaos.domain.artifact_release import (
     ArtifactSourceRef,
@@ -54,6 +55,90 @@ def _scenario(root: Path) -> Path:
     (scenario / "ui_revisions" / "001.json").write_text('{}\n', encoding="utf-8")
     (scenario / "__pycache__" / "generated.pyc").write_bytes(b"cache")
     return scenario
+
+
+def _add_empty_conversational_package(scenario: Path) -> None:
+    manifest_path = scenario / "scenario.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["conversational"] = {"manifest": "conversational/manifest.yaml"}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    package = scenario / "conversational"
+    package.mkdir()
+    sources = {
+        "manifest.yaml": {
+            "schema": "adaos.conversational.package_manifest.v1",
+            "package_id": "recipes",
+            "package_kind": "scenario",
+            "owner_ref": {"kind": "scenario", "id": "recipes"},
+            "version": "1.2.3",
+            "workflow_refs": [],
+            "files": {
+                "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
+                "affordances": "affordances.yaml",
+                "repair": "repair.yaml",
+                "output": "output.yaml",
+                "stories": [],
+                "locales": ["locale.en.yaml"],
+            },
+            "locales": ["en"],
+            "privacy_defaults": {
+                "source_scope": "scenario",
+                "runtime_overlay_scope": "user",
+                "public_promotion": "requires_review",
+            },
+            "compiled_outputs": [],
+            "compatibility_aliases": [],
+        },
+        "input.yaml": {
+            "schema": "adaos.conversational.input.v1",
+            "package_id": "recipes",
+            "intents": [],
+            "policy": {
+                "default_confidence": 0.8,
+                "abstain_below": 0.5,
+                "protected_action_confirmation": True,
+            },
+        },
+        "entities.yaml": {
+            "schema": "adaos.conversational.entities.v1",
+            "package_id": "recipes",
+            "entities": [],
+        },
+        "examples.yaml": {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "recipes",
+            "examples": [],
+            "hard_negatives": [],
+        },
+        "affordances.yaml": {
+            "schema": "adaos.conversational.affordances.v1",
+            "package_id": "recipes",
+            "affordances": [],
+        },
+        "repair.yaml": {
+            "schema": "adaos.conversational.repair.v1",
+            "package_id": "recipes",
+            "policies": [],
+        },
+        "output.yaml": {
+            "schema": "adaos.conversational.output.v1",
+            "package_id": "recipes",
+            "outputs": [],
+        },
+        "locale.en.yaml": {
+            "schema": "adaos.conversational.locale.v1",
+            "package_id": "recipes",
+            "locale": "en",
+            "messages": {},
+        },
+    }
+    for name, value in sources.items():
+        (package / name).write_text(
+            yaml.safe_dump(value, sort_keys=False),
+            encoding="utf-8",
+        )
 
 
 def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -> None:
@@ -105,6 +190,21 @@ def test_package_persists_builder_target_and_packaged_schema_identity(tmp_path: 
     assert verified.package_manifest["schema_locks"] == [
         built.ref.schema_locks[0].to_dict()
     ]
+
+
+def test_package_locks_and_revalidates_conversational_sources(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _add_empty_conversational_package(scenario)
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.conversational_lock is not None
+    assert built.ref.conversational_lock.lock_id == "conversational:scenario:recipes@1.2.3"
+    assert built.package_manifest["conversational_lock"] == (
+        built.ref.conversational_lock.to_dict()
+    )
+    assert verified.ref == built.ref
 
 
 def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path) -> None:

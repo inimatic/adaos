@@ -321,6 +321,7 @@ class ArtifactPackageRef:
     build_policy_digest: str | None = None
     materialization_path: str | None = None
     schema_locks: tuple[ArtifactContractLock, ...] = ()
+    conversational_lock: ArtifactContractLock | None = None
     workflow_lock: ArtifactContractLock | None = None
     workflow_validation_lock: ArtifactContractLock | None = None
     workflow_adapter_locks: tuple[WorkflowAdapterLock, ...] = ()
@@ -363,6 +364,19 @@ class ArtifactPackageRef:
             "schema_locks",
             _unique_locks(self.schema_locks, field="package schema"),
         )
+        if self.conversational_lock is not None:
+            if self.builder_id is None:
+                raise ArtifactReleaseContractError(
+                    "conversational_lock requires builder attestation"
+                )
+            if not isinstance(self.conversational_lock, ArtifactContractLock):
+                raise ArtifactReleaseContractError(
+                    "conversational_lock must be an ArtifactContractLock"
+                )
+            if not self.conversational_lock.lock_id.startswith("conversational:"):
+                raise ArtifactReleaseContractError(
+                    "conversational_lock id must start with conversational:"
+                )
         if self.workflow_lock is not None:
             if self.builder_id is None:
                 raise ArtifactReleaseContractError("workflow_lock requires builder attestation")
@@ -431,6 +445,8 @@ class ArtifactPackageRef:
             )
         if self.workflow_lock is not None:
             payload["workflow_lock"] = self.workflow_lock.to_dict()
+        if self.conversational_lock is not None:
+            payload["conversational_lock"] = self.conversational_lock.to_dict()
         if self.workflow_validation_lock is not None:
             payload["workflow_validation_lock"] = self.workflow_validation_lock.to_dict()
             payload["workflow_adapter_locks"] = [
@@ -456,6 +472,7 @@ class ArtifactPackageRef:
                 "build_policy_digest",
                 "materialization_path",
                 "schema_locks",
+                "conversational_lock",
                 "workflow_lock",
                 "workflow_validation_lock",
                 "workflow_adapter_locks",
@@ -487,6 +504,7 @@ class ArtifactPackageRef:
                 "PackageRef builder attestation fields must be supplied together"
             )
         raw_schema_locks = value.get("schema_locks") or []
+        raw_conversational_lock = value.get("conversational_lock")
         raw_workflow_lock = value.get("workflow_lock")
         raw_workflow_validation_lock = value.get("workflow_validation_lock")
         raw_workflow_adapter_locks = value.get("workflow_adapter_locks") or []
@@ -496,6 +514,10 @@ class ArtifactPackageRef:
             raise ArtifactReleaseContractError("schema_locks must be a list of objects")
         if raw_workflow_lock is not None and not isinstance(raw_workflow_lock, Mapping):
             raise ArtifactReleaseContractError("workflow_lock must be an object")
+        if raw_conversational_lock is not None and not isinstance(
+            raw_conversational_lock, Mapping
+        ):
+            raise ArtifactReleaseContractError("conversational_lock must be an object")
         if raw_workflow_validation_lock is not None and not isinstance(
             raw_workflow_validation_lock, Mapping
         ):
@@ -516,6 +538,11 @@ class ArtifactPackageRef:
             materialization_path=value.get("materialization_path"),
             schema_locks=tuple(
                 ArtifactContractLock.from_mapping(item) for item in raw_schema_locks
+            ),
+            conversational_lock=(
+                ArtifactContractLock.from_mapping(raw_conversational_lock)
+                if isinstance(raw_conversational_lock, Mapping)
+                else None
             ),
             workflow_lock=(
                 ArtifactContractLock.from_mapping(raw_workflow_lock)

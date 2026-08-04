@@ -300,6 +300,7 @@ def _cross_check_package(
     locale_sources: Sequence[Mapping[str, Any]],
     workflow_artifact: WorkflowDefinitionArtifact | None,
     operation_catalog: Mapping[str, Sequence[str]],
+    require_operation_catalog: bool,
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     package_id = str(manifest.get("package_id") or "").strip()
@@ -519,7 +520,7 @@ def _cross_check_package(
         invocation = dict(affordance.get("skill_invocation") or {})
         skill_id = str(invocation.get("skill_id") or "")
         operation_id = str(invocation.get("operation_id") or "")
-        if skill_id not in normalized_catalog:
+        if skill_id not in normalized_catalog and require_operation_catalog:
             diagnostics.append(
                 _diagnostic(
                     "conversational.affordance.skill_unknown",
@@ -527,7 +528,7 @@ def _cross_check_package(
                     f"affordance references skill without an admitted operation catalog: {skill_id}",
                 )
             )
-        elif operation_id not in normalized_catalog[skill_id]:
+        elif skill_id in normalized_catalog and operation_id not in normalized_catalog[skill_id]:
             diagnostics.append(
                 _diagnostic(
                     "conversational.affordance.operation_unknown",
@@ -1476,6 +1477,7 @@ def validate_conversational_package(
     run_stories: bool = True,
     workflow_artifact: WorkflowDefinitionArtifact | None = None,
     operation_catalog: Mapping[str, Sequence[str]] | None = None,
+    require_operation_catalog: bool = True,
 ) -> ConversationalValidationResult:
     root = Path(artifact_root).expanduser().resolve()
     package_dir = root / CONVERSATIONAL_DIR
@@ -1689,6 +1691,7 @@ def validate_conversational_package(
             locale_sources=locale_sources,
             workflow_artifact=workflow_artifact,
             operation_catalog=admitted_operation_catalog,
+            require_operation_catalog=require_operation_catalog,
         )
     )
 

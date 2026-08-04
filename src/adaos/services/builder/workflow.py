@@ -43,6 +43,7 @@ from adaos.services.builder.project_aggregate import (
     set_focus,
 )
 from adaos.services.conversation_interactions import interaction_from_workflow_description
+from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.governed_workflow import CompiledWorkflowDefinition
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
@@ -2709,6 +2710,100 @@ class BuilderWorkflowService:
                     "statechart_edge_count": len(static_review["statechart"]["edges"]),
                     "coverage": copy.deepcopy(static_review["coverage"]),
                 }
+            conversational_definition: dict[str, Any] = {
+                "status": "missing",
+                "manifest_ref": "conversational/manifest.yaml",
+                "package_digest": None,
+                "valid": None,
+                "metrics": {},
+                "diagnostics": [],
+                "story_reports": [],
+                "static_report": None,
+            }
+            if isinstance(manifest.get("conversational"), Mapping):
+                operation_catalog: dict[str, tuple[str, ...]] = {}
+                for dependency in dependencies:
+                    dependency_root = self.dev_skills_root / dependency
+                    dependency_manifest = dependency_root / "skill.yaml"
+                    if not dependency_manifest.is_file():
+                        continue
+                    try:
+                        dependency_payload = yaml.safe_load(
+                            dependency_manifest.read_text(encoding="utf-8-sig")
+                        ) or {}
+                    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                        continue
+                    if not isinstance(dependency_payload, Mapping):
+                        continue
+                    operations = [
+                        str(item.get("name") or "").strip()
+                        for item in dependency_payload.get("tools") or []
+                        if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+                    ]
+                    exports = (
+                        dependency_payload.get("exports")
+                        if isinstance(dependency_payload.get("exports"), Mapping)
+                        else {}
+                    )
+                    operations.extend(
+                        str(item.get("name") if isinstance(item, Mapping) else item).strip()
+                        for item in dict(exports).get("tools") or []
+                        if str(item.get("name") if isinstance(item, Mapping) else item).strip()
+                    )
+                    operation_catalog[dependency] = tuple(sorted(set(operations)))
+                try:
+                    conversational_result = compile_conversational_package(
+                        root,
+                        manifest_name=manifest_name,
+                        operation_catalog=operation_catalog,
+                    )
+                except Exception as exc:
+                    conversational_definition.update(
+                        {
+                            "status": "ambiguous",
+                            "valid": False,
+                            "diagnostics": [
+                                {
+                                    "code": "conversational.pipeline.failed",
+                                    "severity": "error",
+                                    "path": "conversational",
+                                    "message": f"{type(exc).__name__}: {exc}",
+                                }
+                            ],
+                        }
+                    )
+                else:
+                    validation_report = conversational_result.validation.report
+                    static_report = conversational_result.static_report
+                    conversational_definition.update(
+                        {
+                            "status": "present" if conversational_result.valid else "ambiguous",
+                            "package_digest": validation_report.get("package_digest"),
+                            "valid": conversational_result.valid,
+                            "metrics": copy.deepcopy(validation_report.get("metrics") or {}),
+                            "diagnostics": copy.deepcopy(
+                                list(validation_report.get("diagnostics") or [])[:50]
+                            ),
+                            "story_reports": [
+                                {
+                                    "story_id": item.get("story_id"),
+                                    "valid": item.get("valid"),
+                                    "steps": item.get("steps"),
+                                    "final_state": item.get("final_state"),
+                                }
+                                for item in validation_report.get("story_reports") or []
+                                if isinstance(item, Mapping)
+                            ][:50],
+                            "static_report": None
+                            if static_report is None
+                            else {
+                                "schema": static_report.get("schema"),
+                                "report_digest": _stable_digest(static_report),
+                                "definition_digest": static_report.get("definition_digest"),
+                                "coverage": copy.deepcopy(static_report.get("coverage") or {}),
+                            },
+                        }
+                    )
             facets: dict[str, Any] = {
                 "target_structure": target_structure,
                 "abi": {
@@ -2721,6 +2816,7 @@ class BuilderWorkflowService:
                 "constraints": constraints,
                 "data_policy": data_policy,
                 "workflow_definition": workflow_definition,
+                "conversational_definition": conversational_definition,
                 "execution_authority": {
                     "status": "present" if selected_paths else "missing",
                     "allowed_paths": selected_paths,
