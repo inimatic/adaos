@@ -2909,6 +2909,12 @@ class RootDeveloperService:
             _write_manifest(manifest_path, data)
             if kind != "scenarios":
                 break
+        if manifest_meta is not None:
+            conversational_manifest = target / "conversational" / "manifest.yaml"
+            if conversational_manifest.is_file():
+                conversational_data = _load_manifest(conversational_manifest)
+                conversational_data["version"] = manifest_meta.get("version")
+                _write_manifest(conversational_manifest, conversational_data)
         return manifest_meta
 
     def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
@@ -3244,6 +3250,9 @@ class RootDeveloperService:
             source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
             workspace / "registry.json",
         ]
+        conversational_manifest = source / "conversational" / "manifest.yaml"
+        if conversational_manifest.is_file():
+            rollback_paths.append(conversational_manifest)
         if kind == "scenarios":
             rollback_paths.append(source / "scenario.json")
             rollback_paths.append(source / "webui.json")

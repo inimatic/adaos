@@ -1923,6 +1923,42 @@ def validate_conversational_package(
                 )
             )
 
+    if component_manifest and manifest:
+        component_kind = "skill" if manifest_name == "skill.yaml" else "scenario"
+        component_id = str(
+            component_manifest.get("name")
+            if component_kind == "skill"
+            else component_manifest.get("id")
+        ).strip()
+        component_version = str(component_manifest.get("version") or "").strip()
+        package_id = str(manifest.get("package_id") or "").strip()
+        package_kind = str(manifest.get("package_kind") or "").strip()
+        package_version = str(manifest.get("version") or "").strip()
+        if component_id and package_id != component_id:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.component_identity.mismatch",
+                    "conversational/manifest.yaml.package_id",
+                    f"conversational package_id {package_id!r} does not match component id {component_id!r}",
+                )
+            )
+        if package_kind != component_kind:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.component_kind.mismatch",
+                    "conversational/manifest.yaml.package_kind",
+                    f"conversational package_kind {package_kind!r} does not match component kind {component_kind!r}",
+                )
+            )
+        if component_version and package_version != component_version:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.component_version.mismatch",
+                    "conversational/manifest.yaml.version",
+                    f"conversational version {package_version!r} does not match component version {component_version!r}",
+                )
+            )
+
     files = dict(manifest.get("files") or {})
     source_specs = [
         ("input", str(files.get("input") or "input.yaml"), INPUT_SCHEMA),

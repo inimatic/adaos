@@ -440,6 +440,21 @@ def test_conversational_package_validates_and_runs_story_with_mocked_activity(tm
     assert timeline[0]["output"]["response_envelope_ref"] is None
 
 
+def test_conversational_package_rejects_component_version_drift(tmp_path: Path) -> None:
+    _write_package(tmp_path)
+    manifest_path = tmp_path / "conversational" / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["version"] = "0.2.0"
+    _write_yaml(manifest_path, manifest)
+
+    result = validate_conversational_package(tmp_path, manifest_name="skill.yaml")
+
+    assert result.report["valid"] is False
+    assert "conversational.component_version.mismatch" in {
+        item["code"] for item in result.report["diagnostics"]
+    }
+
+
 def test_conversational_package_validates_optional_deterministic_matchers(tmp_path: Path) -> None:
     _write_package(tmp_path)
     manifest_path = tmp_path / "conversational" / "manifest.yaml"

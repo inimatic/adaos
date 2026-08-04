@@ -596,6 +596,37 @@ def test_root_dev_scenario_manifest_update_only_updates_scenario_yaml(tmp_path: 
     assert json_payload == {"id": "builder_scene", "name": "builder_scene", "version": "0.1.0", "ui": {"application": {}}}
 
 
+def test_root_dev_skill_manifest_update_keeps_conversational_version_atomic(tmp_path: Path) -> None:
+    target = tmp_path / "skills" / "builder_skill"
+    conversational = target / "conversational"
+    conversational.mkdir(parents=True)
+    (target / "skill.yaml").write_text(
+        "name: builder_skill\nversion: 0.3.40\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    (conversational / "manifest.yaml").write_text(
+        "schema: adaos.conversational.package_manifest.v1\npackage_id: builder_skill\npackage_kind: skill\nversion: 0.3.40\n",
+        encoding="utf-8",
+    )
+    service = object.__new__(RootDeveloperService)
+
+    metadata = service._update_manifest(
+        "skills",
+        target,
+        "builder_skill",
+        None,
+        version_bump_index=2,
+        set_prototype=False,
+    )
+
+    skill_manifest = yaml.safe_load((target / "skill.yaml").read_text(encoding="utf-8"))
+    package_manifest = yaml.safe_load(
+        (conversational / "manifest.yaml").read_text(encoding="utf-8")
+    )
+    assert metadata["version"] == "0.3.41"
+    assert skill_manifest["version"] == package_manifest["version"] == "0.3.41"
+
+
 def test_root_dev_scenario_create_rewrites_the_complete_default_template(tmp_path: Path) -> None:
     template = (
         Path(__file__).resolve().parents[1]
