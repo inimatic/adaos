@@ -132,8 +132,11 @@ already selected.
   [Governed Workflow Runtime Inventory](governed-workflow-runtime-inventory.md)
   and classifies each surface as canonical workflow, separate canonical model,
   compatibility, projection/evidence, or open reliability gap.
-- [ ] `[could]` `GWR0-07` Produce diagrams generated from the future canonical
-  workflow definitions for architecture review.
+- [x] `[could]` `GWR0-07` Produce diagrams generated from the future canonical
+  workflow definitions for architecture review. `workflow_static_report_markdown`
+  renders the validated `adaos.workflow.static_report.v1` projection as
+  Markdown with a Mermaid statechart; the developer SDK can export that
+  evidence beside the JSON validation/static reports.
 - [x] `[deferred]` `GWR0-08` Do not harmonize all historical documentation in
   this milestone; update owning documents only as implementation reaches them.
 - [x] `[must]` `GWR0-09` Add a cross-document decision map linking shared
@@ -780,6 +783,9 @@ story summaries, and state/command/transition/output coverage.
   `conversational_package_static_report` generate non-authoritative statechart,
   definition review, conformance, story summary, and coverage sections from
   compiled workflow and package sources while omitting exact chat prose.
+  `workflow_static_report_markdown` adds a human-readable Markdown/Mermaid
+  projection, and `adaos.sdk.developer.conversational.export_package` writes
+  validation JSON, static-report JSON, and Markdown review evidence together.
 - [x] `[should]` `GWR5-34` Preserve trace identity across turn, proposal,
   dialog frame, interaction, response, command, workflow event, Run/activity,
   semantic output, and delivery attempt. The first proof ABI is

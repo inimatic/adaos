@@ -618,7 +618,9 @@ for their detailed gates and evidence.
   `compile_conversational_package` pipeline returns validation evidence plus
   `adaos.workflow.static_report.v1`; Builder context packets, skill/scenario
   validators, and `adaos.sdk.developer.conversational.compile_package` use the
-  same source.
+  same source. `adaos.sdk.developer.conversational.export_package` additionally
+  writes validation JSON, static-report JSON, and Markdown/Mermaid review
+  evidence without making Markdown authoritative.
 - [ ] `[should]` Add coverage metrics over workflow paths, dialog repair paths,
   output kinds, risky actions, locales, and channel fallbacks.
 - [ ] `[should]` Add conversational threat-model checks for prompt injection,

@@ -668,6 +668,9 @@ Authoring and activation add records around, not inside, the pure definition:
   definition review, generated conformance cases, story summaries, and
   state/command/transition/output coverage. Story summaries intentionally keep
   semantic command/output/correlation evidence and omit exact user prose.
+  `workflow_static_report_markdown` can render the same validated projection as
+  Markdown with a Mermaid statechart for human review; the JSON report remains
+  the authoritative machine-readable evidence.
 - `adaos.workflow.metrics_report.v1` records the measured proof surface:
   definition complexity, governed context sufficiency, conversation-story
   outcomes, current/legacy cycle-time probes, diagnosis effort, and signed

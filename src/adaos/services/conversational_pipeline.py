@@ -12,7 +12,10 @@ from adaos.services.conversational_artifacts import (
     ConversationalValidationResult,
     validate_conversational_package,
 )
-from adaos.services.workflow_static_reports import conversational_package_static_report
+from adaos.services.workflow_static_reports import (
+    conversational_package_static_report,
+    workflow_static_report_markdown,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,7 @@ class ConversationalPipelineResult:
 
     validation: ConversationalValidationResult
     static_report: dict[str, Any] | None
+    static_markdown: str | None
 
     @property
     def valid(self) -> bool:
@@ -35,6 +39,7 @@ class ConversationalPipelineResult:
             "valid": self.valid,
             "validation_report": copy.deepcopy(self.validation.report),
             "static_report": copy.deepcopy(self.static_report),
+            "static_markdown": self.static_markdown,
         }
 
 
@@ -58,12 +63,18 @@ def compile_conversational_package(
     )
     package = validation.package
     static_report = None
+    static_markdown = None
     if build_static_report and package is not None and package.workflow_artifact is not None:
         static_report = conversational_package_static_report(
             package,
             validation_result=validation,
         )
-    return ConversationalPipelineResult(validation=validation, static_report=static_report)
+        static_markdown = workflow_static_report_markdown(static_report)
+    return ConversationalPipelineResult(
+        validation=validation,
+        static_report=static_report,
+        static_markdown=static_markdown,
+    )
 
 
 __all__ = [

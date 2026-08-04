@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -277,8 +278,130 @@ def conversational_package_static_report(
     )
 
 
+def _markdown_cell(value: Any) -> str:
+    return str(value if value not in (None, "") else "-").replace("|", "\\|").replace("\n", " ")
+
+
+def workflow_static_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a human-readable, non-authoritative projection of a static report."""
+
+    value = copy.deepcopy(dict(report))
+    validate_workflow_record(WORKFLOW_STATIC_REPORT_SCHEMA, value)
+    statechart = dict(value.get("statechart") or {})
+    states = [dict(item) for item in statechart.get("states") or [] if isinstance(item, Mapping)]
+    edges = [dict(item) for item in statechart.get("edges") or [] if isinstance(item, Mapping)]
+    node_ids = {str(item.get("id")): f"state_{index}" for index, item in enumerate(states)}
+    terminal_states = set(dict(value.get("definition_review") or {}).get("terminal_states") or [])
+
+    lines = [
+        f"# Workflow {value['workflow_type']}",
+        "",
+        "> Generated projection for review. `workflow.json` and the admitted package remain authoritative.",
+        "",
+        f"- Definition version: `{value['definition_version']}`",
+        f"- Definition digest: `{value['definition_digest']}`",
+        f"- Package: `{value.get('package_id') or 'none'}`",
+        f"- Package digest: `{value.get('package_digest') or 'none'}`",
+        f"- Generated at: `{value['generated_at']}`",
+        "",
+        "## Statechart",
+        "",
+        "```mermaid",
+        "flowchart LR",
+    ]
+    for state in states:
+        state_id = str(state.get("id") or "state")
+        label = f"{state_id} (terminal)" if state_id in terminal_states else state_id
+        lines.append(f"  {node_ids[state_id]}[{json.dumps(label, ensure_ascii=True)}]")
+    for edge in edges:
+        target = node_ids.get(str(edge.get("target") or ""))
+        if target is None:
+            continue
+        label = f"{edge.get('command')} / {edge.get('transition_id')}"
+        for source_id in edge.get("source") or []:
+            source = node_ids.get(str(source_id))
+            if source is not None:
+                lines.append(f"  {source} -->|{label}| {target}")
+    lines.extend(["```", "", "## Coverage", ""])
+
+    coverage = dict(value.get("coverage") or {})
+    lines.extend(
+        [
+            "| Surface | Covered | Declared | Missing |",
+            "| --- | ---: | ---: | --- |",
+            (
+                f"| States | {len(coverage.get('states_covered_by_stories') or [])} | "
+                f"{coverage.get('state_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('states_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Transitions | {len(coverage.get('transitions_covered_by_stories') or [])} | "
+                f"{coverage.get('transition_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('transitions_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Commands | {len(coverage.get('commands_covered_by_stories') or [])} | "
+                f"{coverage.get('command_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('commands_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Outputs | {len(coverage.get('outputs_covered_by_stories') or [])} | "
+                f"{len(coverage.get('outputs_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('outputs_missing_story_coverage') or []))} |"
+            ),
+            "",
+            "## Conversation Stories",
+            "",
+        ]
+    )
+    stories = [dict(item) for item in value.get("story_reports") or [] if isinstance(item, Mapping)]
+    if not stories:
+        lines.append("No conversation stories were included.")
+    for story in stories:
+        status = "PASS" if story.get("valid") is True else "FAIL"
+        lines.extend(
+            [
+                f"### {story.get('story_id')} [{status}]",
+                "",
+                f"Final state: `{story.get('final_state') or 'none'}`",
+                "",
+                "| Step | Command | Transition | State | Output |",
+                "| ---: | --- | --- | --- | --- |",
+            ]
+        )
+        for item in story.get("timeline") or []:
+            if not isinstance(item, Mapping):
+                continue
+            output = dict(item.get("output") or {})
+            state_path = f"{item.get('before_state') or '-'} -> {item.get('after_state') or '-'}"
+            output_label = output.get("source_output_ref") or output.get("kind") or "-"
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        _markdown_cell(item.get("step")),
+                        _markdown_cell(item.get("command")),
+                        _markdown_cell(item.get("transition_id")),
+                        _markdown_cell(state_path),
+                        _markdown_cell(output_label),
+                    )
+                )
+                + " |"
+            )
+        diagnostics = [dict(item) for item in story.get("diagnostics") or [] if isinstance(item, Mapping)]
+        if diagnostics:
+            lines.extend(["", "Diagnostics:"])
+            for diagnostic in diagnostics:
+                lines.append(
+                    f"- `{diagnostic.get('code')}` at `{diagnostic.get('path')}`: {diagnostic.get('message')}"
+                )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 __all__ = [
     "WORKFLOW_STATIC_REPORT_SCHEMA",
     "conversational_package_static_report",
+    "workflow_static_report_markdown",
     "workflow_static_report",
 ]

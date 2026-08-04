@@ -927,8 +927,11 @@ Conversational artifacts and learning:
 - [ ] `[must]` Preserve conversational trace continuity from user turn through
   proposal, dialog/interaction, workflow command, Run/activity, semantic
   output, and delivery attempt in Builder evidence.
-- [ ] `[should]` Generate static workflow/statechart and conversation-story
-  reports for Builder review, model context, and trial evidence.
+- [x] `[should]` Generate static workflow/statechart and conversation-story
+  reports for Builder review, model context, and trial evidence. The shared
+  conversational pipeline now returns validation JSON plus
+  `adaos.workflow.static_report.v1`; the developer SDK can export both JSON
+  reports and a Markdown/Mermaid human-review projection.
 - [ ] `[should]` Add conversational threat-model checks for prompt injection in
   descriptors/stories, alias hijacking, private-data promotion, output/action
   mismatch, and MCP scope confusion.

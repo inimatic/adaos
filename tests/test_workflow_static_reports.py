@@ -14,6 +14,7 @@ from adaos.services.governed_workflow import (
 )
 from adaos.services.workflow_static_reports import (
     conversational_package_static_report,
+    workflow_static_report_markdown,
     workflow_static_report,
 )
 
@@ -415,3 +416,9 @@ def test_conversational_package_static_report_covers_story_without_chat_prose(tm
     assert report["coverage"]["outputs_missing_story_coverage"] == ["repair_no_match"]
     assert report["story_reports"][0]["timeline"][0]["output"]["workflow_event_id"]
     assert "approve it" not in json.dumps(report, ensure_ascii=False)
+
+    markdown = workflow_static_report_markdown(report)
+    assert "```mermaid" in markdown
+    assert "|approve / approve_prototype|" in markdown
+    assert "builder.approve.en.happy_path [PASS]" in markdown
+    assert "prototype -> automation" in markdown
