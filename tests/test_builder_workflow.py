@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from adaos.services.builder.governed import builder_change_definition
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService, _replace_path
 
 
@@ -38,6 +39,107 @@ def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
         dev_scenarios_root=scenarios,
         state_dir=tmp_path / "state",
     ), root
+
+
+def _write_json_yaml(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def _write_minimal_conversational_package(root: Path) -> None:
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    (root / "workflow.json").write_text(json.dumps(builder_change_definition()), encoding="utf-8")
+    conv = root / "conversational"
+    _write_json_yaml(
+        conv / "manifest.yaml",
+        {
+            "schema": "adaos.conversational.package_manifest.v1",
+            "package_id": "recipes",
+            "package_kind": "scenario",
+            "owner_ref": {"kind": "scenario", "id": "recipes"},
+            "version": "0.1.0",
+            "workflow_refs": [
+                {
+                    "workflow_type": "builder.change",
+                    "definition_ref": "../workflow.json",
+                    "definition_version": "1.0.0",
+                    "definition_digest": None,
+                }
+            ],
+            "files": {
+                "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
+                "affordances": "affordances.yaml",
+                "repair": "repair.yaml",
+                "output": "output.yaml",
+                "stories": [],
+                "locales": ["locale.en.yaml"],
+            },
+            "locales": ["en"],
+            "privacy_defaults": {
+                "source_scope": "scenario",
+                "runtime_overlay_scope": "user",
+                "public_promotion": "requires_review",
+            },
+            "compiled_outputs": [],
+            "compatibility_aliases": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "input.yaml",
+        {
+            "schema": "adaos.conversational.input.v1",
+            "package_id": "recipes",
+            "intents": [],
+            "policy": {
+                "default_confidence": 0.8,
+                "abstain_below": 0.55,
+                "protected_action_confirmation": True,
+            },
+        },
+    )
+    _write_json_yaml(
+        conv / "entities.yaml",
+        {"schema": "adaos.conversational.entities.v1", "package_id": "recipes", "entities": []},
+    )
+    _write_json_yaml(
+        conv / "examples.yaml",
+        {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "recipes",
+            "examples": [],
+            "hard_negatives": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "affordances.yaml",
+        {
+            "schema": "adaos.conversational.affordances.v1",
+            "package_id": "recipes",
+            "affordances": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "repair.yaml",
+        {"schema": "adaos.conversational.repair.v1", "package_id": "recipes", "policies": []},
+    )
+    _write_json_yaml(
+        conv / "output.yaml",
+        {"schema": "adaos.conversational.output.v1", "package_id": "recipes", "outputs": []},
+    )
+    _write_json_yaml(
+        conv / "locale.en.yaml",
+        {
+            "schema": "adaos.conversational.locale.v1",
+            "package_id": "recipes",
+            "locale": "en",
+            "messages": {},
+        },
+    )
 
 
 def test_atomic_replace_retries_transient_windows_lock(monkeypatch, tmp_path: Path) -> None:
@@ -255,6 +357,42 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
     assert packet["facets"]["workflow_definition"]["status"] == "missing"
     assert packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
     assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
+
+
+def test_context_packet_surfaces_valid_conversational_static_report(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    _write_minimal_conversational_package(root)
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-conversation-valid",
+            "request": "Admit the conversation package.",
+            "issues": [
+                {
+                    "issue_id": "conversation",
+                    "title": "Admit the conversation package",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The package passes admission."],
+                }
+            ],
+        },
+    )
+
+    packet = service.build_context_packet("scenario", "recipes")
+
+    workflow_facet = packet["facets"]["workflow_definition"]
+    conversational_facet = packet["facets"]["conversational_definition"]
+    assert conversational_facet["status"] == "present"
+    assert conversational_facet["valid"] is True
+    assert conversational_facet["diagnostics"] == []
+    assert conversational_facet["package_digest"].startswith("sha256:")
+    assert conversational_facet["static_report"]["schema"] == "adaos.workflow.static_report.v1"
+    assert conversational_facet["static_report"]["definition_digest"] == workflow_facet["definition_digest"]
+    assert conversational_facet["static_report"]["coverage"]["states_declared"]
 
 
 def test_change_set_routes_interface_work_through_prototype_first(

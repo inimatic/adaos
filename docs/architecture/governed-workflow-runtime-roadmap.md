@@ -589,7 +589,11 @@ tests cover all legal and representative illegal paths.
   carry stable workflow authoring ABI digests, the registered adapter catalogue,
   default fail-closed role policy, validation `graph_diff`, and a static review
   summary derived from `adaos.workflow.static_report.v1`; Codex task projection
-  retains that facet through the governed context packet. Publication-lock proof
+  retains that facet through the governed context packet. The shared
+  `compile_conversational_package` pipeline now runs from Builder context
+  packets, skill validation, scenario validation, and the developer SDK; context
+  facets expose conversational package digest, validation diagnostics, bounded
+  story summaries, and static workflow-story coverage. Publication-lock proof
   keeps this item open.
 - [x] `[must]` `GWR4-25` Route workflow-definition corrections to the isolated
   Automation/Codex lane while keeping visual process-layout requests in

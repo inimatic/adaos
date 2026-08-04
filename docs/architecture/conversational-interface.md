@@ -489,6 +489,14 @@ Executors receive this bounded context packet. They may propose source patches,
 tests, or migration code, but they may not read unbounded conversation history
 or mutate runtime learning stores directly.
 
+Design-time package admission is shared by Builder, skill/scenario validation,
+and the developer SDK through `compile_conversational_package`. The pipeline
+validates source files, runs deterministic story tests when requested, and
+projects `adaos.workflow.static_report.v1` without provider calls. Builder
+context packets surface the package digest, validation diagnostics, bounded
+story summaries, and static workflow-story coverage so an executor repairs
+source artifacts against the same evidence that publication will later check.
+
 ## Observability, Safety, And Evaluation
 
 The conversational control plane needs trace continuity across domains. A single
@@ -579,8 +587,12 @@ for their detailed gates and evidence.
 
 ### Should
 
-- [ ] `[should]` Generate static workflow/statechart and conversation-story
-  reports from the package for human review and model context.
+- [x] `[should]` Generate static workflow/statechart and conversation-story
+  reports from the package for human review and model context. The shared
+  `compile_conversational_package` pipeline returns validation evidence plus
+  `adaos.workflow.static_report.v1`; Builder context packets, skill/scenario
+  validators, and `adaos.sdk.developer.conversational.compile_package` use the
+  same source.
 - [ ] `[should]` Add coverage metrics over workflow paths, dialog repair paths,
   output kinds, risky actions, locales, and channel fallbacks.
 - [ ] `[should]` Add conversational threat-model checks for prompt injection,
