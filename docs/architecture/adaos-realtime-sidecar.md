@@ -212,6 +212,11 @@ Success criteria:
   timer can insert `PING\r\n` inside a fragmented `PUB` payload and invalidate
   its declared size. Runtime-owned NATS keepalive and WebSocket control
   ping/pong provide liveness without modifying the relayed byte stream.
+- [x] `[must]` Request graceful sidecar process shutdown before forced
+  termination. Managed restart gives each live relay time to close its remote
+  WebSocket with a close frame; the peer must not observe synthetic `1006`
+  merely because an operator requested a restart. Forced termination remains
+  a bounded fallback when the child does not acknowledge the shutdown signal.
 - [x] `[must]` Keep the hub-root bridge supervisor alive when a child transport
   cleanup surfaces `CancelledError`, while still propagating cancellation
   requested by shutdown or an explicit rearm.

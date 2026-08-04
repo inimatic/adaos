@@ -159,6 +159,12 @@ transport-only `/ws` and `/yws` handoff as ready.
   could be queued between TCP fragments of the same `PUB` payload, adding bytes
   that were absent from the declared size. The upstream NATS close then
   surfaced at the client as WebSocket `1006` (no close frame observed).
+- WebSocket `1006` is a local API diagnostic for an absent close frame, not a
+  close code that may be transmitted on the wire. Healthy traffic and managed
+  restart must therefore not produce it. Managed stop now calls a loopback-only
+  sidecar control endpoint first so the relay itself can send a close frame.
+  A dedicated process-group signal and then hard termination remain bounded
+  fallbacks for an unresponsive child.
 - A single `POST /api/node/hub-root/reconnect` restored the route. Sidecar
   diagnostics changed from `remote_session_state=down` and
   `transport_ready=false` to `ready` and `true`, with a new remote session and

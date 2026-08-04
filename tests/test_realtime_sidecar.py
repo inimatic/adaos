@@ -1331,6 +1331,7 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
 ) -> None:
     popen_env: dict[str, str] = {}
     popen_args: list[str] = []
+    popen_creationflags = 0
 
     class _FakeProc:
         def poll(self):
@@ -1349,9 +1350,10 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
         raise AssertionError("subprocess startup must not open the NATS listener as a health probe")
 
     def _fake_popen(*args, **kwargs):
-        nonlocal popen_args, popen_env
+        nonlocal popen_args, popen_creationflags, popen_env
         popen_args = list(args[0])
         popen_env = dict(kwargs["env"])
+        popen_creationflags = int(kwargs.get("creationflags") or 0)
         return _FakeProc()
 
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
@@ -1372,6 +1374,161 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "0"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
     assert popen_env["ADAOS_BASE_DIR"] == str(tmp_path / "base")
+    if realtime_sidecar_mod.os.name == "nt":
+        assert popen_creationflags & int(realtime_sidecar_mod.subprocess.CREATE_NEW_PROCESS_GROUP)
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_requests_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[object] = []
+
+    class _FakeProc:
+        exit_code = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, signum) -> None:
+            sent.append(signum)
+            self.exit_code = 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.killed = True
+            self.exit_code = 2
+
+    proc = _FakeProc()
+    graceful_signal = object()
+    async def _request_control_shutdown(*, timeout_s: float = 2.0) -> bool:
+        proc.exit_code = 0
+        return True
+
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _request_control_shutdown,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: graceful_signal)
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert sent == []
+    assert proc.terminated is False
+    assert proc.killed is False
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_uses_signal_when_control_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[object] = []
+
+    class _FakeProc:
+        exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, signum) -> None:
+            sent.append(signum)
+            self.exit_code = 0
+
+        def terminate(self) -> None:
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.exit_code = 2
+
+    async def _control_unavailable(*, timeout_s: float = 2.0) -> bool:
+        return False
+
+    proc = _FakeProc()
+    graceful_signal = object()
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _control_unavailable,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: graceful_signal)
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert sent == [graceful_signal]
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_falls_back_when_graceful_signal_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProc:
+        exit_code = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, _signum) -> None:
+            raise OSError("signal unavailable")
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.killed = True
+            self.exit_code = 2
+
+    proc = _FakeProc()
+    async def _control_unavailable(*, timeout_s: float = 2.0) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _control_unavailable,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: object())
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert proc.terminated is True
+    assert proc.killed is False
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_local_control_accepts_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    nats_port = _free_port()
+    control_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_PORT", str(nats_port))
+    monkeypatch.setenv("ADAOS_REALTIME_CONTROL_PORT", str(control_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG", str(tmp_path / "sidecar.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    server = RealtimeSidecarServer(host="127.0.0.1", port=nats_port)
+    await server.start()
+
+    try:
+        accepted = await realtime_sidecar_mod._request_realtime_sidecar_graceful_shutdown()
+        await asyncio.wait_for(server._shutdown_requested.wait(), timeout=1.0)
+    finally:
+        await server.close()
+
+    assert accepted is True
 
 
 @pytest.mark.asyncio
