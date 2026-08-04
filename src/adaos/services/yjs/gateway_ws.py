@@ -9402,6 +9402,7 @@ async def events_ws(websocket: WebSocket):
                     from adaos.services.webrtc.peer import handle_rtc_offer
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
                     signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
                     signal_generation_id = str(payload.get("generation_id") or "").strip() or None
                     if device_id is None and signal_device_id != "unknown":
@@ -9435,6 +9436,7 @@ async def events_ws(websocket: WebSocket):
                         send_ice_cb=_send_ice_via_ws,
                         generation_id=signal_generation_id,
                         negotiation_mode=payload.get("negotiation_mode"),
+                        peer_id=signal_peer_id,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:
@@ -9447,6 +9449,7 @@ async def events_ws(websocket: WebSocket):
                     from adaos.services.webrtc.peer import handle_remote_ice
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     if payload.get("webspace_id"):
@@ -9455,6 +9458,7 @@ async def events_ws(websocket: WebSocket):
                         signal_device_id,
                         payload.get("candidate"),
                         generation_id=payload.get("generation_id"),
+                        peer_id=signal_peer_id,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 except Exception as e:

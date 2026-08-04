@@ -236,6 +236,55 @@ def test_fresh_generation_replaces_connecting_peer(monkeypatch) -> None:
     assert answer["generation_id"] == "generation-new"
 
 
+def test_browser_tabs_with_one_device_keep_independent_peers(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+
+    class NewPeer:
+        def __init__(self, device_id, webspace_id, send_ice_cb, generation_id=None) -> None:
+            self.device_id = device_id
+            self.webspace_id = webspace_id
+            self._send_ice = send_ice_cb
+            self.generation_id = generation_id
+            self.pc = SimpleNamespace(connectionState="new")
+            self.closed = False
+
+        async def handle_offer(self, sdp: str, type: str = "offer") -> dict[str, str]:
+            return {"sdp": f"answer:{sdp}", "type": "answer"}
+
+        async def add_ice_candidate(self, candidate) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.closed = True
+
+        def _emit_state_event(self, *, reason: str) -> None:
+            return None
+
+    monkeypatch.setattr(peer_mod, "HubPeer", NewPeer)
+    peer_mod._peers.clear()
+
+    async def send_ice_cb(candidate: dict[str, object]) -> None:
+        return None
+
+    for peer_id in ("peer-tab-a", "peer-tab-b"):
+        asyncio.run(
+            peer_mod.handle_rtc_offer(
+                offer_sdp=peer_id,
+                offer_type="offer",
+                device_id="browser-shared",
+                peer_id=peer_id,
+                webspace_id="dev1-dev",
+                send_ice_cb=send_ice_cb,
+                generation_id=f"generation-{peer_id}",
+                negotiation_mode="fresh_peer",
+            )
+        )
+
+    assert set(peer_mod._peers) == {"peer-tab-a", "peer-tab-b"}
+    assert {peer.device_id for peer in peer_mod._peers.values()} == {"browser-shared"}
+    assert all(peer.closed is False for peer in peer_mod._peers.values())
+
+
 def test_ice_restart_reuses_same_generation_peer(monkeypatch) -> None:
     peer_mod = _load_peer_module(monkeypatch)
 
