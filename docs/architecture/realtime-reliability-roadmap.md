@@ -108,6 +108,16 @@ transport-only `/ws` and `/yws` handoff as ready.
   persists a deferral counter, permits one automatic retry by default, and then
   fails explicitly in `prewarm` with public evidence instead of repeating
   preparation forever or silently violating strict warm-switch policy.
+- Automatic release reconciliation on `.30` subsequently detected immutable
+  target `ffee59be46c496049421c1c8ba19e25dcfc5044a` (`0.1.666`) without an
+  operator redispatch. Slot B preparation took about 182 seconds under local I/O
+  pressure, the passive runtime became ready during the normal 60-second
+  countdown, and warm cutover completed through root promotion plus a managed
+  supervisor self-restart. The replacement generation reported
+  `succeeded / validate`, exact manifest parity, no candidate listener, a clean
+  monitor (`last_failure=null`, `consecutive_failure_total=0`), and ready
+  sidecar/upstream-route evidence. This is the live acceptance for bounded
+  slow-candidate handling and automatic distribution recovery.
 - The hub-root bridge now has two independent recovery rails. Child transport
   cleanup cancellation is classified separately from owner-requested task
   cancellation, so an abnormal sidecar EOF cannot silently terminate the
@@ -919,6 +929,11 @@ lifecycle and update attempt state.
 - [ ] `[should]` Add stronger soak/recovery coverage for candidate promotion
   fallback, stale candidate cleanup, and low-memory warm-switch downgrade
   paths.
+- [ ] `[should]` Keep the supervisor public/status control surface responsive
+  while a promoted candidate retires a slow old runtime and root promotion is
+  being finalized. The `.30` acceptance kept the new runtime and routed data
+  plane available, but the old-runtime shutdown took about 55 seconds and the
+  supervisor API was temporarily unavailable until the managed self-restart.
 
 ### Candidate code areas
 
