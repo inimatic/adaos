@@ -21,7 +21,9 @@
     "error": {"type": ["string", "null"], "maxLength": 4000},
     "receipt": {"type": ["object", "null"]},
     "claimed_at": {"type": "string", "format": "date-time"},
-    "completed_at": {"type": ["string", "null"], "format": "date-time"}
+    "completed_at": {"type": ["string", "null"], "format": "date-time"},
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "additionalProperties": false
 }

@@ -17,6 +17,7 @@
     "command_id",
     "workflow_ref",
     "workflow_event_id",
+    "activity_run_id",
     "run_ref",
     "conversation_output_id",
     "response_envelope_id",
@@ -44,6 +45,7 @@
       ]
     },
     "workflow_event_id": { "type": ["string", "null"], "maxLength": 240 },
+    "activity_run_id": { "type": ["string", "null"], "maxLength": 300 },
     "run_ref": {
       "oneOf": [
         { "$ref": "workflow.ref.v1.schema.json" },
@@ -77,6 +79,7 @@
         "interaction_response_ref": { "type": ["object", "null"] },
         "invocation_ref": { "type": ["object", "null"] },
         "workflow_event_ref": { "type": ["object", "null"] },
+        "activity_run_ref": { "type": ["object", "null"] },
         "conversation_output_ref": { "type": ["object", "null"] },
         "response_envelope_ref": { "type": ["object", "null"] },
         "delivery_attempt_ref": { "type": ["object", "null"] },

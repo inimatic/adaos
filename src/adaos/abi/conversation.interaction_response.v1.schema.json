@@ -40,7 +40,9 @@
     "supersedes_response_id": { "type": ["string", "null"], "maxLength": 240 },
     "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 300 },
     "created_at": { "type": "string", "format": "date-time" },
-    "metadata": { "type": "object" }
+    "metadata": { "type": "object" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "additionalProperties": false
 }

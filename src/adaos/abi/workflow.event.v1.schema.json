@@ -39,7 +39,9 @@
     "input_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "evidence_refs": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/ref" } },
     "data": { "type": "object" },
-    "created_at": { "type": "string", "format": "date-time" }
+    "created_at": { "type": "string", "format": "date-time" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "$defs": {
     "ref": {

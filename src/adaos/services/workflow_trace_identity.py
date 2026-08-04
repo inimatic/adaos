@@ -72,10 +72,10 @@ def _run_ref_from_execution(execution_result: Mapping[str, Any]) -> dict[str, An
     commit = execution_result.get("commit")
     if not isinstance(commit, Mapping):
         return None
-    for key in ("run_id", "task_id", "outbox_id"):
+    for key in ("run_id", "task_id", "activity_attempt_id", "outbox_id"):
         token = _string(commit.get(key))
         if token:
-            return workflow_ref("task", token)
+            return workflow_ref("activity_run" if key == "activity_attempt_id" else "task", token)
     return None
 
 
@@ -112,6 +112,18 @@ def _workflow_identity(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _run_identity(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {
+        "kind": value.get("kind"),
+        "id": value.get("id"),
+        "version": value.get("version"),
+        "generation": value.get("generation"),
+        "digest": value.get("digest"),
+    }
+
+
 def workflow_trace_identity_report(
     *,
     turn_trace_id: str | None = None,
@@ -120,6 +132,7 @@ def workflow_trace_identity_report(
     interaction_response: Mapping[str, Any] | None = None,
     invocation: Mapping[str, Any] | None = None,
     execution_result: Mapping[str, Any] | None = None,
+    activity_run: Mapping[str, Any] | None = None,
     conversation_output: Mapping[str, Any] | None = None,
     response_envelope: Mapping[str, Any] | None = None,
     delivery_attempt: Mapping[str, Any] | None = None,
@@ -133,11 +146,21 @@ def workflow_trace_identity_report(
     invocation_record = _mapping(invocation or _nested(execution_result, "invocation"))
     command = _mapping(invocation_record.get("command") if invocation_record else {})
     result = _mapping(execution_result)
+    decision_record = _mapping(result.get("decision") if result else None)
+    event_record = next(
+        (
+            dict(item)
+            for item in decision_record.get("event_records") or []
+            if isinstance(item, Mapping)
+        ),
+        {},
+    )
     output = _mapping(conversation_output)
     output_correlation = _mapping(output.get("correlation") if output else {})
     envelope = _mapping(response_envelope)
     envelope_correlation = _mapping(envelope.get("correlation") if envelope else {})
     attempt = _mapping(delivery_attempt)
+    activity = _mapping(activity_run)
 
     diagnostics: list[dict[str, str]] = []
 
@@ -148,6 +171,9 @@ def workflow_trace_identity_report(
     output_id = _string(output.get("output_id"))
     envelope_id = _string(envelope.get("envelope_id"))
     attempt_id = _string(attempt.get("attempt_id"))
+    activity_run_id = _string(activity.get("attempt_id")) or _string(
+        _nested(result, "commit", "activity_attempt_id")
+    )
 
     command_reply_route = _maybe_ref(command.get("reply_route_ref") if isinstance(command, Mapping) else None)
     output_reply_route = _maybe_ref(output_correlation.get("reply_route_ref"))
@@ -162,7 +188,16 @@ def workflow_trace_identity_report(
         or output.get("conversation_id")
         or envelope.get("conversation_id")
     )
-    selected_turn_trace_id = _string(turn_trace_id or output_correlation.get("turn_trace_id"))
+    selected_turn_trace_id = _string(
+        turn_trace_id
+        or proposal.get("turn_trace_id")
+        or interaction_record.get("turn_trace_id")
+        or response.get("turn_trace_id")
+        or invocation_record.get("turn_trace_id")
+        or output_correlation.get("turn_trace_id")
+        or envelope.get("turn_trace_id")
+        or attempt.get("turn_trace_id")
+    )
     selected_command_id = _string(
         act.get("command")
         or command.get("command_id")
@@ -175,7 +210,27 @@ def workflow_trace_identity_report(
         or envelope_correlation.get("workflow_ref")
         or command.get("instance_ref")
     )
-    selected_run_ref = _maybe_ref(output_correlation.get("run_ref") or envelope_correlation.get("task_ref"))
+    raw_run_ref = _maybe_ref(
+        output_correlation.get("run_ref")
+        or envelope_correlation.get("task_ref")
+        or _run_ref_from_execution(result)
+        or (workflow_ref("activity_run", activity_run_id) if activity_run_id else None)
+    )
+    selected_run_ref = (
+        workflow_ref(
+            "activity_run" if raw_run_ref.get("kind") == "activity_run" else "task",
+            str(raw_run_ref["id"]),
+            version=_string(raw_run_ref.get("version")),
+            generation=(
+                int(raw_run_ref["generation"])
+                if raw_run_ref.get("generation") is not None
+                else None
+            ),
+            digest=_string(raw_run_ref.get("digest")),
+        )
+        if raw_run_ref
+        else None
+    )
     selected_workflow_event_id = _string(
         _first_event_id(result) or output_correlation.get("workflow_event_id")
     )
@@ -186,6 +241,44 @@ def workflow_trace_identity_report(
         or attempt_route_id
     )
 
+    _add_mismatch(
+        diagnostics,
+        code="workflow.trace.turn_trace_mismatch",
+        path="turn_trace_id",
+        label="turn_trace_id",
+        values={
+            "intent_proposal": proposal.get("turn_trace_id"),
+            "interaction": interaction_record.get("turn_trace_id"),
+            "interaction_response": response.get("turn_trace_id"),
+            "invocation": invocation_record.get("turn_trace_id"),
+            "command": command.get("turn_trace_id"),
+            "workflow_event": event_record.get("turn_trace_id"),
+            "activity_run": activity.get("turn_trace_id")
+            or _nested(activity, "effect_binding", "turn_trace_id"),
+            "conversation_output": output_correlation.get("turn_trace_id"),
+            "response_envelope": envelope.get("turn_trace_id"),
+            "delivery_attempt": attempt.get("turn_trace_id"),
+        },
+    )
+    _add_mismatch(
+        diagnostics,
+        code="workflow.trace.context_mismatch",
+        path="trace.trace_id",
+        label="trace.trace_id",
+        values={
+            "intent_proposal": _nested(proposal, "trace", "trace_id"),
+            "interaction": _nested(interaction_record, "trace", "trace_id"),
+            "interaction_response": _nested(response, "trace", "trace_id"),
+            "invocation": _nested(invocation_record, "trace", "trace_id"),
+            "command": _nested(command, "trace", "trace_id"),
+            "workflow_event": _nested(event_record, "trace", "trace_id"),
+            "activity_run": _nested(activity, "trace", "trace_id")
+            or _nested(activity, "effect_binding", "trace", "trace_id"),
+            "conversation_output": _nested(output, "trace", "trace_id"),
+            "response_envelope": _nested(envelope, "trace", "trace_id"),
+            "delivery_attempt": _nested(attempt, "trace", "trace_id"),
+        },
+    )
     _add_mismatch(
         diagnostics,
         code="workflow.trace.conversation_mismatch",
@@ -273,9 +366,9 @@ def workflow_trace_identity_report(
         path="run_ref",
         label="run_ref",
         values={
-            "execution_result": _run_ref_from_execution(result),
-            "conversation_output": output_correlation.get("run_ref"),
-            "response_envelope": envelope_correlation.get("task_ref"),
+            "execution_result": _run_identity(_run_ref_from_execution(result)),
+            "conversation_output": _run_identity(output_correlation.get("run_ref")),
+            "response_envelope": _run_identity(envelope_correlation.get("task_ref")),
         },
     )
     _add_mismatch(
@@ -330,7 +423,10 @@ def workflow_trace_identity_report(
     }
     report = {
         "schema": WORKFLOW_TRACE_IDENTITY_SCHEMA,
-        "trace_id": _string(trace_id) or "trace:" + _digest(seed).removeprefix("sha256:"),
+        "trace_id": _string(trace_id)
+        or _string(_nested(proposal, "trace", "trace_id"))
+        or _string(_nested(invocation_record, "trace", "trace_id"))
+        or "trace:" + _digest(seed).removeprefix("sha256:"),
         "valid": not any(item["severity"] == "error" for item in diagnostics),
         "generated_at": now or _now(),
         "conversation_id": selected_conversation,
@@ -348,6 +444,7 @@ def workflow_trace_identity_report(
         "command_id": selected_command_id,
         "workflow_ref": selected_workflow_ref,
         "workflow_event_id": selected_workflow_event_id,
+        "activity_run_id": activity_run_id,
         "run_ref": selected_run_ref,
         "conversation_output_id": output_id,
         "response_envelope_id": envelope_id or _string(_nested(output, "response_envelope_ref", "id")),
@@ -364,6 +461,11 @@ def workflow_trace_identity_report(
             "workflow_event_ref": (
                 workflow_ref("evidence", selected_workflow_event_id)
                 if selected_workflow_event_id
+                else None
+            ),
+            "activity_run_ref": (
+                workflow_ref("activity_run", activity_run_id)
+                if activity_run_id
                 else None
             ),
             "conversation_output_ref": workflow_ref("evidence", output_id) if output_id else None,

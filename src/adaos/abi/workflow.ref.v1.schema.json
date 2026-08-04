@@ -12,6 +12,7 @@
         "aggregate",
         "workflow",
         "task",
+        "activity_run",
         "artifact",
         "evidence",
         "interaction",

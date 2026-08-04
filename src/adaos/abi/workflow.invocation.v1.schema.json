@@ -25,7 +25,9 @@
     "confirmation_required": { "type": "boolean" },
     "command": { "$ref": "workflow.command.v1.schema.json" },
     "created_at": { "type": "string", "format": "date-time" },
-    "metadata": { "type": "object" }
+    "metadata": { "type": "object" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "$defs": {
     "ref": {

@@ -253,6 +253,7 @@
       "description": "Optional link to the current channel-neutral delivery envelope derived from this semantic output.",
       "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }]
     },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
     "metadata": { "type": "object" },
     "created_at": { "type": "string", "format": "date-time" }
   },

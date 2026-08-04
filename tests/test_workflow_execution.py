@@ -11,11 +11,13 @@ from adaos.services.governed_workflow import (
 from adaos.services.workflow_execution import (
     WorkflowExecutorRegistration,
     WorkflowExecutorRegistry,
+    cross_channel_ingress_conformance,
     description_with_executor_readiness,
     execute_invocation,
     prepare_interaction_invocation,
     prepare_sdk_invocation,
 )
+from adaos.services.conversational_runtime import build_workflow_intent_proposal
 from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
@@ -158,3 +160,127 @@ def test_web_interaction_and_sdk_share_one_invocation_and_durable_reply_boundary
         item["envelope_id"] for item in recovered["resumable"]
     }
     assert workflow_persistence.get_instance(instance["instance_id"])["generation"] == 1
+
+
+def _cross_channel_invocations(
+    instance: dict[str, object],
+) -> tuple[dict[str, dict[str, object]], object, object]:
+    definition = compiled_builder_change_definition()
+    adapters = platform_workflow_adapter_registry()
+    contract = adapters.get("activity", "builder.codex.run")
+    presentation_executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker",
+            ),
+        ),
+    )
+    description = description_with_executor_readiness(
+        _description(instance), definition, presentation_executors
+    )
+    workflow = workflow_ref(
+        "workflow",
+        instance["instance_id"],
+        version=definition.definition_version,
+        generation=instance["generation"],
+    )
+    invocations: dict[str, dict[str, object]] = {}
+    selected_target = None
+    for channel in ("web", "telegram", "text"):
+        interaction = conversation_interactions.interaction_from_workflow_description(
+            description,
+            conversation_id=f"conversation:ingress:{channel}",
+            owner="skill:builder_skill",
+            interaction_id=f"interaction:ingress:{channel}",
+            workflow_ref=workflow,
+            command_context_ref=workflow_ref("command_context", "builder:ingress"),
+        )
+        presentation = conversation_interactions.negotiate_presentation(
+            interaction,
+            conversation_interactions.standard_capability_profile(channel),
+        )
+        action = next(
+            item for item in presentation["actions"] if item["command"] == "start_automation"
+        )
+        selected_target = action["target_ref"]
+        if channel == "text":
+            proposal = build_workflow_intent_proposal(
+                conversation_id=interaction["conversation_id"],
+                source_message_id="message:ingress:text",
+                source_text="start automation",
+                workflow_type=definition.workflow_type,
+                command_id="start_automation",
+                instance_ref=workflow,
+                target_ref=selected_target,
+                interaction_id=interaction["interaction_id"],
+                action_id=action["action_id"],
+                risk="isolated_write",
+                channel="text",
+            )
+            response = conversation_interactions.submit_response(
+                interaction["interaction_id"],
+                actor_id="user:local",
+                expected_generation=0,
+                idempotency_key="text:start-automation",
+                original_text="start automation",
+                proposed_action_id=action["action_id"],
+                intent_proposal=proposal,
+                metadata={"io_type": "text"},
+            )["response"]
+        else:
+            response = conversation_interactions.submit_action_token(
+                action["token"],
+                actor_id="user:local",
+                idempotency_key=f"{channel}:start-automation",
+                metadata={"io_type": channel},
+            )["response"]
+        invocations[channel] = prepare_interaction_invocation(response)
+    invocations["sdk"] = prepare_sdk_invocation(
+        workflow_type=definition.workflow_type,
+        instance_ref=workflow,
+        actor_id="user:local",
+        command_id="start_automation",
+        expected_generation=int(instance["generation"]),
+        idempotency_key="sdk:start-automation",
+        target_ref=selected_target,
+        context_ref=workflow_ref("command_context", "builder:ingress"),
+        risk="isolated_write",
+    )
+    return invocations, definition, adapters
+
+
+def test_cross_channel_ingress_harness_proves_same_guard_target_and_executor_failure() -> None:
+    instance = new_instance(compiled_builder_change_definition(), "change:ingress-harness")
+    instance["state"] = "automation_ready"
+    invocations, definition, adapters = _cross_channel_invocations(instance)
+
+    report = cross_channel_ingress_conformance(
+        invocations,
+        definition,
+        instance,
+        principal=_principal(),
+        adapters=adapters,
+        executors=WorkflowExecutorRegistry(adapters),
+        now="2026-08-04T00:00:00+00:00",
+    )
+
+    assert report["valid"] is True
+    assert report["diagnostics"] == []
+    assert {item["expected_generation"] for item in report["channels"]} == {0}
+    assert len({_digest_target(item["target_ref"]) for item in report["channels"]}) == 1
+    assert {item["guard"]["accepted"] for item in report["channels"]} == {True}
+    assert {item["executor"]["reason_code"] for item in report["channels"]} == {
+        "executor_unavailable"
+    }
+    assert {item["execution"]["reason_code"] for item in report["channels"]} == {
+        "executor_unavailable"
+    }
+
+
+def _digest_target(value: object) -> str:
+    import json
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))

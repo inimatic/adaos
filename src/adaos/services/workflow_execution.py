@@ -22,6 +22,8 @@ from adaos.services.workflow_registry import WorkflowAdapterRegistry
 
 
 WORKFLOW_INVOCATION_SCHEMA = "adaos.workflow.invocation.v1"
+WORKFLOW_INGRESS_CONFORMANCE_SCHEMA = "adaos.workflow.ingress_conformance.v1"
+_INGRESS_CHANNELS = ("web", "telegram", "text", "sdk")
 
 
 class WorkflowExecutionError(ValueError):
@@ -255,6 +257,21 @@ def prepare_interaction_invocation(
     command_context = _ref(action.get("command_context_ref"), fallback_kind="command_context")
     reply_route = _ref(interaction.get("reply_route_ref"), fallback_kind="reply_route")
     created_at = now or str(stored_response.get("created_at") or _now())
+    source_meta = dict(stored_response.get("metadata") or {})
+    selected_turn_trace_id = str(
+        stored_response.get("turn_trace_id")
+        or source_meta.get("turn_trace_id")
+        or interaction.get("turn_trace_id")
+        or ""
+    ).strip() or None
+    selected_trace = copy.deepcopy(
+        dict(
+            stored_response.get("trace")
+            or source_meta.get("trace")
+            or interaction.get("trace")
+            or {}
+        )
+    )
     command = validate_workflow_record(
         "adaos.workflow.command.v1",
         {
@@ -269,9 +286,10 @@ def prepare_interaction_invocation(
             "context_ref": command_context,
             "reply_route_ref": reply_route,
             "created_at": created_at,
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
         },
     )
-    source_meta = dict(stored_response.get("metadata") or {})
     selected_source = str(source or source_meta.get("io_type") or stored_response.get("source") or "system").strip().lower()
     if selected_source == "action":
         selected_source = "web"
@@ -293,9 +311,13 @@ def prepare_interaction_invocation(
         "confirmation_required": confirmation_required,
         "command": command,
         "created_at": created_at,
+        "turn_trace_id": selected_turn_trace_id,
+        "trace": selected_trace,
         "metadata": {
             "presentation_id": stored_response.get("presentation_id"),
             "source_message_ref": copy.deepcopy(stored_response.get("source_message_ref")),
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
         },
     }
     return validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, record)
@@ -315,6 +337,8 @@ def prepare_sdk_invocation(
     reply_route_ref: Mapping[str, Any] | None = None,
     risk: str = "read",
     confirmation_required: bool = False,
+    turn_trace_id: str | None = None,
+    trace: Mapping[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     """Build the same invocation record for an internal SDK caller."""
@@ -323,6 +347,8 @@ def prepare_sdk_invocation(
     instance = _ref(instance_ref, fallback_kind="workflow")
     if instance is None or not instance.get("version") or instance.get("generation") is None:
         raise WorkflowExecutionError("SDK invocation requires an exact workflow instance ref")
+    selected_turn_trace_id = str(turn_trace_id or "").strip() or None
+    selected_trace = copy.deepcopy(dict(trace or {}))
     command = validate_workflow_record(
         "adaos.workflow.command.v1",
         {
@@ -337,6 +363,8 @@ def prepare_sdk_invocation(
             "context_ref": _ref(context_ref, fallback_kind="command_context"),
             "reply_route_ref": _ref(reply_route_ref, fallback_kind="reply_route"),
             "created_at": timestamp,
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
         },
     )
     record = {
@@ -351,7 +379,12 @@ def prepare_sdk_invocation(
         "confirmation_required": bool(confirmation_required),
         "command": command,
         "created_at": timestamp,
-        "metadata": {},
+        "turn_trace_id": selected_turn_trace_id,
+        "trace": selected_trace,
+        "metadata": {
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
+        },
     }
     return validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, record)
 
@@ -360,6 +393,175 @@ def _reply_route_ids(invocation: Mapping[str, Any]) -> list[str]:
     route = dict(dict(invocation["command"]).get("reply_route_ref") or {})
     route_id = str(route.get("id") or "").strip()
     return [route_id] if route_id else []
+
+
+def _invocation_semantics(invocation: Mapping[str, Any]) -> dict[str, Any]:
+    record = validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, invocation)
+    command = dict(record["command"])
+    return {
+        "workflow_type": command["workflow_type"],
+        "command_id": command["command_id"],
+        "instance_ref": copy.deepcopy(command["instance_ref"]),
+        "actor_ref": copy.deepcopy(command["actor_ref"]),
+        "expected_generation": int(command["expected_generation"]),
+        "input": copy.deepcopy(command["input"]),
+        "target_ref": copy.deepcopy(record.get("target_ref")),
+        "risk": record["risk"],
+        "confirmation_required": bool(record["confirmation_required"]),
+    }
+
+
+def cross_channel_ingress_conformance(
+    invocations: Mapping[str, Mapping[str, Any]],
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+    instance: Mapping[str, Any],
+    *,
+    principal: VerifiedWorkflowPrincipal,
+    adapters: WorkflowAdapterRegistry,
+    executors: WorkflowExecutorRegistry,
+    context: Mapping[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """Prove that Web, Telegram, text, and SDK share one ingress contract.
+
+    Transport-specific response, presentation, route, timestamp, and
+    idempotency identities are deliberately excluded from the semantic digest.
+    Authority, guards, generation, target, risk, and executor readiness are not.
+    """
+
+    supplied = {str(key).strip().lower(): value for key, value in invocations.items()}
+    if set(supplied) != set(_INGRESS_CHANNELS):
+        missing = sorted(set(_INGRESS_CHANNELS) - set(supplied))
+        extra = sorted(set(supplied) - set(_INGRESS_CHANNELS))
+        raise WorkflowExecutionError(
+            "cross-channel ingress requires exactly web, telegram, text, and sdk "
+            f"(missing={missing}, extra={extra})"
+        )
+    compiled = (
+        definition
+        if isinstance(definition, CompiledWorkflowDefinition)
+        else compile_definition(definition)
+    )
+    adapters.bind(compiled)
+    current = copy.deepcopy(dict(instance))
+    diagnostics: list[dict[str, str]] = []
+    channels: list[dict[str, Any]] = []
+    comparison: list[dict[str, Any]] = []
+
+    for channel in _INGRESS_CHANNELS:
+        invocation = validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, supplied[channel])
+        if invocation["source"] != channel:
+            diagnostics.append(
+                {
+                    "code": "workflow.ingress.source_mismatch",
+                    "severity": "error",
+                    "path": f"invocations.{channel}.source",
+                    "message": f"{channel} ingress produced source={invocation['source']}",
+                }
+            )
+        command = dict(invocation["command"])
+        semantics = _invocation_semantics(invocation)
+        semantic_digest = _digest(semantics)
+        guard = apply_workflow_command(
+            compiled,
+            current,
+            command,
+            resolver=WorkflowResolver(require_verified_principal=True),
+            principal=principal,
+            context=context,
+        )
+        transition = compiled.by_source_command.get(
+            (str(current.get("state") or ""), str(command["command_id"]))
+        )
+        activity = (
+            str(transition.descriptor["effect"].get("activity") or "").strip() or None
+            if transition is not None
+            else None
+        )
+        executor = executors.status(activity)
+        execution = execute_invocation(
+            invocation,
+            compiled,
+            current,
+            principal=principal,
+            adapters=adapters,
+            executors=executors,
+            context=context,
+            persist=False,
+        )
+        comparison.append(
+            {
+                "semantic_digest": semantic_digest,
+                "guard": (
+                    bool(guard["accepted"]),
+                    guard.get("reason_code"),
+                    guard.get("transition_id"),
+                ),
+                "executor": (
+                    bool(executor.get("available")),
+                    executor.get("adapter_id"),
+                    executor.get("reason_code"),
+                ),
+                "execution": (
+                    bool(execution["accepted"]),
+                    execution.get("status"),
+                    execution.get("reason_code"),
+                ),
+            }
+        )
+        channels.append(
+            {
+                "channel": channel,
+                "invocation_id": invocation["invocation_id"],
+                "semantic_digest": semantic_digest,
+                "workflow_type": command["workflow_type"],
+                "command_id": command["command_id"],
+                "expected_generation": int(command["expected_generation"]),
+                "target_ref": copy.deepcopy(invocation.get("target_ref")),
+                "guard": {
+                    "accepted": bool(guard["accepted"]),
+                    "reason_code": guard.get("reason_code"),
+                    "transition_id": guard.get("transition_id"),
+                },
+                "executor": copy.deepcopy(executor),
+                "execution": {
+                    "accepted": bool(execution["accepted"]),
+                    "status": str(execution["status"]),
+                    "reason_code": execution.get("reason_code"),
+                },
+            }
+        )
+
+    for field, code in (
+        ("semantic_digest", "workflow.ingress.semantic_mismatch"),
+        ("guard", "workflow.ingress.guard_mismatch"),
+        ("executor", "workflow.ingress.executor_mismatch"),
+        ("execution", "workflow.ingress.execution_mismatch"),
+    ):
+        values = {_digest({"value": item[field]}) for item in comparison}
+        if len(values) > 1:
+            diagnostics.append(
+                {
+                    "code": code,
+                    "severity": "error",
+                    "path": f"channels.*.{field}",
+                    "message": f"{field} differs across workflow ingress channels",
+                }
+            )
+    report = {
+        "schema": WORKFLOW_INGRESS_CONFORMANCE_SCHEMA,
+        "valid": not diagnostics,
+        "generated_at": now or _now(),
+        "required_channels": list(_INGRESS_CHANNELS),
+        "semantic_digest": (
+            comparison[0]["semantic_digest"]
+            if len({item["semantic_digest"] for item in comparison}) == 1
+            else None
+        ),
+        "channels": channels,
+        "diagnostics": diagnostics,
+    }
+    return validate_workflow_record(WORKFLOW_INGRESS_CONFORMANCE_SCHEMA, report)
 
 
 def execute_invocation(
@@ -416,6 +618,12 @@ def execute_invocation(
         principal=principal,
         context=context,
     )
+    if decision["accepted"] and decision["status"] == "accepted":
+        decision = copy.deepcopy(decision)
+        for event in decision.get("event_records") or []:
+            event["turn_trace_id"] = record.get("turn_trace_id")
+            event["trace"] = copy.deepcopy(dict(record.get("trace") or {}))
+            validate_workflow_record("adaos.workflow.event.v1", event)
     if not decision["accepted"]:
         return {
             "accepted": False,
@@ -435,6 +643,8 @@ def execute_invocation(
                 "activity": activity,
                 "executor": status.get("executor_id"),
                 "contract_digest": status.get("contract_digest"),
+                "turn_trace_id": record.get("turn_trace_id"),
+                "trace": copy.deepcopy(dict(record.get("trace") or {})),
             }
         target = dict(record.get("target_ref") or {})
         target_digest = str(target.get("digest") or "").strip() or None
@@ -465,6 +675,8 @@ def execute_invocation(
             "interaction_ref": copy.deepcopy(record.get("interaction_ref")),
             "command_id": str(command["command_id"]),
             "reply_route_ids": route_ids,
+            "turn_trace_id": record.get("turn_trace_id"),
+            "trace": copy.deepcopy(dict(record.get("trace") or {})),
         }
         responses.append(
             durable_delivery.enqueue_response(
@@ -503,10 +715,12 @@ def execute_invocation(
 
 
 __all__ = [
+    "WORKFLOW_INGRESS_CONFORMANCE_SCHEMA",
     "WORKFLOW_INVOCATION_SCHEMA",
     "WorkflowExecutionError",
     "WorkflowExecutorRegistration",
     "WorkflowExecutorRegistry",
+    "cross_channel_ingress_conformance",
     "description_with_executor_readiness",
     "execute_invocation",
     "prepare_interaction_invocation",

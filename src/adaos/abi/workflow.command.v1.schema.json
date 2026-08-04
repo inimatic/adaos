@@ -27,7 +27,9 @@
     "input": { "type": "object" },
     "context_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
     "reply_route_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
-    "created_at": { "type": "string", "format": "date-time" }
+    "created_at": { "type": "string", "format": "date-time" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "$defs": {
     "ref": {

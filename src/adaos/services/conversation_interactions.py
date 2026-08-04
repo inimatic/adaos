@@ -308,6 +308,8 @@ def create_interaction(
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    turn_trace_id: str | None = None,
+    trace: Mapping[str, Any] | None = None,
     now: str | None = None,
     persist: bool = True,
 ) -> dict[str, Any]:
@@ -384,6 +386,13 @@ def create_interaction(
             "updated_at": timestamp,
             "completed_at": None,
             "metadata": copy.deepcopy(dict(metadata or {})),
+            "turn_trace_id": (
+                str(turn_trace_id or dict(metadata or {}).get("turn_trace_id") or "").strip()
+                or None
+            ),
+            "trace": copy.deepcopy(
+                dict(trace or dict(metadata or {}).get("trace") or {})
+            ),
         },
     )
     if not persist:
@@ -408,6 +417,8 @@ def interaction_from_workflow_description(
     reply_route_ref: Mapping[str, Any] | None = None,
     expires_at: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    turn_trace_id: str | None = None,
+    trace: Mapping[str, Any] | None = None,
     action_labels: Mapping[str, str] | None = None,
     now: str | None = None,
     persist: bool = True,
@@ -492,6 +503,8 @@ def interaction_from_workflow_description(
             "state": snapshot.get("state"),
             **copy.deepcopy(dict(metadata or {})),
         },
+        turn_trace_id=turn_trace_id,
+        trace=trace,
         now=now,
         persist=persist,
     )
@@ -833,6 +846,26 @@ def submit_response(
 
     valid, missing, reason = _validate_response_values(semantic, response_values)
     response_status = "partial" if valid and missing else ("answered" if valid else "rejected")
+    response_metadata = copy.deepcopy(dict(metadata or {}))
+    proposal_trace = (
+        dict(intent_proposal.get("trace") or {})
+        if isinstance(intent_proposal, Mapping)
+        else {}
+    )
+    proposal_turn_trace_id = (
+        intent_proposal.get("turn_trace_id")
+        if isinstance(intent_proposal, Mapping)
+        else None
+    )
+    selected_turn_trace_id = str(
+        response_metadata.get("turn_trace_id")
+        or proposal_turn_trace_id
+        or semantic.get("turn_trace_id")
+        or ""
+    ).strip() or None
+    selected_trace = copy.deepcopy(
+        dict(response_metadata.get("trace") or proposal_trace or semantic.get("trace") or {})
+    )
     response = _validate(
         INTERACTION_RESPONSE_SCHEMA,
         {
@@ -869,7 +902,9 @@ def submit_response(
             "supersedes_response_id": str(supersedes_response_id) if supersedes_response_id else None,
             "idempotency_key": str(idempotency_key or "").strip(),
             "created_at": timestamp,
-            "metadata": {**copy.deepcopy(dict(metadata or {})), "request_digest": request_digest},
+            "metadata": {**response_metadata, "request_digest": request_digest},
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
         },
     )
     stored_response = conversation_store.append_interaction_response(response)

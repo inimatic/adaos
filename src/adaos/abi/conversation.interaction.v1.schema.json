@@ -70,7 +70,9 @@
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" },
     "completed_at": { "type": ["string", "null"], "format": "date-time" },
-    "metadata": { "type": "object" }
+    "metadata": { "type": "object" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
   },
   "additionalProperties": false
 }

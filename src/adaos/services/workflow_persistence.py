@@ -328,13 +328,16 @@ def _attempt(attempt_id: str) -> dict[str, Any]:
         ).fetchone()
     if not row:
         raise WorkflowPersistenceError(f"workflow activity attempt not found: {attempt_id}")
+    effect_binding = json.loads(row["effect_binding_json"])
     return {
         "attempt_id": row["attempt_id"],
         "instance_id": row["instance_id"],
         "generation": int(row["generation"]),
         "transition_id": row["transition_id"],
         "activity": row["activity"],
-        "effect_binding": json.loads(row["effect_binding_json"]),
+        "effect_binding": effect_binding,
+        "turn_trace_id": effect_binding.get("turn_trace_id"),
+        "trace": copy.deepcopy(dict(effect_binding.get("trace") or {})),
         "target_digest": row["target_digest"],
         "approval_witness": json.loads(row["approval_witness_json"]) if row["approval_witness_json"] else None,
         "retry_policy": row["retry_policy"],

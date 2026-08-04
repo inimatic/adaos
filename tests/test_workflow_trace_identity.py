@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 
+from adaos.services import conversation_interactions, durable_delivery, workflow_persistence
+from adaos.services.builder.governed import compiled_builder_change_definition
 from adaos.services.conversational_runtime import (
     build_workflow_intent_proposal,
     conversation_output_from_workflow_execution,
@@ -16,7 +18,16 @@ from adaos.services.governed_workflow import (
     validate_workflow_record,
     workflow_definition_digest,
     workflow_ref,
+    verified_workflow_principal,
 )
+from adaos.services.workflow_execution import (
+    WorkflowExecutorRegistration,
+    WorkflowExecutorRegistry,
+    description_with_executor_readiness,
+    execute_invocation,
+    prepare_interaction_invocation,
+)
+from adaos.services.workflow_registry import platform_workflow_adapter_registry
 from adaos.services.workflow_trace_identity import (
     WORKFLOW_TRACE_IDENTITY_SCHEMA,
     workflow_trace_identity_report,
@@ -253,3 +264,153 @@ def test_trace_identity_report_fails_when_delivery_route_breaks_identity() -> No
     assert {item["code"] for item in report["diagnostics"]} == {
         "workflow.trace.reply_route_mismatch"
     }
+
+
+def test_trace_spine_propagates_through_interaction_activity_and_delivery() -> None:
+    turn_trace_id = "turn:builder:automation"
+    trace = {
+        "trace_id": "a" * 32,
+        "span_id": "b" * 16,
+        "parent_span_id": None,
+        "traceparent": f"00-{'a' * 32}-{'b' * 16}-01",
+    }
+    definition = compiled_builder_change_definition()
+    instance = new_instance(definition, "change:trace-spine")
+    instance["state"] = "automation_ready"
+    principal = verified_workflow_principal(
+        "user:local",
+        authenticated=True,
+        issuer="tests.workflow_trace_identity",
+    )
+    adapters = platform_workflow_adapter_registry()
+    contract = adapters.get("activity", "builder.codex.run")
+    executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker",
+            ),
+        ),
+    )
+    description = description_with_executor_readiness(
+        WorkflowResolver(require_verified_principal=True).describe(
+            definition,
+            instance,
+            actor="user:local",
+            principal=principal,
+        ),
+        definition,
+        executors,
+    )
+    route = durable_delivery.create_reply_route(
+        "conversation:trace-spine",
+        route_id="route:trace-spine:web",
+        transport="web",
+        destination_ref={"webspace_id": "dev-local", "channel_id": "builder"},
+        principal_scope=["user:local"],
+    )
+    workflow = workflow_ref(
+        "workflow",
+        instance["instance_id"],
+        version=definition.definition_version,
+        generation=instance["generation"],
+        digest=workflow_definition_digest(definition),
+    )
+    interaction = conversation_interactions.interaction_from_workflow_description(
+        description,
+        conversation_id="conversation:trace-spine",
+        owner="skill:builder_skill",
+        interaction_id="interaction:trace-spine",
+        workflow_ref=workflow,
+        command_context_ref=workflow_ref("command_context", "builder:trace-spine"),
+        reply_route_ref=workflow_ref("reply_route", route["route_id"]),
+        turn_trace_id=turn_trace_id,
+        trace=trace,
+    )
+    action = next(
+        item for item in interaction["actions"] if item["command"] == "start_automation"
+    )
+    proposal = build_workflow_intent_proposal(
+        conversation_id=interaction["conversation_id"],
+        source_message_id="message:trace-spine",
+        source_text="start automation",
+        workflow_type=definition.workflow_type,
+        command_id="start_automation",
+        instance_ref=workflow,
+        target_ref=action["target_ref"],
+        interaction_id=interaction["interaction_id"],
+        action_id=action["action_id"],
+        reply_route_ref=workflow_ref("reply_route", route["route_id"]),
+        risk="isolated_write",
+        turn_trace_id=turn_trace_id,
+        trace=trace,
+    )
+    response = conversation_interactions.submit_response(
+        interaction["interaction_id"],
+        actor_id="user:local",
+        expected_generation=0,
+        idempotency_key="trace-spine:start-automation",
+        original_text="start automation",
+        proposed_action_id=action["action_id"],
+        intent_proposal=proposal,
+        metadata={"io_type": "text"},
+    )["response"]
+    invocation = prepare_interaction_invocation(response)
+    result = execute_invocation(
+        invocation,
+        definition,
+        instance,
+        principal=principal,
+        adapters=adapters,
+        executors=executors,
+    )
+    activity_run = workflow_persistence.claim_activity(
+        result["commit"]["activity_attempt_id"]
+    )
+    envelope = result["responses"][0]
+    output = conversation_output_from_workflow_execution(
+        result,
+        intent_proposal_id=proposal["proposal_id"],
+        response_envelope_ref_value={
+            "schema": "adaos.workflow.ref.v1",
+            "kind": "response_envelope",
+            "id": envelope["envelope_id"],
+            "version": None,
+            "generation": envelope["sequence"],
+            "digest": None,
+        },
+    )
+    attempt = durable_delivery.claim_delivery(envelope["envelope_id"], route["route_id"])
+
+    report = workflow_trace_identity_report(
+        intent_proposal=proposal,
+        interaction=interaction,
+        interaction_response=response,
+        invocation=invocation,
+        execution_result=result,
+        activity_run=activity_run,
+        conversation_output=output,
+        response_envelope=envelope,
+        delivery_attempt=attempt,
+    )
+
+    assert report["valid"] is True, report["diagnostics"]
+    assert report["trace_id"] == trace["trace_id"]
+    assert report["turn_trace_id"] == turn_trace_id
+    assert report["activity_run_id"] == activity_run["attempt_id"]
+    for record in (
+        proposal,
+        interaction,
+        response,
+        invocation,
+        invocation["command"],
+        result["decision"]["event_records"][0],
+        activity_run,
+        output,
+        envelope,
+        attempt,
+    ):
+        assert record["turn_trace_id"] == turn_trace_id
+        assert record["trace"]["trace_id"] == trace["trace_id"]

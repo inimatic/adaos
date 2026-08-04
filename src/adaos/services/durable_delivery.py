@@ -289,6 +289,8 @@ def enqueue_response(
     terminal_key: str | None = None,
     attention_policy: Mapping[str, Any] | None = None,
     envelope_id: str | None = None,
+    turn_trace_id: str | None = None,
+    trace: Mapping[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     ensure_schema()
@@ -333,6 +335,8 @@ def enqueue_response(
         "attention_plan": attention_plan,
         "coalesce_key": effective_coalesce_key,
         "terminal_key": effective_terminal_key,
+        "turn_trace_id": str(turn_trace_id or "").strip() or None,
+        "trace": copy.deepcopy(dict(trace or {})),
     }
     request_digest = hashlib.sha256(
         json.dumps(
@@ -376,6 +380,8 @@ def enqueue_response(
                     dict.fromkeys(str(item).strip() for item in reply_route_ids if str(item).strip())
                 ),
                 "status": status,
+                "turn_trace_id": str(turn_trace_id or "").strip() or None,
+                "trace": copy.deepcopy(dict(trace or {})),
                 "materialization_status": "pending",
                 "created_at": timestamp,
                 "updated_at": timestamp,
@@ -611,6 +617,8 @@ def claim_delivery(
                 "idempotency_key": stable_key,
                 "attempt_number": attempt_number,
                 "status": "claimed",
+                "turn_trace_id": envelope.get("turn_trace_id"),
+                "trace": copy.deepcopy(dict(envelope.get("trace") or {})),
                 "error": None,
                 "receipt": None,
                 "claimed_at": timestamp,

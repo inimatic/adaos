@@ -531,6 +531,7 @@ def _proposal_record(
     input_context: Mapping[str, Any] | None = None,
     provenance: Mapping[str, Any] | None = None,
     trace: Mapping[str, Any] | None = None,
+    turn_trace_id: str | None = None,
     model: Mapping[str, Any] | None = None,
     disposition: str = "proposed",
     clarification: Mapping[str, Any] | None = None,
@@ -594,6 +595,8 @@ def _proposal_record(
         )
     if "trace" in schema_properties:
         record["trace"] = copy.deepcopy(dict(trace) if isinstance(trace, Mapping) else _trace())
+    if "turn_trace_id" in schema_properties:
+        record["turn_trace_id"] = str(turn_trace_id).strip() if turn_trace_id else None
     return validate_intent_proposal(record)
 
 
@@ -625,6 +628,7 @@ def build_workflow_intent_proposal(
     input_context: Mapping[str, Any] | None = None,
     provenance: Mapping[str, Any] | None = None,
     trace: Mapping[str, Any] | None = None,
+    turn_trace_id: str | None = None,
     channel: str = "text",
     modality: str = "text",
     retention_class: str = "normal",
@@ -683,6 +687,7 @@ def build_workflow_intent_proposal(
         input_context=proposal_input_context,
         provenance=provenance,
         trace=trace,
+        turn_trace_id=turn_trace_id,
         model=model,
         disposition=disposition,
         clarification=clarification,
@@ -892,6 +897,8 @@ def workflow_invocation_from_intent_proposal(
         or arguments.get("idempotency_key")
         or f"intent:{record['proposal_id']}:{act['act_id']}"
     ).strip()
+    selected_trace = copy.deepcopy(dict(record.get("trace") or {}))
+    selected_turn_trace_id = str(record.get("turn_trace_id") or "").strip() or None
     command = validate_workflow_record(
         WORKFLOW_COMMAND_SCHEMA,
         {
@@ -906,6 +913,8 @@ def workflow_invocation_from_intent_proposal(
             "context_ref": selected_context_ref,
             "reply_route_ref": selected_reply_route_ref,
             "created_at": timestamp,
+            "turn_trace_id": selected_turn_trace_id,
+            "trace": selected_trace,
         },
     )
     invocation_seed = {
@@ -931,6 +940,8 @@ def workflow_invocation_from_intent_proposal(
         "confirmation_required": selected_confirmation,
         "command": command,
         "created_at": timestamp,
+        "turn_trace_id": selected_turn_trace_id,
+        "trace": selected_trace,
         "metadata": {
             "intent_proposal_id": record["proposal_id"],
             "intent_act_id": act["act_id"],
@@ -939,6 +950,7 @@ def workflow_invocation_from_intent_proposal(
             "action_policy": action_policy_from_workflow_risk(selected_risk),
             "provenance": copy.deepcopy(dict(record["provenance"])),
             "trace": copy.deepcopy(dict(record["trace"])),
+            "turn_trace_id": selected_turn_trace_id,
         },
     }
     return validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, invocation)
@@ -1086,6 +1098,7 @@ def build_conversation_output(
         "fields": [copy.deepcopy(dict(item)) for item in fields],
         "evidence_refs": [copy.deepcopy(dict(item)) for item in evidence_refs],
         "correlation": merged_correlation,
+        "turn_trace_id": merged_correlation.get("turn_trace_id"),
         "next_expected_input": merged_next_expected_input,
         "channel_constraints": merged_channel_constraints,
         "response_envelope_ref": _deepcopy_mapping(response_envelope_ref),
@@ -1168,6 +1181,7 @@ def _run_ref_from_commit(commit: Mapping[str, Any] | None) -> dict[str, Any] | N
     for key, kind in (
         ("run_id", "run"),
         ("task_id", "task"),
+        ("activity_attempt_id", "activity_run"),
         ("commit_id", "workflow_commit"),
         ("event_id", "workflow_event"),
     ):
@@ -1236,6 +1250,15 @@ def conversation_output_from_workflow_execution(
         "status": result.get("status"),
         "reason_code": reason_code,
     }
+    selected_turn_trace_id = (
+        str(turn_trace_id).strip()
+        if turn_trace_id is not None
+        else str(invocation.get("turn_trace_id") or metadata.get("turn_trace_id") or "").strip()
+        or None
+    )
+    selected_trace = copy.deepcopy(
+        dict(invocation.get("trace") or metadata.get("trace") or {})
+    )
     return build_conversation_output(
         output_id=output_id or _stable_id("conversation_output", seed),
         conversation_id=selected_conversation_id,
@@ -1258,7 +1281,7 @@ def conversation_output_from_workflow_execution(
             if isinstance(item, Mapping)
         ],
         correlation={
-            "turn_trace_id": turn_trace_id or metadata.get("turn_trace_id"),
+            "turn_trace_id": selected_turn_trace_id,
             "intent_proposal_id": proposal_id,
             "interaction_id": interaction_id,
             "workflow_ref": workflow_ref_value,
@@ -1288,6 +1311,7 @@ def conversation_output_from_workflow_execution(
             "transition_id": (decision or {}).get("transition_id"),
             "reason_code": reason_code or None,
         },
+        trace=selected_trace,
         now=now or str((decision or {}).get("decided_at") or _now()),
     )
 
@@ -1403,6 +1427,8 @@ def response_envelope_from_conversation_output(
         "reply_route_ids": routes,
         "materialization_status": materialization_status,
         "status": selected_status,
+        "turn_trace_id": output_correlation.get("turn_trace_id"),
+        "trace": copy.deepcopy(dict(record.get("trace") or {})),
         "created_at": timestamp,
         "updated_at": timestamp,
         "materialized_at": None,

@@ -149,6 +149,7 @@
       "additionalProperties": false
     },
     "trace": { "$ref": "#/$defs/trace" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
     "disposition": { "enum": ["proposed", "clarification_required", "rejected", "committed", "corrected"] },
     "clarification": {
       "oneOf": [
