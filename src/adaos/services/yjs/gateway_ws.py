@@ -2787,6 +2787,17 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
                 "inbound_guard_last_reset_reserved": bool(raw_diag.get("inbound_guard_last_reset_reserved")),
                 "effective_repair_total": int(raw_diag.get("effective_repair_total") or 0),
                 "effective_repair_bytes": int(raw_diag.get("effective_repair_bytes") or 0),
+                "effective_initial_replay_total": int(raw_diag.get("effective_initial_replay_total") or 0),
+                "effective_initial_replay_bytes": int(raw_diag.get("effective_initial_replay_bytes") or 0),
+                "effective_initial_replay_skip_total": int(
+                    raw_diag.get("effective_initial_replay_skip_total") or 0
+                ),
+                "effective_initial_replay_dedupe_total": int(
+                    raw_diag.get("effective_initial_replay_dedupe_total") or 0
+                ),
+                "effective_initial_replay_last_reason": str(
+                    raw_diag.get("effective_initial_replay_last_reason") or ""
+                ),
                 "send_stream": {
                     "current_buffer_used": int(send_stream.get("current_buffer_used") or 0),
                     "max_buffer_size": int(send_stream.get("max_buffer_size") or 0),

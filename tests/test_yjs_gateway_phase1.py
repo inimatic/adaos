@@ -2257,6 +2257,15 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
             self._update_send_stream = _FakeStatsStream(buffer_used=5, waiting_send=2, waiting_receive=1)
             self._update_receive_stream = _FakeStatsStream(buffer_used=5, waiting_send=2, waiting_receive=1)
 
+        def _diag_snapshot(self):
+            return {
+                "effective_initial_replay_total": 1,
+                "effective_initial_replay_bytes": 512,
+                "effective_initial_replay_skip_total": 2,
+                "effective_initial_replay_dedupe_total": 3,
+                "effective_initial_replay_last_reason": "malformed_preflight",
+            }
+
     key = "gateway-room-debug"
     room = _FakeRoom()
     gateway_module.y_server.rooms[key] = room
@@ -2307,6 +2316,11 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"
     assert room_info["update_send_stream"]["current_buffer_used"] == 5
     assert room_info["update_send_stream"]["tasks_waiting_send"] == 2
+    assert room_info["diagnostic"]["effective_initial_replay_total"] == 1
+    assert room_info["diagnostic"]["effective_initial_replay_bytes"] == 512
+    assert room_info["diagnostic"]["effective_initial_replay_skip_total"] == 2
+    assert room_info["diagnostic"]["effective_initial_replay_dedupe_total"] == 3
+    assert room_info["diagnostic"]["effective_initial_replay_last_reason"] == "malformed_preflight"
     assert room_info["last_reset_reason"] == "manual_test"
     assert room_info["last_reset_closed_webrtc_peers"] == 2
     assert transport["active_room_total"] >= 1
