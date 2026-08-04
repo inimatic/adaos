@@ -618,11 +618,18 @@ for their detailed gates and evidence.
   `adaos.sdk.developer.conversational.scaffold_package` creates the complete
   source skeleton, binds an existing governed workflow, refuses replacement,
   and immediately runs the canonical compiler/validator.
+- [x] `[must]` Expose project-identity design-time ports for Builder.
+  `scaffold_project(kind, id)` and `compile_project(kind, id)` resolve only a
+  bounded DEV artifact, automatically derive a scenario's admitted skill
+  operation catalog, and call the same canonical package pipeline as path-based
+  SDK consumers. Builder exposes these ports as non-destructive scaffold and
+  validation tools.
 - [ ] `[must]` Define the skill/scenario SDK ports for validation,
   compilation, proposal emission, semantic output, interactions, Teacher
-  candidate capture, and Builder promotion. Scaffold, validation, story
-  execution, static export, and pure runtime ABI builders exist; a unified
-  high-level interaction/Teacher-promotion facade remains open.
+  candidate capture, and Builder promotion. Path- and project-bound scaffold,
+  validation, story execution, static export, and pure runtime ABI builders
+  exist; runtime proposal/output/interaction and Teacher-promotion facades
+  remain open.
 - [x] `[must]` Add first workflow-facing conversation-story fixtures and runner
   support for deterministic `IntentProposal` fixtures, workflow command, state
   transition, semantic output, and no-LLM execution.
@@ -713,9 +720,11 @@ The remaining work should proceed in dependency order:
 4. Promote repeated failures into reviewable regression-story candidates and
    connect failed stories to quarantine/rollback without deleting unrelated
    runtime learning.
-5. Finish output-derived presentation identity, Builder package authoring UX,
-   OpenTelemetry export, and direct-agent comparison metrics. A2A/MCP remain
-   optional adapters over these AdaOS-owned records.
+5. Use the bounded DEV Builder pilot to harden package authoring, diagnostics,
+   and story-first scenario development; then finish output-derived
+   presentation identity, structured package editing UX, OpenTelemetry export,
+   and direct-agent comparison metrics. A2A/MCP remain optional adapters over
+   these AdaOS-owned records.
 
 ### Deferred
 

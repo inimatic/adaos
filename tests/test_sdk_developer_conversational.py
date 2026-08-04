@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from adaos.sdk.developer import conversational
+import yaml
+
+from adaos.sdk.developer import conversational, projects
 
 
 def test_developer_sdk_scaffolds_non_destructive_valid_package(tmp_path: Path) -> None:
@@ -51,6 +53,107 @@ def test_developer_sdk_scaffold_binds_existing_workflow(tmp_path: Path) -> None:
     report = result["static_report"]
     assert report is not None
     assert report["workflow_type"] == "example.release"
+
+
+def test_developer_sdk_scaffolds_and_compiles_dev_project_by_identity(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    skills = tmp_path / "skills"
+    scenarios = tmp_path / "scenarios"
+    skills.mkdir()
+    scenarios.mkdir()
+    monkeypatch.setattr(projects, "_roots", lambda: (skills.resolve(), scenarios.resolve()))
+    project_root = skills / "identity_demo"
+    project_root.mkdir(parents=True)
+    (project_root / "skill.yaml").write_text(
+        "name: identity_demo\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+
+    scaffolded = conversational.scaffold_project(
+        "skill",
+        "identity_demo",
+        locales=("en", "ru"),
+    )
+    compiled = conversational.compile_project("skill", "identity_demo")
+
+    assert scaffolded["valid"] is True
+    assert compiled["valid"] is True
+    assert compiled["validation_report"]["metrics"]["locales"] == 2
+    assert (project_root / "conversational" / "locale.ru.yaml").is_file()
+
+
+def test_developer_sdk_derives_scenario_dependency_operation_catalog(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    skills = tmp_path / "skills"
+    scenarios = tmp_path / "scenarios"
+    skills.mkdir()
+    scenarios.mkdir()
+    monkeypatch.setattr(projects, "_roots", lambda: (skills.resolve(), scenarios.resolve()))
+    dependency = skills / "demo_control"
+    dependency.mkdir()
+    (dependency / "skill.yaml").write_text(
+        "name: demo_control\nversion: 0.1.0\ntools:\n- name: ping\n  entry: handlers.main:ping\n",
+        encoding="utf-8",
+    )
+    project_root = scenarios / "identity_scenario"
+    project_root.mkdir()
+    (project_root / "scenario.yaml").write_text(
+        "id: identity_scenario\nversion: 0.1.0\ndepends: [demo_control]\n",
+        encoding="utf-8",
+    )
+    conversational.scaffold_project("scenario", "identity_scenario")
+    package_root = project_root / "conversational"
+    input_source = yaml.safe_load((package_root / "input.yaml").read_text(encoding="utf-8"))
+    input_source["intents"] = [
+        {
+            "id": "ping",
+            "description": "Read dependency status.",
+            "kind": "query",
+            "affordance_id": "ping",
+            "workflow": None,
+            "skill_invocation": {"skill_id": "demo_control", "operation_id": "ping"},
+            "example_ids": [],
+            "slots": [],
+        }
+    ]
+    affordances = yaml.safe_load(
+        (package_root / "affordances.yaml").read_text(encoding="utf-8")
+    )
+    affordances["affordances"] = [
+        {
+            "id": "ping",
+            "kind": "query",
+            "label": "Read status",
+            "description": "Read status through the declared dependency.",
+            "workflow": None,
+            "skill_invocation": {"skill_id": "demo_control", "operation_id": "ping"},
+            "action_policy": {
+                "schema": "adaos.conversation.action_policy.v1",
+                "risk_class": "read",
+                "side_effect": "none",
+                "confirmation": "none",
+            },
+            "required_capabilities": [],
+            "output_refs": [],
+        }
+    ]
+    (package_root / "input.yaml").write_text(
+        yaml.safe_dump(input_source, sort_keys=False),
+        encoding="utf-8",
+    )
+    (package_root / "affordances.yaml").write_text(
+        yaml.safe_dump(affordances, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    compiled = conversational.compile_project("scenario", "identity_scenario")
+
+    assert compiled["valid"] is True
+    assert compiled["validation_report"]["diagnostics"] == []
 
 
 def test_developer_sdk_runs_canonical_conversational_pipeline(tmp_path: Path) -> None:

@@ -900,9 +900,15 @@ Conversational artifacts and learning:
   entity, example, optional deterministic matcher, locale, and story sources.
   Workspace/package admission, Builder context, SDK scaffold/compile/export,
   and deterministic stories share the canonical package pipeline.
-- [ ] `[must]` Define Builder/SDK ports for conversational validation,
-  compilation, proposal emission, semantic output, interaction creation,
-  Teacher candidate capture, and candidate-to-Change promotion.
+- [ ] `[must]` Complete Builder/SDK ports for conversational proposal emission,
+  semantic output, interaction creation, Teacher candidate capture, and
+  candidate-to-Change promotion. Project-bound scaffold and compilation ports
+  are implemented and use the canonical pipeline.
+- [x] `[must]` Expose bounded project-identity conversational authoring tools
+  in Builder. `scaffold_conversational_package` refuses replacement, while
+  `validate_conversational_package` runs source validation, dependency-aware
+  affordance checks, deterministic stories, and static evidence for the
+  selected `(kind, id)` project.
 - [x] `[must]` Include conversational package digest, diagnostics, bounded
   story summaries, and workflow/output/repair/risk/locale/channel coverage in
   Builder context packets for conversational Changes.
@@ -947,6 +953,11 @@ Conversational artifacts and learning:
 - [ ] `[should]` Track comparison metrics against direct Codex/Claude access:
   time to diagnosis, context needed, rework, missing tests, review load, and
   release confidence.
+- [x] `[should]` Start a bounded Builder dogfood package with English/Russian
+  authored examples and matchers, Prototype workflow affordances and outputs,
+  a deterministic multi-turn workflow story, and no-match repair coverage.
+  This admits design-time scenario-development trials but does not mark live
+  canonical NLU ingress or unattended runtime activation complete.
 - [ ] `[could]` Export accepted conversation stories as user-facing learning or
   education-on-the-go material after they pass privacy and localization checks.
 - [ ] `[deferred]` Build an interactive workflow/conversation studio with trace

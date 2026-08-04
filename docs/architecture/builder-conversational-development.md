@@ -898,3 +898,39 @@ The first refactoring slice is accepted only when:
 12. a Project exposes multiple independent Changes and an indirect
     shared-component conflict without inventing one global project stage;
 13. the recovered Builder retains the complete functional-parity contract.
+
+## Bounded Conversational Pilot
+
+The current DEV Builder is admitted for a design-time conversational pilot,
+not for an unattended production rollout. The pilot boundary is one selected
+skill/scenario and its declared workflow, dependencies, and git-versioned
+`conversational/` package. Builder resolves the project by `(kind, id)`, can
+create a non-destructive package skeleton, runs the canonical validator and
+mocked story runner, and returns static workflow/story evidence without giving
+the model direct authority over runtime workflow definitions.
+
+The first dogfood package is `builder_skill`: authored English/Russian
+examples and deterministic matchers cover Prototype planning, review, and
+acceptance; a three-turn workflow story reaches `automation_ready`; and a
+no-match story proves repair without mutation. This package is trial evidence,
+not a claim that the live NLU dispatcher already uses the canonical ingress.
+
+Every pilot scenario-development Change must therefore follow this gate:
+
+1. scaffold or inspect the selected project's `conversational/` package;
+2. author input, affordance, repair, output, locale, and matcher data against
+   existing workflow commands or declared skill operations;
+3. add deterministic happy, repair, hard-negative, and protected-action
+   stories before implementation is accepted;
+4. run `validate_conversational_package` and reject the Change on any schema,
+   cross-reference, risk, threat, or story diagnostic;
+5. inspect package digest, coverage, and static workflow/story evidence in the
+   Builder context before starting Automation or Trial;
+6. retain failures and direct-agent comparison measurements as Change/Run
+   evidence rather than editing runtime Teacher overlays into source.
+
+The pilot must stop short of automatic runtime activation until canonical
+`IntentProposal` ingress replaces the `nlp.intent.detected` compatibility
+authority, output-derived presentation identity is complete, and
+Teacher-candidate-to-Change execution can apply and reject bounded source
+patches with provenance.

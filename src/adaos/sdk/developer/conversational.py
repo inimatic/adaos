@@ -26,6 +26,73 @@ def _yaml_text(value: Mapping[str, Any]) -> str:
     return yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=False)
 
 
+def _project_root(kind: ArtifactKind, project_id: str) -> Path:
+    """Resolve one bounded DEV project through the developer workspace SDK."""
+
+    from adaos.sdk.developer import projects
+
+    return projects._root(kind, project_id)  # noqa: SLF001
+
+
+def _project_operation_catalog(
+    kind: ArtifactKind,
+    project_id: str,
+    supplied: Mapping[str, Sequence[str]] | None,
+) -> dict[str, tuple[str, ...]]:
+    """Build the admitted operation catalog for a DEV scenario's dependencies."""
+
+    from adaos.sdk.developer import projects
+
+    catalog = {
+        str(skill_id): tuple(str(operation) for operation in operations)
+        for skill_id, operations in dict(supplied or {}).items()
+    }
+    if kind != "scenario":
+        return catalog
+
+    root = _project_root(kind, project_id)
+    component = yaml.safe_load((root / "scenario.yaml").read_text(encoding="utf-8-sig")) or {}
+    if not isinstance(component, Mapping):
+        return catalog
+
+    def values(value: Any) -> list[Any]:
+        return [value] if isinstance(value, str) else list(value or [])
+
+    dependencies = values(component.get("depends"))
+    runtime = component.get("runtime") if isinstance(component.get("runtime"), Mapping) else {}
+    skills = runtime.get("skills") if isinstance(runtime.get("skills"), Mapping) else {}
+    dependencies.extend(values(skills.get("required")))
+    for dependency in sorted({str(item).strip() for item in dependencies if str(item).strip()}):
+        try:
+            skill_root = projects._root("skill", dependency)  # noqa: SLF001
+            manifest = yaml.safe_load(
+                (skill_root / "skill.yaml").read_text(encoding="utf-8-sig")
+            ) or {}
+        except (
+            projects.DeveloperProjectError,
+            FileNotFoundError,
+            OSError,
+            UnicodeDecodeError,
+            yaml.YAMLError,
+        ):
+            continue
+        if not isinstance(manifest, Mapping):
+            continue
+        operations = {
+            str(item.get("name") or "").strip()
+            for item in list(manifest.get("tools") or [])
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        }
+        exports = manifest.get("exports") if isinstance(manifest.get("exports"), Mapping) else {}
+        operations.update(
+            str(item.get("name") if isinstance(item, Mapping) else item).strip()
+            for item in list(exports.get("tools") or [])
+            if str(item.get("name") if isinstance(item, Mapping) else item).strip()
+        )
+        catalog.setdefault(dependency, tuple(sorted(operations)))
+    return catalog
+
+
 def scaffold_package(
     path: Path | str,
     *,
@@ -208,6 +275,27 @@ def scaffold_package(
     }
 
 
+def scaffold_project(
+    kind: ArtifactKind,
+    project_id: str,
+    *,
+    package_id: str | None = None,
+    version: str | None = None,
+    locales: Sequence[str] = ("en",),
+    include_matchers: bool = True,
+) -> dict[str, Any]:
+    """Scaffold a package for a bounded DEV project selected by identity."""
+
+    return scaffold_package(
+        _project_root(kind, project_id),
+        kind=kind,
+        package_id=package_id,
+        version=version,
+        locales=locales,
+        include_matchers=include_matchers,
+    )
+
+
 def compile_package(
     path: Path | str,
     *,
@@ -228,6 +316,25 @@ def compile_package(
         build_static_report=build_static_report,
     )
     return result.as_dict()
+
+
+def compile_project(
+    kind: ArtifactKind,
+    project_id: str,
+    *,
+    operation_catalog: Mapping[str, Sequence[str]] | None = None,
+    run_stories: bool = True,
+    build_static_report: bool = True,
+) -> dict[str, Any]:
+    """Compile a bounded DEV project's conversational package by identity."""
+
+    return compile_package(
+        _project_root(kind, project_id),
+        kind=kind,
+        operation_catalog=_project_operation_catalog(kind, project_id, operation_catalog),
+        run_stories=run_stories,
+        build_static_report=build_static_report,
+    )
 
 
 def export_package(
@@ -275,4 +382,11 @@ def export_package(
     return {**result, "artifacts": artifacts}
 
 
-__all__ = ["ArtifactKind", "compile_package", "export_package", "scaffold_package"]
+__all__ = [
+    "ArtifactKind",
+    "compile_package",
+    "compile_project",
+    "export_package",
+    "scaffold_package",
+    "scaffold_project",
+]
