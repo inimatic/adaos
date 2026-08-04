@@ -317,7 +317,9 @@ Target controls:
 - **Candidate view**: shows intent ranking, extracted entities/slots, matched lookup values, and the proposed action target.
 - **Correct**: marks the current interpretation as accepted and records the example as positive feedback.
 - **Fix**: lets the operator choose or edit intent, slots, action, and storage target.
-- **Save example**: persists the curated example into scenario or skill training content, without mutating code.
+- **Save example**: persists the curated example as a scoped runtime overlay
+  and creates a Builder promotion candidate for a reusable owner package,
+  without mutating code or package source.
 
 The first implementation can be intentionally narrow: support dry-run phrase checks, show ranking/entities for Rasa, and save examples for the
 default desktop modal and runtime-backed system action intents. Broader tool/action authoring should wait until Root MCP descriptors are available.
@@ -688,13 +690,17 @@ Required Root MCP surfaces for NLU Teacher:
 - `desktop.get_state`: current scenario, home scenario, open modals, installed apps, focused node/browser, and current route.
 - `desktop.preview_action`: validate an action candidate and show the event/action preview without dispatching it.
 - `skill.describe_tools`: skill tools, event subscriptions/publications, input schemas, and ownership hints.
-- `skill.describe_nlu`: skill-owned intents, examples, slots, regex rules, and `llm_policy`.
-- `scenario.describe_nlu`: scenario-owned intents, actions, examples, and routing hints.
+- `skill.describe_nlu`: skill conversational package data plus compatibility
+  intents/hints and `llm_policy`.
+- `scenario.describe_nlu`: scenario conversational package data plus
+  compatibility intents, actions, and routing hints.
 - `sdk.describe_surface`: SDK functions/events/projections as read-only descriptors for ownership and affordance discovery. This is not an
   execution surface for the LLM.
 
-This keeps the existing regex model intact: Root MCP supplies descriptors and governed operations, while the current runtime pipeline remains
-`regex-first` and data-owned rules stay in scenario/skill artifacts.
+This keeps the existing regex model intact: Root MCP supplies descriptors and
+governed operations, while the current runtime pipeline remains `regex-first`.
+Scoped overlays own runtime specialization; git-versioned conversational
+packages own reusable matcher source.
 
 Current Root MCP implementation status:
 
@@ -914,7 +920,8 @@ Proposed bundle shape:
 Initial apply policy:
 
 - `regex`: apply only after explicit operator confirmation, and never overwrite existing rules.
-- `rasa`: save examples and lookup references into scenario/skill training content.
+- `rasa`: save examples and lookup references into the runtime overlay and
+  propose promotion to `conversational/examples.yaml`.
 - `neural`: store labels/masked examples as future training metadata; do not enable inference behavior until neural stage is explicitly enabled.
 - `lookups`: generate from live desktop registry snapshots, not from hardcoded examples such as `member-1`.
 
@@ -1209,7 +1216,8 @@ treated as `[could]` unless explicitly promoted.
   the raw probe JSON.
 - `[deferred]` Show existing templates relevant to the phrase/intent and allow selecting one for correction.
 - `[deferred]` Add Correct/Fix actions.
-- `[deferred]` Save curated examples into scenario/skill training content.
+- Implemented: save curated examples into runtime overlays and produce bounded
+  package promotion candidates for reusable skill/scenario targets.
 - `[could]` Show previous failure/correction thread when the current phrase looks like a correction.
 - `[could]` Show candidate verification state: proposed, previewed, intent-matched, dispatched, accepted, corrected, applied.
 

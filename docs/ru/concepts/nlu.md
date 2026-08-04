@@ -13,11 +13,12 @@ This document describes the current production MVP direction for intent detectio
 1. UI / Telegram / Voice publishes:
    - `nlp.intent.detect.request { text, webspace_id, request_id, _meta... }`
 2. `nlu.pipeline` tries regex rules:
+   - scoped Teacher overlays from Yjs `data.nlu.regex_rules` first
+   - git-versioned `conversational/matchers.yaml` from installed skills and the
+     active scenario
+   - legacy `scenario.json:nlu.regex_rules` and `skill.yaml:nlu.regex_rules` as
+     read-only compatibility baselines
    - built-in rules (`nlu.pipeline`)
-   - dynamic rules loaded centrally from:
-     - workspace scenarios (`scenario.json:nlu.regex_rules`)
-     - workspace skills (`skill.yaml:nlu.regex_rules`)
-     - legacy per-webspace cache (`data.nlu.regex_rules`)
 3. If regex does not match:
    - if `ADAOS_NLU_NEURAL=1`, or if the variable is unset and
      `neural_nlu_service_skill` is installed/active: emits
@@ -48,6 +49,9 @@ This document describes the current production MVP direction for intent detectio
    - on abstain/error -> falls back to `nlp.intent.detect.rasa`
 5. If an intent is found:
    - `nlp.intent.detected { intent, confidence, slots, text, webspace_id, request_id, via }`
+   - this event and direct `intent -> scenario.run` dispatch are compatibility
+     paths; the target contract emits `IntentProposal` and admits a workflow
+     command or skill invocation
 6. If intent is not obtained:
    - `nlp.intent.not_obtained { reason, text, via, webspace_id, request_id }`
    - Router emits a human-friendly `io.out.chat.append` and records the request for NLU Teacher.
@@ -88,9 +92,10 @@ When `regex` and `rasa` do not produce an intent, AdaOS calls an LLM teacher to:
 
 Teacher receives scenario + skill context, including:
 
-- current scenario NLU (`scenario.json:nlu`)
+- active conversational package input/examples/matchers and affordances
 - installed catalog (apps/widgets + origins)
-- existing dynamic regex rules (from scenarios/skills + legacy per-webspace cache)
+- scoped runtime overlays and git-versioned package matchers
+- legacy scenario/skill regex fields as read-only compatibility evidence
 - built-in regex rules (`nlu.pipeline`)
 - selected skill-level NLU artifacts (e.g. `interpreter/intents.yml`)
 - intent routing hints (`intent_routes`: scenario intent -> callSkill topic -> skill)
@@ -111,10 +116,12 @@ In the default web desktop scenario the NLU Teacher UI is a schema-driven modal:
 - Apply actions:
   - `nlp.teacher.revision.apply`
   - `nlp.teacher.candidate.apply`:
-    - for `regex_rule` candidates: persists the rule into a workspace owner (preferably a skill), then mirrors into
-      `data.nlu.regex_rules` as a runtime cache so the next request matches immediately (`via="regex.dynamic"`)
+    - for `regex_rule` candidates: writes a scoped runtime overlay to
+      `data.nlu.regex_rules` and creates a Builder promotion candidate for
+      `conversational/matchers.yaml`
     - for `skill`/`scenario` candidates: creates a development plan item
-  - a successful apply emits `ui.notify` with the owner (skill/scenario) where the rule was installed
+  - a successful apply emits `ui.notify` with runtime scope and promotion
+    candidate identity; package source is not changed by Teacher
 
 The modal is opened through the Web UI overlay runtime, not directly by a
 widget. The runtime captures the focused desktop element, releases background
@@ -122,9 +129,13 @@ focus before hiding the desktop surface, and restores focus after dismissal.
 This keeps the NLU Teacher action declarative while preserving the shared
 accessibility lifecycle for all schema-driven modals.
 
-## Dynamic regex rules (current contract)
+## Deterministic matcher storage (current contract)
 
-- Storage (source of truth):
+- Reusable source: skill/scenario `conversational/matchers.yaml`, changed only
+  through Builder/package admission.
+- Runtime specialization: Yjs `data.nlu.regex_rules[]` plus node-local
+  `state/interpreter/nlu_teacher_overlays.json` promotion evidence.
+- Legacy compatibility input (read-only):
   - skill: `.adaos/workspace/skills/<skill>/skill.yaml` → `nlu.regex_rules[]`
   - scenario: `.adaos/workspace/scenarios/<scenario>/scenario.json` → `nlu.regex_rules[]`
 - Rule identity:
@@ -132,7 +143,8 @@ accessibility lifecycle for all schema-driven modals.
 - Observability:
   - every `regex.dynamic` match appends a JSONL record into `state/nlu/regex_usage.jsonl` (webspace_id, scenario_id, rule_id, intent, slots…)
 - Optional trust policy:
-  - `skill.yaml: llm_policy.autoapply_nlu_teacher=true` enables automatic Apply for teacher-proposed regex candidates targeting that skill
+  - `skill.yaml: llm_policy.autoapply_nlu_teacher=true` may auto-apply a trusted
+    runtime overlay; reusable source still requires Builder review
 
 ## Later (not MVP)
 

@@ -940,9 +940,10 @@ Conversational artifacts and learning:
   conversational pipeline now returns validation JSON plus
   `adaos.workflow.static_report.v1`; the developer SDK can export both JSON
   reports and a Markdown/Mermaid human-review projection.
-- [ ] `[should]` Add conversational threat-model checks for prompt injection in
-  descriptors/stories, alias hijacking, private-data promotion, output/action
-  mismatch, and MCP scope confusion.
+- [x] `[should]` Add conversational package threat-model checks for
+  instruction-like authored descriptors, normalized alias hijacking,
+  private/unreviewed Teacher data in public source, output/action risk
+  mismatch, and embedded credential/MCP session material.
 - [ ] `[should]` Track comparison metrics against direct Codex/Claude access:
   time to diagnosis, context needed, rework, missing tests, review load, and
   release confidence.

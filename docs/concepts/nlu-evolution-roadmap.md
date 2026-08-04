@@ -243,9 +243,10 @@ Live-trial blocker:
   voice-surface bindings over stale regex hypotheses, so a bad earlier
   candidate should no longer block the correct Infrastate inventory binding.
 - Skill-owned actions can now be learned as training examples without scenario
-  mapping. Candidate Apply carries `action_candidate` into the skill artifact,
-  persists a `skillTool` action under `skill.yaml` `nlu.intents`, and the
-  dispatcher executes that published skill action through the normal tool path.
+  mapping. Candidate Apply carries `action_candidate` into a scoped example
+  overlay and promotion candidate, including the proposed `skillTool` binding;
+  the dispatcher can execute the runtime binding through the normal tool path
+  without Teacher editing `skill.yaml`.
   This is the first deterministic route for phrases such as ReDevice slideshow
   controls that belong to a skill rather than to a core UI modal.
 
@@ -486,7 +487,10 @@ Acceptance checklist:
   portability, and rollback metadata.
 - [ ] `[must]` Promotion candidates targeting reusable behavior identify the
   owning `conversational/` package files, affected workflow commands/entities/
-  outputs/stories, and the Builder Change that will review the patch.
+  outputs/stories, and the Builder Change that will review the patch. Example
+  and matcher candidates now identify their target package file, bounded patch,
+  allowed paths, acceptance criteria, evidence refs, and intended Change id;
+  affected semantic-id expansion and durable Change creation remain open.
 - [ ] `[must]` Promotion flow checks scope, private entities, target owner,
   duplicate/conflict risk, and regression suite before repo push.
 - [ ] `[must]` Skill/scenario push validates voice descriptors, aliases, examples,
@@ -513,7 +517,10 @@ Acceptance checklist:
 
 - [ ] `[must]` Conversation stories can assert NLU result, action preview,
   dispatch acknowledgement, workflow state transition, semantic output, UI
-  outcome, and result-mode behavior.
+  outcome, and result-mode behavior. Current deterministic stories assert
+  proposal, workflow transition/state, semantic output, repair,
+  `ConversationInteraction`, and channel fallback; provider parsing, dispatch
+  acknowledgement, and concrete UI outcome remain open.
 - [ ] `[must]` Failed conversation stories create quarantine, Teacher candidate,
   or Builder repair evidence, not silent pass/fail text.
 - [ ] `[must]` Rollback restores the previous local learned behavior or removes

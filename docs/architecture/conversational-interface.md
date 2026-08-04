@@ -323,8 +323,8 @@ tests, and release gates.
 
 ## Conversational Artifact Pipeline
 
-The SDK should expose one pipeline used by Builder design-time authoring,
-Teacher promotion, CI, and package publication:
+One canonical pipeline is shared by Builder design-time admission, the
+developer SDK, skill/scenario validation, CI, and future Teacher promotion:
 
 ```text
 collect sources
@@ -336,6 +336,13 @@ collect sources
   -> compile/package
   -> publish/promote
 ```
+
+The current implementation closes source collection, draft generation,
+normalization, static validation, stories, workflow simulation, and static
+evidence through `scaffold_package`, `compile_package`, and `export_package`.
+Provider-specific compilation, durable Builder execution of promotion patches,
+and publication remain explicit next stages rather than hidden behavior in the
+validator.
 
 Required checks:
 
@@ -377,38 +384,56 @@ A story is not a transcript snapshot. It is a specification of expected
 semantic behavior:
 
 ```yaml
-id: builder.create_report_app.en.happy_path
-title: Create a reporting application from chat
-workflow: adaos.builder.change.v1
+schema: adaos.conversational.story.v1
+id: release.submit.en.happy_path
+title: Submit a release for review
+story_kind: workflow
+workflow_type: example.release
 locale: en
 channel: web
+actor:
+  id: user:local
+  permissions: [release.submit]
+  roles: []
 start:
-  project_ref: project:test-reporting
-  state: idle
+  instance_id: release:reference
+  state: draft
+  generation: 0
+  context: {}
 steps:
-  - user: "Build a small reporting app for monthly sales."
+  - user: "Submit this release for review."
+    given:
+      proposal:
+        kind: workflow_command
+        intent_id: submit_release
+        command: submit
+        skill_id: null
+        operation_id: null
+        arguments: {}
+        confidence: 0.96
+        action_policy:
+          schema: adaos.conversation.action_policy.v1
+          risk_class: isolated_write
+          side_effect: reversible
+          confirmation: none
+      event: null
+      skill_result: null
+      output_ref: release_submitted
     expect:
       proposal:
         kind: workflow_command
-        command: builder.change.plan
-      output:
-        kind: clarification
-        asks_for: [data_source, audience]
-  - user: "Use the CRM demo data. It is for managers."
-    expect:
-      command: builder.change.start_prototype
-      state: prototype_in_progress
-      output:
-        kind: accepted
-        actions: [show_process]
-  - event:
-      activity: prototype_revision_recorded
-      revision_ref: revision:ui-001
-    expect:
-      state: prototype_review
+        command: submit
+        confidence_at_least: 0.9
+      command: submit
+      transition_id: submit_release
+      state: review
+      reason_code: null
       output:
         kind: result
-        actions: [approve, request_changes]
+        output_ref: release_submitted
+        summary: Release submitted for review.
+        actions: []
+        next_expected_input: none
 ```
 
 Story assertions should prefer stable semantic fields over exact prose:
@@ -428,7 +453,7 @@ artifacts.
 
 ### Story Runner Contract
 
-The first story runner should be deterministic and side-effect isolated:
+The current story runner is deterministic and side-effect isolated:
 
 - run against a pinned workflow definition, conversational package, locale,
   channel profile, actor scope, and initial workflow snapshot;
@@ -642,9 +667,11 @@ for their detailed gates and evidence.
   output kinds, risky actions, locales, and channel fallbacks. Static reports
   distinguish declared, covered, and missing output kinds, repair policies,
   risk classes, and locales, and record covered channels and story kinds.
-- [ ] `[should]` Add conversational threat-model checks for prompt injection,
-  descriptor poisoning, alias hijacking, private-data promotion, output/action
-  mismatch, and MCP scope confusion.
+- [x] `[should]` Add conversational package threat-model checks. Validation
+  rejects normalized alias collisions, embedded credential/MCP session fields,
+  unreviewed Teacher/private data in public source, and understated output
+  action risk; instruction-like authored control text produces an auditable
+  warning so explicit negative fixtures are not silently prohibited.
 - [ ] `[should]` Add candidate-to-story promotion so repeated runtime failures
   become reviewable story candidates.
 - [x] `[should]` Update legacy NLU and scenario documentation to mark
@@ -669,6 +696,26 @@ for their detailed gates and evidence.
   are legal workflow definitions.
 - [ ] `[could]` Add education-on-the-go exports that turn accepted stories into
   user-facing walkthroughs or contextual training cards.
+
+### Next Implementation Sequence
+
+The remaining work should proceed in dependency order:
+
+1. Migrate the live NLU/dispatcher path from direct `nlp.intent.detected`
+   authority to `IntentProposal -> workflow/skill invocation admission`, while
+   retaining the event as a measured compatibility projection.
+2. Complete Teacher-to-Builder execution: carry candidate/privacy refs into the
+   context packet, create a durable Change, apply only bounded package patches,
+   run the canonical validator/stories, and link release or rejection back to
+   the source overlay.
+3. Add provider compilation contracts and implementations with source digest,
+   compatibility, rollout, active/previous version, and rollback evidence.
+4. Promote repeated failures into reviewable regression-story candidates and
+   connect failed stories to quarantine/rollback without deleting unrelated
+   runtime learning.
+5. Finish output-derived presentation identity, Builder package authoring UX,
+   OpenTelemetry export, and direct-agent comparison metrics. A2A/MCP remain
+   optional adapters over these AdaOS-owned records.
 
 ### Deferred
 

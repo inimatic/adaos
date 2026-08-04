@@ -80,7 +80,7 @@ The current repository has useful but fragmented foundations:
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | persisted phase/change state, Runs, revisions, trial/publication evidence | domain-specific and partially integrated; recovery remains fragmented |
 | Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
-| Conversation stories | early golden-conversation fixtures in NLU tests; workflow graph export exists as a non-authoritative projection | no shared story schema, workflow-path coverage, or Builder package admission yet |
+| Conversation stories | shared package/story schemas, deterministic no-LLM runner, workflow/statechart and Markdown/Mermaid export, Builder context admission, and executable reference package | validated-local; provider-backed NLU parsing, candidate-to-story promotion, and interactive replay remain open |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing, bounded reconnect cleanup | at-most-once transport path; target-zone publish is not durable hub acceptance or a workflow journal |
 | Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow lock | validated-local artifact foundation; registry trust, complete adapter binding, and activation admission remain open |
@@ -775,7 +775,8 @@ authoring invalid-to-valid convergence with persisted provenance, explicit
 definition migration with package/binding pins, non-Builder scenario activation
 and rollback, legacy inline workflow translation/shadow comparison, and static
 workflow/conversational review reports with statechart, conformance cases,
-story summaries, and state/command/transition/output coverage.
+story summaries, and state/command/transition/output/repair/risk/locale/channel
+coverage.
 - [x] `[should]` `GWR5-33` Generate static statechart, story, and coverage
   reports from admitted workflow/conversational package sources for human
   review, Builder context packets, and trial evidence. The first report ABI is
@@ -786,6 +787,11 @@ story summaries, and state/command/transition/output coverage.
   `workflow_static_report_markdown` adds a human-readable Markdown/Mermaid
   projection, and `adaos.sdk.developer.conversational.export_package` writes
   validation JSON, static-report JSON, and Markdown review evidence together.
+  Coverage distinguishes declared, covered, and missing output kinds, repair
+  policies, risk classes, and locales, and records covered channels/story kinds.
+  Package admission also applies fail-closed alias, secret/scope,
+  private-public promotion, and output/action risk checks, plus warning-level
+  inspection of instruction-like authored control text.
 - [x] `[should]` `GWR5-34` Preserve trace identity across turn, proposal,
   dialog frame, interaction, response, command, workflow event, Run/activity,
   semantic output, and delivery attempt. The first proof ABI is

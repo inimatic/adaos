@@ -24,11 +24,15 @@ skills or prepare A/B slots on the hot parse path.
 
 ## Event interface
 
-The hub NLU pipeline uses:
+The current hub NLU pipeline uses these compatibility events:
 
 - `nlp.intent.detect.request { text, webspace_id, request_id, _meta }`
 - `nlp.intent.detected { intent, confidence, slots, text, webspace_id, request_id, via }`
 - `nlp.intent.not_obtained { reason, text, webspace_id, request_id, via }`
+
+Provider bridges must also preserve enough evidence to construct the canonical
+`IntentProposal`. The target path admits that proposal as a workflow command or
+skill invocation; `nlp.intent.detected` is not protected-effect authority.
 
 ## Neural NLU service skill
 

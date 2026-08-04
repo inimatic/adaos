@@ -1,6 +1,11 @@
 # NLU Target Architecture (Neural Intent Detector)
 
-This document defines the **target architecture** for integrating a neural intent detector (reference: `Fla1lx/neural-network-module-for-determining-user-intent`) into AdaOS.
+This document defines the provider architecture for integrating a neural intent
+detector (reference: `Fla1lx/neural-network-module-for-determining-user-intent`)
+into AdaOS. It is subordinate to the
+[Conversational Control Interface](../architecture/conversational-interface.md):
+providers contribute interpretation evidence, while `IntentProposal`, workflow
+admission, and `ConversationOutput` remain the end-to-end authority contracts.
 
 ## Why this architecture
 
@@ -19,13 +24,16 @@ For AdaOS, this is a good fit between regex (fast deterministic) and LLM teacher
 flowchart LR
   A[nlp.intent.detect.request] --> N[Named-entity canonicalization]
   N --> B[Regex stage]
-  B -->|hit| O[nlp.intent.detected via=regex]
+  B -->|hit| O[IntentProposal evidence]
   B -->|miss| C[Neural NLU Service Skill]
-  C -->|conf >= threshold| O2[nlp.intent.detected via=neural]
+  C -->|conf >= threshold| O
   C -->|low conf / reject| D[Rasa Service Skill]
-  D -->|hit| O3[nlp.intent.detected via=rasa]
+  D -->|hit| O
   D -->|miss| E[NLU Teacher LLM]
-  E --> F[revision/regex/capability proposal]
+  E --> F[Runtime overlay or development/promotion candidate]
+  O --> G[Workflow command or skill invocation admission]
+  G --> H[ConversationOutput]
+  F --> I[Builder Change when reusable]
 ```
 
 ## Components
@@ -113,9 +121,11 @@ Responsibilities:
 - subscribe to `nlp.intent.detect.request`,
 - invoke neural service with timeout/retry,
 - apply confidence gates (`accept`, `abstain`, `reject`),
-- emit:
-  - `nlp.intent.detected` (`via="neural"`), or
-  - `nlp.intent.not_obtained` / `nlp.intent.detect.rasa` fallback.
+- project accepted provider evidence into `IntentProposal`;
+- emit `nlp.intent.detected` only as a compatibility projection while legacy
+  dispatchers migrate;
+- emit `nlp.intent.not_obtained` / `nlp.intent.detect.rasa` fallback when no
+  proposal can be admitted;
 - collect usage statistics for later model-splitting decisions.
 
 ### 4) Data and model registry
@@ -174,12 +184,18 @@ locale, webspace, profile, hardware class, or domain are justified.
 
 ### 6) Training data ownership
 
-Curated examples are stored with the owner of the behavior:
+Curated reusable data is stored in the git-versioned `conversational/` package
+of the behavior owner:
 
-- skill actions -> the owning skill;
-- scenario flows -> the owning scenario;
+- skill actions -> the owning skill package;
+- scenario flows -> the owning scenario package;
 - core/client actions -> a versioned system action catalog;
 - aliases and display names -> named-entity authoritative sources.
+
+Teacher Apply never writes those sources. It records scoped runtime overlays
+and, for reusable skill/scenario behavior, a bounded Builder promotion
+candidate. Provider examples, indexes, weights, and model bundles are compiled
+outputs tied to a conversational source digest and rollback ref.
 
 The system action catalog covers built-in UI/kernel/client commands such as
 move, hide, open, pin, switch, and similar shell behavior. These actions should
@@ -189,10 +205,15 @@ keeping execution authority in the core/client subsystem.
 
 ## Target decision policy
 
-1. **Regex hit**: immediate accept.
-2. **Neural high confidence** (`>= T_accept`): accept as final.
+1. **Regex hit**: emit a high-confidence proposal.
+2. **Neural high confidence** (`>= T_accept`): emit a proposal with provider
+   evidence.
 3. **Neural uncertainty** (`T_reject < conf < T_accept`): delegate to Rasa.
 4. **No intent after Rasa**: delegate to Teacher.
+
+No provider acceptance is permission for a protected effect. The proposal must
+still resolve to a declared affordance and pass workflow/skill invocation
+admission, policy, generation, and confirmation checks.
 
 Recommended initial thresholds:
 
@@ -244,9 +265,9 @@ flows, and no-op safe when disabled.
 
 - Push abstained/low-confidence utterances to NLU Teacher queue.
 - Teacher can propose:
-  - regex fixes,
-  - dataset revisions,
-  - new intent/skill candidates.
+  - runtime matcher/example overlays,
+  - Builder promotion candidates for package matchers/examples,
+  - descriptor fixes or new capability development tasks.
 - `[deferred]` Add "accepted by teacher later" feedback channel for retraining.
 
 **Exit criteria:** closed feedback loop from runtime misses to curated improvements.
@@ -274,6 +295,12 @@ This target architecture preserves current AdaOS strategy:
 - named-entity canonicalization remains a core shared preprocessing layer,
 - service-skill isolation remains the default runtime model,
 - Rasa remains a long-term compatible fallback,
-- Teacher remains improvement/governance mechanism.
+- Teacher remains a runtime improvement and promotion-evidence mechanism,
+- reusable NLU source remains in `conversational/` packages under Builder
+  validation and release control,
+- `nlp.intent.detected` remains a compatibility event until all callers consume
+  `IntentProposal`.
 
-The only structural change is adding a **neural service stage** between regex and Rasa.
+Within the provider chain, the structural change is adding a **neural service
+stage** between regex and Rasa; the provider chain still terminates at the
+shared conversational proposal/admission boundary.

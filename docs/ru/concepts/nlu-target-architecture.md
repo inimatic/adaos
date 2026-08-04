@@ -1,6 +1,10 @@
 # Целевая архитектура NLU (нейросетевой детектор намерений)
 
-Документ описывает **целевую архитектуру** интеграции нейросетевого детектора интентов (референс: `Fla1lx/neural-network-module-for-determining-user-intent`) в AdaOS.
+Документ описывает provider-архитектуру интеграции нейросетевого детектора
+интентов (референс: `Fla1lx/neural-network-module-for-determining-user-intent`)
+в AdaOS. Сквозные authority-контракты определены в
+[Conversational Control Interface](../../architecture/conversational-interface.md):
+provider формирует evidence, а не выполняет защищённые действия.
 
 ## Зачем
 
@@ -18,13 +22,15 @@
 ```mermaid
 flowchart LR
   A[nlp.intent.detect.request] --> B[Regex stage]
-  B -->|hit| O[nlp.intent.detected via=regex]
+  B -->|hit| O[IntentProposal evidence]
   B -->|miss| C[Neural NLU Service Skill]
-  C -->|conf >= threshold| O2[nlp.intent.detected via=neural]
+  C -->|conf >= threshold| O
   C -->|low conf / reject| D[Rasa Service Skill]
-  D -->|hit| O3[nlp.intent.detected via=rasa]
+  D -->|hit| O
   D -->|miss| E[NLU Teacher LLM]
-  E --> F[revision/regex/capability proposal]
+  E --> F[Runtime overlay or Builder candidate]
+  O --> G[Workflow or skill admission]
+  G --> H[ConversationOutput]
 ```
 
 ## Компоненты
@@ -68,8 +74,9 @@ Response:
 - подписка на `nlp.intent.detect.request`,
 - вызов neural-сервиса с timeout/retry,
 - применение confidence-порогов (`accept`, `abstain`, `reject`),
-- публикация:
-  - `nlp.intent.detected` (`via="neural"`), или
+- проекция принятого provider evidence в `IntentProposal`,
+- публикация compatibility-события `nlp.intent.detected` до миграции legacy
+  consumers, или
   - `nlp.intent.not_obtained` / `nlp.intent.detect.rasa` (fallback).
 
 ### 4) Реестр данных и моделей
@@ -100,10 +107,15 @@ Response:
 
 ## Целевая политика принятия решения
 
-1. **Regex hit**: принимаем сразу.
-2. **Neural high confidence** (`>= T_accept`): принимаем как финальный результат.
+1. **Regex hit**: формируем high-confidence `IntentProposal`.
+2. **Neural high confidence** (`>= T_accept`): формируем proposal с provider
+   evidence.
 3. **Neural uncertainty** (`T_reject < conf < T_accept`): передаем в Rasa.
 4. **Нет интента после Rasa**: передаем в Teacher.
+
+Provider confidence не разрешает protected effect: proposal должен ссылаться
+на declared affordance и пройти workflow/skill admission, policy, generation и
+confirmation checks.
 
 Рекомендуемые стартовые пороги:
 
