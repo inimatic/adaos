@@ -78,6 +78,14 @@ def test_nats_quarantine_skips_local_realtime_sidecar_candidate() -> None:
     )
 
 
+def test_sidecar_transient_failover_is_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", raising=False)
+    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is False
+
+    monkeypatch.setenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", "1")
+    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is True
+
+
 def test_resolve_nats_log_server_prefers_current_attempt() -> None:
     assert (
         bootstrap_mod._resolve_nats_log_server(
@@ -259,6 +267,42 @@ async def test_hub_root_reconnect_rearms_running_bridge_without_active_connectio
                 task.cancel()
         old_task.cancel()
         await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_hub_root_bridge_watchdog_rearms_unexpectedly_completed_bridge() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    completed = asyncio.create_task(asyncio.sleep(0), name=service._hub_root_bridge_task_name)
+    await completed
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(completed)
+
+    try:
+        result = await service._repair_missing_hub_root_bridge(reason="test_abnormal_close")
+
+        assert result["attempted"] is True
+        assert result["state"] == "rearmed"
+        assert service._hub_root_bridge_watchdog_rearm_total == 1
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert service._find_live_boot_task(service._hub_root_bridge_task_name) is not None
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -910,6 +954,33 @@ async def test_nats_cleanup_reports_successful_close() -> None:
 
     assert cleaned is True
     assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_does_not_promote_child_cancellation_to_supervisor_shutdown() -> None:
+    async def _self_cancelled_close() -> None:
+        raise asyncio.CancelledError()
+
+    assert await bootstrap_mod._run_bounded_async_cleanup(_self_cancelled_close, timeout_s=0.1) is False
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_preserves_owner_requested_task_cancellation() -> None:
+    started = asyncio.Event()
+
+    async def _stuck_close() -> None:
+        started.set()
+        await asyncio.Future()
+
+    async def _worker() -> bool:
+        return await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=10.0)
+
+    task = asyncio.create_task(_worker())
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 def test_should_forward_node_status_to_members_skips_member_originated_payloads() -> None:

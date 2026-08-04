@@ -81,6 +81,18 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 ### Repository checkpoint: current tree
 
+- The hub-root bridge now has two independent recovery rails. Child transport
+  cleanup cancellation is classified separately from owner-requested task
+  cancellation, so an abnormal sidecar EOF cannot silently terminate the
+  supervisor loop; a periodic runtime watchdog also rearms a bridge task that
+  nevertheless disappears. Sidecar/direct-WSS oscillation after a transient
+  remote failure is disabled by default, while listener-unavailable fallback
+  remains intact.
+- Regression coverage now exercises `established -> abnormal remote close ->
+  local session close -> new runtime session`, missing-bridge rearm, and both
+  child and owner cancellation semantics. It also proves that a fragmented
+  `PUB` payload crosses the sidecar byte-for-byte even when legacy sidecar NATS
+  ping configuration is present. Live soak after deployment remains open.
 - Code and tests now keep realtime sidecar enabled by default for hub runtimes;
   `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
 - Yjs materialization fallback is now explicitly bounded and degraded-aware.
@@ -133,6 +145,33 @@ transport-only `/ws` and `/yws` handoff as ready.
   enabled and partially stand-accepted for local transport-only handoff**.
   Full acceptance still requires A/B/root-routed browser survival and
   WebRTC/Yjs auto-upgrade evidence with server-side opt-outs verified.
+
+### Local incident checkpoint: 2026-08-04, `sn_6acf0c01`
+
+- The sidecar listener and process remained alive, but its last established
+  remote session had closed with WebSocket `1006`; the runtime NATS bridge task
+  had disappeared after `UnexpectedEOF`, while HTTP heartbeat continued to be
+  accepted. Telegram input therefore never reached the local Builder runtime.
+- Correlated Root NATS logs exposed two `Client parser ERROR` records while the
+  local runtime was publishing large payloads. NATS parser state `41` is
+  `MSG_END_R`: the server had consumed the declared payload length but did not
+  find the required carriage return. The sidecar's timer-driven NATS `PING`
+  could be queued between TCP fragments of the same `PUB` payload, adding bytes
+  that were absent from the declared size. The upstream NATS close then
+  surfaced at the client as WebSocket `1006` (no close frame observed).
+- A single `POST /api/node/hub-root/reconnect` restored the route. Sidecar
+  diagnostics changed from `remote_session_state=down` and
+  `transport_ready=false` to `ready` and `true`, with a new remote session and
+  active NATS traffic. The routed node-status endpoint changed from transport
+  `503` to the expected authentication boundary (`401` without credentials).
+- Root cause: cleanup-level cancellation was interpreted as cancellation of
+  the entire supervisor, and no in-process invariant repaired the missing
+  bridge. The initiating protocol defect was sidecar-originated NATS keepalive
+  injection into a transparent byte stream. The current tree removes that
+  injection, separates child/owner cancellation, adds an independent bridge
+  watchdog, and disables transient sidecar/direct-WSS failover by default.
+  Deployment plus large-payload and injected-close soak remains the acceptance
+  gate.
 
 ### Stand checkpoint: 2026-06-07, `adaost1` / `91.98.89.76`
 
@@ -564,6 +603,18 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   blocker is architectural: the current sidecar NATS path is a byte relay tied
   to the local runtime client lifetime. A stable root-visible hub session needs
   a protocol-aware relay or sidecar-owned hub-root NATS session authority.
+- [x] `[must]` Recover the current runtime NATS session after an abnormal
+  sidecar remote close without reusing stale protocol state. The byte relay
+  closes the affected local socket; the runtime supervisor recreates NATS
+  subscriptions, child cleanup cancellation cannot terminate the supervisor,
+  and an independent watchdog rearms a missing bridge task.
+- [x] `[must]` Preserve transparent NATS byte-stream integrity. Sidecar does
+  not synthesize application-level NATS keepalive commands; protocol keepalive
+  stays with the runtime NATS client and transport liveness uses WebSocket
+  control ping/pong.
+- [x] `[must]` Stop automatic oscillation between a healthy local sidecar
+  listener and direct WSS after transient remote EOF. Direct fallback is used
+  when the listener is unavailable; transient failover is explicit opt-in.
 - [x] `[must]` Add route-proxy runtime-reconnect support so an already-open
   browser `/ws` or `/yws` socket is not closed only because the current runtime
   upstream disappears.

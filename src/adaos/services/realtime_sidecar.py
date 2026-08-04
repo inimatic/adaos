@@ -1104,20 +1104,13 @@ def _realtime_ws_proxy() -> str | bool | None:
 
 
 def _realtime_nats_ping_interval_s() -> float | None:
-    raw = os.getenv("ADAOS_REALTIME_NATS_PING_S")
-    if raw is None:
-        raw = os.getenv("ADAOS_REALTIME_UPSTREAM_NATS_PING_S")
-    if raw is None:
-        return 15.0
-    try:
-        value = float(str(raw).strip() or "0")
-    except Exception:
-        return None
-    if value <= 0.0:
-        return None
-    if value < 5.0:
-        value = 5.0
-    return value
+    # The sidecar is a transparent byte relay, not a NATS protocol endpoint.
+    # Injecting PING between two TCP reads can place those bytes inside a PUB
+    # payload while its declared size remains unchanged. NATS then reports a
+    # parser error at MSG_END_R and closes the upstream connection. Keepalive
+    # belongs to the runtime NATS client; WebSocket control ping/pong remains
+    # available to the transport. Legacy env knobs are intentionally ignored.
+    return None
 
 
 def _realtime_probe_grace_s() -> float:
@@ -2416,7 +2409,6 @@ class RealtimeSidecarServer:
         if len(self._live_session_tasks()) <= 1:
             self._pending_ping_sources = pending_ping_sources
         client_pings_outstanding = 0
-        sidecar_pings_outstanding = 0
 
         async def _queue_remote_payload(payload: bytes) -> None:
             await send_q.put(payload)
@@ -2440,7 +2432,7 @@ class RealtimeSidecarServer:
                 await _queue_remote_payload(chunk)
 
         async def _remote_writer_loop() -> None:
-            nonlocal client_pings_outstanding, sidecar_pings_outstanding
+            nonlocal client_pings_outstanding
             recv_task: asyncio.Task[Any] | None = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
             wake_task: asyncio.Task[Any] | None = None
             try:
@@ -2468,14 +2460,6 @@ class RealtimeSidecarServer:
                         elif payload == NATS_PONG:
                             self._stats.remote_nats_pongs_rx += 1
                             source = pending_ping_sources.popleft() if pending_ping_sources else None
-                            if source == "sidecar":
-                                if sidecar_pings_outstanding > 0:
-                                    sidecar_pings_outstanding -= 1
-                                if self._stats.sidecar_nats_pings_outstanding > 0:
-                                    self._stats.sidecar_nats_pings_outstanding -= 1
-                                self._stats.sidecar_nats_pongs_rx += 1
-                                recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
-                                continue
                             if source == "client":
                                 if client_pings_outstanding > 0:
                                     client_pings_outstanding -= 1
@@ -2485,13 +2469,6 @@ class RealtimeSidecarServer:
                                 client_pings_outstanding -= 1
                                 if self._stats.client_nats_pings_outstanding > 0:
                                     self._stats.client_nats_pings_outstanding -= 1
-                            elif sidecar_pings_outstanding > 0:
-                                sidecar_pings_outstanding -= 1
-                                if self._stats.sidecar_nats_pings_outstanding > 0:
-                                    self._stats.sidecar_nats_pings_outstanding -= 1
-                                self._stats.sidecar_nats_pongs_rx += 1
-                                recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
-                                continue
                         await recv_q.put(payload)
                         recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
                         continue
@@ -2538,29 +2515,12 @@ class RealtimeSidecarServer:
                 self._stats.local_tx_bytes += len(payload)
                 self._stats.last_local_tx_at = time.monotonic()
 
-        async def _sidecar_keepalive_loop(*, interval_s: float) -> None:
-            nonlocal sidecar_pings_outstanding
-            while True:
-                await asyncio.sleep(interval_s)
-                if getattr(ws, "closed", False):
-                    return
-                if sidecar_pings_outstanding > 0:
-                    continue
-                pending_ping_sources.append("sidecar")
-                sidecar_pings_outstanding += 1
-                self._stats.sidecar_nats_pings_tx += 1
-                self._stats.sidecar_nats_pings_outstanding += 1
-                await _queue_remote_payload(NATS_PING)
-
-        interval_s = _realtime_nats_ping_interval_s()
-        self._stats.sidecar_nats_ping_interval_s = interval_s
+        self._stats.sidecar_nats_ping_interval_s = _realtime_nats_ping_interval_s()
         tasks = [
             asyncio.create_task(_local_reader_loop(), name="adaos-realtime-l2r"),
             asyncio.create_task(_remote_writer_loop(), name="adaos-realtime-ws-io"),
             asyncio.create_task(_remote_reader_loop(), name="adaos-realtime-r2l"),
         ]
-        if interval_s is not None:
-            tasks.append(asyncio.create_task(_sidecar_keepalive_loop(interval_s=interval_s), name="adaos-realtime-ka"))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()

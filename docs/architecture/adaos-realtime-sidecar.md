@@ -202,6 +202,29 @@ Success criteria:
 - [x] `[must]` Hub-root sidecar NATS avoids `UnexpectedEOF`, remote
   quarantine, and connect-failure churn during the target-stand acceptance
   window.
+- [x] `[must]` Treat an abnormal remote-session close as loss of the current
+  byte-relay session: close the matching local NATS socket and let the hub
+  runtime recreate `CONNECT` and every `SUB` on a new session. The sidecar must
+  not reconnect its remote WebSocket transparently behind an already-open
+  local socket because it cannot reconstruct NATS protocol state.
+- [x] `[must]` Never inject sidecar-originated NATS `PING` bytes into the
+  transparent relay. A relay read boundary is not a NATS frame boundary, so a
+  timer can insert `PING\r\n` inside a fragmented `PUB` payload and invalidate
+  its declared size. Runtime-owned NATS keepalive and WebSocket control
+  ping/pong provide liveness without modifying the relayed byte stream.
+- [x] `[must]` Keep the hub-root bridge supervisor alive when a child transport
+  cleanup surfaces `CancelledError`, while still propagating cancellation
+  requested by shutdown or an explicit rearm.
+- [x] `[must]` Rearm an unexpectedly missing hub-root bridge from an independent
+  runtime watchdog. Automatic sidecar-to-direct-WSS failover after a transient
+  remote EOF is disabled by default; direct fallback remains available when
+  the local sidecar listener is unavailable and transient failover remains an
+  explicit emergency opt-in.
+- [ ] `[should]` Complete a target-stand soak that injects abnormal WS close,
+  proves automatic bridge recreation and subscription restoration, and
+  observes no sidecar/direct-WSS oscillation. The 2026-08-04 local incident was
+  recovered manually and is covered by regression tests, but the patched
+  runtime still requires deployed soak evidence.
 - [x] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
   during the target-stand acceptance window.
 - [x] `[must]` Operators can see that sidecar owns transport only and can

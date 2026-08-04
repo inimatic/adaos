@@ -234,9 +234,39 @@ async def _run_bounded_async_cleanup(
         await asyncio.wait_for(operation(), timeout=max(0.01, float(timeout_s)))
         return True
     except asyncio.CancelledError:
-        raise
+        # A transport close coroutine can surface its *own* cancellation after
+        # an EOF.  That must not be mistaken for cancellation of the bridge
+        # supervisor itself, otherwise one broken session permanently removes
+        # the reconnect loop.  Preserve only cancellation requested for the
+        # current task by its owner (shutdown, cutover, or explicit rearm).
+        current = asyncio.current_task()
+        cancelling = getattr(current, "cancelling", None) if current is not None else None
+        if callable(cancelling) and int(cancelling() or 0) > 0:
+            raise
+        return False
     except Exception:
         return False
+
+
+def _current_async_task_is_cancelling() -> bool:
+    current = asyncio.current_task()
+    if current is None:
+        return False
+    cancelling = getattr(current, "cancelling", None)
+    if not callable(cancelling):
+        return bool(current.cancelled())
+    try:
+        return int(cancelling() or 0) > 0
+    except Exception:
+        return bool(current.cancelled())
+
+
+def _hub_root_bridge_watchdog_interval_s() -> float:
+    return _bounded_interval_seconds(
+        os.getenv("HUB_ROOT_BRIDGE_WATCHDOG_INTERVAL_S", "2"),
+        default=2.0,
+        minimum=0.5,
+    )
 
 
 def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
@@ -1339,7 +1369,13 @@ def _should_quarantine_nats_candidate(candidate: str | None, *, local_sidecar_ur
 
 
 def _hub_nats_sidecar_failover_on_transient() -> bool:
-    return _env_truthy(os.getenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT"), default=True)
+    # A healthy sidecar listener owns the hub-root transport boundary.  Moving
+    # an established runtime back and forth between the local byte relay and a
+    # direct WSS client creates two competing reconnect loops and repeatedly
+    # rebuilds all NATS subscriptions.  Direct fallback remains available when
+    # the sidecar listener itself is unavailable; quarantining a live listener
+    # after a remote EOF is an explicit emergency opt-in only.
+    return _env_truthy(os.getenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT"), default=False)
 
 
 def _hub_nats_sidecar_quarantine_s() -> float:
@@ -1499,7 +1535,9 @@ class BootstrapService:
         # Best-effort route relay reset hook installed by the hub-route runtime once subscriptions are live.
         self._hub_root_route_reset: Any = None
         self._hub_root_bridge_task_name = "adaos-nats-io-bridge"
+        self._hub_root_bridge_watchdog_task_name = "adaos-nats-io-bridge-watchdog"
         self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
+        self._hub_root_bridge_watchdog_rearm_total = 0
         self._hub_root_authority_waiters: set[asyncio.Event] = set()
         self._hub_root_authority_ready_at: float | None = None
         self._member_ready_callback: Callable[[], Awaitable[None]] | None = None
@@ -1541,6 +1579,64 @@ class BootstrapService:
         if not start_immediately:
             return None
         return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
+
+    def _hub_root_bridge_required(self) -> bool:
+        try:
+            role = str(getattr(self.ctx.config, "role", "") or "").strip().lower()
+        except Exception:
+            role = ""
+        if role != "hub":
+            return False
+        try:
+            if _hub_root_candidate_passive_mode():
+                return False
+        except Exception:
+            pass
+        return callable(self._hub_root_bridge_factory)
+
+    async def _repair_missing_hub_root_bridge(self, *, reason: str) -> dict[str, Any]:
+        if not self._hub_root_bridge_required():
+            return {"attempted": False, "state": "not_required"}
+        live = self._find_live_boot_task(self._hub_root_bridge_task_name)
+        if live is not None:
+            return {"attempted": False, "state": "running", "task_name": live.get_name()}
+        result = await self.request_hub_root_reconnect(_reason=f"bridge_watchdog:{reason}")
+        bridge = result.get("bridge") if isinstance(result, dict) else None
+        started = bool(isinstance(bridge, dict) and bridge.get("started"))
+        if started:
+            self._hub_root_bridge_watchdog_rearm_total += 1
+            self._log.warning(
+                "hub-root bridge watchdog rearmed missing bridge reason=%s total=%s",
+                str(reason or "watchdog"),
+                self._hub_root_bridge_watchdog_rearm_total,
+            )
+            try:
+                record_hub_root_transport_event(
+                    "bridge_watchdog_rearmed",
+                    summary="runtime watchdog rearmed missing hub-root bridge",
+                    details={
+                        "reason": str(reason or "watchdog"),
+                        "rearm_total": self._hub_root_bridge_watchdog_rearm_total,
+                    },
+                )
+            except Exception:
+                pass
+        return {
+            "attempted": True,
+            "state": "rearmed" if started else "rearm_failed",
+            "result": result,
+        }
+
+    async def _hub_root_bridge_watchdog(self) -> None:
+        interval_s = _hub_root_bridge_watchdog_interval_s()
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self._repair_missing_hub_root_bridge(reason="periodic_watchdog")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._log.warning("hub-root bridge watchdog repair failed", exc_info=True)
 
     def _ensure_hub_root_bridge_task(
         self,
@@ -1669,6 +1765,7 @@ class BootstrapService:
         transport: str | None = None,
         url_override: str | None = None,
         wait_for_authority: bool = False,
+        _reason: str = "manual_reconnect",
     ) -> dict[str, Any]:
         """
         Force hub-root transport reconnect.
@@ -1678,6 +1775,7 @@ class BootstrapService:
         """
         tr = str(transport or "").strip().lower() or None
         override = str(url_override or "").strip() or None
+        reconnect_reason = str(_reason or "manual_reconnect").strip() or "manual_reconnect"
         close_diag: dict[str, Any] = {"attempted": False, "timeout": False, "forced_ws_close": False}
         bridge_diag: dict[str, Any] = {"attempted": False, "started": False}
         authority_waiter = asyncio.Event() if wait_for_authority else None
@@ -1725,14 +1823,18 @@ class BootstrapService:
                     "reconnect_requested",
                     transport=tr,
                     server=override,
-                    summary="manual hub-root reconnect requested",
-                    details={"requested_transport": tr, "url_override": override},
+                    summary=f"hub-root reconnect requested ({reconnect_reason})",
+                    details={
+                        "requested_transport": tr,
+                        "url_override": override,
+                        "reason": reconnect_reason,
+                    },
                 )
             except Exception:
                 pass
             try:
                 close_diag["route_reset"] = await self._reset_hub_root_route_runtime(
-                    reason="manual_reconnect",
+                    reason=reconnect_reason,
                     notify_browser=True,
                 )
             except Exception:
@@ -1806,7 +1908,11 @@ class BootstrapService:
                 force_bridge_rearm = nc is None or bool(close_diag.get("timeout"))
                 bridge_diag = self._ensure_hub_root_bridge_task(
                     force_rearm=force_bridge_rearm,
-                    reason="manual_reconnect_without_active_nats" if nc is None else "manual_reconnect_close_timeout",
+                    reason=(
+                        f"{reconnect_reason}_without_active_nats"
+                        if nc is None
+                        else f"{reconnect_reason}_close_timeout"
+                    ),
                 )
                 if bridge_diag.get("started"):
                     try:
@@ -1814,7 +1920,7 @@ class BootstrapService:
                             "bridge_rearmed",
                             transport=tr,
                             server=override,
-                            summary="manual hub-root reconnect rearmed bridge task",
+                            summary=f"hub-root reconnect rearmed bridge task ({reconnect_reason})",
                             details=dict(bridge_diag),
                         )
                     except Exception:
@@ -10242,13 +10348,13 @@ class BootstrapService:
                             pass
                         try:
                             await asyncio.wait_for(nc.drain(), timeout=2.0)
+                        except asyncio.CancelledError:
+                            if _current_async_task_is_cancelling():
+                                raise
                         except Exception:
                             pass
-                        try:
-                            await asyncio.wait_for(nc.close(), timeout=2.0)
-                        except Exception:
-                            pass
-                        await _force_close_ws_transport()
+                        await _run_bounded_async_cleanup(nc.close, timeout_s=2.0)
+                        await _run_bounded_async_cleanup(_force_close_ws_transport, timeout_s=2.0)
                         # Give canceled subscription tasks a chance to finish to avoid
                         # "Task was destroyed but it is pending!" warnings.
                         try:
@@ -10551,18 +10657,44 @@ class BootstrapService:
                             await asyncio.sleep(delay)
                             delay = min(max(delay, 0.5), 2.0)
                         except asyncio.CancelledError:
+                            if _current_async_task_is_cancelling():
+                                try:
+                                    self._log.info(
+                                        "nats supervisor cancelled hub_id=%s server=%s",
+                                        hub_id,
+                                        _resolve_nats_log_server(
+                                            current_attempt=nats_attempt_server,
+                                            connected_server=nats_last_server,
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                                raise
+                            # An awaited transport/cleanup coroutine cancelled
+                            # itself.  Treat that as a failed attempt, not as an
+                            # instruction to permanently stop the supervisor.
+                            self._log.warning(
+                                "nats bridge surfaced child cancellation; restarting hub_id=%s server=%s",
+                                hub_id,
+                                _resolve_nats_log_server(
+                                    current_attempt=nats_attempt_server,
+                                    connected_server=nats_last_server,
+                                ),
+                            )
                             try:
-                                self._log.info(
-                                    "nats supervisor cancelled hub_id=%s server=%s",
-                                    hub_id,
-                                    _resolve_nats_log_server(
+                                record_hub_root_transport_event(
+                                    "child_cancellation_recovered",
+                                    server=_resolve_nats_log_server(
                                         current_attempt=nats_attempt_server,
                                         connected_server=nats_last_server,
                                     ),
+                                    summary="hub-root supervisor recovered a child transport cancellation",
                                 )
                             except Exception:
                                 pass
-                            return
+                            await asyncio.sleep(0.5)
+                            delay = min(max(delay, 0.5), 2.0)
+                            continue
                         except Exception as e:
                             ran_for_s = time.monotonic() - started_at
                             is_transient = is_transient_nats_error(e)
@@ -10861,6 +10993,10 @@ class BootstrapService:
                 self._start_hub_root_bridge_task(
                     _nats_bridge_supervisor,
                     start_immediately=not candidate_transport_deferred,
+                )
+                self._start_boot_task_once(
+                    self._hub_root_bridge_watchdog_task_name,
+                    self._hub_root_bridge_watchdog,
                 )
                 if candidate_transport_deferred:
                     self._log.info(
