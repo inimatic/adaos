@@ -517,7 +517,10 @@ Rules:
   iteration exception is recorded and retried with bounded exponential backoff
   against durable status/attempt guards; status exposes the monitor heartbeat,
   last failure, and recovery count so a dead control scheduler cannot remain a
-  silent partial failure
+  silent partial failure. The exception boundary also advances the independent
+  live-but-unresponsive runtime watchdog. An auxiliary monitor defect therefore
+  cannot indefinitely prevent listener/API self-heal from restarting a child
+  process that is alive but no longer serving requests
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
   promotion receipt records the immutable supervisor instance id and PID that
@@ -527,6 +530,12 @@ Rules:
   receipt after service restart and source-parity validation, so neither an old
   surviving runtime nor the pre-restart supervisor can turn a failed or merely
   scheduled restart into false success
+- a `root_restart_timeout` remains a durable failure while the promoted runtime
+  is unavailable. If the supervisor later self-heals that runtime, the active
+  slot manifest still matches the immutable requested target, and the runtime
+  API becomes ready, reconciliation may commit the same attempt as validated.
+  This does not replay the update and does not broaden the fast rollback path
+  for bootstrap/root changes
 - terminal reconciliation treats `subsequent_transition_request` as the durable
   execution authority. A carried boolean without that request is an orphaned
   diagnostic marker: the supervisor clears it instead of displaying or replaying

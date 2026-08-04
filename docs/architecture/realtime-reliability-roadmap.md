@@ -81,6 +81,21 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 ### Repository checkpoint: current tree
 
+- The `192.168.0.30` incident on 2026-08-04 exposed two coupled livelocks.
+  A closed subnet member WebSocket raised a synchronous Starlette
+  `RuntimeError`; the receive loop retried it without yielding until the
+  runtime consumed a CPU and filled the `8778` accept backlog. Independently,
+  supervisor diagnostics referenced `re` without importing it, so every
+  monitor iteration failed before the existing API-unready watchdog could
+  restart that live-but-unresponsive runtime. Subnet receive failures are now
+  terminal except for explicitly recoverable malformed JSON, stale connection
+  cleanup is generation-bound, and the supervisor exception boundary advances
+  runtime self-heal even when auxiliary monitor work fails.
+- A promoted target that reached `root_restart_timeout` can now converge after
+  that self-heal only when the replacement runtime is ready and the active
+  manifest matches the original immutable target. The reconciler records a
+  terminal validation instead of replaying the update or silently claiming
+  rollback. Live `.30` rollout acceptance remains required.
 - The hub-root bridge now has two independent recovery rails. Child transport
   cleanup cancellation is classified separately from owner-requested task
   cancellation, so an abnormal sidecar EOF cannot silently terminate the
@@ -838,6 +853,13 @@ lifecycle and update attempt state.
   only in ad-hoc browser badges.
 - [x] `[must]` Separate runtime liveness from listener/API readiness in
   supervisor-visible status.
+- [x] `[must]` Keep live-but-unresponsive runtime self-heal independent of
+  auxiliary monitor success, and regression-test the exception boundary.
+- [x] `[must]` Terminate closed/replaced subnet member receive handlers without
+  a synchronous retry loop, and prevent stale handler cleanup from removing a
+  replacement member link.
+- [x] `[must]` Reconcile `root_restart_timeout` after bounded runtime self-heal
+  only when the active manifest still matches the requested immutable target.
 - [x] `[must]` Surface the active managed runtime command/source in supervisor
   diagnostics.
 - [x] `[must]` Surface active-slot structure validation in supervisor
