@@ -665,6 +665,11 @@ Authoring and activation add records around, not inside, the pure definition:
   definition review, generated conformance cases, story summaries, and
   state/command/transition/output coverage. Story summaries intentionally keep
   semantic command/output/correlation evidence and omit exact user prose.
+- `adaos.workflow.metrics_report.v1` records the measured proof surface:
+  definition complexity, governed context sufficiency, conversation-story
+  outcomes, current/legacy cycle-time probes, diagnosis effort, and signed
+  deltas. Metrics are evidence attached to a definition digest, not executable
+  transition semantics.
 
 `WorkflowDefinition` remains deterministic process data. Mutable review state,
 LLM provenance, package installation state, and activation pointers do not
@@ -1120,6 +1125,9 @@ outgoing-command count per state, cycles, competing guards, waiting states,
 unhandled activity outcomes, projection coverage, and generated test coverage.
 Thresholds initially require review rather than impose one universal numeric
 limit, because a count alone does not measure understandable behavior.
+The separate metrics report records these structural counts alongside context
+coverage and story-derived rates, so complexity review and user-facing cycle
+time are comparable without changing the workflow definition digest.
 
 Complexity is bounded through named domain workflows and explicit subworkflow
 commands, not by creating one global AdaOS graph. A subprocess has typed input,
@@ -1350,6 +1358,14 @@ They may assert repair behavior, store-free `ConversationInteraction`
 projection, and channel presentation fallback for the same workflow state.
 Those assertions fail when command identity, expected generation, fallback mode,
 reason code, semantic equivalence, or repair next-input semantics drift.
+
+Measured acceptance evidence can be captured as
+`adaos.workflow.metrics_report.v1`. A metrics report links one definition
+digest to definition complexity, context-packet coverage, clarification/repair
+rates, repeated corrections, action mismatch defects, presentation fallback,
+unsupported presentation, semantic-equivalence failures, and current-versus-
+legacy cycle-time deltas. Missing current or legacy measurements are explicit
+warnings rather than implicit zeros.
 
 ## Builder Reference Workflow
 

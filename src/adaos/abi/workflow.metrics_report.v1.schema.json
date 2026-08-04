@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.metrics_report.v1",
+  "title": "AdaOS Workflow Metrics Report",
+  "type": "object",
+  "required": [
+    "schema",
+    "report_id",
+    "generated_at",
+    "workflow_type",
+    "definition_version",
+    "definition_digest",
+    "definition_complexity",
+    "context_sufficiency",
+    "story_outcomes",
+    "cycle_time",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.metrics_report.v1" },
+    "report_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workflow_type": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "definition_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "definition_complexity": {
+      "type": "object",
+      "required": [
+        "state_count",
+        "transition_count",
+        "command_count",
+        "terminal_state_count",
+        "waiting_state_count",
+        "max_branching_factor",
+        "average_branching_factor",
+        "cycle_edge_count",
+        "guard_count",
+        "external_activity_count",
+        "confirmation_required_count",
+        "required_capability_count",
+        "optional_capability_count"
+      ],
+      "properties": {
+        "state_count": { "type": "integer", "minimum": 0 },
+        "transition_count": { "type": "integer", "minimum": 0 },
+        "command_count": { "type": "integer", "minimum": 0 },
+        "terminal_state_count": { "type": "integer", "minimum": 0 },
+        "waiting_state_count": { "type": "integer", "minimum": 0 },
+        "max_branching_factor": { "type": "integer", "minimum": 0 },
+        "average_branching_factor": { "type": "number", "minimum": 0 },
+        "cycle_edge_count": { "type": "integer", "minimum": 0 },
+        "guard_count": { "type": "integer", "minimum": 0 },
+        "external_activity_count": { "type": "integer", "minimum": 0 },
+        "confirmation_required_count": { "type": "integer", "minimum": 0 },
+        "required_capability_count": { "type": "integer", "minimum": 0 },
+        "optional_capability_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "context_sufficiency": {
+      "type": "object",
+      "required": ["ready", "score", "required", "present", "missing", "ambiguous", "context_packet_digest"],
+      "properties": {
+        "ready": { "type": ["boolean", "null"] },
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "required": { "type": "array", "items": { "type": "string" } },
+        "present": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "ambiguous": { "type": "array", "items": { "type": "string" } },
+        "context_packet_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "story_outcomes": {
+      "type": "object",
+      "required": [
+        "story_count",
+        "valid_story_count",
+        "step_count",
+        "workflow_command_step_count",
+        "clarification_output_count",
+        "repair_output_count",
+        "action_mismatch_defect_count",
+        "repeated_correction_count",
+        "presentation_fallback_count",
+        "unsupported_presentation_count",
+        "semantic_equivalence_failure_count",
+        "diagnostic_count",
+        "error_count",
+        "warning_count",
+        "distinct_diagnostic_codes",
+        "clarification_rate",
+        "repair_rate",
+        "action_mismatch_rate",
+        "presentation_fallback_rate"
+      ],
+      "properties": {
+        "story_count": { "type": "integer", "minimum": 0 },
+        "valid_story_count": { "type": "integer", "minimum": 0 },
+        "step_count": { "type": "integer", "minimum": 0 },
+        "workflow_command_step_count": { "type": "integer", "minimum": 0 },
+        "clarification_output_count": { "type": "integer", "minimum": 0 },
+        "repair_output_count": { "type": "integer", "minimum": 0 },
+        "action_mismatch_defect_count": { "type": "integer", "minimum": 0 },
+        "repeated_correction_count": { "type": "integer", "minimum": 0 },
+        "presentation_fallback_count": { "type": "integer", "minimum": 0 },
+        "unsupported_presentation_count": { "type": "integer", "minimum": 0 },
+        "semantic_equivalence_failure_count": { "type": "integer", "minimum": 0 },
+        "diagnostic_count": { "type": "integer", "minimum": 0 },
+        "error_count": { "type": "integer", "minimum": 0 },
+        "warning_count": { "type": "integer", "minimum": 0 },
+        "distinct_diagnostic_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "clarification_rate": { "type": "number", "minimum": 0 },
+        "repair_rate": { "type": "number", "minimum": 0 },
+        "action_mismatch_rate": { "type": "number", "minimum": 0 },
+        "presentation_fallback_rate": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "cycle_time": {
+      "type": "object",
+      "required": [
+        "source",
+        "current",
+        "legacy",
+        "delta",
+        "recovery_explanation_available"
+      ],
+      "properties": {
+        "source": { "type": ["string", "null"], "maxLength": 240 },
+        "current": { "$ref": "#/$defs/non_negative_timings" },
+        "legacy": { "$ref": "#/$defs/non_negative_timings" },
+        "delta": { "$ref": "#/$defs/signed_timings" },
+        "recovery_explanation_available": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "path", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "severity": { "enum": ["info", "warning", "error"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "non_negative_timings": {
+      "type": "object",
+      "required": ["time_to_understand_ms", "action_availability_ms", "recovery_explanation_ms", "diagnosis_effort_steps"],
+      "properties": {
+        "time_to_understand_ms": { "type": ["number", "null"], "minimum": 0 },
+        "action_availability_ms": { "type": ["number", "null"], "minimum": 0 },
+        "recovery_explanation_ms": { "type": ["number", "null"], "minimum": 0 },
+        "diagnosis_effort_steps": { "type": ["number", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "signed_timings": {
+      "type": "object",
+      "required": ["time_to_understand_ms", "action_availability_ms", "recovery_explanation_ms", "diagnosis_effort_steps"],
+      "properties": {
+        "time_to_understand_ms": { "type": ["number", "null"] },
+        "action_availability_ms": { "type": ["number", "null"] },
+        "recovery_explanation_ms": { "type": ["number", "null"] },
+        "diagnosis_effort_steps": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

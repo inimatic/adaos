@@ -662,9 +662,11 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [x] `[must]` `GWR5-09` Update the Builder roadmap with the accepted semantic
   proof without copying this checklist. Phase 11 evidence points to the
   governed E2E suite and commit `7717319d`.
-- [ ] `[should]` `GWR5-10` Measure time to understand current state, action
+- [x] `[should]` `GWR5-10` Measure time to understand current state, action
   mismatch defects, clarification rate, and diagnosis effort versus the old
-  Builder path.
+  Builder path. `adaos.workflow.metrics_report.v1` records current/legacy
+  cycle-time probes, signed deltas, clarification/repair rates, action
+  mismatch defects, repeated corrections, and presentation fallback rates.
 - [ ] `[could]` `GWR5-11` Add mutation testing that deliberately removes guards
   or projections and proves conformance tests fail.
 - [x] `[deferred]` `GWR5-12` Do not block the semantic proof on choosing or
@@ -684,9 +686,12 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [x] `[must]` `GWR5-17` Prove a spatial UI request receives parent/sibling/order,
   responsive, ABI, data-binding, and active-constraint facets or stops for
   clarification before the model is called.
-- [ ] `[should]` `GWR5-18` Record definition complexity and context-sufficiency
+- [x] `[should]` `GWR5-18` Record definition complexity and context-sufficiency
   metrics alongside cycle time, clarification, repeated-correction, and action
-  mismatch rates.
+  mismatch rates. `workflow_metrics_report` derives complexity from the
+  compiled definition, context sufficiency from the governed context packet
+  coverage, and story outcomes from conversation-story reports under the
+  `adaos.workflow.metrics_report.v1` ABI.
 - [x] `[must]` `GWR5-19` Prove one Interaction preserves command identity,
   risk, confirmation, and target when negotiated as a Web form, Telegram
   choices, numbered text, or a cross-channel deep-link handoff.
