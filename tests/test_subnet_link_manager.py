@@ -78,6 +78,20 @@ class _FakeWebSocket:
         return None
 
 
+def test_unregister_does_not_remove_replacement_link(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    manager = mod.HubLinkManager()
+    stale_link = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    replacement_link = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    manager._links["member-1"] = replacement_link
+
+    asyncio.run(manager.unregister("member-1", expected_link=stale_link))
+
+    assert manager._links["member-1"] is replacement_link
+    assert fake_bus.events == []
+
+
 async def _noop_push(*_args, **_kwargs) -> None:
     return None
 

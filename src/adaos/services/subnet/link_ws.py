@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import time
 from typing import Any
@@ -54,7 +55,16 @@ def _is_websocket_disconnect(exc: BaseException) -> bool:
     # Starlette/FastAPI have moved this exception across import paths between
     # versions; normal close frames must not bubble as ASGI errors just because
     # the concrete class came from a sibling module.
-    return exc.__class__.__name__ == "WebSocketDisconnect"
+    if exc.__class__.__name__ == "WebSocketDisconnect":
+        return True
+    if isinstance(exc, RuntimeError):
+        text = str(exc or "").strip().lower()
+        return (
+            "websocket is not connected" in text
+            or ("cannot call" in text and "receive" in text and "disconnect" in text)
+            or "close message has been sent" in text
+        )
+    return False
 
 
 @router.websocket("/ws/subnet")
@@ -167,10 +177,23 @@ async def subnet_ws(websocket: WebSocket) -> None:
         while True:
             try:
                 msg: Any = await websocket.receive_json()
+            except json.JSONDecodeError:
+                _log.debug("ignored malformed subnet websocket JSON node_id=%s", node_id)
+                continue
             except Exception as exc:
                 if _is_websocket_disconnect(exc):
                     break
-                continue
+                # A receive failure is terminal unless it is an explicitly
+                # recoverable malformed JSON frame. Retrying an already closed
+                # Starlette WebSocket raises synchronously and otherwise turns
+                # this loop into a process-wide CPU spin.
+                _log.warning(
+                    "subnet websocket receive failed; closing handler node_id=%s error=%s: %s",
+                    node_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                break
             if not isinstance(msg, dict):
                 continue
 
@@ -290,6 +313,6 @@ async def subnet_ws(websocket: WebSocket) -> None:
             except Exception:
                 pass
             try:
-                await mgr.unregister(node_id)
+                await mgr.unregister(node_id, expected_link=link)
             except Exception:
                 pass
