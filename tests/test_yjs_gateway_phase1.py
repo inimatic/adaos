@@ -4035,6 +4035,34 @@ def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> No
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
+
+
+def test_yjs_balancer_reports_attempt_ids_for_their_exact_browser_session(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    monkeypatch.setattr(gateway_module, "_y_server_runtime_snapshot", lambda: {"ready": True, "room_total": 1})
+
+    tab_a = SimpleNamespace(query_params={"dev": "dev-shared", "browser_session_id": "tab-a"})
+    tab_b = SimpleNamespace(query_params={"dev": "dev-shared", "browser_session_id": "tab-b"})
+    gateway_module._set_websocket_yws_attempt_id(tab_a, "attempt-a")
+    gateway_module._set_websocket_yws_attempt_id(tab_b, "attempt-b")
+    gateway_module._track_yws_connection("ops", tab_a, device_id="dev-shared")
+    gateway_module._track_yws_connection("ops", tab_b, device_id="dev-shared")
+
+    rows = gateway_module.yjs_balancer_snapshot(webspace_id="ops")["usage"]["active_client_sessions"]
+
+    assert {
+        row["client_limit_id"]: row["attempt_ids"]
+        for row in rows
+    } == {
+        "tab-a": ["attempt-a"],
+        "tab-b": ["attempt-b"],
+    }
+
+    gateway_module._untrack_yws_connection("ops", tab_a)
+    gateway_module._untrack_yws_connection("ops", tab_b)
+    _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 4)
     monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 2)

@@ -4039,10 +4039,10 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
         attempts: dict[str, list[str]] = {}
         for webspace_id, sockets in _ACTIVE_YWS_CONNECTIONS.items():
             for websocket in list(sockets or []):
-                device_id = _websocket_device_id(websocket)
+                client_key = _websocket_yws_client_limit_key(websocket)
                 attempt_id = _websocket_yws_attempt_id(websocket)
                 if attempt_id:
-                    attempts.setdefault(f"{webspace_id}::{device_id}", []).append(attempt_id)
+                    attempts.setdefault(f"{webspace_id}::{client_key}", []).append(attempt_id)
     rows: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
         for client_key, count in sorted(device_counts.items()):
@@ -4054,7 +4054,7 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
             }
             if scoped_client_id:
                 row["client_limit_id"] = scoped_client_id
-            attempt_ids = attempts.get(f"{webspace_id}::{device_id}") or []
+            attempt_ids = attempts.get(f"{webspace_id}::{client_key}") or []
             if attempt_ids:
                 row["attempt_ids"] = attempt_ids[:3]
                 row["latest_attempt_id"] = attempt_ids[-1]

@@ -635,7 +635,12 @@ class HubPeer:
         @self.pc.on("datachannel")
         def on_datachannel(channel) -> None:  # type: ignore[no-untyped-def]
             self._touch()
-            _log.info("datachannel opened: label=%s device=%s", channel.label, self.device_id)
+            _log.info(
+                "datachannel opened: label=%s device=%s peer=%s",
+                channel.label,
+                self.device_id,
+                self.peer_id,
+            )
             if channel.label == "events":
                 self._setup_events_channel(channel)
             elif channel.label == "yjs":
@@ -660,7 +665,12 @@ class HubPeer:
             state = self._connection_state()
             self._touch()
             self._last_state_change_at = time.time()
-            _log.info("peer %s connectionState=%s", self.device_id, state)
+            _log.info(
+                "peer device=%s peer=%s connectionState=%s",
+                self.device_id,
+                self.peer_id,
+                state,
+            )
             self._emit_state_event(reason=f"connection_state:{state}")
             if state == "connected":
                 self._cancel_scheduled_close()
@@ -1512,7 +1522,7 @@ class HubPeer:
                 pass
         self._emit_state_event(reason="peer.closed")
         # Only remove ourselves — a replacement peer may already be registered.
-        _log.info("peer closed device=%s", self.device_id)
+        _log.info("peer closed device=%s peer=%s", self.device_id, self.peer_id)
 
 
 # -- Public API ---------------------------------------------------------------
