@@ -511,6 +511,7 @@ async def test_voice_confirmation_yes_applies_candidate():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
     from adaos.services.nlu.probe import probe_phrase
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
     import asyncio
     import json
@@ -622,9 +623,24 @@ async def test_voice_confirmation_yes_applies_candidate():
     assert applied
 
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
-    rules = (saved.get("nlu") or {}).get("regex_rules") or []
+    assert not ((saved.get("nlu") or {}).get("regex_rules") or [])
+    async with async_get_ydoc(webspace_id) as ydoc:
+        rules = list(((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or [])
     saved_rule = next(item for item in rules if item.get("candidate_id") == candidate["id"])
     assert saved_rule["slots"] == {"modal_id": "canonical_panel"}
+    promotion = next(
+        item
+        for item in read_store(ctx)["promotion_candidates"]
+        if item["source_overlay_id"] == f"yjs:{webspace_id}:regex:{saved_rule['id']}"
+    )
+    assert promotion["target"] == {
+        "type": "scenario",
+        "id": scenario_id,
+        "package_manifest": "conversational/manifest.yaml",
+        "source_file": "conversational/matchers.yaml",
+    }
+    assert promotion["package_patch"]["operation"] == "upsert_matcher"
+    assert "conversational/matchers.yaml" in promotion["builder_change"]["allowed_paths"]
 
     probe = await probe_phrase("open raw panel", webspace_id=webspace_id, use_rasa=False, emit_trace=False)
     assert probe["accepted"] is True

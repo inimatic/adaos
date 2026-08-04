@@ -11,6 +11,7 @@ async def test_regex_rule_candidate_defaults_to_skill_target_when_intent_calls_s
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply
     from adaos.services.nlu.regex_rules_runtime import _on_regex_rule_apply
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -89,18 +90,43 @@ async def test_regex_rule_candidate_defaults_to_skill_target_when_intent_calls_s
 
     await _on_candidate_apply({"webspace_id": webspace_id, "candidate_id": candidate_id})
 
-    # Must be stored in the skill (preferred), not in the scenario.
-    rr = []
+    # Must be scoped to the skill (preferred), not written to git-versioned source.
+    runtime_rules = []
     for _ in range(50):
-        saved_skill = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
-        rr = ((saved_skill.get("nlu") or {}).get("regex_rules")) or []
-        if any(isinstance(r, dict) and r.get("intent") == "desktop.open_weather" for r in rr):
+        async with async_get_ydoc(webspace_id) as ydoc:
+            runtime_rules = list(((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or [])
+        if any(isinstance(r, dict) and r.get("intent") == "desktop.open_weather" for r in runtime_rules):
             break
         import asyncio
 
         await asyncio.sleep(0.01)
-    assert any(isinstance(r, dict) and r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern for r in rr)
+    rule = next(
+        r
+        for r in runtime_rules
+        if isinstance(r, dict)
+        and r.get("intent") == "desktop.open_weather"
+        and r.get("pattern") == pattern
+    )
+    assert rule["provenance"]["target"] == {"type": "skill", "id": skill_name}
+    assert rule["promotion"]["portability"] == "skill-global"
+
+    saved_skill = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
+    rr_skill = ((saved_skill.get("nlu") or {}).get("regex_rules")) or []
+    assert not any(isinstance(r, dict) and r.get("pattern") == pattern for r in rr_skill)
 
     saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
     rr_sc = ((saved_scenario.get("nlu") or {}).get("regex_rules")) or []
     assert not any(isinstance(r, dict) and r.get("pattern") == pattern for r in rr_sc)
+
+    promotion = next(
+        item
+        for item in read_store(ctx)["promotion_candidates"]
+        if item["source_overlay_id"] == f"yjs:{webspace_id}:regex:{rule['id']}"
+    )
+    assert promotion["target"] == {
+        "type": "skill",
+        "id": skill_name,
+        "package_manifest": "conversational/manifest.yaml",
+        "source_file": "conversational/matchers.yaml",
+    }
+    assert promotion["package_patch"]["operation"] == "upsert_matcher"
