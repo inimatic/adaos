@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -279,6 +280,66 @@ def _walk_keys(value: Any, prefix: str = "$") -> list[tuple[str, str]]:
     return result
 
 
+def _walk_items(value: Any, prefix: str = "$") -> list[tuple[str, str, Any]]:
+    result: list[tuple[str, str, Any]] = []
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            path = f"{prefix}.{key}"
+            result.append((str(key), path, item))
+            result.extend(_walk_items(item, path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            result.extend(_walk_items(item, f"{prefix}[{index}]"))
+    return result
+
+
+def _normalized_phrase(value: Any) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
+_SECRET_KEYS = {
+    "access_token",
+    "api_key",
+    "authorization",
+    "bearer",
+    "client_secret",
+    "mcp_token",
+    "refresh_token",
+    "session_token",
+}
+_INJECTION_MARKERS = (
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "reveal the system prompt",
+    "developer message",
+    "<|system|>",
+    "<|assistant|>",
+)
+_OUTPUT_RISK_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3, "destructive": 4}
+_AFFORDANCE_MINIMUM_OUTPUT_RISK = {
+    "read": "none",
+    "local_reversible": "low",
+    "isolated_write": "medium",
+    "trial_activation": "medium",
+    "workspace_activation": "high",
+    "publication": "high",
+    "destructive": "destructive",
+}
+
+
+def _contains_private_provenance(value: Mapping[str, Any]) -> bool:
+    private_scopes = {"session", "user", "webspace", "node", "organization", "private", "local"}
+    for key, _path, item in _walk_items(value):
+        normalized_key = key.casefold().replace("-", "_")
+        if normalized_key in {"local_only", "private", "private_scope", "contains_private_data"}:
+            if item is True or _normalized_phrase(item) in {"true", "yes", "private", "local"}:
+                return True
+        if normalized_key in {"scope", "source_scope", "portability", "portability_class"}:
+            if _normalized_phrase(item).replace("-", "_") in private_scopes:
+                return True
+    return False
+
+
 def _transition_by_id(compiled: CompiledWorkflowDefinition) -> dict[str, Any]:
     return {transition.transition_id: transition for transition in compiled.transitions}
 
@@ -358,6 +419,107 @@ def _cross_check_package(
         for action in list(output.get("actions") or [])
         if isinstance(action, Mapping) and str(action.get("action_id") or "").strip()
     }
+
+    source_documents = {
+        "manifest.yaml": manifest,
+        "input.yaml": input_source,
+        "entities.yaml": entities_source,
+        "examples.yaml": examples_source,
+        "matchers.yaml": matchers_source,
+        "affordances.yaml": affordances_source,
+        "repair.yaml": repair_source,
+        "output.yaml": output_source,
+        **{f"locale[{index}]": source for index, source in enumerate(locale_sources)},
+        **{f"story[{index}]": source for index, source in enumerate(stories)},
+    }
+    for source_name, source in source_documents.items():
+        for key, path, value in _walk_items(source, source_name):
+            normalized_key = key.casefold().replace("-", "_")
+            if normalized_key in _SECRET_KEYS and value is not None and value != "" and value != [] and value != {}:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.threat.secret_material",
+                        path,
+                        "conversational package source must not embed credentials or MCP session material",
+                    )
+                )
+
+    authored_texts: list[tuple[str, str]] = []
+    for index, intent in enumerate(list(input_source.get("intents") or [])):
+        if isinstance(intent, Mapping):
+            authored_texts.append((f"input.yaml.intents[{index}].description", str(intent.get("description") or "")))
+    for index, affordance in enumerate(list(affordances_source.get("affordances") or [])):
+        if isinstance(affordance, Mapping):
+            authored_texts.extend(
+                (
+                    (f"affordances.yaml.affordances[{index}].label", str(affordance.get("label") or "")),
+                    (f"affordances.yaml.affordances[{index}].description", str(affordance.get("description") or "")),
+                )
+            )
+    for index, output in enumerate(list(output_source.get("outputs") or [])):
+        if isinstance(output, Mapping):
+            authored_texts.extend(
+                (
+                    (f"output.yaml.outputs[{index}].summary", str(output.get("summary") or "")),
+                    (f"output.yaml.outputs[{index}].explanation", str(output.get("explanation") or "")),
+                )
+            )
+    for locale_index, locale_source in enumerate(locale_sources):
+        for message_id, message in dict(locale_source.get("messages") or {}).items():
+            authored_texts.append((f"locale[{locale_index}].messages.{message_id}", str(message)))
+    for path, value in authored_texts:
+        normalized = _normalized_phrase(value)
+        marker = next((item for item in _INJECTION_MARKERS if item in normalized), None)
+        if marker is not None:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.threat.prompt_injection_marker",
+                    path,
+                    f"authored control text contains an instruction-like marker: {marker!r}",
+                    severity="warning",
+                )
+            )
+
+    for entity_index, entity in enumerate(list(entities_source.get("entities") or [])):
+        if not isinstance(entity, Mapping):
+            continue
+        aliases: dict[tuple[str, str], str] = {}
+        for value_index, value in enumerate(list(entity.get("values") or [])):
+            if not isinstance(value, Mapping):
+                continue
+            canonical = json.dumps(value.get("value"), ensure_ascii=False, sort_keys=True)
+            for alias_index, alias in enumerate(list(value.get("aliases") or [])):
+                if not isinstance(alias, Mapping):
+                    continue
+                key = (str(alias.get("locale") or ""), _normalized_phrase(alias.get("text")))
+                previous = aliases.get(key)
+                if key[1] and previous is not None and previous != canonical:
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.threat.alias_hijacking",
+                            f"entities.yaml.entities[{entity_index}].values[{value_index}].aliases[{alias_index}]",
+                            f"normalized alias {key[1]!r} maps to multiple canonical values for locale {key[0]!r}",
+                        )
+                    )
+                aliases[key] = canonical
+
+    if dict(manifest.get("privacy_defaults") or {}).get("source_scope") == "public":
+        for source_name, values in (
+            ("examples.yaml.examples", examples_source.get("examples")),
+            ("matchers.yaml.matchers", matchers_source.get("matchers")),
+        ):
+            for index, item in enumerate(values if isinstance(values, list) else []):
+                if not isinstance(item, Mapping):
+                    continue
+                provenance = item.get("provenance") if isinstance(item.get("provenance"), Mapping) else {}
+                if item.get("source") == "teacher_candidate" or _contains_private_provenance(provenance):
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.threat.private_public_promotion",
+                            f"{source_name}[{index}]",
+                            "public package source contains unpromoted or runtime-private Teacher data",
+                        )
+                    )
     compiled = workflow_artifact.compiled if workflow_artifact is not None else None
     transitions = _transition_by_id(compiled) if compiled is not None else {}
     commands = compiled.commands if compiled is not None else {}
@@ -720,6 +882,19 @@ def _cross_check_package(
                         f"output {output_id} action references unknown affordance {affordance_id}",
                     )
                 )
+            if affordance_id in affordances:
+                policy = dict(affordances[affordance_id].get("action_policy") or {})
+                minimum = _AFFORDANCE_MINIMUM_OUTPUT_RISK.get(str(policy.get("risk_class") or ""))
+                output_risk = str(output.get("risk_level") or "none")
+                if minimum is not None and _OUTPUT_RISK_ORDER[output_risk] < _OUTPUT_RISK_ORDER[minimum]:
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.threat.output_action_risk_mismatch",
+                            f"output.yaml.outputs[{index}].risk_level",
+                            f"output {output_id} risk {output_risk!r} understates "
+                            f"action {affordance_id} minimum {minimum!r}",
+                        )
+                    )
 
     for index, policy in enumerate(list(repair_source.get("policies") or [])):
         if not isinstance(policy, Mapping):

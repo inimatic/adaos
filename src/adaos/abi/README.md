@@ -73,12 +73,14 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   affordances, repair behavior, semantic output templates, and executable
   conversation stories
 - `conversational.validation_report.v1.schema.json` - Builder/SDK validation
-  report for package schema checks, workflow cross-checks, and story runner
-  evidence
+  report for package schema checks, workflow cross-checks, threat diagnostics,
+  coverage, and deterministic story-runner evidence
   The pure runtime bridge for these conversation-facing schemas lives in
   `adaos.services.conversational_runtime`; it validates proposals/outputs and
   converts between proposed workflow acts, canonical workflow invocation,
   workflow execution results, and response-envelope refs.
+  The design-time SDK in `adaos.sdk.developer.conversational` scaffolds,
+  compiles, validates, runs stories, and exports static JSON/Markdown evidence.
 - `workflow.definition.v1.schema.json`, `workflow.transition.v1.schema.json`,
   `workflow.validation_report.v1.schema.json`, `workflow.registry_entry.v1.schema.json`,
   `workflow.binding.v1.schema.json`, `workflow.definition_artifact.v1.schema.json`,
