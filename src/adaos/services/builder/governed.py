@@ -81,6 +81,8 @@ def governed_instance(
     *,
     project_ref: str,
     definition: CompiledWorkflowDefinition | None = None,
+    package_digest: str | None = None,
+    binding_digest: str | None = None,
 ) -> dict[str, Any]:
     definition = definition or compiled_builder_change_definition()
     change = dict(workflow.get("change") or workflow.get("change_set") or {})
@@ -111,6 +113,17 @@ def governed_instance(
                     "definition_digest": expected_digest,
                 }
                 candidate["context"] = context
+            for field, expected in (
+                ("package_digest", package_digest),
+                ("binding_digest", binding_digest),
+            ):
+                bound = str(candidate.get(field) or "").strip() or None
+                if expected and bound and bound != expected:
+                    raise WorkflowResolutionError(
+                        f"Builder workflow {field} migration is required"
+                    )
+                if expected and not bound:
+                    candidate[field] = expected
             return candidate
     instance = new_instance(
         definition,
@@ -120,6 +133,8 @@ def governed_instance(
             "project_ref": project_ref,
             "evidence_refs": list(change.get("source_message_ids") or [])[:100],
         },
+        package_digest=package_digest,
+        binding_digest=binding_digest,
     )
     instance["state"] = legacy_state(workflow)
     return instance
@@ -205,6 +220,8 @@ def admit_legacy_transition(
     idempotency_key: str,
     now: str,
     definition: CompiledWorkflowDefinition | None = None,
+    package_digest: str | None = None,
+    binding_digest: str | None = None,
 ) -> dict[str, Any] | None:
     definition = definition or compiled_builder_change_definition()
     command = canonical_command(action, workflow, metadata)
@@ -222,10 +239,18 @@ def admit_legacy_transition(
                     str(item) for item in metadata.get("source_message_ids") or [] if str(item).strip()
                 ][:100],
             },
+            package_digest=package_digest,
+            binding_digest=binding_digest,
             now=now,
         )
     else:
-        instance = governed_instance(workflow, project_ref=project_ref, definition=definition)
+        instance = governed_instance(
+            workflow,
+            project_ref=project_ref,
+            definition=definition,
+            package_digest=package_digest,
+            binding_digest=binding_digest,
+        )
     # The compatibility service already enforces the legacy confirmation gate.
     # Recording it explicitly prevents the canonical resolver from weakening it.
     input_value = {

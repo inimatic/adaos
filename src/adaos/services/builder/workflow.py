@@ -3,10 +3,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import shutil
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +15,11 @@ from typing import Any, Mapping
 
 import yaml
 
+from adaos.domain.artifact_release import (
+    ArtifactReleaseContractError,
+    WorkspaceLock,
+    canonical_payload_digest,
+)
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.action_contracts import build_builder_action
 from adaos.services.builder.governed import (
@@ -44,7 +50,13 @@ from adaos.services.builder.project_aggregate import (
 )
 from adaos.services.conversation_interactions import interaction_from_workflow_description
 from adaos.services.conversational_pipeline import compile_conversational_package
-from adaos.services.governed_workflow import CompiledWorkflowDefinition
+from adaos.services.governed_workflow import (
+    CompiledWorkflowDefinition,
+    compile_definition,
+    migrate_workflow_instance,
+    verified_workflow_principal,
+    workflow_definition_digest,
+)
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -78,6 +90,20 @@ BUILDER_WORKFLOW_SCHEMA = "adaos.builder.workflow.v1"
 BUILDER_CHANGE_SET_SCHEMA = "adaos.builder.change_set.v1"
 BUILDER_CHANGE_SCHEMA = "adaos.builder.change.v1"
 BUILDER_RUN_SCHEMA = "adaos.builder.run.v1"
+BUILDER_PACKAGE_CUTOVER_ENV = "ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE"
+
+
+def _feature_flag(value: bool | None, *, env_name: str) -> bool:
+    if value is not None:
+        return bool(value)
+    token = str(os.getenv(env_name) or "").strip().lower()
+    if token in {"", "0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise BuilderWorkflowError(f"{env_name} must be a boolean feature flag")
+
+
 BUILDER_CONTEXT_PACKET_SCHEMA = "adaos.builder.context_packet.v1"
 BUILDER_INTERACTION_FRAME_SCHEMA = "adaos.builder.interaction_frame.v1"
 BUILDER_WORKFLOW_EVENT = "builder.workflow.changed"
@@ -779,11 +805,24 @@ class BuilderWorkflowService:
     dev_scenarios_root: Path
     state_dir: Path | None = None
     event_sink: Any = None
+    workspace_root: Path | None = None
+    require_active_builder_package: bool | None = None
+    _active_package_digest: str | None = field(init=False, default=None)
+    _active_binding_digest: str | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.dev_skills_root = Path(self.dev_skills_root)
         self.dev_scenarios_root = Path(self.dev_scenarios_root)
         self.state_dir = Path(self.state_dir or current_state_dir())
+        self.workspace_root = (
+            Path(self.workspace_root).expanduser().resolve()
+            if self.workspace_root is not None
+            else None
+        )
+        self.require_active_builder_package = _feature_flag(
+            self.require_active_builder_package,
+            env_name=BUILDER_PACKAGE_CUTOVER_ENV,
+        )
 
     @classmethod
     def from_context(cls) -> "BuilderWorkflowService":
@@ -793,6 +832,7 @@ class BuilderWorkflowService:
             dev_scenarios_root=Path(ctx.paths.dev_scenarios_dir()),
             state_dir=current_state_dir(),
             event_sink=cls._publish,
+            workspace_root=Path(ctx.paths.workspace_dir()),
         )
 
     @staticmethod
@@ -813,6 +853,10 @@ class BuilderWorkflowService:
         return root
 
     def _governed_definition(self) -> CompiledWorkflowDefinition:
+        self._active_package_digest = None
+        self._active_binding_digest = None
+        if self.require_active_builder_package:
+            return self._active_builder_definition()
         skill_root = (self.dev_skills_root / "builder_skill").resolve()
         if not skill_root.is_dir():
             # Bounded compatibility for isolated core tests and rollback only. A
@@ -828,6 +872,83 @@ class BuilderWorkflowService:
             )
         except (OSError, WorkflowArtifactError) as exc:
             raise BuilderWorkflowError(f"invalid declarative Builder workflow: {exc}") from exc
+
+    def _active_builder_definition(self) -> CompiledWorkflowDefinition:
+        if self.workspace_root is None:
+            raise BuilderWorkflowError(
+                "Builder package cutover requires a configured Workspace root"
+            )
+        lock_path = self.workspace_root / ".adaos" / "workspace.lock.json"
+        try:
+            payload = json.loads(lock_path.read_text(encoding="utf-8"))
+            workspace_lock = WorkspaceLock.from_mapping(payload)
+        except FileNotFoundError as exc:
+            raise BuilderWorkflowError(
+                "Builder package cutover requires an active WorkspaceLock"
+            ) from exc
+        except (OSError, ValueError, ArtifactReleaseContractError) as exc:
+            raise BuilderWorkflowError(f"invalid active WorkspaceLock: {exc}") from exc
+        package = next(
+            (item for item in workspace_lock.components if item.key == "skill:builder_skill"),
+            None,
+        )
+        if package is None:
+            raise BuilderWorkflowError(
+                "active WorkspaceLock does not contain skill:builder_skill"
+            )
+        if (
+            package.workflow_lock is None
+            or package.workflow_validation_lock is None
+            or package.workflow_binding_digest is None
+        ):
+            raise BuilderWorkflowError(
+                "active Builder package has no complete workflow binding"
+            )
+        relative = package.materialization_path or "skills/builder_skill"
+        skill_root = (self.workspace_root / relative).resolve()
+        if self.workspace_root not in skill_root.parents:
+            raise BuilderWorkflowError("active Builder materialization escapes Workspace")
+        try:
+            artifact = load_manifest_bound_workflow(
+                skill_root,
+                manifest_name="skill.yaml",
+                registered_guards=set(_BUILDER_WORKFLOW_GUARDS),
+                registered_activities=set(_BUILDER_WORKFLOW_ACTIVITIES),
+                allow_legacy_inline=False,
+            )
+        except (OSError, WorkflowArtifactError) as exc:
+            raise BuilderWorkflowError(
+                f"invalid active Builder workflow package: {exc}"
+            ) from exc
+        if artifact is None or artifact.compiled.workflow_type != "builder.change":
+            raise BuilderWorkflowError(
+                "active Builder package must contain builder.change workflow.json"
+            )
+        if artifact.definition_digest != package.workflow_lock.digest:
+            raise BuilderWorkflowError(
+                "active Builder workflow definition differs from WorkspaceLock"
+            )
+        validation_digest = canonical_payload_digest(artifact.validation_report)
+        if validation_digest != package.workflow_validation_lock.digest:
+            raise BuilderWorkflowError(
+                "active Builder workflow validation differs from WorkspaceLock"
+            )
+        try:
+            binding = platform_workflow_adapter_registry().bind(
+                artifact.compiled,
+                expected_locks=(item.to_dict() for item in package.workflow_adapter_locks),
+            )
+        except WorkflowAdapterRegistryError as exc:
+            raise BuilderWorkflowError(
+                f"active Builder workflow adapter binding is invalid: {exc}"
+            ) from exc
+        if binding["binding_digest"] != package.workflow_binding_digest:
+            raise BuilderWorkflowError(
+                "active Builder workflow binding differs from WorkspaceLock"
+            )
+        self._active_package_digest = package.digest
+        self._active_binding_digest = package.workflow_binding_digest
+        return artifact.compiled
 
     def _workflow_inspection(self, object_type: str, object_id: str) -> dict[str, Any]:
         definition = self._governed_definition()
@@ -953,6 +1074,190 @@ class BuilderWorkflowService:
         temporary = path.with_name(f".{path.name}.tmp")
         temporary.write_bytes(raw)
         _replace_path(temporary, path)
+
+    def _migration_checkpoint_path(self, checkpoint_id: str) -> Path:
+        token = str(checkpoint_id or "").strip().lower()
+        if len(token) != 64 or any(char not in "0123456789abcdef" for char in token):
+            raise BuilderWorkflowError("Builder migration checkpoint id is invalid")
+        return Path(self.state_dir) / "builder" / "workflow_migrations" / f"{token}.json"
+
+    def migrate_in_flight_instance(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        source_definition: CompiledWorkflowDefinition | Mapping[str, Any],
+        target_definition: CompiledWorkflowDefinition | Mapping[str, Any],
+        migration: Mapping[str, Any],
+        expected_generation: int,
+        idempotency_key: str,
+        actor_id: str = "user:local",
+        permissions: tuple[str, ...] = ("workflow.definition.migrate",),
+        target_package_digest: str | None = None,
+        target_binding_digest: str | None = None,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Migrate one persisted Builder instance with a restart-safe checkpoint."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        source = (
+            source_definition
+            if isinstance(source_definition, CompiledWorkflowDefinition)
+            else compile_definition(source_definition)
+        )
+        target = (
+            target_definition
+            if isinstance(target_definition, CompiledWorkflowDefinition)
+            else compile_definition(target_definition)
+        )
+        state = self._read_state(kind, project_id)
+        workflow = _mapping(state.get("workflow"))
+        current = _mapping(workflow.get("governed"))
+        if not current:
+            raise BuilderWorkflowError("Builder project has no in-flight governed instance")
+        checkpoint_id = hashlib.sha256(
+            canonical_workflow_bytes(
+                {
+                    "project": f"{kind}:{project_id}",
+                    "instance_id": current.get("instance_id"),
+                    "migration_id": migration.get("migration_id"),
+                    "idempotency_key": idempotency_key,
+                }
+            )
+        ).hexdigest()
+        checkpoint_path = self._migration_checkpoint_path(checkpoint_id)
+        if checkpoint_path.is_file():
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            if current == checkpoint.get("after"):
+                return {
+                    "status": "completed",
+                    "checkpoint_id": checkpoint_id,
+                    "instance": copy.deepcopy(current),
+                    "idempotent_replay": True,
+                }
+            if current == checkpoint.get("before") and checkpoint.get("after"):
+                workflow["governed"] = copy.deepcopy(checkpoint["after"])
+                state["workflow"] = workflow
+                self._write_state(kind, project_id, state)
+                return {
+                    "status": "completed",
+                    "checkpoint_id": checkpoint_id,
+                    "instance": copy.deepcopy(checkpoint["after"]),
+                    "idempotent_replay": True,
+                }
+            raise BuilderWorkflowError(
+                "Builder migration checkpoint conflicts with current instance"
+            )
+        principal = verified_workflow_principal(
+            actor_id,
+            authenticated=True,
+            issuer="adaos.builder.workflow_migration",
+            permissions=permissions,
+        )
+        try:
+            decision = migrate_workflow_instance(
+                source,
+                target,
+                current,
+                migration,
+                actor=actor_id,
+                permissions=permissions,
+                principal=principal,
+                require_verified_principal=True,
+                expected_generation=expected_generation,
+                idempotency_key=idempotency_key,
+                target_package_digest=target_package_digest,
+                target_binding_digest=target_binding_digest,
+                now=now,
+            )
+        except (ValueError, TypeError) as exc:
+            raise BuilderWorkflowError(f"Builder workflow migration rejected: {exc}") from exc
+        checkpoint = {
+            "schema": "adaos.builder.workflow_migration_checkpoint.v1",
+            "checkpoint_id": checkpoint_id,
+            "object_type": kind,
+            "object_id": project_id,
+            "migration_id": migration.get("migration_id"),
+            "source_definition_digest": workflow_definition_digest(source),
+            "target_definition_digest": workflow_definition_digest(target),
+            "before": copy.deepcopy(current),
+            "after": copy.deepcopy(decision["after"]),
+            "created_at": now or _now(),
+            "rolled_back_at": None,
+        }
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_tmp = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+        checkpoint_tmp.write_text(
+            json.dumps(checkpoint, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _replace_path(checkpoint_tmp, checkpoint_path)
+        workflow["governed"] = copy.deepcopy(decision["after"])
+        state["workflow"] = workflow
+        self._write_state(kind, project_id, state)
+        return {
+            "status": "completed",
+            "checkpoint_id": checkpoint_id,
+            "instance": copy.deepcopy(decision["after"]),
+            "idempotent_replay": False,
+        }
+
+    def rollback_in_flight_migration(
+        self,
+        checkpoint_id: str,
+        *,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        checkpoint_path = self._migration_checkpoint_path(checkpoint_id)
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise BuilderWorkflowError(f"cannot read Builder migration checkpoint: {exc}") from exc
+        kind = _kind(checkpoint.get("object_type"))
+        project_id = _project_id(checkpoint.get("object_id"))
+        state = self._read_state(kind, project_id)
+        workflow = _mapping(state.get("workflow"))
+        current = _mapping(workflow.get("governed"))
+        before = _mapping(checkpoint.get("before"))
+        after = _mapping(checkpoint.get("after"))
+        if not before or not after:
+            raise BuilderWorkflowError("Builder migration checkpoint is incomplete")
+        if current == before:
+            if not checkpoint.get("rolled_back_at"):
+                checkpoint["rolled_back_at"] = now or _now()
+                checkpoint_tmp = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+                checkpoint_tmp.write_text(
+                    json.dumps(checkpoint, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                _replace_path(checkpoint_tmp, checkpoint_path)
+            return {
+                "status": "rolled_back",
+                "checkpoint_id": checkpoint_id,
+                "instance": copy.deepcopy(before),
+                "idempotent_replay": True,
+            }
+        if current != after:
+            raise BuilderWorkflowError(
+                "Builder migration rollback requires the exact migrated instance"
+            )
+        workflow["governed"] = copy.deepcopy(before)
+        state["workflow"] = workflow
+        self._write_state(kind, project_id, state)
+        checkpoint["rolled_back_at"] = now or _now()
+        checkpoint_tmp = checkpoint_path.with_name(f".{checkpoint_path.name}.tmp")
+        checkpoint_tmp.write_text(
+            json.dumps(checkpoint, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _replace_path(checkpoint_tmp, checkpoint_path)
+        return {
+            "status": "rolled_back",
+            "checkpoint_id": checkpoint_id,
+            "instance": copy.deepcopy(before),
+            "idempotent_replay": False,
+        }
 
     def _project_version(self, object_type: str, object_id: str) -> str | None:
         kind = _kind(object_type)
@@ -1101,10 +1406,13 @@ class BuilderWorkflowService:
             ][-_MAX_HISTORY:],
             "updated_at": str(raw.get("updated_at") or state.get("updated_at") or "").strip() or None,
         }
+        definition = self._governed_definition()
         normalized["governed"] = governed_instance(
             {**normalized, "governed": raw.get("governed")},
             project_ref=f"{_kind(object_type)}:{_project_id(object_id)}",
-            definition=self._governed_definition(),
+            definition=definition,
+            package_digest=self._active_package_digest,
+            binding_digest=self._active_binding_digest,
         )
         normalized["data_binding"] = normalize_binding_state(
             raw.get("data_binding"),
@@ -2220,6 +2528,7 @@ class BuilderWorkflowService:
             }
             governed_decision = None
             if action_token == "plan_change_set" or workflow.get("change") or workflow.get("change_set"):
+                definition = self._governed_definition()
                 governed_decision = admit_legacy_transition(
                     workflow,
                     action_token,
@@ -2229,7 +2538,9 @@ class BuilderWorkflowService:
                     idempotency_key=str(details.get("idempotency_key") or "").strip()
                     or f"legacy:{kind}:{project_id}:{int(workflow.get('generation') or 0)}:{action_token}",
                     now=changed_at,
-                    definition=self._governed_definition(),
+                    definition=definition,
+                    package_digest=self._active_package_digest,
+                    binding_digest=self._active_binding_digest,
                 )
                 if governed_decision is not None and not bool(governed_decision.get("accepted")):
                     raise BuilderWorkflowError(

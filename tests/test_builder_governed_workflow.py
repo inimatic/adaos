@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from adaos.domain.artifact_release import ArtifactSourceRef, WorkspaceLock
+from adaos.services.artifact_pipeline import BuiltArtifactPackage, build_artifact_package
 from adaos.services.builder.governed import (
     builder_change_definition,
     compiled_builder_change_definition,
@@ -17,6 +20,60 @@ from adaos.services.governed_workflow import workflow_definition_digest
 
 
 ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
+
+
+def _source_ref() -> ArtifactSourceRef:
+    return ArtifactSourceRef(
+        forge="github",
+        repository="inimatic/adaos-registry",
+        revision="0123456789abcdef0123456789abcdef01234567",
+        path_scope=("skills/builder_skill/",),
+    )
+
+
+def _build_builder_package(
+    tmp_path: Path,
+    definition: dict[str, object],
+) -> tuple[BuiltArtifactPackage, Path]:
+    version = str(definition["definition_version"])
+    root = tmp_path / "builder_packages" / version
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "skill.yaml").write_text(
+        "name: builder_skill\n"
+        f"version: {version}\n"
+        "workflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (root / "workflow.json").write_text(
+        json.dumps(definition, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return (
+        build_artifact_package(root, kind="skill", source_ref=_source_ref()),
+        root,
+    )
+
+
+def _activate_builder_package(
+    workspace: Path,
+    built: BuiltArtifactPackage,
+    source: Path,
+) -> None:
+    target = workspace / "skills" / "builder_skill"
+    target.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / "skill.yaml", target / "skill.yaml")
+    shutil.copyfile(source / "workflow.json", target / "workflow.json")
+    lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-08-04T00:00:00+00:00",
+        components=(built.ref,),
+    )
+    lock_path = workspace / ".adaos" / "workspace.lock.json"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(
+        json.dumps(lock.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _service(tmp_path: Path) -> BuilderWorkflowService:
@@ -153,6 +210,148 @@ def test_present_but_invalid_dev_builder_workflow_fails_closed(tmp_path: Path) -
 
     with pytest.raises(BuilderWorkflowError, match="unregistered activity"):
         service.describe("scenario", "recipes")
+
+
+def test_builder_package_cutover_requires_active_workspace_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compatibility_service = _service(tmp_path)
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("ADAOS_BUILDER_REQUIRE_ACTIVE_PACKAGE", "true")
+    service = BuilderWorkflowService(
+        compatibility_service.dev_skills_root,
+        compatibility_service.dev_scenarios_root,
+        compatibility_service.state_dir,
+        workspace_root=workspace,
+    )
+
+    with pytest.raises(BuilderWorkflowError, match="active WorkspaceLock"):
+        service.describe("scenario", "recipes")
+
+    built, source = _build_builder_package(tmp_path, builder_change_definition())
+    _activate_builder_package(workspace, built, source)
+
+    workflow = _plan(service)
+
+    assert workflow["governed"]["package_digest"] == built.ref.digest
+    assert (
+        workflow["governed"]["binding_digest"]
+        == built.ref.workflow_binding_digest
+    )
+
+    tampered = builder_change_definition()
+    tampered["metadata"] = {**tampered["metadata"], "tampered": True}
+    (workspace / "skills" / "builder_skill" / "workflow.json").write_text(
+        json.dumps(tampered, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    restarted = BuilderWorkflowService(
+        service.dev_skills_root,
+        service.dev_scenarios_root,
+        service.state_dir,
+        workspace_root=workspace,
+    )
+    with pytest.raises(BuilderWorkflowError, match="differs from WorkspaceLock"):
+        restarted.describe("scenario", "recipes")
+
+
+def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_instance(
+    tmp_path: Path,
+) -> None:
+    compatibility_service = _service(tmp_path)
+    workspace = tmp_path / "workspace"
+    source_definition = builder_change_definition()
+    source_built, source_root = _build_builder_package(tmp_path, source_definition)
+    _activate_builder_package(workspace, source_built, source_root)
+    service = BuilderWorkflowService(
+        compatibility_service.dev_skills_root,
+        compatibility_service.dev_scenarios_root,
+        compatibility_service.state_dir,
+        workspace_root=workspace,
+        require_active_builder_package=True,
+    )
+    before = _plan(service)["governed"]
+
+    target_definition = copy.deepcopy(source_definition)
+    target_definition["definition_version"] = "1.1.0"
+    target_built, target_root = _build_builder_package(tmp_path, target_definition)
+    migration = {
+        "schema": "adaos.workflow.definition_migration.v1",
+        "migration_id": "builder_change_1_0_to_1_1",
+        "workflow_type": "builder.change",
+        "from_definition_version": "1.0.0",
+        "to_definition_version": "1.1.0",
+        "allowed_source_states": ["prototype_editing"],
+        "state_map": {"prototype_editing": "prototype_editing"},
+        "context_set": {"builder_package_cutover": "1.1.0"},
+        "context_remove": [],
+        "authority": {
+            "actors": ["user:local"],
+            "permissions": ["workflow.definition.migrate"],
+        },
+        "explanation": "Move the active Builder change to its admitted package generation.",
+    }
+
+    migrated = service.migrate_in_flight_instance(
+        "scenario",
+        "recipes",
+        source_definition=source_definition,
+        target_definition=target_definition,
+        migration=migration,
+        expected_generation=before["generation"],
+        idempotency_key="builder-cutover-1.1.0",
+        target_package_digest=target_built.ref.digest,
+        target_binding_digest=target_built.ref.workflow_binding_digest,
+        now="2026-08-04T01:00:00+00:00",
+    )
+    replay = service.migrate_in_flight_instance(
+        "scenario",
+        "recipes",
+        source_definition=source_definition,
+        target_definition=target_definition,
+        migration=migration,
+        expected_generation=before["generation"],
+        idempotency_key="builder-cutover-1.1.0",
+        target_package_digest=target_built.ref.digest,
+        target_binding_digest=target_built.ref.workflow_binding_digest,
+        now="2026-08-04T01:00:00+00:00",
+    )
+    assert replay["idempotent_replay"] is True
+    assert replay["instance"] == migrated["instance"]
+
+    _activate_builder_package(workspace, target_built, target_root)
+    restarted = BuilderWorkflowService(
+        service.dev_skills_root,
+        service.dev_scenarios_root,
+        service.state_dir,
+        workspace_root=workspace,
+        require_active_builder_package=True,
+    )
+    after_restart = restarted.describe("scenario", "recipes")["governed"]
+    assert after_restart == migrated["instance"]
+    assert after_restart["definition_version"] == "1.1.0"
+    assert after_restart["package_digest"] == target_built.ref.digest
+
+    rolled_back = restarted.rollback_in_flight_migration(
+        migrated["checkpoint_id"],
+        now="2026-08-04T02:00:00+00:00",
+    )
+    assert rolled_back["instance"] == before
+    assert restarted.rollback_in_flight_migration(
+        migrated["checkpoint_id"],
+        now="2026-08-04T02:00:00+00:00",
+    )["idempotent_replay"] is True
+
+    _activate_builder_package(workspace, source_built, source_root)
+    restored = BuilderWorkflowService(
+        service.dev_skills_root,
+        service.dev_scenarios_root,
+        service.state_dir,
+        workspace_root=workspace,
+        require_active_builder_package=True,
+    ).describe("scenario", "recipes")["governed"]
+    assert restored == before
 
 
 def test_legacy_transition_is_admitted_and_persisted_by_canonical_statechart(tmp_path: Path) -> None:
