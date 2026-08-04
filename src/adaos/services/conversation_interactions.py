@@ -309,6 +309,7 @@ def create_interaction(
     expires_at: str | None = None,
     metadata: Mapping[str, Any] | None = None,
     now: str | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
     timestamp = now or _now()
     spec = {
@@ -385,6 +386,8 @@ def create_interaction(
             "metadata": copy.deepcopy(dict(metadata or {})),
         },
     )
+    if not persist:
+        return record
     stored = conversation_store.save_interaction(record, create_only=True)
     if stored is None:
         raise ConversationInteractionError("durable conversation store is unavailable")
@@ -407,6 +410,7 @@ def interaction_from_workflow_description(
     metadata: Mapping[str, Any] | None = None,
     action_labels: Mapping[str, str] | None = None,
     now: str | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
     snapshot = copy.deepcopy(dict(description or {}))
     if snapshot.get("schema") != "adaos.workflow.description.v1":
@@ -489,6 +493,7 @@ def interaction_from_workflow_description(
             **copy.deepcopy(dict(metadata or {})),
         },
         now=now,
+        persist=persist,
     )
 
 

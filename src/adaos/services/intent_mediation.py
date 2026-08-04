@@ -6,12 +6,13 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from jsonschema import Draft202012Validator
-
 from adaos.services import conversation_interactions, conversation_store
+from adaos.services.conversational_runtime import (
+    ConversationalRuntimeError,
+    validate_intent_proposal,
+)
 
 
 INTENT_PROPOSAL_SCHEMA = "adaos.intent.proposal.v1"
@@ -47,23 +48,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _schema() -> dict[str, Any]:
-    path = Path(__file__).resolve().parents[1] / "abi" / "intent.proposal.v1.schema.json"
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _validate(value: Mapping[str, Any]) -> dict[str, Any]:
-    record = copy.deepcopy(dict(value))
-    errors = sorted(
-        Draft202012Validator(_schema()).iter_errors(record),
-        key=lambda item: list(item.absolute_path),
-    )
-    if errors:
-        location = ".".join(str(item) for item in errors[0].absolute_path) or "$"
-        raise IntentMediationError(
-            f"{INTENT_PROPOSAL_SCHEMA} validation failed at {location}: {errors[0].message}"
-        )
-    return record
+    try:
+        return validate_intent_proposal(value)
+    except ConversationalRuntimeError as exc:
+        raise IntentMediationError(str(exc)) from exc
 
 
 def _normalized(text: str) -> str:
@@ -184,6 +173,7 @@ def _act(
         "target_ref": copy.deepcopy((action or {}).get("target_ref")),
         "interaction_id": str((interaction or {}).get("interaction_id")) if interaction else None,
         "command": str((action or {}).get("command")) if action else None,
+        "skill_invocation": None,
         "arguments": {
             "action_id": (action or {}).get("action_id"),
             "value": copy.deepcopy((action or {}).get("value")),
@@ -205,6 +195,16 @@ def propose_intent(
     retention_class: str = "normal",
     redaction: str = "policy",
     supersedes_proposal_id: str | None = None,
+    channel: str = "text",
+    modality: str = "text",
+    actor_ref: Mapping[str, Any] | None = None,
+    principal_ref: Mapping[str, Any] | None = None,
+    reply_route_ref: Mapping[str, Any] | None = None,
+    context_ref: Mapping[str, Any] | None = None,
+    package_ref: Mapping[str, Any] | None = None,
+    package_digest: str | None = None,
+    prompt_digest: str | None = None,
+    trace: Mapping[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     conversation = str(conversation_id or "").strip()
@@ -239,7 +239,18 @@ def propose_intent(
                     for item in candidates
                 ],
             }
-            alternatives.extend(ambiguity["candidates"])
+            alternatives.extend(
+                {
+                    "alternative_id": f"alternative.{len(alternatives) + offset + 1}",
+                    "kind": "interaction_answer",
+                    "confidence": 0.5,
+                    "target_ref": copy.deepcopy(candidate[0].get("workflow_ref")),
+                    "interaction_id": str(candidate[0]["interaction_id"]),
+                    "action_id": str(candidate[1]["action_id"]),
+                    "command": str(candidate[1].get("command") or "") or None,
+                }
+                for offset, candidate in enumerate(candidates)
+            )
             acts.append(_act(index, "unrelated", segment, confidence=0.0))
         elif len(interactions) == 1 and dict(interactions[0].get("input_spec") or {}).get("kind") in {"text", "form"}:
             acts.append(_act(index, "interaction_answer", segment, interaction=interactions[0], confidence=1.0))
@@ -258,14 +269,28 @@ def propose_intent(
                         for item in free_text_targets
                     ],
                 }
-                alternatives.extend(ambiguity["candidates"])
+                alternatives.extend(
+                    {
+                        "alternative_id": f"alternative.{len(alternatives) + offset + 1}",
+                        "kind": "interaction_answer",
+                        "confidence": 0.5,
+                        "target_ref": copy.deepcopy(item.get("workflow_ref")),
+                        "interaction_id": str(item["interaction_id"]),
+                        "action_id": None,
+                        "command": None,
+                    }
+                    for offset, item in enumerate(free_text_targets)
+                )
             acts.append(_act(index, kind, segment, confidence=0.0 if ambiguity else 1.0))
     disposition = "proposed"
     clarification = None
     mutating = [item for item in acts if item["kind"] in {"interaction_answer", "workflow_command"}]
     if ambiguity:
+        ambiguity.setdefault("prompt", None)
         disposition, clarification = "clarification_required", ambiguity
     elif protected:
+        protected.setdefault("prompt", None)
+        protected.setdefault("candidates", [])
         disposition, clarification = "clarification_required", protected
     elif not mutating:
         disposition = "proposed"
@@ -284,10 +309,33 @@ def propose_intent(
             "source_message_id": message_id,
             "source_text": text,
             "locale": str(locale or "en").strip(),
+            "input_context": {
+                "channel": str(channel or "text").strip(),
+                "modality": str(modality or "text").strip(),
+                "actor_ref": copy.deepcopy(dict(actor_ref)) if isinstance(actor_ref, Mapping) else None,
+                "principal_ref": copy.deepcopy(dict(principal_ref)) if isinstance(principal_ref, Mapping) else None,
+                "reply_route_ref": copy.deepcopy(dict(reply_route_ref)) if isinstance(reply_route_ref, Mapping) else None,
+                "context_ref": copy.deepcopy(dict(context_ref)) if isinstance(context_ref, Mapping) else None,
+            },
             "semantic_acts": acts,
             "alternatives": alternatives,
             "allowed_command_snapshot": _snapshot(interactions),
             "model": {"provider": "adaos", "name": "deterministic-intent-mediator", "version": "1.0.0"},
+            "provenance": {
+                "source": "deterministic",
+                "package_ref": copy.deepcopy(dict(package_ref)) if isinstance(package_ref, Mapping) else None,
+                "package_digest": str(package_digest).strip() if package_digest else None,
+                "prompt_digest": str(prompt_digest).strip() if prompt_digest else None,
+                "context_digest": "sha256:" + hashlib.sha256(
+                    json.dumps(_snapshot(interactions), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+            },
+            "trace": {
+                "trace_id": str(dict(trace or {}).get("trace_id") or "") or None,
+                "span_id": str(dict(trace or {}).get("span_id") or "") or None,
+                "parent_span_id": str(dict(trace or {}).get("parent_span_id") or "") or None,
+                "traceparent": str(dict(trace or {}).get("traceparent") or "") or None,
+            },
             "disposition": disposition,
             "clarification": clarification,
             "supersedes_proposal_id": supersedes_proposal_id,

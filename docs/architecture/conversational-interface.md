@@ -559,8 +559,11 @@ for their detailed gates and evidence.
 - [x] `[must]` Add first workflow-facing conversation-story fixtures and runner
   support for deterministic `IntentProposal` fixtures, workflow command, state
   transition, semantic output, and no-LLM execution.
-- [ ] `[must]` Extend story assertions to full dialog repair,
-  `ConversationInteraction`, and channel fallback coverage.
+- [x] `[must]` Extend story assertions to full dialog repair,
+  `ConversationInteraction`, and channel fallback coverage. Story expectations
+  can now assert repair reason/next input, command-preserving
+  `ConversationInteraction` projections, and channel `InteractionPresentation`
+  fallback mode, reason, command identity, and semantic equivalence.
 - [x] `[must]` Make the story runner side-effect isolated by default and require
   explicit integration-trial profiles for live effects or provider calls.
   The first runner records workflow activities as mocked timeline entries and

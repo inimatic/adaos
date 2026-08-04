@@ -10,7 +10,9 @@
     "kind",
     "audience",
     "risk_level",
+    "reason",
     "summary",
+    "content_parts",
     "details",
     "actions",
     "fields",
@@ -18,6 +20,10 @@
     "correlation",
     "next_expected_input",
     "channel_constraints",
+    "handoff_target",
+    "lifecycle",
+    "provenance",
+    "trace",
     "response_envelope_ref",
     "created_at"
   ],
@@ -39,7 +45,36 @@
     },
     "audience": { "enum": ["user", "developer", "operator"] },
     "risk_level": { "enum": ["none", "low", "medium", "high", "destructive"] },
+    "reason": {
+      "type": "object",
+      "required": ["code", "explanation", "retryable", "source"],
+      "properties": {
+        "code": { "type": ["string", "null"], "maxLength": 240 },
+        "explanation": { "type": ["string", "null"], "maxLength": 4000 },
+        "retryable": { "type": "boolean" },
+        "source": { "enum": ["conversation", "workflow", "skill", "policy", "provider", "system"] }
+      },
+      "additionalProperties": false
+    },
     "summary": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "content_parts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["part_id", "kind", "text", "data", "artifact_ref", "media_type", "sensitivity"],
+        "properties": {
+          "part_id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["text", "json", "artifact", "media", "code", "table"] },
+          "text": { "type": ["string", "null"], "maxLength": 12000 },
+          "data": { "type": ["object", "null"] },
+          "artifact_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+          "media_type": { "type": ["string", "null"], "maxLength": 160 },
+          "sensitivity": { "enum": ["public", "internal", "personal", "sensitive"] }
+        },
+        "additionalProperties": false
+      }
+    },
     "details": {
       "type": "array",
       "maxItems": 100,
@@ -67,6 +102,8 @@
           "target_refs",
           "requires_confirmation",
           "presentation_hint"
+          ,"binding"
+          ,"action_policy"
         ],
         "properties": {
           "action_id": { "$ref": "#/$defs/id" },
@@ -80,6 +117,18 @@
           },
           "requires_confirmation": { "type": "boolean" },
           "presentation_hint": { "enum": ["primary", "secondary", "danger", "link", "hidden"] },
+          "binding": {
+            "type": "object",
+            "required": ["kind", "affordance_id", "workflow_command", "skill_operation"],
+            "properties": {
+              "kind": { "enum": ["workflow_command", "skill_invocation", "query", "link", "none"] },
+              "affordance_id": { "type": ["string", "null"], "maxLength": 160 },
+              "workflow_command": { "type": ["string", "null"], "maxLength": 160 },
+              "skill_operation": { "type": ["string", "null"], "maxLength": 160 }
+            },
+            "additionalProperties": false
+          },
+          "action_policy": { "$ref": "#/$defs/actionPolicy" },
           "metadata": { "type": "object" }
         },
         "additionalProperties": false
@@ -172,6 +221,34 @@
       },
       "additionalProperties": false
     },
+    "handoff_target": {
+      "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }]
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": ["sequence", "update_kind", "supersedes_output_id", "terminal", "task_status"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "update_kind": { "enum": ["snapshot", "delta"] },
+        "supersedes_output_id": { "type": ["string", "null"], "maxLength": 240 },
+        "terminal": { "type": "boolean" },
+        "task_status": { "enum": ["none", "submitted", "working", "input_required", "completed", "failed", "cancelled", "unknown"] }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source", "package_ref", "package_digest", "source_ref", "source_digest"],
+      "properties": {
+        "source": { "enum": ["conversation", "workflow", "skill", "repair", "system"] },
+        "package_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+        "package_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "source_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+        "source_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "trace": { "$ref": "#/$defs/trace" },
     "response_envelope_ref": {
       "description": "Optional link to the current channel-neutral delivery envelope derived from this semantic output.",
       "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }]
@@ -192,6 +269,30 @@
         "version": { "type": ["string", "null"], "maxLength": 120 },
         "generation": { "type": ["integer", "null"], "minimum": 0 },
         "digest": { "type": ["string", "null"], "maxLength": 120 }
+      },
+      "additionalProperties": false
+    },
+    "trace": {
+      "type": "object",
+      "required": ["trace_id", "span_id", "parent_span_id", "traceparent"],
+      "properties": {
+        "trace_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+        "span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+        "parent_span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+        "traceparent": { "type": ["string", "null"], "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "actionPolicy": {
+      "type": "object",
+      "required": ["schema", "risk_class", "side_effect", "confirmation"],
+      "properties": {
+        "schema": { "const": "adaos.conversation.action_policy.v1" },
+        "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+        "side_effect": { "enum": ["none", "reversible", "external", "destructive"] },
+        "confirmation": { "enum": ["none", "required", "rich_review"] },
+        "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
       },
       "additionalProperties": false
     }

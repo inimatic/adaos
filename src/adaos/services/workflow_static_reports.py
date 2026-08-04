@@ -79,6 +79,7 @@ def _timeline_output_summary(output: Mapping[str, Any]) -> dict[str, Any]:
         "turn_trace_id": correlation.get("turn_trace_id"),
         "workflow_event_id": correlation.get("workflow_event_id"),
         "command_id": correlation.get("command_id"),
+        "source_output_ref": dict(output.get("metadata") or {}).get("source_output_ref"),
     }
 
 
@@ -128,12 +129,7 @@ def _coverage(
     covered_transitions: list[str] = []
     covered_commands: list[str] = []
     story_step_count = 0
-    for story in stories:
-        start = story.get("start")
-        if isinstance(start, Mapping):
-            state = str(start.get("state") or "").strip()
-            if state:
-                covered_states.append(state)
+    covered_outputs_actual: list[str] = []
     for report in story_reports:
         story_step_count += int(report.get("steps") or 0)
         final_state = str(report.get("final_state") or "").strip()
@@ -152,11 +148,16 @@ def _coverage(
             transition_id = str(item.get("transition_id") or "").strip()
             if transition_id:
                 covered_transitions.append(transition_id)
+            output = item.get("output")
+            if isinstance(output, Mapping):
+                output_ref = str(output.get("source_output_ref") or "").strip()
+                if output_ref:
+                    covered_outputs_actual.append(output_ref)
 
     covered_states_sorted = _sorted_ids(covered_states)
     covered_transitions_sorted = _sorted_ids(covered_transitions)
     covered_commands_sorted = _sorted_ids(covered_commands)
-    covered_outputs = _story_output_refs(stories)
+    covered_outputs = _sorted_ids(covered_outputs_actual)
     return {
         "state_total": len(declared_states),
         "transition_total": len(declared_transitions),

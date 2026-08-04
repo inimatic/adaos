@@ -772,6 +772,47 @@ def build_skill_intent_proposal(
     )
 
 
+def build_noninvocation_intent_proposal(
+    *,
+    conversation_id: str,
+    source_message_id: str,
+    source_text: str,
+    kind: str,
+    confidence: float = 1.0,
+    locale: str = "en",
+    input_context: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    trace: Mapping[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    selected_kind = str(kind or "").strip()
+    if selected_kind not in {"feedback", "new_issue", "question", "context_selection", "unrelated"}:
+        raise ConversationalRuntimeError(
+            f"non-invocation intent kind is not supported: {selected_kind}"
+        )
+    act = _semantic_act(
+        act_id="act.1",
+        kind=selected_kind,
+        text=source_text,
+        target_ref=None,
+        interaction_id=None,
+        command=None,
+        arguments={},
+        confidence=confidence,
+    )
+    return _proposal_record(
+        conversation_id=conversation_id,
+        source_message_id=source_message_id,
+        source_text=source_text,
+        locale=locale,
+        semantic_acts=(act,),
+        input_context=input_context,
+        provenance=provenance,
+        trace=trace,
+        now=now,
+    )
+
+
 def _single_act(proposal: Mapping[str, Any], kind: str) -> dict[str, Any]:
     record = validate_intent_proposal(proposal)
     acts = [dict(item) for item in record["semantic_acts"] if item.get("kind") == kind]
@@ -1363,19 +1404,28 @@ def response_envelope_from_conversation_output(
 
 
 __all__ = [
+    "ACTION_POLICY_SCHEMA",
     "CONVERSATION_OUTPUT_SCHEMA",
     "INTENT_PROPOSAL_SCHEMA",
     "RESPONSE_ENVELOPE_SCHEMA",
+    "SKILL_INVOCATION_SCHEMA",
     "ConversationalRuntimeError",
+    "action_policy",
+    "action_policy_from_legacy_side_effect",
+    "action_policy_from_workflow_risk",
     "build_conversation_output",
+    "build_noninvocation_intent_proposal",
     "build_skill_intent_proposal",
     "build_workflow_intent_proposal",
     "conversation_output_from_workflow_execution",
     "link_conversation_output_to_response_envelope",
     "response_envelope_from_conversation_output",
     "response_envelope_ref",
+    "skill_invocation_from_intent_proposal",
+    "validate_action_policy",
     "validate_conversation_output",
     "validate_intent_proposal",
     "validate_response_envelope",
+    "validate_skill_invocation",
     "workflow_invocation_from_intent_proposal",
 ]

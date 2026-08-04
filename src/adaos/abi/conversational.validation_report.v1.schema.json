@@ -27,13 +27,19 @@
     },
     "metrics": {
       "type": "object",
-      "required": ["intents", "affordances", "repair_policies", "outputs", "stories", "workflow_commands_referenced", "workflow_transitions_referenced"],
+      "required": ["intents", "entities", "examples", "affordances", "repair_policies", "outputs", "stories", "locales", "workflow_commands_referenced", "workflow_transitions_referenced"],
       "properties": {
         "intents": { "type": "integer", "minimum": 0 },
+        "entities": { "type": "integer", "minimum": 0 },
+        "examples": { "type": "integer", "minimum": 0 },
+        "entities": { "type": "integer", "minimum": 0 },
+        "examples": { "type": "integer", "minimum": 0 },
         "affordances": { "type": "integer", "minimum": 0 },
         "repair_policies": { "type": "integer", "minimum": 0 },
         "outputs": { "type": "integer", "minimum": 0 },
         "stories": { "type": "integer", "minimum": 0 },
+        "locales": { "type": "integer", "minimum": 0 },
+        "locales": { "type": "integer", "minimum": 0 },
         "workflow_commands_referenced": { "type": "integer", "minimum": 0 },
         "workflow_transitions_referenced": { "type": "integer", "minimum": 0 }
       },

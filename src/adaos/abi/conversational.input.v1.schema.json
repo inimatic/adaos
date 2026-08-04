@@ -3,7 +3,7 @@
   "$id": "adaos.conversational.input.v1",
   "title": "AdaOS Conversational Input Source",
   "type": "object",
-  "required": ["schema", "package_id", "intents", "hard_negatives", "policy"],
+  "required": ["schema", "package_id", "intents", "policy"],
   "properties": {
     "schema": { "const": "adaos.conversational.input.v1" },
     "package_id": { "$ref": "#/$defs/id" },
@@ -12,7 +12,7 @@
       "maxItems": 500,
       "items": {
         "type": "object",
-        "required": ["id", "description", "kind", "affordance_id", "examples", "slots"],
+        "required": ["id", "description", "kind", "affordance_id", "workflow", "skill_invocation", "example_ids", "slots"],
         "properties": {
           "id": { "$ref": "#/$defs/id" },
           "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
@@ -37,19 +37,11 @@
             },
             "additionalProperties": false
           },
-          "examples": {
+          "example_ids": {
             "type": "array",
+            "uniqueItems": true,
             "maxItems": 200,
-            "items": {
-              "type": "object",
-              "required": ["text", "locale"],
-              "properties": {
-                "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
-                "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
-                "source": { "enum": ["authored", "teacher", "trace", "test"] }
-              },
-              "additionalProperties": false
-            }
+            "items": { "$ref": "#/$defs/id" }
           },
           "slots": {
             "type": "array",
@@ -68,20 +60,35 @@
           },
           "metadata": { "type": "object" }
         },
-        "additionalProperties": false
-      }
-    },
-    "hard_negatives": {
-      "type": "array",
-      "maxItems": 500,
-      "items": {
-        "type": "object",
-        "required": ["text", "locale", "reason"],
-        "properties": {
-          "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
-          "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
-          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
-        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "workflow_command" } } },
+            "then": {
+              "properties": {
+                "workflow": { "type": "object" },
+                "affordance_id": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["skill_invocation", "query"] } } },
+            "then": {
+              "properties": {
+                "skill_invocation": { "type": "object" },
+                "affordance_id": { "type": "string", "minLength": 1 }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["feedback", "question", "unrelated"] } } },
+            "then": {
+              "properties": {
+                "workflow": { "type": "null" },
+                "skill_invocation": { "type": "null" }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       }
     },

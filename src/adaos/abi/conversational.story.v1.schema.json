@@ -3,12 +3,13 @@
   "$id": "adaos.conversational.story.v1",
   "title": "AdaOS Conversation Story",
   "type": "object",
-  "required": ["schema", "id", "workflow_type", "locale", "channel", "actor", "start", "steps"],
+  "required": ["schema", "id", "story_kind", "workflow_type", "locale", "channel", "actor", "start", "steps"],
   "properties": {
     "schema": { "const": "adaos.conversational.story.v1" },
     "id": { "$ref": "#/$defs/id" },
     "title": { "type": ["string", "null"], "maxLength": 240 },
-    "workflow_type": { "$ref": "#/$defs/id" },
+    "story_kind": { "enum": ["workflow", "skill", "dialog"] },
+    "workflow_type": { "type": ["string", "null"], "maxLength": 160 },
     "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
     "channel": { "type": "string", "minLength": 1, "maxLength": 80 },
     "actor": {
@@ -16,31 +17,26 @@
       "required": ["id", "permissions", "roles"],
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 240 },
-        "permissions": {
-          "type": "array",
-          "maxItems": 100,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 160 }
-        },
-        "roles": {
-          "type": "array",
-          "maxItems": 20,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
-        }
+        "permissions": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+        "roles": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } }
       },
       "additionalProperties": false
     },
     "start": {
-      "type": "object",
-      "required": ["instance_id", "state", "generation", "context"],
-      "properties": {
-        "instance_id": { "type": "string", "minLength": 1, "maxLength": 240 },
-        "state": { "$ref": "#/$defs/id" },
-        "generation": { "type": "integer", "minimum": 0 },
-        "context": { "type": "object" }
-      },
-      "additionalProperties": false
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["instance_id", "state", "generation", "context"],
+          "properties": {
+            "instance_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+            "state": { "$ref": "#/$defs/id" },
+            "generation": { "type": "integer", "minimum": 0 },
+            "context": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "steps": {
       "type": "array",
@@ -48,24 +44,86 @@
       "maxItems": 200,
       "items": {
         "type": "object",
-        "required": ["expect"],
+        "required": ["given", "expect"],
         "properties": {
           "user": { "type": ["string", "null"], "maxLength": 8000 },
-          "event": { "type": ["object", "null"] },
-          "expect": {
+          "given": {
             "type": "object",
-            "required": ["output"],
+            "required": ["proposal", "event", "skill_result", "output_ref"],
             "properties": {
               "proposal": {
-                "type": ["object", "null"],
-                "required": ["kind", "command", "arguments"],
-                "properties": {
-                  "kind": { "enum": ["workflow_command", "skill_invocation", "question", "unrelated"] },
-                  "command": { "type": ["string", "null"], "maxLength": 160 },
-                  "arguments": { "type": "object" },
-                  "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
-                },
-                "additionalProperties": false
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["kind", "intent_id", "command", "skill_id", "operation_id", "arguments", "confidence", "action_policy"],
+                    "properties": {
+                      "kind": { "enum": ["workflow_command", "skill_invocation", "question", "unrelated"] },
+                      "intent_id": { "type": ["string", "null"], "maxLength": 160 },
+                      "command": { "type": ["string", "null"], "maxLength": 160 },
+                      "skill_id": { "type": ["string", "null"], "maxLength": 160 },
+                      "operation_id": { "type": ["string", "null"], "maxLength": 160 },
+                      "arguments": { "type": "object" },
+                      "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                      "action_policy": { "$ref": "#/$defs/actionPolicy" }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "event": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["event_id", "type", "command", "input"],
+                    "properties": {
+                      "event_id": { "$ref": "#/$defs/id" },
+                      "type": { "$ref": "#/$defs/id" },
+                      "command": { "$ref": "#/$defs/id" },
+                      "input": { "type": "object" }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "skill_result": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["status", "data", "reason_code"],
+                    "properties": {
+                      "status": { "enum": ["completed", "failed", "input_required"] },
+                      "data": {},
+                      "reason_code": { "type": ["string", "null"], "maxLength": 240 }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_ref": { "type": ["string", "null"], "maxLength": 160 }
+            },
+            "additionalProperties": false
+          },
+          "expect": {
+            "type": "object",
+            "required": ["proposal", "command", "transition_id", "state", "reason_code", "output"],
+            "properties": {
+              "proposal": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["kind", "command", "confidence_at_least"],
+                    "properties": {
+                      "kind": { "enum": ["workflow_command", "skill_invocation", "question", "unrelated"] },
+                      "command": { "type": ["string", "null"], "maxLength": 160 },
+                      "confidence_at_least": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
               },
               "command": { "type": ["string", "null"], "maxLength": 160 },
               "transition_id": { "type": ["string", "null"], "maxLength": 160 },
@@ -73,30 +131,69 @@
               "reason_code": { "type": ["string", "null"], "maxLength": 240 },
               "output": {
                 "type": "object",
-                "required": ["kind"],
+                "required": ["kind", "output_ref", "summary", "actions", "next_expected_input"],
                 "properties": {
-                  "kind": {
-                    "enum": [
-                      "clarification",
-                      "confirmation",
-                      "accepted",
-                      "progress",
-                      "result",
-                      "repair",
-                      "refusal",
-                      "handoff"
-                    ]
-                  },
+                  "kind": { "enum": ["clarification", "confirmation", "accepted", "progress", "result", "repair", "refusal", "handoff"] },
                   "output_ref": { "type": ["string", "null"], "maxLength": 160 },
                   "summary": { "type": ["string", "null"], "maxLength": 12000 },
-                  "actions": {
-                    "type": "array",
-                    "maxItems": 100,
-                    "items": { "$ref": "#/$defs/id" }
-                  },
+                  "actions": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/id" } },
                   "next_expected_input": { "enum": ["action", "text", "form", "none"] }
                 },
                 "additionalProperties": false
+              },
+              "interaction": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["commands", "expected_generation"],
+                    "properties": {
+                      "commands": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": { "$ref": "#/$defs/id" }
+                      },
+                      "expected_generation": { "type": ["integer", "null"], "minimum": 0 }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "presentation": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["channel", "mode", "supported", "reason_code", "commands", "semantic_equivalent"],
+                    "properties": {
+                      "channel": { "type": "string", "minLength": 1, "maxLength": 80 },
+                      "mode": { "type": ["string", "null"], "maxLength": 80 },
+                      "supported": { "type": ["boolean", "null"] },
+                      "reason_code": { "type": ["string", "null"], "maxLength": 240 },
+                      "commands": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": { "$ref": "#/$defs/id" }
+                      },
+                      "semantic_equivalent": { "type": ["boolean", "null"] }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "repair": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["reason_code", "next_expected_input"],
+                    "properties": {
+                      "reason_code": { "type": ["string", "null"], "maxLength": 240 },
+                      "next_expected_input": { "enum": ["action", "text", "form", "none"] }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
               }
             },
             "additionalProperties": false
@@ -107,8 +204,31 @@
     },
     "metadata": { "type": "object" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "story_kind": { "const": "workflow" } } },
+      "then": { "properties": { "workflow_type": { "type": "string", "minLength": 1 }, "start": { "type": "object" } } }
+    },
+    {
+      "if": { "properties": { "story_kind": { "enum": ["skill", "dialog"] } } },
+      "then": { "properties": { "workflow_type": { "type": "null" }, "start": { "type": "null" } } }
+    }
+  ],
   "$defs": {
-    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" }
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$" },
+    "actionPolicy": {
+      "type": "object",
+      "required": ["schema", "risk_class", "side_effect", "confirmation"],
+      "properties": {
+        "schema": { "const": "adaos.conversation.action_policy.v1" },
+        "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+        "side_effect": { "enum": ["none", "reversible", "external", "destructive"] },
+        "confirmation": { "enum": ["none", "required", "rich_review"] },
+        "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.skill.invocation.v1",
+  "title": "AdaOS Governed Skill Invocation",
+  "type": "object",
+  "required": [
+    "schema", "invocation_id", "conversation_id", "proposal_ref",
+    "actor_ref", "target_ref", "operation", "input", "action_policy",
+    "idempotency_key", "trace", "created_at", "metadata"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.skill.invocation.v1" },
+    "invocation_id": { "$ref": "#/$defs/id" },
+    "conversation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "proposal_ref": { "$ref": "#/$defs/ref" },
+    "actor_ref": { "$ref": "#/$defs/ref" },
+    "target_ref": { "$ref": "#/$defs/ref" },
+    "operation": {
+      "type": "object",
+      "required": ["skill_id", "operation_id"],
+      "properties": {
+        "skill_id": { "$ref": "#/$defs/id" },
+        "operation_id": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "input": { "type": "object" },
+    "action_policy": {
+      "type": "object",
+      "required": ["schema", "risk_class", "side_effect", "confirmation"],
+      "properties": {
+        "schema": { "const": "adaos.conversation.action_policy.v1" },
+        "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+        "side_effect": { "enum": ["none", "reversible", "external", "destructive"] },
+        "confirmation": { "enum": ["none", "required", "rich_review"] },
+        "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+      },
+      "additionalProperties": false
+    },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "trace": { "$ref": "#/$defs/trace" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,239}$" },
+    "ref": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "schema": { "type": ["string", "null"], "maxLength": 120 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "version": { "type": ["string", "null"], "maxLength": 120 },
+        "generation": { "type": ["integer", "null"], "minimum": 0 },
+        "digest": { "type": ["string", "null"], "maxLength": 120 }
+      },
+      "additionalProperties": false
+    },
+    "trace": {
+      "type": "object",
+      "required": ["trace_id", "span_id", "parent_span_id", "traceparent"],
+      "properties": {
+        "trace_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+        "span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+        "parent_span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+        "traceparent": { "type": ["string", "null"], "maxLength": 128 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

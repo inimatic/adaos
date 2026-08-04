@@ -12,9 +12,11 @@ from adaos.services.conversational_runtime import (
     conversation_output_from_workflow_execution,
     link_conversation_output_to_response_envelope,
     response_envelope_from_conversation_output,
+    skill_invocation_from_intent_proposal,
     validate_conversation_output,
     validate_intent_proposal,
     validate_response_envelope,
+    validate_skill_invocation,
     workflow_invocation_from_intent_proposal,
 )
 from adaos.services.governed_workflow import (
@@ -173,6 +175,19 @@ def test_skill_intent_proposal_is_valid_but_not_a_workflow_invocation() -> None:
             idempotency_key="intent:skill",
         )
 
+    invocation = skill_invocation_from_intent_proposal(
+        proposal,
+        actor_id="user:local",
+        idempotency_key="intent:skill",
+    )
+    assert validate_skill_invocation(invocation)["schema"] == "adaos.skill.invocation.v1"
+    assert invocation["operation"] == {
+        "skill_id": "builder",
+        "operation_id": "summarize_draft",
+    }
+    assert invocation["input"] == {"draft_id": "draft:1"}
+    assert invocation["proposal_ref"]["id"] == proposal["proposal_id"]
+
 
 def test_workflow_execution_result_builds_semantic_output_and_response_envelope() -> None:
     compiled, instance = _compiled_and_instance()
@@ -240,6 +255,9 @@ def test_workflow_execution_result_builds_semantic_output_and_response_envelope(
     assert output["correlation"]["intent_proposal_id"] == proposal["proposal_id"]
     assert output["correlation"]["workflow_event_id"] == decision["event_records"][0]["event_id"]
     assert output["correlation"]["workflow_ref"]["generation"] == 1
+    assert output["reason"]["source"] == "workflow"
+    assert output["lifecycle"]["task_status"] == "submitted"
+    assert output["content_parts"][0]["kind"] == "text"
     assert validate_response_envelope(envelope)["category"] == "accepted"
     assert envelope["payload"]["data"]["semantic_output_id"] == output["output_id"]
     assert linked["response_envelope_ref"]["id"] == "response:exec:accepted"

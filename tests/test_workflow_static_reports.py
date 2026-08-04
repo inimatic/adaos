@@ -145,11 +145,13 @@ def _write_package(root: Path) -> None:
             ],
             "files": {
                 "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
                 "affordances": "affordances.yaml",
                 "repair": "repair.yaml",
                 "output": "output.yaml",
                 "stories": ["tests/stories/approve.yaml"],
-                "locales": [],
+                "locales": ["locale.en.yaml"],
             },
             "locales": ["en"],
             "privacy_defaults": {
@@ -158,6 +160,7 @@ def _write_package(root: Path) -> None:
                 "public_promotion": "requires_review",
             },
             "compiled_outputs": [],
+            "compatibility_aliases": [],
         },
     )
     _write_yaml(
@@ -177,16 +180,37 @@ def _write_package(root: Path) -> None:
                         "transition_id": "approve_prototype",
                     },
                     "skill_invocation": None,
-                    "examples": [{"text": "approve it", "locale": "en", "source": "authored"}],
+                    "example_ids": ["approve.example.1"],
                     "slots": [],
                 }
             ],
-            "hard_negatives": [],
             "policy": {
                 "default_confidence": 0.8,
                 "abstain_below": 0.55,
                 "protected_action_confirmation": True,
             },
+        },
+    )
+    _write_yaml(
+        conv / "entities.yaml",
+        {"schema": "adaos.conversational.entities.v1", "package_id": "demo_skill", "entities": []},
+    )
+    _write_yaml(
+        conv / "examples.yaml",
+        {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "demo_skill",
+            "examples": [
+                {
+                    "id": "approve.example.1",
+                    "intent_id": "approve_prototype",
+                    "text": "approve it",
+                    "locale": "en",
+                    "source": "authored",
+                    "entities": [],
+                }
+            ],
+            "hard_negatives": [],
         },
     )
     _write_yaml(
@@ -206,7 +230,12 @@ def _write_package(root: Path) -> None:
                         "transition_id": "approve_prototype",
                     },
                     "skill_invocation": None,
-                    "side_effect_class": "reversible",
+                    "action_policy": {
+                        "schema": "adaos.conversation.action_policy.v1",
+                        "risk_class": "isolated_write",
+                        "side_effect": "reversible",
+                        "confirmation": "none",
+                    },
                     "required_capabilities": [],
                     "presentation": {"hint": "button", "priority": 10},
                     "output_refs": ["prototype_approved"],
@@ -240,7 +269,11 @@ def _write_package(root: Path) -> None:
                     "id": "prototype_approved",
                     "kind": "result",
                     "audience": "user",
+                    "risk_level": "medium",
+                    "reason_code": "prototype_approved",
+                    "explanation": "The workflow accepted the approval.",
                     "summary": "Prototype approved.",
+                    "content_parts": [],
                     "details": [],
                     "actions": [
                         {
@@ -250,18 +283,28 @@ def _write_package(root: Path) -> None:
                         }
                     ],
                     "next_expected_input": "none",
+                    "handoff_target": None,
                 },
                 {
                     "id": "repair_no_match",
                     "kind": "repair",
                     "audience": "user",
+                    "risk_level": "none",
+                    "reason_code": "no_match",
+                    "explanation": "The input did not match an available intent.",
                     "summary": "Please rephrase.",
+                    "content_parts": [],
                     "details": [],
                     "actions": [],
                     "next_expected_input": "text",
+                    "handoff_target": None,
                 },
             ],
         },
+    )
+    _write_yaml(
+        conv / "locale.en.yaml",
+        {"schema": "adaos.conversational.locale.v1", "package_id": "demo_skill", "locale": "en", "messages": {}},
     )
     _write_yaml(
         conv / "tests" / "stories" / "approve.yaml",
@@ -269,6 +312,7 @@ def _write_package(root: Path) -> None:
             "schema": "adaos.conversational.story.v1",
             "id": "builder.approve.en.happy_path",
             "title": "Approve the prototype",
+            "story_kind": "workflow",
             "workflow_type": "builder.change",
             "locale": "en",
             "channel": "web",
@@ -286,16 +330,36 @@ def _write_package(root: Path) -> None:
             "steps": [
                 {
                     "user": "approve it",
+                    "given": {
+                        "proposal": {
+                            "kind": "workflow_command",
+                            "intent_id": "approve_prototype",
+                            "command": "approve",
+                            "skill_id": None,
+                            "operation_id": None,
+                            "arguments": {},
+                            "confidence": 0.9,
+                            "action_policy": {
+                                "schema": "adaos.conversation.action_policy.v1",
+                                "risk_class": "isolated_write",
+                                "side_effect": "reversible",
+                                "confirmation": "none",
+                            },
+                        },
+                        "event": None,
+                        "skill_result": None,
+                        "output_ref": "prototype_approved",
+                    },
                     "expect": {
                         "proposal": {
                             "kind": "workflow_command",
                             "command": "approve",
-                            "arguments": {},
-                            "confidence": 0.9,
+                            "confidence_at_least": 0.9,
                         },
                         "command": "approve",
                         "transition_id": "approve_prototype",
                         "state": "automation",
+                        "reason_code": None,
                         "output": {
                             "kind": "result",
                             "output_ref": "prototype_approved",

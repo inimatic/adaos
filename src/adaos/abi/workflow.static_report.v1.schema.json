@@ -239,7 +239,8 @@
                     "next_expected_input",
                     "turn_trace_id",
                     "workflow_event_id",
-                    "command_id"
+                    "command_id",
+                    "source_output_ref"
                   ],
                   "properties": {
                     "output_id": { "$ref": "#/$defs/id" },
@@ -247,7 +248,8 @@
                     "next_expected_input": { "type": "string", "minLength": 1, "maxLength": 80 },
                     "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
                     "workflow_event_id": { "type": ["string", "null"], "maxLength": 240 },
-                    "command_id": { "type": ["string", "null"], "maxLength": 160 }
+                    "command_id": { "type": ["string", "null"], "maxLength": 160 },
+                    "source_output_ref": { "type": ["string", "null"], "maxLength": 160 }
                   },
                   "additionalProperties": false
                 }

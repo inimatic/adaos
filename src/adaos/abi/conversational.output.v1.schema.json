@@ -12,7 +12,7 @@
       "maxItems": 500,
       "items": {
         "type": "object",
-        "required": ["id", "kind", "audience", "summary", "details", "actions", "next_expected_input"],
+        "required": ["id", "kind", "audience", "risk_level", "reason_code", "explanation", "summary", "content_parts", "details", "actions", "next_expected_input", "handoff_target"],
         "properties": {
           "id": { "$ref": "#/$defs/id" },
           "kind": {
@@ -28,7 +28,28 @@
             ]
           },
           "audience": { "enum": ["user", "developer", "operator"] },
+          "risk_level": { "enum": ["none", "low", "medium", "high", "destructive"] },
+          "reason_code": { "type": ["string", "null"], "maxLength": 240 },
+          "explanation": { "type": ["string", "null"], "maxLength": 4000 },
           "summary": { "type": "string", "minLength": 1, "maxLength": 12000 },
+          "content_parts": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["part_id", "kind", "text", "data", "artifact_ref", "media_type", "sensitivity"],
+              "properties": {
+                "part_id": { "$ref": "#/$defs/id" },
+                "kind": { "enum": ["text", "json", "artifact", "media", "code", "table"] },
+                "text": { "type": ["string", "null"], "maxLength": 12000 },
+                "data": { "type": ["object", "null"] },
+                "artifact_ref": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
+                "media_type": { "type": ["string", "null"], "maxLength": 160 },
+                "sensitivity": { "enum": ["public", "internal", "personal", "sensitive"] }
+              },
+              "additionalProperties": false
+            }
+          },
           "details": {
             "type": "array",
             "maxItems": 100,
@@ -57,6 +78,7 @@
             }
           },
           "next_expected_input": { "enum": ["action", "text", "form", "none"] },
+          "handoff_target": { "oneOf": [{ "$ref": "#/$defs/ref" }, { "type": "null" }] },
           "metadata": { "type": "object" }
         },
         "additionalProperties": false
@@ -64,7 +86,20 @@
     }
   },
   "$defs": {
-    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" }
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
+    "ref": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "schema": { "type": ["string", "null"], "maxLength": 120 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "version": { "type": ["string", "null"], "maxLength": 120 },
+        "generation": { "type": ["integer", "null"], "minimum": 0 },
+        "digest": { "type": ["string", "null"], "maxLength": 120 }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

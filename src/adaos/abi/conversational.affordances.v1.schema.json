@@ -18,7 +18,8 @@
           "label",
           "description",
           "workflow",
-          "side_effect_class",
+          "skill_invocation",
+          "action_policy",
           "required_capabilities",
           "output_refs"
         ],
@@ -46,7 +47,19 @@
             },
             "additionalProperties": false
           },
-          "side_effect_class": { "enum": ["none", "read_only", "reversible", "external", "destructive"] },
+          "action_policy": {
+            "type": "object",
+            "required": ["schema", "risk_class", "side_effect", "confirmation"],
+            "properties": {
+              "schema": { "const": "adaos.conversation.action_policy.v1" },
+              "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+              "side_effect": { "enum": ["none", "reversible", "external", "destructive"] },
+              "confirmation": { "enum": ["none", "required", "rich_review"] },
+              "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+              "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+            },
+            "additionalProperties": false
+          },
           "required_capabilities": {
             "type": "array",
             "maxItems": 50,
@@ -69,6 +82,20 @@
           },
           "metadata": { "type": "object" }
         },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "workflow_command" } } },
+            "then": { "properties": { "workflow": { "type": "object" }, "skill_invocation": { "type": "null" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["skill_invocation", "query"] } } },
+            "then": { "properties": { "workflow": { "type": "null" }, "skill_invocation": { "type": "object" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["view", "output_only"] } } },
+            "then": { "properties": { "workflow": { "type": "null" }, "skill_invocation": { "type": "null" } } }
+          }
+        ],
         "additionalProperties": false
       }
     }

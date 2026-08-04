@@ -50,10 +50,17 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   capability profile contracts
 - `conversation.output.v1.schema.json` - semantic conversation output before
   channel-specific `ResponseEnvelope` materialization
+- `conversation.action_policy.v1.schema.json` - canonical workflow-facing risk,
+  side-effect, and confirmation policy shared through explicit legacy adapters
+- `skill.invocation.v1.schema.json` - governed skill operation invocation built
+  from an admitted `IntentProposal`
 - `conversational.package_manifest.v1.schema.json` - git-versioned
   `conversational/manifest.yaml` contract for skill/scenario conversational
   sources and compiled output refs
 - `conversational.input.v1.schema.json`,
+  `conversational.entities.v1.schema.json`,
+  `conversational.examples.v1.schema.json`,
+  `conversational.locale.v1.schema.json`,
   `conversational.affordances.v1.schema.json`,
   `conversational.repair.v1.schema.json`,
   `conversational.output.v1.schema.json`, and

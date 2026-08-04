@@ -776,9 +776,13 @@ story summaries, and state/command/transition/output coverage.
   semantic `ConversationOutput`, `ResponseEnvelope`, and delivery attempt IDs
   and fails the report on command, workflow identity, event, envelope, or reply
   route mismatches.
-- [ ] `[must]` `GWR5-35` Extend story assertions to full dialog repair,
+- [x] `[must]` `GWR5-35` Extend story assertions to full dialog repair,
   `ConversationInteraction`, and channel fallback coverage once the workflow
-  contract slice is stable.
+  contract slice is stable. `run_conversation_story` now accepts
+  `expect.repair`, `expect.interaction`, and `expect.presentation`, projects
+  store-free `ConversationInteraction`/`InteractionPresentation` records, and
+  fails the story on command identity, generation, presentation mode, reason,
+  semantic-equivalence, or repair next-input mismatches.
 - [x] `[deferred]` `GWR5-36` Defer an interactive workflow/conversation studio
   until static graph/story exports, runner evidence, and package admission are
   stable.

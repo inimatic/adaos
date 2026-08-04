@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.examples.v1",
+  "title": "AdaOS Conversational Example Source",
+  "type": "object",
+  "required": ["schema", "package_id", "examples", "hard_negatives"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.examples.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "examples": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["id", "intent_id", "text", "locale", "source", "entities"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "intent_id": { "$ref": "#/$defs/id" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
+          "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+          "source": { "enum": ["authored", "teacher_candidate", "teacher_promoted", "trace", "test"] },
+          "entities": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": ["entity_id", "value"],
+              "properties": {
+                "entity_id": { "$ref": "#/$defs/id" },
+                "value": {},
+                "start": { "type": ["integer", "null"], "minimum": 0 },
+                "end": { "type": ["integer", "null"], "minimum": 0 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "provenance": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "hard_negatives": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "locale", "reason"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
+          "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" } },
+  "additionalProperties": false
+}

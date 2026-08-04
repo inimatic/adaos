@@ -10,7 +10,18 @@ from typing import Any, Mapping, Sequence
 import yaml
 from jsonschema import Draft202012Validator
 
-from adaos.services.conversational_runtime import build_conversation_output
+from adaos.services import conversation_interactions
+from adaos.services.conversational_runtime import (
+    action_policy_from_workflow_risk,
+    build_conversation_output,
+    build_noninvocation_intent_proposal,
+    build_skill_intent_proposal,
+    build_workflow_intent_proposal,
+    conversation_output_from_workflow_execution,
+    response_envelope_from_conversation_output,
+    skill_invocation_from_intent_proposal,
+    workflow_invocation_from_intent_proposal,
+)
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
     WorkflowResolver,
@@ -30,10 +41,13 @@ CONVERSATIONAL_MANIFEST = "manifest.yaml"
 CONVERSATION_OUTPUT_SCHEMA = "conversation.output.v1.schema.json"
 PACKAGE_MANIFEST_SCHEMA = "conversational.package_manifest.v1.schema.json"
 INPUT_SCHEMA = "conversational.input.v1.schema.json"
+ENTITIES_SCHEMA = "conversational.entities.v1.schema.json"
+EXAMPLES_SCHEMA = "conversational.examples.v1.schema.json"
 AFFORDANCES_SCHEMA = "conversational.affordances.v1.schema.json"
 REPAIR_SCHEMA = "conversational.repair.v1.schema.json"
 OUTPUT_SOURCE_SCHEMA = "conversational.output.v1.schema.json"
 STORY_SCHEMA = "conversational.story.v1.schema.json"
+LOCALE_SCHEMA = "conversational.locale.v1.schema.json"
 VALIDATION_REPORT_SCHEMA = "conversational.validation_report.v1.schema.json"
 
 _BANNED_AFFORDANCE_WORKFLOW_KEYS = {
@@ -80,12 +94,16 @@ class ConversationalPackage:
     manifest_path: Path
     manifest: dict[str, Any]
     input_source: dict[str, Any]
+    entities_source: dict[str, Any]
+    examples_source: dict[str, Any]
     affordances_source: dict[str, Any]
     repair_source: dict[str, Any]
     output_source: dict[str, Any]
     stories: tuple[dict[str, Any], ...]
     story_paths: tuple[Path, ...]
-    workflow_artifact: WorkflowDefinitionArtifact
+    locale_sources: tuple[dict[str, Any], ...]
+    locale_paths: tuple[Path, ...]
+    workflow_artifact: WorkflowDefinitionArtifact | None
     package_digest: str
 
 
@@ -272,17 +290,23 @@ def _cross_check_package(
     *,
     manifest: Mapping[str, Any],
     input_source: Mapping[str, Any],
+    entities_source: Mapping[str, Any],
+    examples_source: Mapping[str, Any],
     affordances_source: Mapping[str, Any],
     repair_source: Mapping[str, Any],
     output_source: Mapping[str, Any],
     stories: Sequence[Mapping[str, Any]],
     story_paths: Sequence[Path],
+    locale_sources: Sequence[Mapping[str, Any]],
     workflow_artifact: WorkflowDefinitionArtifact | None,
+    operation_catalog: Mapping[str, Sequence[str]],
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     package_id = str(manifest.get("package_id") or "").strip()
     for name, source in (
         ("input.yaml", input_source),
+        ("entities.yaml", entities_source),
+        ("examples.yaml", examples_source),
         ("affordances.yaml", affordances_source),
         ("repair.yaml", repair_source),
         ("output.yaml", output_source),
@@ -299,6 +323,9 @@ def _cross_check_package(
 
     for name, values in (
         ("input.yaml intents", input_source.get("intents")),
+        ("entities.yaml entities", entities_source.get("entities")),
+        ("examples.yaml examples", examples_source.get("examples")),
+        ("examples.yaml hard_negatives", examples_source.get("hard_negatives")),
         ("affordances.yaml affordances", affordances_source.get("affordances")),
         ("repair.yaml policies", repair_source.get("policies")),
         ("output.yaml outputs", output_source.get("outputs")),
@@ -313,6 +340,9 @@ def _cross_check_package(
             )
 
     affordances = _id_index(affordances_source.get("affordances"))
+    intents = _id_index(input_source.get("intents"))
+    entities = _id_index(entities_source.get("entities"))
+    examples = _id_index(examples_source.get("examples"))
     outputs = _id_index(output_source.get("outputs"))
     output_actions = {
         str(action.get("action_id"))
@@ -328,17 +358,17 @@ def _cross_check_package(
         for transition in compiled.transitions:
             command_transitions.setdefault(transition.command, []).append(transition)
 
-    if workflow_artifact is None:
+    workflow_refs = list(manifest.get("workflow_refs") or [])
+    if workflow_refs and workflow_artifact is None:
         diagnostics.append(
             _diagnostic(
                 "conversational.workflow.missing",
                 "$.workflow_refs",
-                "conversational package requires a manifest-bound governed workflow.json",
+                "conversational package references a governed workflow but workflow.json is unavailable",
             )
         )
     else:
-        workflow_refs = list(manifest.get("workflow_refs") or [])
-        if not any(
+        if workflow_artifact is not None and not any(
             isinstance(ref, Mapping)
             and ref.get("workflow_type") == workflow_artifact.compiled.workflow_type
             for ref in workflow_refs
@@ -350,7 +380,7 @@ def _cross_check_package(
                     f"manifest does not reference workflow_type {workflow_artifact.compiled.workflow_type}",
                 )
             )
-        for index, ref in enumerate(workflow_refs):
+        for index, ref in enumerate(workflow_refs if workflow_artifact is not None else []):
             if not isinstance(ref, Mapping):
                 continue
             if ref.get("definition_digest") and ref.get("definition_digest") != workflow_artifact.definition_digest:
@@ -456,16 +486,55 @@ def _cross_check_package(
                         f"affordance {affordance_id} omits workflow-required capabilities: {', '.join(missing_caps)}",
                     )
                 )
-            workflow_side_effect = str(transition.descriptor["risk"]["side_effect"])
-            affordance_class = str(affordance.get("side_effect_class") or "")
+            workflow_risk = dict(transition.descriptor["risk"])
+            affordance_policy = dict(affordance.get("action_policy") or {})
+            workflow_side_effect = str(workflow_risk["side_effect"])
+            affordance_class = str(affordance_policy.get("side_effect") or "")
             if not _side_effect_matches(affordance_class, workflow_side_effect):
                 diagnostics.append(
                     _diagnostic(
                         "conversational.affordance.side_effect_mismatch",
-                        f"affordances.yaml.affordances[{index}].side_effect_class",
-                        f"affordance {affordance_id} side_effect_class {affordance_class!r} does not match workflow side_effect {workflow_side_effect!r}",
+                        f"affordances.yaml.affordances[{index}].action_policy.side_effect",
+                        f"affordance {affordance_id} side effect {affordance_class!r} does not match workflow side_effect {workflow_side_effect!r}",
                     )
                 )
+            for key in ("risk_class", "confirmation"):
+                workflow_key = "class" if key == "risk_class" else key
+                if str(affordance_policy.get(key) or "") != str(workflow_risk.get(workflow_key) or ""):
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.affordance.action_policy_mismatch",
+                            f"affordances.yaml.affordances[{index}].action_policy.{key}",
+                            f"affordance {affordance_id} {key} does not match workflow risk contract",
+                        )
+                    )
+
+    normalized_catalog = {
+        str(skill_id): {str(operation) for operation in operations}
+        for skill_id, operations in operation_catalog.items()
+    }
+    for index, affordance in enumerate(list(affordances_source.get("affordances") or [])):
+        if not isinstance(affordance, Mapping) or affordance.get("kind") not in {"skill_invocation", "query"}:
+            continue
+        invocation = dict(affordance.get("skill_invocation") or {})
+        skill_id = str(invocation.get("skill_id") or "")
+        operation_id = str(invocation.get("operation_id") or "")
+        if skill_id not in normalized_catalog:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.affordance.skill_unknown",
+                    f"affordances.yaml.affordances[{index}].skill_invocation.skill_id",
+                    f"affordance references skill without an admitted operation catalog: {skill_id}",
+                )
+            )
+        elif operation_id not in normalized_catalog[skill_id]:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.affordance.operation_unknown",
+                    f"affordances.yaml.affordances[{index}].skill_invocation.operation_id",
+                    f"skill {skill_id} does not declare operation {operation_id}",
+                )
+            )
 
     for index, intent in enumerate(list(input_source.get("intents") or [])):
         if not isinstance(intent, Mapping):
@@ -501,6 +570,99 @@ def _cross_check_package(
                             f"intent {intent_id} command {command_id} does not match affordance {affordance_id}",
                         )
                     )
+        skill_binding = intent.get("skill_invocation")
+        if isinstance(skill_binding, Mapping) and affordance_id in affordances:
+            if dict(affordances[affordance_id].get("skill_invocation") or {}) != dict(skill_binding):
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.intent.affordance_operation_mismatch",
+                        f"input.yaml.intents[{index}].skill_invocation",
+                        f"intent {intent_id} skill operation does not match affordance {affordance_id}",
+                    )
+                )
+        for example_id in list(intent.get("example_ids") or []):
+            if str(example_id) not in examples:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.intent.example_unknown",
+                        f"input.yaml.intents[{index}].example_ids",
+                        f"intent {intent_id} references unknown example {example_id}",
+                    )
+                )
+        for slot_index, slot in enumerate(list(intent.get("slots") or [])):
+            if not isinstance(slot, Mapping):
+                continue
+            entity_id = str(slot.get("entity_type") or "").strip()
+            if entity_id and entity_id not in entities:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.intent.entity_unknown",
+                        f"input.yaml.intents[{index}].slots[{slot_index}].entity_type",
+                        f"intent {intent_id} references unknown entity {entity_id}",
+                    )
+                )
+
+    manifest_locales = {str(item) for item in list(manifest.get("locales") or [])}
+    locale_ids: set[str] = set()
+    for index, locale_source in enumerate(locale_sources):
+        locale_id = str(locale_source.get("locale") or "")
+        locale_ids.add(locale_id)
+        source_package_id = str(locale_source.get("package_id") or "")
+        if source_package_id and source_package_id != package_id:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.package_id.mismatch",
+                    f"locale[{index}]",
+                    f"locale package_id {source_package_id!r} does not match manifest {package_id!r}",
+                )
+            )
+    if locale_ids != manifest_locales:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.locale.coverage_mismatch",
+                "manifest.yaml.locales",
+                "locale files must cover every declared locale exactly",
+                details={
+                    "missing": sorted(manifest_locales - locale_ids),
+                    "undeclared": sorted(locale_ids - manifest_locales),
+                },
+            )
+        )
+
+    for index, example in enumerate(list(examples_source.get("examples") or [])):
+        if not isinstance(example, Mapping):
+            continue
+        example_id = str(example.get("id") or f"#{index}")
+        intent_id = str(example.get("intent_id") or "")
+        if intent_id not in intents:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.example.intent_unknown",
+                    f"examples.yaml.examples[{index}].intent_id",
+                    f"example {example_id} references unknown intent {intent_id}",
+                )
+            )
+        locale_id = str(example.get("locale") or "")
+        if locale_id not in manifest_locales:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.example.locale_unknown",
+                    f"examples.yaml.examples[{index}].locale",
+                    f"example {example_id} uses undeclared locale {locale_id}",
+                )
+            )
+        for entity_index, annotation in enumerate(list(example.get("entities") or [])):
+            if not isinstance(annotation, Mapping):
+                continue
+            entity_id = str(annotation.get("entity_id") or "")
+            if entity_id not in entities:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.example.entity_unknown",
+                        f"examples.yaml.examples[{index}].entities[{entity_index}].entity_id",
+                        f"example {example_id} references unknown entity {entity_id}",
+                    )
+                )
 
     for index, output in enumerate(list(output_source.get("outputs") or [])):
         if not isinstance(output, Mapping):
@@ -538,7 +700,16 @@ def _cross_check_package(
             if story_index < len(story_paths)
             else f"story[{story_index}]"
         )
-        if compiled is not None and story.get("workflow_type") != compiled.workflow_type:
+        story_kind = str(story.get("story_kind") or "")
+        if story_kind == "workflow" and compiled is None:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.workflow_missing",
+                    path_label,
+                    "workflow story requires an admitted workflow definition",
+                )
+            )
+        if story_kind == "workflow" and compiled is not None and story.get("workflow_type") != compiled.workflow_type:
             diagnostics.append(
                 _diagnostic(
                     "conversational.story.workflow_type_mismatch",
@@ -547,7 +718,7 @@ def _cross_check_package(
                 )
             )
         start = dict(story.get("start") or {})
-        if compiled is not None and str(start.get("state") or "") not in compiled.states:
+        if story_kind == "workflow" and compiled is not None and str(start.get("state") or "") not in compiled.states:
             diagnostics.append(
                 _diagnostic(
                     "conversational.story.start_state_unknown",
@@ -558,14 +729,16 @@ def _cross_check_package(
         for step_index, step in enumerate(list(story.get("steps") or [])):
             if not isinstance(step, Mapping):
                 continue
+            given = dict(step.get("given") or {})
+            given_proposal = dict(given.get("proposal") or {})
+            given_event = dict(given.get("event") or {})
             expect = dict(step.get("expect") or {})
-            proposal = dict(expect.get("proposal") or {})
-            command_id = str(expect.get("command") or proposal.get("command") or "").strip()
+            command_id = str(given_proposal.get("command") or given_event.get("command") or "").strip()
             if command_id and compiled is not None and command_id not in commands:
                 diagnostics.append(
                     _diagnostic(
                         "conversational.story.command_unknown",
-                        f"{path_label}.steps[{step_index}].expect.command",
+                        f"{path_label}.steps[{step_index}].given",
                         f"story references undeclared workflow command {command_id}",
                     )
                 )
@@ -598,15 +771,35 @@ def _cross_check_package(
                     )
                 )
             output = dict(expect.get("output") or {})
-            output_ref = str(output.get("output_ref") or "").strip()
+            output_ref = str(given.get("output_ref") or "").strip()
             if output_ref and output_ref not in outputs:
                 diagnostics.append(
                     _diagnostic(
                         "conversational.story.output_ref_unknown",
-                        f"{path_label}.steps[{step_index}].expect.output.output_ref",
+                        f"{path_label}.steps[{step_index}].given.output_ref",
                         f"story references unknown output {output_ref}",
                     )
                 )
+            expected_output_ref = str(output.get("output_ref") or "").strip()
+            if expected_output_ref and expected_output_ref not in outputs:
+                diagnostics.append(
+                    _diagnostic(
+                        "conversational.story.output_ref_unknown",
+                        f"{path_label}.steps[{step_index}].expect.output.output_ref",
+                        f"story expects unknown output {expected_output_ref}",
+                    )
+                )
+            if given_proposal.get("kind") == "skill_invocation":
+                skill_id = str(given_proposal.get("skill_id") or "")
+                operation_id = str(given_proposal.get("operation_id") or "")
+                if skill_id not in normalized_catalog or operation_id not in normalized_catalog.get(skill_id, set()):
+                    diagnostics.append(
+                        _diagnostic(
+                            "conversational.story.operation_unknown",
+                            f"{path_label}.steps[{step_index}].given.proposal",
+                            f"story invokes undeclared operation {skill_id}.{operation_id}",
+                        )
+                    )
             for action_id in list(output.get("actions") or []):
                 if str(action_id) not in output_actions and str(action_id) not in affordances:
                     diagnostics.append(
@@ -617,6 +810,118 @@ def _cross_check_package(
                         )
                     )
     return diagnostics
+
+
+def _catalog_output(
+    *,
+    output_ref: str,
+    output_source: Mapping[str, Any],
+    affordances_source: Mapping[str, Any],
+    story_id: str,
+    step_index: int,
+    conversation_id: str,
+    proposal: Mapping[str, Any] | None,
+    instance: Mapping[str, Any] | None,
+    command_id: str | None,
+    workflow_event_id: str | None,
+    package_id: str | None,
+    package_digest: str | None,
+) -> dict[str, Any]:
+    template = _id_index(output_source.get("outputs")).get(output_ref)
+    if template is None:
+        raise ConversationalArtifactError(f"story output source is unknown: {output_ref}")
+    affordances = _id_index(affordances_source.get("affordances"))
+    workflow_ref_value = None
+    if isinstance(instance, Mapping):
+        workflow_ref_value = workflow_ref(
+            "workflow",
+            str(instance.get("instance_id") or ""),
+            version=str(instance.get("definition_version") or "") or None,
+            generation=int(instance.get("generation") or 0),
+            digest=str(instance.get("definition_digest") or "") or None,
+        )
+    actions: list[dict[str, Any]] = []
+    for action_source in list(template.get("actions") or []):
+        if not isinstance(action_source, Mapping):
+            continue
+        affordance_id = str(action_source.get("affordance_id") or "").strip()
+        affordance = affordances.get(affordance_id, {})
+        policy = copy.deepcopy(
+            dict(affordance.get("action_policy") or action_policy_from_workflow_risk("read"))
+        )
+        workflow_binding = dict(affordance.get("workflow") or {})
+        skill_binding = dict(affordance.get("skill_invocation") or {})
+        binding_kind = str(affordance.get("kind") or "none")
+        actions.append(
+            {
+                "action_id": str(action_source.get("action_id") or ""),
+                "label": str(action_source.get("label") or action_source.get("action_id") or ""),
+                "command": str(workflow_binding.get("command_id") or "") or None,
+                "risk_level": str(template.get("risk_level") or "none"),
+                "target_refs": [workflow_ref_value] if workflow_ref_value else [],
+                "requires_confirmation": policy.get("confirmation") != "none",
+                "presentation_hint": "danger" if policy.get("risk_class") == "destructive" else "secondary",
+                "binding": {
+                    "kind": binding_kind if binding_kind in {"workflow_command", "skill_invocation", "query"} else "none",
+                    "affordance_id": affordance_id or None,
+                    "workflow_command": str(workflow_binding.get("command_id") or "") or None,
+                    "skill_operation": str(skill_binding.get("operation_id") or "") or None,
+                },
+                "action_policy": policy,
+            }
+        )
+    details = [
+        {
+            "label": str(item.get("label") or "detail"),
+            "value": copy.deepcopy(item.get("value")),
+            "sensitivity": "internal",
+        }
+        for item in list(template.get("details") or [])
+        if isinstance(item, Mapping)
+    ]
+    return build_conversation_output(
+        output_id=f"story:{story_id}:step:{step_index}:{output_ref}",
+        conversation_id=conversation_id,
+        kind=str(template.get("kind") or "result"),
+        audience=str(template.get("audience") or "user"),
+        risk_level=str(template.get("risk_level") or "none"),
+        reason={
+            "code": str(template.get("reason_code") or output_ref),
+            "explanation": str(template.get("explanation") or template.get("summary") or "") or None,
+            "retryable": str(template.get("kind") or "") in {"clarification", "confirmation", "repair"},
+            "source": "conversation",
+        },
+        summary=str(template.get("summary") or ""),
+        content_parts=[dict(item) for item in list(template.get("content_parts") or []) if isinstance(item, Mapping)],
+        details=details,
+        actions=actions,
+        correlation={
+            "turn_trace_id": f"story:{story_id}:turn:{step_index}",
+            "intent_proposal_id": str((proposal or {}).get("proposal_id") or "") or None,
+            "interaction_id": None,
+            "workflow_ref": workflow_ref_value,
+            "workflow_event_id": workflow_event_id,
+            "command_id": command_id,
+            "run_ref": None,
+            "reply_route_ref": None,
+        },
+        next_expected_input={
+            "kind": str(template.get("next_expected_input") or "none"),
+            "interaction_id": None,
+            "fields": [],
+        },
+        handoff_target=dict(template["handoff_target"]) if isinstance(template.get("handoff_target"), Mapping) else None,
+        provenance={
+            "source": "repair" if template.get("kind") == "repair" else "conversation",
+            "package_ref": workflow_ref("artifact", f"conversational_package:{package_id}") if package_id else None,
+            "package_digest": package_digest,
+            "source_ref": workflow_ref("artifact", f"conversational_output:{output_ref}"),
+            "source_digest": _sha256(_canonical_bytes(template)),
+        },
+        trace=dict((proposal or {}).get("trace") or {}) or None,
+        metadata={"story_id": story_id, "source_output_ref": output_ref},
+        now=f"2026-01-01T00:{step_index:02d}:30+00:00",
+    )
 
 
 def _conversation_output_from_story(
@@ -651,6 +956,12 @@ def _conversation_output_from_story(
         kind=kind,
         summary=summary,
         risk_level="none",
+        reason={
+            "code": str(output_spec.get("reason_code") or kind),
+            "explanation": summary,
+            "retryable": kind in {"clarification", "repair", "confirmation"},
+            "source": "conversation",
+        },
         actions=actions,
         correlation={
             "turn_trace_id": f"story:{story_id}:turn:{step_index}",
@@ -679,15 +990,244 @@ def _conversation_output_from_story(
         },
         response_envelope_ref=None,
         metadata={"workflow_type": workflow_type, "story_id": story_id},
-        now="2026-01-01T00:00:00+00:00",
+        now=f"2026-01-01T00:{step_index:02d}:30+00:00",
     )
 
 
-def run_conversation_story(
+def _story_projection_ref(
+    instance: Mapping[str, Any],
+    *,
+    definition_version: str,
+) -> dict[str, Any]:
+    return workflow_ref(
+        "workflow",
+        str(instance["instance_id"]),
+        version=definition_version,
+        generation=int(instance["generation"]),
+    )
+
+
+def _expected_list(value: Any) -> list[str]:
+    return [str(item).strip() for item in list(value or []) if str(item).strip()]
+
+
+def _story_interaction_projection(
+    *,
+    story_id: str,
+    step_index: int,
+    story_channel: str,
+    workflow: CompiledWorkflowDefinition,
+    resolver: WorkflowResolver,
+    instance: Mapping[str, Any],
+    actor_id: str,
+    permissions: Sequence[str],
+    roles: Sequence[str],
+    expect: Mapping[str, Any],
+    conversation_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    interaction_expect = dict(expect.get("interaction") or {})
+    presentation_expect = dict(expect.get("presentation") or {})
+    if not interaction_expect and not presentation_expect:
+        return None, None, []
+
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        description = resolver.describe(
+            workflow,
+            instance,
+            actor=actor_id,
+            permissions=tuple(permissions),
+            roles=tuple(roles),
+        )
+        interaction = conversation_interactions.interaction_from_workflow_description(
+            description,
+            conversation_id=conversation_id,
+            owner="story.runner",
+            interaction_id=f"interaction:{story_id}:{step_index}",
+            workflow_ref=_story_projection_ref(
+                instance,
+                definition_version=workflow.definition_version,
+            ),
+            now=f"2026-01-01T00:{step_index:02d}:00+00:00",
+            persist=False,
+        )
+    except Exception as exc:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.interaction_projection_failed",
+                f"{story_id}.steps[{step_index}].expect.interaction",
+                str(exc),
+            )
+        )
+        return None, None, diagnostics
+
+    expected_commands = _expected_list(interaction_expect.get("commands"))
+    actual_commands = [str(item.get("command") or "") for item in interaction.get("actions") or []]
+    if expected_commands and actual_commands != expected_commands:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.interaction_commands_mismatch",
+                f"{story_id}.steps[{step_index}].expect.interaction.commands",
+                "interaction commands do not match expected command identities",
+                details={"expected": expected_commands, "actual": actual_commands},
+            )
+        )
+    expected_generation = interaction_expect.get("expected_generation")
+    if expected_generation is not None and any(
+        int(item.get("expected_generation") if item.get("expected_generation") is not None else -1)
+        != int(expected_generation)
+        for item in interaction.get("actions") or []
+    ):
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.interaction_generation_mismatch",
+                f"{story_id}.steps[{step_index}].expect.interaction.expected_generation",
+                f"interaction actions do not target generation {expected_generation}",
+            )
+        )
+
+    presentation: dict[str, Any] | None = None
+    if presentation_expect:
+        channel = str(presentation_expect.get("channel") or story_channel or "text")
+        try:
+            profile = conversation_interactions.standard_capability_profile(
+                channel,
+                persist=False,
+            )
+            presentation = conversation_interactions.negotiate_presentation(
+                interaction,
+                profile,
+                persist=False,
+                now=f"2026-01-01T00:{step_index:02d}:00+00:00",
+            )
+        except Exception as exc:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_projection_failed",
+                    f"{story_id}.steps[{step_index}].expect.presentation",
+                    str(exc),
+                )
+            )
+            return interaction, None, diagnostics
+
+        expected_mode = str(presentation_expect.get("mode") or "").strip()
+        if expected_mode and presentation.get("mode") != expected_mode:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_mode_mismatch",
+                    f"{story_id}.steps[{step_index}].expect.presentation.mode",
+                    f"expected presentation mode {expected_mode}, got {presentation.get('mode')}",
+                )
+            )
+        if "supported" in presentation_expect and bool(presentation.get("supported")) != bool(
+            presentation_expect.get("supported")
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_supported_mismatch",
+                    f"{story_id}.steps[{step_index}].expect.presentation.supported",
+                    f"expected supported={presentation_expect.get('supported')}, got {presentation.get('supported')}",
+                )
+            )
+        expected_reason = str(presentation_expect.get("reason_code") or "").strip()
+        if expected_reason and presentation.get("reason_code") != expected_reason:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_reason_mismatch",
+                    f"{story_id}.steps[{step_index}].expect.presentation.reason_code",
+                    f"expected reason {expected_reason}, got {presentation.get('reason_code')}",
+                )
+            )
+        expected_presentation_commands = _expected_list(presentation_expect.get("commands"))
+        actual_presentation_commands = [
+            str(item.get("command") or "") for item in presentation.get("actions") or []
+        ]
+        if expected_presentation_commands and actual_presentation_commands != expected_presentation_commands:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_commands_mismatch",
+                    f"{story_id}.steps[{step_index}].expect.presentation.commands",
+                    "presentation commands do not match expected command identities",
+                    details={
+                        "expected": expected_presentation_commands,
+                        "actual": actual_presentation_commands,
+                    },
+                )
+            )
+        expected_equivalence = presentation_expect.get("semantic_equivalent")
+        actual_equivalence = dict(presentation.get("plan") or {}).get("semantic_equivalent")
+        if expected_equivalence is not None and bool(actual_equivalence) != bool(expected_equivalence):
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.presentation_equivalence_mismatch",
+                    f"{story_id}.steps[{step_index}].expect.presentation.semantic_equivalent",
+                    f"expected semantic_equivalent={expected_equivalence}, got {actual_equivalence}",
+                )
+            )
+
+    return interaction, presentation, diagnostics
+
+
+def _assert_story_repair(
+    *,
+    story_id: str,
+    step_index: int,
+    expect: Mapping[str, Any],
+    output: Mapping[str, Any],
+    command_id: str | None,
+) -> list[dict[str, Any]]:
+    repair_expect = dict(expect.get("repair") or {})
+    if not repair_expect:
+        return []
+    diagnostics: list[dict[str, Any]] = []
+    if command_id:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.repair_command_present",
+                f"{story_id}.steps[{step_index}].expect.repair",
+                "repair story step must not execute a workflow command",
+            )
+        )
+    if output.get("kind") != "repair":
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.repair_output_mismatch",
+                f"{story_id}.steps[{step_index}].expect.repair.kind",
+                f"expected repair output, got {output.get('kind')}",
+            )
+        )
+    expected_next = str(repair_expect.get("next_expected_input") or "").strip()
+    actual_next = str(dict(output.get("next_expected_input") or {}).get("kind") or "")
+    if expected_next and actual_next != expected_next:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.repair_next_input_mismatch",
+                f"{story_id}.steps[{step_index}].expect.repair.next_expected_input",
+                f"expected next input {expected_next}, got {actual_next}",
+            )
+        )
+    expected_reason = str(repair_expect.get("reason_code") or "").strip()
+    actual_reason = str(dict(output.get("reason") or {}).get("code") or "")
+    if expected_reason and actual_reason and actual_reason != expected_reason:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.story.repair_reason_mismatch",
+                f"{story_id}.steps[{step_index}].expect.repair.reason_code",
+                f"expected repair reason {expected_reason}, got {actual_reason}",
+            )
+        )
+    return diagnostics
+
+
+def _run_conversation_story_legacy(
     story: Mapping[str, Any],
     workflow: CompiledWorkflowDefinition,
     *,
     resolver: WorkflowResolver | None = None,
+    output_source: Mapping[str, Any] | None = None,
+    affordances_source: Mapping[str, Any] | None = None,
+    package_id: str | None = None,
+    package_digest: str | None = None,
 ) -> dict[str, Any]:
     """Run a deterministic conversation story without LLM calls or live effects."""
 
@@ -713,8 +1253,9 @@ def run_conversation_story(
 
     for index, raw_step in enumerate(list(story.get("steps") or [])):
         step = dict(raw_step or {})
+        given = dict(step.get("given") or {})
         expect = dict(step.get("expect") or {})
-        proposal = dict(expect.get("proposal") or {})
+        proposal = dict(given.get("proposal") or expect.get("proposal") or {})
         command_id = str(expect.get("command") or proposal.get("command") or "").strip()
         input_value = dict(proposal.get("arguments") or {})
         if "confirmed" not in input_value and command_id:
@@ -783,23 +1324,90 @@ def run_conversation_story(
                 )
             )
         output_spec = dict(expect.get("output") or {})
-        output = _conversation_output_from_story(
-            story_id=story_id,
-            step_index=index,
-            conversation_id=conversation_id,
-            output_spec=output_spec,
-            instance=instance,
-            workflow_type=workflow.workflow_type,
-            definition_version=workflow.definition_version,
-            command_id=command_id or None,
-            workflow_event_id=workflow_event_id,
-        )
+        repair_expect = dict(expect.get("repair") or {})
+        if (
+            output_spec.get("kind") == "repair"
+            and "reason_code" not in output_spec
+            and repair_expect.get("reason_code") is not None
+        ):
+            output_spec["reason_code"] = repair_expect.get("reason_code")
+        output_ref = str(output_spec.get("output_ref") or given.get("output_ref") or "").strip()
+        try:
+            if output_ref and isinstance(output_source, Mapping):
+                output = _catalog_output(
+                    output_ref=output_ref,
+                    output_source=output_source,
+                    affordances_source=affordances_source or {},
+                    story_id=story_id,
+                    step_index=index,
+                    conversation_id=conversation_id,
+                    proposal=proposal,
+                    instance=instance,
+                    command_id=command_id or None,
+                    workflow_event_id=workflow_event_id,
+                    package_id=package_id,
+                    package_digest=package_digest,
+                )
+            else:
+                output = _conversation_output_from_story(
+                    story_id=story_id,
+                    step_index=index,
+                    conversation_id=conversation_id,
+                    output_spec=output_spec,
+                    instance=instance,
+                    workflow_type=workflow.workflow_type,
+                    definition_version=workflow.definition_version,
+                    command_id=command_id or None,
+                    workflow_event_id=workflow_event_id,
+                )
+        except Exception as exc:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.story.output_projection_failed",
+                    f"{story_id}.steps[{index}].expect.output",
+                    str(exc),
+                )
+            )
+            output = _conversation_output_from_story(
+                story_id=story_id,
+                step_index=index,
+                conversation_id=conversation_id,
+                output_spec=output_spec,
+                instance=instance,
+                workflow_type=workflow.workflow_type,
+                definition_version=workflow.definition_version,
+                command_id=command_id or None,
+                workflow_event_id=workflow_event_id,
+            )
         output_errors = _schema_diagnostics(
             CONVERSATION_OUTPUT_SCHEMA,
             output,
             f"{story_id}.steps[{index}].output",
         )
         diagnostics.extend(output_errors)
+        diagnostics.extend(
+            _assert_story_repair(
+                story_id=story_id,
+                step_index=index,
+                expect=expect,
+                output=output,
+                command_id=command_id or None,
+            )
+        )
+        interaction, presentation, interaction_diagnostics = _story_interaction_projection(
+            story_id=story_id,
+            step_index=index,
+            story_channel=str(story.get("channel") or "text"),
+            workflow=workflow,
+            resolver=resolver,
+            instance=instance,
+            actor_id=actor_id,
+            permissions=permissions,
+            roles=roles,
+            expect=expect,
+            conversation_id=conversation_id,
+        )
+        diagnostics.extend(interaction_diagnostics)
         timeline.append(
             {
                 "step": index,
@@ -813,6 +1421,8 @@ def run_conversation_story(
                 "transition_id": None if decision is None else decision.get("transition_id"),
                 "activity": activity_mock,
                 "output": output,
+                "interaction": interaction,
+                "presentation": presentation,
             }
         )
 
@@ -827,12 +1437,339 @@ def run_conversation_story(
     return report
 
 
+def _assert_story_value(
+    diagnostics: list[dict[str, Any]],
+    *,
+    path: str,
+    code: str,
+    expected: Any,
+    actual: Any,
+) -> None:
+    if expected is not None and expected != actual:
+        diagnostics.append(_diagnostic(code, path, f"expected {expected!r}, got {actual!r}"))
+
+
+def run_conversation_story(
+    story: Mapping[str, Any],
+    workflow: CompiledWorkflowDefinition | None = None,
+    *,
+    resolver: WorkflowResolver | None = None,
+    output_source: Mapping[str, Any] | None = None,
+    affordances_source: Mapping[str, Any] | None = None,
+    package_id: str | None = None,
+    package_digest: str | None = None,
+) -> dict[str, Any]:
+    """Run deterministic ABI records and compare assertions after execution."""
+
+    resolver = resolver or WorkflowResolver()
+    diagnostics: list[dict[str, Any]] = []
+    timeline: list[dict[str, Any]] = []
+    story_id = str(story.get("id") or "story")
+    story_kind = str(story.get("story_kind") or "workflow")
+    actor = dict(story.get("actor") or {})
+    actor_id = str(actor.get("id") or "user:local")
+    permissions = tuple(str(item) for item in list(actor.get("permissions") or []))
+    roles = tuple(str(item) for item in list(actor.get("roles") or []))
+    instance: dict[str, Any] | None = None
+    if story_kind == "workflow":
+        if workflow is None:
+            return {
+                "story_id": story_id,
+                "valid": False,
+                "steps": len(list(story.get("steps") or [])),
+                "final_state": None,
+                "diagnostics": [_diagnostic("conversational.story.workflow_missing", story_id, "workflow story has no workflow definition")],
+                "timeline": [],
+            }
+        start = dict(story.get("start") or {})
+        instance = new_instance(
+            workflow,
+            str(start.get("instance_id") or f"story:{story_id}"),
+            context=dict(start.get("context") or {}),
+            now="2026-01-01T00:00:00+00:00",
+        )
+        if str(start.get("state") or workflow.initial_state) in workflow.states:
+            instance["state"] = str(start.get("state") or workflow.initial_state)
+        instance["generation"] = int(start.get("generation") or 0)
+    conversation_id = f"story:{story_id}"
+
+    for index, raw_step in enumerate(list(story.get("steps") or [])):
+        step = dict(raw_step or {})
+        given = dict(step.get("given") or {})
+        expect = dict(step.get("expect") or {})
+        given_proposal = dict(given.get("proposal") or expect.get("proposal") or {})
+        given_event = dict(given.get("event") or {})
+        expected_proposal = dict(expect.get("proposal") or {})
+        before_state = str(instance.get("state")) if instance is not None else None
+        proposal: dict[str, Any] | None = None
+        invocation: dict[str, Any] | None = None
+        decision: dict[str, Any] | None = None
+        activity_mock: dict[str, Any] | None = None
+        workflow_event_id: str | None = None
+        command_id = str(
+            given_proposal.get("command") or given_event.get("command") or expect.get("command") or ""
+        ).strip() or None
+        timestamp = f"2026-01-01T00:{index:02d}:00+00:00"
+        fixed_trace = {
+            "trace_id": hashlib.sha256(f"{story_id}:{index}:trace".encode()).hexdigest()[:32],
+            "span_id": hashlib.sha256(f"{story_id}:{index}:span".encode()).hexdigest()[:16],
+            "parent_span_id": None,
+            "traceparent": None,
+        }
+        input_context = {
+            "channel": str(story.get("channel") or "test"),
+            "modality": "event" if given_event else "text",
+            "actor_ref": workflow_ref("principal", actor_id),
+            "principal_ref": workflow_ref("principal", actor_id),
+            "reply_route_ref": None,
+            "context_ref": None,
+        }
+        provenance = {
+            "source": "story",
+            "package_ref": workflow_ref("artifact", f"conversational_package:{package_id}") if package_id else None,
+            "package_digest": package_digest,
+            "prompt_digest": None,
+            "context_digest": _digest_sources({"given": given}),
+        }
+        proposal_kind = str(given_proposal.get("kind") or "")
+        if proposal_kind == "workflow_command" and workflow is not None and instance is not None:
+            policy = dict(given_proposal.get("action_policy") or action_policy_from_workflow_risk("read"))
+            exact_ref = workflow_ref(
+                "workflow",
+                str(instance["instance_id"]),
+                version=workflow.definition_version,
+                generation=int(instance["generation"]),
+                digest=str(instance.get("definition_digest") or "") or None,
+            )
+            proposal = build_workflow_intent_proposal(
+                conversation_id=conversation_id,
+                source_message_id=f"story:{story_id}:message:{index}",
+                source_text=str(step.get("user") or command_id or "workflow command"),
+                workflow_type=workflow.workflow_type,
+                command_id=str(command_id or ""),
+                instance_ref=exact_ref,
+                input_value=dict(given_proposal.get("arguments") or {}),
+                risk=str(policy.get("risk_class") or "read"),
+                confirmation_required=policy.get("confirmation") != "none",
+                confidence=float(given_proposal.get("confidence") or 0.0),
+                locale=str(story.get("locale") or "en"),
+                input_context=input_context,
+                provenance=provenance,
+                trace=fixed_trace,
+                now=timestamp,
+            )
+            invocation = workflow_invocation_from_intent_proposal(
+                proposal,
+                actor_id=actor_id,
+                idempotency_key=f"story:{story_id}:{index}:{command_id}",
+                now=timestamp,
+            )
+            decision = resolver.apply(
+                workflow,
+                instance,
+                str(command_id or ""),
+                input_value=dict(invocation["command"]["input"]),
+                actor=actor_id,
+                permissions=permissions,
+                roles=roles,
+                expected_generation=int(invocation["command"]["expected_generation"]),
+                idempotency_key=str(invocation["command"]["idempotency_key"]),
+                now=timestamp,
+            )
+            instance = copy.deepcopy(decision["after"])
+            event_records = [dict(item) for item in decision.get("event_records") or []]
+            workflow_event_id = str(event_records[0].get("event_id") or "") if event_records else None
+            if decision.get("accepted") and decision.get("activity"):
+                activity_mock = {"mocked": True, "side_effect_isolated": True, "activity": copy.deepcopy(decision["activity"])}
+        elif given_event and workflow is not None and instance is not None:
+            decision = resolver.apply(
+                workflow,
+                instance,
+                str(command_id or ""),
+                input_value=dict(given_event.get("input") or {}),
+                actor=actor_id,
+                permissions=permissions,
+                roles=roles,
+                expected_generation=int(instance["generation"]),
+                idempotency_key=f"story:event:{given_event.get('event_id')}",
+                now=timestamp,
+            )
+            instance = copy.deepcopy(decision["after"])
+            event_records = [dict(item) for item in decision.get("event_records") or []]
+            workflow_event_id = str(event_records[0].get("event_id") or given_event.get("event_id") or "")
+        elif proposal_kind == "skill_invocation":
+            proposal = build_skill_intent_proposal(
+                conversation_id=conversation_id,
+                source_message_id=f"story:{story_id}:message:{index}",
+                source_text=str(step.get("user") or "skill invocation"),
+                skill_id=str(given_proposal.get("skill_id") or ""),
+                operation_id=str(given_proposal.get("operation_id") or ""),
+                arguments=dict(given_proposal.get("arguments") or {}),
+                confidence=float(given_proposal.get("confidence") or 0.0),
+                locale=str(story.get("locale") or "en"),
+                action_policy=dict(given_proposal.get("action_policy") or action_policy_from_workflow_risk("read")),
+                input_context=input_context,
+                provenance=provenance,
+                trace=fixed_trace,
+                now=timestamp,
+            )
+            invocation = skill_invocation_from_intent_proposal(
+                proposal,
+                actor_id=actor_id,
+                idempotency_key=f"story:{story_id}:{index}:skill",
+                now=timestamp,
+            )
+            activity_mock = {
+                "mocked": True,
+                "side_effect_isolated": True,
+                "activity": {
+                    "skill_id": invocation["operation"]["skill_id"],
+                    "operation_id": invocation["operation"]["operation_id"],
+                    "result": copy.deepcopy(given.get("skill_result")),
+                },
+            }
+        elif proposal_kind in {"question", "unrelated"}:
+            proposal = build_noninvocation_intent_proposal(
+                conversation_id=conversation_id,
+                source_message_id=f"story:{story_id}:message:{index}",
+                source_text=str(step.get("user") or proposal_kind),
+                kind=proposal_kind,
+                confidence=float(given_proposal.get("confidence") or 0.0),
+                locale=str(story.get("locale") or "en"),
+                input_context=input_context,
+                provenance=provenance,
+                trace=fixed_trace,
+                now=timestamp,
+            )
+
+        if decision is not None:
+            _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.reason_code", code="conversational.story.reason_mismatch", expected=expect.get("reason_code"), actual=decision.get("reason_code"))
+            if expect.get("reason_code") is None and not decision.get("accepted"):
+                diagnostics.append(_diagnostic("conversational.story.command_rejected", f"{story_id}.steps[{index}].given", f"command {command_id} was rejected: {decision.get('reason_code')}"))
+            _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.transition_id", code="conversational.story.transition_mismatch", expected=expect.get("transition_id"), actual=decision.get("transition_id"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.state", code="conversational.story.state_mismatch", expected=expect.get("state"), actual=str(instance.get("state")) if instance is not None else None)
+        actual_act = dict((proposal or {}).get("semantic_acts", [{}])[0]) if proposal else {}
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.proposal.kind", code="conversational.story.proposal_kind_mismatch", expected=expected_proposal.get("kind"), actual=actual_act.get("kind"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.proposal.command", code="conversational.story.proposal_command_mismatch", expected=expected_proposal.get("command"), actual=actual_act.get("command"))
+        minimum_confidence = expected_proposal.get("confidence_at_least")
+        if minimum_confidence is not None and float(actual_act.get("confidence") or 0.0) < float(minimum_confidence):
+            diagnostics.append(_diagnostic("conversational.story.proposal_confidence_mismatch", f"{story_id}.steps[{index}].expect.proposal.confidence_at_least", f"expected confidence >= {minimum_confidence}, got {actual_act.get('confidence')}"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.command", code="conversational.story.command_mismatch", expected=expect.get("command"), actual=command_id)
+
+        expected_output = dict(expect.get("output") or {})
+        repair_expect = dict(expect.get("repair") or {})
+        if (
+            expected_output.get("kind") == "repair"
+            and "reason_code" not in expected_output
+            and repair_expect.get("reason_code") is not None
+        ):
+            expected_output["reason_code"] = repair_expect.get("reason_code")
+        output_ref = str(given.get("output_ref") or expected_output.get("output_ref") or "").strip()
+        if output_ref:
+            output = _catalog_output(
+                output_ref=output_ref,
+                output_source=output_source or {},
+                affordances_source=affordances_source or {},
+                story_id=story_id,
+                step_index=index,
+                conversation_id=conversation_id,
+                proposal=proposal,
+                instance=instance,
+                command_id=command_id,
+                workflow_event_id=workflow_event_id,
+                package_id=package_id,
+                package_digest=package_digest,
+            )
+        elif decision is not None and proposal is not None and invocation is not None:
+            output = conversation_output_from_workflow_execution(
+                {"accepted": decision.get("accepted"), "status": decision.get("status"), "reason_code": decision.get("reason_code"), "invocation": invocation, "decision": decision, "commit": None, "responses": []},
+                now=f"2026-01-01T00:{index:02d}:30+00:00",
+            )
+        elif expected_output and workflow is not None and instance is not None:
+            output = _conversation_output_from_story(
+                story_id=story_id,
+                step_index=index,
+                conversation_id=conversation_id,
+                output_spec=expected_output,
+                instance=instance,
+                workflow_type=workflow.workflow_type,
+                definition_version=workflow.definition_version,
+                command_id=command_id,
+                workflow_event_id=workflow_event_id,
+            )
+        else:
+            diagnostics.append(_diagnostic("conversational.story.output_source_missing", f"{story_id}.steps[{index}].given.output_ref", "non-workflow story step requires output_ref"))
+            continue
+        envelope = response_envelope_from_conversation_output(output, sequence=index + 1, now=f"2026-01-01T00:{index:02d}:45+00:00")
+        actual_action_ids = [str(item.get("action_id")) for item in output.get("actions") or []]
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.output.kind", code="conversational.story.output_kind_mismatch", expected=expected_output.get("kind"), actual=output.get("kind"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.output.output_ref", code="conversational.story.output_ref_mismatch", expected=expected_output.get("output_ref"), actual=dict(output.get("metadata") or {}).get("source_output_ref"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.output.summary", code="conversational.story.output_summary_mismatch", expected=expected_output.get("summary"), actual=output.get("summary"))
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.output.actions", code="conversational.story.output_actions_mismatch", expected=expected_output.get("actions"), actual=actual_action_ids)
+        _assert_story_value(diagnostics, path=f"{story_id}.steps[{index}].expect.output.next_expected_input", code="conversational.story.next_input_mismatch", expected=expected_output.get("next_expected_input"), actual=dict(output.get("next_expected_input") or {}).get("kind"))
+        diagnostics.extend(
+            _assert_story_repair(
+                story_id=story_id,
+                step_index=index,
+                expect=expect,
+                output=output,
+                command_id=command_id,
+            )
+        )
+        interaction = presentation = None
+        if workflow is not None and instance is not None:
+            interaction, presentation, projection_diagnostics = _story_interaction_projection(
+                story_id=story_id,
+                step_index=index,
+                story_channel=str(story.get("channel") or "text"),
+                workflow=workflow,
+                resolver=resolver,
+                instance=instance,
+                actor_id=actor_id,
+                permissions=permissions,
+                roles=roles,
+                expect=expect,
+                conversation_id=conversation_id,
+            )
+            diagnostics.extend(projection_diagnostics)
+        timeline.append(
+            {
+                "step": index,
+                "input_kind": "event" if given_event else "user",
+                "proposal": proposal,
+                "invocation": invocation,
+                "event": copy.deepcopy(given_event) if given_event else None,
+                "command": command_id,
+                "before_state": before_state,
+                "after_state": str(instance.get("state")) if instance is not None else None,
+                "accepted": None if decision is None else bool(decision.get("accepted")),
+                "reason_code": None if decision is None else decision.get("reason_code"),
+                "transition_id": None if decision is None else decision.get("transition_id"),
+                "activity": activity_mock,
+                "output": output,
+                "response_envelope": envelope,
+                "interaction": interaction,
+                "presentation": presentation,
+            }
+        )
+
+    return {
+        "story_id": story_id,
+        "valid": not diagnostics,
+        "steps": len(list(story.get("steps") or [])),
+        "final_state": str(instance.get("state")) if instance is not None else None,
+        "diagnostics": diagnostics,
+        "timeline": timeline,
+    }
+
+
 def validate_conversational_package(
     artifact_root: Path | str,
     *,
     manifest_name: str,
     run_stories: bool = True,
     workflow_artifact: WorkflowDefinitionArtifact | None = None,
+    operation_catalog: Mapping[str, Sequence[str]] | None = None,
 ) -> ConversationalValidationResult:
     root = Path(artifact_root).expanduser().resolve()
     package_dir = root / CONVERSATIONAL_DIR
@@ -840,12 +1777,17 @@ def validate_conversational_package(
     story_reports: list[dict[str, Any]] = []
     manifest: dict[str, Any] = {}
     input_source: dict[str, Any] = {}
+    entities_source: dict[str, Any] = {}
+    examples_source: dict[str, Any] = {}
     affordances_source: dict[str, Any] = {}
     repair_source: dict[str, Any] = {}
     output_source: dict[str, Any] = {}
     stories: list[dict[str, Any]] = []
     story_paths: list[Path] = []
+    locale_sources: list[dict[str, Any]] = []
+    locale_paths: list[Path] = []
     package_digest: str | None = None
+    component_manifest: dict[str, Any] = {}
 
     if workflow_artifact is None:
         try:
@@ -927,21 +1869,49 @@ def validate_conversational_package(
             )
 
     files = dict(manifest.get("files") or {})
-    source_specs = (
+    source_specs = [
         ("input", str(files.get("input") or "input.yaml"), INPUT_SCHEMA),
+        ("entities", str(files.get("entities") or "entities.yaml"), ENTITIES_SCHEMA),
+        ("examples", str(files.get("examples") or "examples.yaml"), EXAMPLES_SCHEMA),
         ("affordances", str(files.get("affordances") or "affordances.yaml"), AFFORDANCES_SCHEMA),
         ("repair", str(files.get("repair") or "repair.yaml"), REPAIR_SCHEMA),
         ("output", str(files.get("output") or "output.yaml"), OUTPUT_SOURCE_SCHEMA),
-    )
+    ]
     loaded: dict[str, dict[str, Any]] = {}
     for key, rel, schema_name in source_specs:
         value = _load_source(package_dir, rel, schema_name, diagnostics)
         if value is not None:
             loaded[key] = value
     input_source = loaded.get("input", {})
+    entities_source = loaded.get("entities", {})
+    examples_source = loaded.get("examples", {})
     affordances_source = loaded.get("affordances", {})
     repair_source = loaded.get("repair", {})
     output_source = loaded.get("output", {})
+
+    for rel in list(files.get("locales") or []):
+        try:
+            path = _safe_rel(package_dir, str(rel))
+        except ConversationalArtifactError as exc:
+            diagnostics.append(_diagnostic("conversational.locale.path_invalid", str(rel), str(exc)))
+            continue
+        if not path.is_file():
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.locale.missing",
+                    str(rel),
+                    f"referenced locale source is missing: {rel}",
+                )
+            )
+            continue
+        try:
+            source = _read_yaml_mapping(path)
+        except ConversationalArtifactError as exc:
+            diagnostics.append(_diagnostic("conversational.locale.invalid_yaml", str(rel), str(exc)))
+            continue
+        diagnostics.extend(_schema_diagnostics(LOCALE_SCHEMA, source, str(rel)))
+        locale_sources.append(source)
+        locale_paths.append(path)
 
     for rel in list(files.get("stories") or []):
         try:
@@ -971,6 +1941,8 @@ def validate_conversational_package(
         listed = {
             CONVERSATIONAL_MANIFEST,
             str(files.get("input") or "input.yaml"),
+            str(files.get("entities") or "entities.yaml"),
+            str(files.get("examples") or "examples.yaml"),
             str(files.get("affordances") or "affordances.yaml"),
             str(files.get("repair") or "repair.yaml"),
             str(files.get("output") or "output.yaml"),
@@ -988,41 +1960,81 @@ def validate_conversational_package(
                     )
                 )
 
+    admitted_operation_catalog: dict[str, Sequence[str]] = dict(operation_catalog or {})
+    if manifest_name == "skill.yaml":
+        skill_id = str(component_manifest.get("name") or root.name).strip()
+        admitted_operation_catalog[skill_id] = tuple(
+            str(item.get("name") or "").strip()
+            for item in list(component_manifest.get("tools") or [])
+            if isinstance(item, Mapping) and str(item.get("name") or "").strip()
+        )
+
     diagnostics.extend(
         _cross_check_package(
             manifest=manifest,
             input_source=input_source,
+            entities_source=entities_source,
+            examples_source=examples_source,
             affordances_source=affordances_source,
             repair_source=repair_source,
             output_source=output_source,
             stories=stories,
             story_paths=story_paths,
+            locale_sources=locale_sources,
             workflow_artifact=workflow_artifact,
+            operation_catalog=admitted_operation_catalog,
         )
     )
-
-    if run_stories and workflow_artifact is not None:
-        for story in stories:
-            story_reports.append(run_conversation_story(story, workflow_artifact.compiled))
-            diagnostics.extend(story_reports[-1]["diagnostics"])
 
     if manifest:
         package_digest = _digest_sources(
             {
                 "manifest": manifest,
                 "input": input_source,
+                "entities": entities_source,
+                "examples": examples_source,
                 "affordances": affordances_source,
                 "repair": repair_source,
                 "output": output_source,
                 "stories": stories,
+                "locales": locale_sources,
             }
         )
+
+    if run_stories:
+        for story in stories:
+            try:
+                story_reports.append(
+                    run_conversation_story(
+                        story,
+                        workflow_artifact.compiled if workflow_artifact is not None else None,
+                        output_source=output_source,
+                        affordances_source=affordances_source,
+                        package_id=str(manifest.get("package_id") or "") or None,
+                        package_digest=package_digest,
+                    )
+                )
+            except Exception as exc:
+                story_reports.append(
+                    {
+                        "story_id": str(story.get("id") or "story"),
+                        "valid": False,
+                        "steps": len(list(story.get("steps") or [])),
+                        "final_state": None,
+                        "diagnostics": [_diagnostic("conversational.story.execution_failed", str(story.get("id") or "story"), str(exc))],
+                        "timeline": [],
+                    }
+                )
+            diagnostics.extend(story_reports[-1]["diagnostics"])
     metrics = {
         "intents": len(list(input_source.get("intents") or [])),
+        "entities": len(list(entities_source.get("entities") or [])),
+        "examples": len(list(examples_source.get("examples") or [])),
         "affordances": len(list(affordances_source.get("affordances") or [])),
         "repair_policies": len(list(repair_source.get("policies") or [])),
         "outputs": len(list(output_source.get("outputs") or [])),
         "stories": len(stories),
+        "locales": len(locale_sources),
         "workflow_commands_referenced": len(
             {
                 str(dict(item.get("workflow") or {}).get("command_id"))
@@ -1054,18 +2066,22 @@ def validate_conversational_package(
     validate_workflow_record("adaos.conversational.validation_report.v1", report)
 
     package: ConversationalPackage | None = None
-    if report["valid"] and workflow_artifact is not None:
+    if report["valid"]:
         package = ConversationalPackage(
             artifact_root=root,
             package_dir=package_dir,
             manifest_path=manifest_path,
             manifest=copy.deepcopy(manifest),
             input_source=copy.deepcopy(input_source),
+            entities_source=copy.deepcopy(entities_source),
+            examples_source=copy.deepcopy(examples_source),
             affordances_source=copy.deepcopy(affordances_source),
             repair_source=copy.deepcopy(repair_source),
             output_source=copy.deepcopy(output_source),
             stories=tuple(copy.deepcopy(item) for item in stories),
             story_paths=tuple(story_paths),
+            locale_sources=tuple(copy.deepcopy(item) for item in locale_sources),
+            locale_paths=tuple(locale_paths),
             workflow_artifact=workflow_artifact,
             package_digest=str(package_digest),
         )

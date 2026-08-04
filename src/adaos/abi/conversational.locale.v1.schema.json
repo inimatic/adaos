@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.locale.v1",
+  "title": "AdaOS Conversational Locale Source",
+  "type": "object",
+  "required": ["schema", "package_id", "locale", "messages"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.locale.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "locale": { "type": "string", "minLength": 2, "maxLength": 40 },
+    "messages": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 12000 }
+    }
+  },
+  "$defs": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" } },
+  "additionalProperties": false
+}

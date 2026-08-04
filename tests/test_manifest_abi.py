@@ -32,8 +32,13 @@ def _load_service_skill_schema() -> dict:
     "schema_name",
     [
         "conversation.output.v1.schema.json",
+        "conversation.action_policy.v1.schema.json",
+        "skill.invocation.v1.schema.json",
         "conversational.package_manifest.v1.schema.json",
         "conversational.input.v1.schema.json",
+        "conversational.entities.v1.schema.json",
+        "conversational.examples.v1.schema.json",
+        "conversational.locale.v1.schema.json",
         "conversational.affordances.v1.schema.json",
         "conversational.repair.v1.schema.json",
         "conversational.output.v1.schema.json",

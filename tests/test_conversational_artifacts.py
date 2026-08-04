@@ -109,6 +109,46 @@ def _definition() -> dict[str, object]:
     }
 
 
+def _fallback_definition(command_count: int = 10) -> dict[str, object]:
+    transitions = []
+    for index in range(command_count):
+        transition = _transition(
+            f"choose_{index}",
+            "choice",
+            "done" if index == command_count - 1 else "choice",
+            f"inspect_{index}",
+        )
+        transition["risk"] = {
+            "class": "read",
+            "side_effect": "none",
+            "confirmation": "none",
+        }
+        transition["capability_requirements"] = {
+            "required": [],
+            "optional": ["buttons"],
+            "fallback": "numbered_text",
+        }
+        transitions.append(transition)
+    return {
+        "schema": "adaos.workflow.definition.v1",
+        "workflow_type": "builder.choice",
+        "definition_version": "1.0.0",
+        "aggregate_type": "builder.choice",
+        "initial_state": "choice",
+        "states": [
+            {"id": "choice", "label": "Choice", "terminal": False},
+            {"id": "done", "label": "Done", "terminal": True},
+        ],
+        "commands": [
+            {"id": transition["trigger"]["command"], "input_schema": transition["trigger"]["input_schema"]}
+            for transition in transitions
+        ],
+        "transitions": transitions,
+        "subworkflows": [],
+        "metadata": {"pilot": "story_fallback"},
+    }
+
+
 def _write_yaml(path: Path, value: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
@@ -139,11 +179,13 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
             ],
             "files": {
                 "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
                 "affordances": "affordances.yaml",
                 "repair": "repair.yaml",
                 "output": "output.yaml",
                 "stories": ["tests/stories/approve.yaml"],
-                "locales": [],
+                "locales": ["locale.en.yaml"],
             },
             "locales": ["en"],
             "privacy_defaults": {
@@ -152,6 +194,7 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
                 "public_promotion": "requires_review",
             },
             "compiled_outputs": [],
+            "compatibility_aliases": [],
         },
     )
     _write_yaml(
@@ -171,16 +214,41 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
                         "transition_id": "approve_prototype",
                     },
                     "skill_invocation": None,
-                    "examples": [{"text": "approve it", "locale": "en", "source": "authored"}],
+                    "example_ids": ["approve.example.1"],
                     "slots": [],
                 }
             ],
-            "hard_negatives": [],
             "policy": {
                 "default_confidence": 0.8,
                 "abstain_below": 0.55,
                 "protected_action_confirmation": True,
             },
+        },
+    )
+    _write_yaml(
+        conv / "entities.yaml",
+        {
+            "schema": "adaos.conversational.entities.v1",
+            "package_id": "demo_skill",
+            "entities": [],
+        },
+    )
+    _write_yaml(
+        conv / "examples.yaml",
+        {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "demo_skill",
+            "examples": [
+                {
+                    "id": "approve.example.1",
+                    "intent_id": "approve_prototype",
+                    "text": "approve it",
+                    "locale": "en",
+                    "source": "authored",
+                    "entities": [],
+                }
+            ],
+            "hard_negatives": [],
         },
     )
     affordance: dict[str, object] = {
@@ -194,7 +262,12 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
             "transition_id": "approve_prototype",
         },
         "skill_invocation": None,
-        "side_effect_class": "reversible",
+        "action_policy": {
+            "schema": "adaos.conversation.action_policy.v1",
+            "risk_class": "isolated_write",
+            "side_effect": "reversible",
+            "confirmation": "none",
+        },
         "required_capabilities": [],
         "presentation": {"hint": "button", "priority": 10},
         "output_refs": ["prototype_approved"],
@@ -235,7 +308,11 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
                     "id": "prototype_approved",
                     "kind": "result",
                     "audience": "user",
+                    "risk_level": "medium",
+                    "reason_code": "prototype_approved",
+                    "explanation": "The workflow accepted the approval.",
                     "summary": "Prototype approved.",
+                    "content_parts": [],
                     "details": [],
                     "actions": [
                         {
@@ -245,17 +322,32 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
                         }
                     ],
                     "next_expected_input": "none",
+                    "handoff_target": None,
                 },
                 {
                     "id": "repair_no_match",
                     "kind": "repair",
                     "audience": "user",
+                    "risk_level": "none",
+                    "reason_code": "no_match",
+                    "explanation": "The input did not match an available intent.",
                     "summary": "Please rephrase.",
+                    "content_parts": [],
                     "details": [],
                     "actions": [],
                     "next_expected_input": "text",
+                    "handoff_target": None,
                 },
             ],
+        },
+    )
+    _write_yaml(
+        conv / "locale.en.yaml",
+        {
+            "schema": "adaos.conversational.locale.v1",
+            "package_id": "demo_skill",
+            "locale": "en",
+            "messages": {},
         },
     )
     _write_yaml(
@@ -264,6 +356,7 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
             "schema": "adaos.conversational.story.v1",
             "id": "builder.approve.en.happy_path",
             "title": "Approve the prototype",
+            "story_kind": "workflow",
             "workflow_type": "builder.change",
             "locale": "en",
             "channel": "web",
@@ -281,16 +374,36 @@ def _write_package(root: Path, *, command: str = "approve", poisoned_affordance:
             "steps": [
                 {
                     "user": "approve it",
+                    "given": {
+                        "proposal": {
+                            "kind": "workflow_command",
+                            "intent_id": "approve_prototype",
+                            "command": command,
+                            "skill_id": None,
+                            "operation_id": None,
+                            "arguments": {},
+                            "confidence": 0.9,
+                            "action_policy": {
+                                "schema": "adaos.conversation.action_policy.v1",
+                                "risk_class": "isolated_write",
+                                "side_effect": "reversible",
+                                "confirmation": "none",
+                            },
+                        },
+                        "event": None,
+                        "skill_result": None,
+                        "output_ref": "prototype_approved",
+                    },
                     "expect": {
                         "proposal": {
                             "kind": "workflow_command",
                             "command": command,
-                            "arguments": {},
-                            "confidence": 0.9,
+                            "confidence_at_least": 0.9,
                         },
                         "command": command,
                         "transition_id": "approve_prototype",
                         "state": "automation",
+                        "reason_code": None,
                         "output": {
                             "kind": "result",
                             "output_ref": "prototype_approved",
@@ -350,16 +463,45 @@ def test_story_runner_can_be_used_directly_without_live_effects() -> None:
     assert instance["state"] == "prototype"
     story = {
         "id": "direct.story",
+        "story_kind": "workflow",
         "workflow_type": "builder.change",
         "actor": {"id": "user:local", "permissions": ["builder.change"], "roles": []},
         "start": {"instance_id": "change:direct", "state": "prototype", "generation": 0, "context": {}},
         "steps": [
             {
+                "given": {
+                    "proposal": {
+                        "kind": "workflow_command",
+                        "intent_id": "approve_prototype",
+                        "command": "approve",
+                        "skill_id": None,
+                        "operation_id": None,
+                        "arguments": {},
+                        "confidence": 1.0,
+                        "action_policy": {
+                            "schema": "adaos.conversation.action_policy.v1",
+                            "risk_class": "isolated_write",
+                            "side_effect": "reversible",
+                            "confirmation": "none",
+                        },
+                    },
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": None,
+                },
                 "expect": {
-                    "proposal": {"kind": "workflow_command", "command": "approve", "arguments": {}},
+                    "proposal": {"kind": "workflow_command", "command": "approve", "confidence_at_least": 1.0},
                     "command": "approve",
+                    "transition_id": "approve_prototype",
                     "state": "automation",
-                    "output": {"kind": "result", "next_expected_input": "none"},
+                    "reason_code": None,
+                    "output": {
+                        "kind": "accepted",
+                        "output_ref": None,
+                        "summary": "approve completed",
+                        "actions": [],
+                        "next_expected_input": "none",
+                    },
                 }
             }
         ],
@@ -370,3 +512,109 @@ def test_story_runner_can_be_used_directly_without_live_effects() -> None:
     assert report["valid"] is True
     assert report["timeline"][0]["accepted"] is True
     assert report["timeline"][0]["activity"]["mocked"] is True
+
+
+def test_story_runner_asserts_interaction_and_channel_fallback() -> None:
+    workflow = compile_definition(_fallback_definition())
+    commands = [f"inspect_{index}" for index in range(10)]
+    story = {
+        "id": "fallback.story",
+        "story_kind": "workflow",
+        "workflow_type": "builder.choice",
+        "locale": "en",
+        "channel": "telegram",
+        "actor": {"id": "user:local", "permissions": ["builder.change"], "roles": []},
+        "start": {"instance_id": "choice:direct", "state": "choice", "generation": 0, "context": {}},
+        "steps": [
+            {
+                "given": {
+                    "proposal": None,
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": None,
+                },
+                "expect": {
+                    "proposal": None,
+                    "command": None,
+                    "transition_id": None,
+                    "state": "choice",
+                    "reason_code": None,
+                    "output": {
+                        "kind": "clarification",
+                        "output_ref": None,
+                        "summary": "Choose an inspection.",
+                        "actions": [],
+                        "next_expected_input": "action",
+                    },
+                    "interaction": {
+                        "commands": commands,
+                        "expected_generation": 0,
+                    },
+                    "presentation": {
+                        "channel": "telegram",
+                        "mode": "numbered_text",
+                        "supported": True,
+                        "reason_code": "action_limit_numbered_fallback",
+                        "commands": commands,
+                        "semantic_equivalent": True,
+                    },
+                },
+            }
+        ],
+    }
+
+    report = run_conversation_story(story, workflow)
+
+    assert report["valid"] is True
+    presentation = report["timeline"][0]["presentation"]
+    assert presentation["mode"] == "numbered_text"
+    assert [item["command"] for item in presentation["actions"]] == commands
+
+
+def test_story_runner_asserts_repair_without_workflow_command() -> None:
+    workflow = compile_definition(_definition())
+    story = {
+        "id": "repair.story",
+        "story_kind": "workflow",
+        "workflow_type": "builder.change",
+        "locale": "en",
+        "channel": "text",
+        "actor": {"id": "user:local", "permissions": ["builder.change"], "roles": []},
+        "start": {"instance_id": "change:repair", "state": "prototype", "generation": 0, "context": {}},
+        "steps": [
+            {
+                "user": "something unrelated",
+                "given": {
+                    "proposal": None,
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": None,
+                },
+                "expect": {
+                    "proposal": None,
+                    "command": None,
+                    "transition_id": None,
+                    "state": "prototype",
+                    "reason_code": None,
+                    "output": {
+                        "kind": "repair",
+                        "output_ref": None,
+                        "summary": "Please rephrase.",
+                        "actions": [],
+                        "next_expected_input": "text",
+                    },
+                    "repair": {
+                        "reason_code": "no_match",
+                        "next_expected_input": "text",
+                    },
+                },
+            }
+        ],
+    }
+
+    report = run_conversation_story(story, workflow)
+
+    assert report["valid"] is True
+    output = report["timeline"][0]["output"]
+    assert output["kind"] == "repair"
+    assert output["reason"]["code"] == "no_match"

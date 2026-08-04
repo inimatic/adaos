@@ -1345,6 +1345,12 @@ workflow event, semantic conversation output, response envelope, and delivery
 attempt. The report is valid only when those records preserve the same command,
 workflow identity, event, envelope, and reply route lineage.
 
+Conversation stories are executable semantic tests, not transcript snapshots.
+They may assert repair behavior, store-free `ConversationInteraction`
+projection, and channel presentation fallback for the same workflow state.
+Those assertions fail when command identity, expected generation, fallback mode,
+reason code, semantic equivalence, or repair next-input semantics drift.
+
 ## Builder Reference Workflow
 
 Builder is the first complete proving domain:
