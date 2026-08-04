@@ -895,21 +895,28 @@ Architecture:
 
 Conversational artifacts and learning:
 
-- [ ] `[must]` Add Builder/SDK support for a git-versioned `conversational/`
+- [x] `[must]` Add Builder/SDK support for a git-versioned `conversational/`
   package beside a skill/scenario, including input, output, affordance, repair,
-  example, locale, and story sources.
+  entity, example, optional deterministic matcher, locale, and story sources.
+  Workspace/package admission, Builder context, SDK scaffold/compile/export,
+  and deterministic stories share the canonical package pipeline.
 - [ ] `[must]` Define Builder/SDK ports for conversational validation,
   compilation, proposal emission, semantic output, interaction creation,
   Teacher candidate capture, and candidate-to-Change promotion.
-- [ ] `[must]` Include conversational package digest, story coverage, output
-  contract coverage, Teacher candidate refs, and promotion privacy scope in
+- [x] `[must]` Include conversational package digest, diagnostics, bounded
+  story summaries, and workflow/output/repair/risk/locale/channel coverage in
   Builder context packets for conversational Changes.
+- [ ] `[must]` Include originating Teacher candidate refs and promotion privacy
+  scope in Builder context packets when a Change is created from runtime
+  learning evidence.
 - [ ] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias, and
   example candidates through a Builder Change before any git-versioned package
   source or public catalog candidate is updated.
-- [ ] `[must]` Add a conversational artifact validation command that checks
+- [x] `[must]` Add a conversational artifact validation command that checks
   source schemas, cross-file refs, workflow command refs, locale coverage,
-  protected-action policy, and package cardinality.
+  protected-action policy, and package cardinality. The developer SDK exposes
+  non-destructive scaffold, compile, story execution, and static export over
+  this same pipeline.
 - [x] `[must]` Land the workflow-facing validation service slice behind the
   future Builder/SDK command. `conversational_artifacts` now validates package
   source schemas, checks affordance refs against the manifest-bound workflow,
@@ -924,9 +931,10 @@ Conversational artifacts and learning:
   artifacts with source digests, rollout metadata, and rollback refs; compiled
   routers, embeddings, indexes, prompt packs, and model bundles must not become
   independent source truth.
-- [ ] `[must]` Preserve conversational trace continuity from user turn through
+- [x] `[must]` Preserve conversational trace continuity from user turn through
   proposal, dialog/interaction, workflow command, Run/activity, semantic
-  output, and delivery attempt in Builder evidence.
+  output, and delivery attempt in Builder evidence. The trace-identity proof
+  and both direct/durable response normalization paths preserve the chain.
 - [x] `[should]` Generate static workflow/statechart and conversation-story
   reports for Builder review, model context, and trial evidence. The shared
   conversational pipeline now returns validation JSON plus

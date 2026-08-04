@@ -70,6 +70,8 @@ keeps AdaOS as the authority for state, source, and effects:
 | --- | --- | --- |
 | Agent loop, tools, handoffs, guardrails, sessions, tracing, and approval pauses | [OpenAI Agents SDK](https://developers.openai.com/api/docs/guides/agents) and [Claude Code Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) | Executors and specialist agents are `Run` backends with bounded context, not owners of product state. |
 | Tool/context protocol, authorization, elicitation, resources, prompts, and async tasks | [MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28) | MCP is an adapter and discovery plane for context/tools; workflow, package, and Builder records remain AdaOS-owned. |
+| Agent-to-agent discovery, messages, tasks, status updates, and output artifacts | [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/) | A2A is an optional federation adapter. AdaOS maps external Tasks/Messages/Artifacts to bounded Runs, conversation evidence, and artifact refs without delegating workflow authority. |
+| Cross-system traces and GenAI agent/tool/MCP semantic attributes | [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/) and [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) | AdaOS trace ids remain contractual identities; OpenTelemetry is the export/correlation seam for model, agent, tool, MCP, workflow, and delivery spans. |
 | Durable graph state, human interrupts, time travel, and thread/checkpoint memory | [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) and [interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts) | AdaOS needs resumable interactions and replayable story/trace evidence, but the canonical command journal is not a model graph transcript. |
 | Durable execution, Signals, Queries, Updates, idempotency, and deterministic replay | [Temporal messages](https://docs.temporal.io/handling-messages) and [workflow definition](https://docs.temporal.io/workflow-definition) | Long waits and human decisions need journaled state and idempotent ingress; external engines are optional adapters after the semantic proof. |
 | Statecharts, actors, invoked work, guards, and visual inspection | [XState actors](https://stately.ai/docs/state-machine-actors) and [invoke](https://stately.ai/docs/invoke) | Workflow definitions should be inspectable statecharts with registered activities, not hidden handler branches. |
@@ -456,15 +458,20 @@ Story types:
 
 ## Static First, Interactive Later
 
-The first implementation should produce static, reviewable artifacts:
+The current design-time pipeline produces these static, reviewable artifacts:
 
 - workflow/statechart graph export generated from `workflow.json`;
 - conversation-story listing and per-story execution report;
 - path coverage over states, transitions, guards, output kinds, repair paths,
   risky actions, locales, and channel fallbacks;
-- candidate diff explaining how a Teacher observation would change the
-  conversational package;
-- static evidence bundle linked from Builder Change, Run, Trial, and Release.
+- JSON validation/static reports and a Markdown/Mermaid projection from
+  `adaos.sdk.developer.conversational.export_package`.
+
+The next static evidence increments are a candidate diff explaining how a
+Teacher observation would change the package and durable links from Builder
+Change, Run, Trial, and Release records. The executable reference package is
+`examples/conversational-workflow-skill`; it is also a clean-checkout SDK and
+story-runner fixture.
 
 An interactive studio is intentionally deferred. The deferred target is a
 Temporal-like review surface where a human can replay traces, inspect workflow
@@ -565,8 +572,12 @@ for their detailed gates and evidence.
 
 - [x] `[must]` Publish `adaos.conversation.output.v1` as the semantic output
   ABI linked to current `ResponseEnvelope` materialization.
-- [ ] `[must]` Align `ResponseEnvelope`/`InteractionPresentation` producers to
-  the same semantic output identity.
+- [x] `[must]` Align direct and durable `ResponseEnvelope` producers to the
+  same semantic output identity. Both normalization paths preserve output id,
+  reason, risk, provenance, trace, envelope id, and response status.
+- [ ] `[must]` Bind `InteractionPresentation` records to the same semantic
+  output identity when a presentation is output-derived rather than a pure
+  workflow-interaction projection.
 - [x] `[must]` Add a pure runtime ABI bridge for workflow/skill
   `IntentProposal`, canonical workflow invocation, workflow execution result ->
   `ConversationOutput`, and `ConversationOutput` -> `ResponseEnvelope` ref.
@@ -578,9 +589,15 @@ for their detailed gates and evidence.
   policy, and package cardinality. Workspace admission, package build, archive
   verification, Builder context assembly, and the developer SDK all use the
   same `conversational_pipeline` service.
+- [x] `[must]` Add a non-destructive design-time package generator.
+  `adaos.sdk.developer.conversational.scaffold_package` creates the complete
+  source skeleton, binds an existing governed workflow, refuses replacement,
+  and immediately runs the canonical compiler/validator.
 - [ ] `[must]` Define the skill/scenario SDK ports for validation,
   compilation, proposal emission, semantic output, interactions, Teacher
-  candidate capture, and Builder promotion.
+  candidate capture, and Builder promotion. Scaffold, validation, story
+  execution, static export, and pure runtime ABI builders exist; a unified
+  high-level interaction/Teacher-promotion facade remains open.
 - [x] `[must]` Add first workflow-facing conversation-story fixtures and runner
   support for deterministic `IntentProposal` fixtures, workflow command, state
   transition, semantic output, and no-LLM execution.
@@ -621,16 +638,19 @@ for their detailed gates and evidence.
   same source. `adaos.sdk.developer.conversational.export_package` additionally
   writes validation JSON, static-report JSON, and Markdown/Mermaid review
   evidence without making Markdown authoritative.
-- [ ] `[should]` Add coverage metrics over workflow paths, dialog repair paths,
-  output kinds, risky actions, locales, and channel fallbacks.
+- [x] `[should]` Add coverage metrics over workflow paths, dialog repair paths,
+  output kinds, risky actions, locales, and channel fallbacks. Static reports
+  distinguish declared, covered, and missing output kinds, repair policies,
+  risk classes, and locales, and record covered channels and story kinds.
 - [ ] `[should]` Add conversational threat-model checks for prompt injection,
   descriptor poisoning, alias hijacking, private-data promotion, output/action
   mismatch, and MCP scope confusion.
 - [ ] `[should]` Add candidate-to-story promotion so repeated runtime failures
   become reviewable story candidates.
-- [ ] `[should]` Update legacy NLU and scenario documentation to mark
+- [x] `[should]` Update legacy NLU and scenario documentation to mark
   `nlp.intent.detected` and direct `intent -> scenario.run` as compatibility
-  paths, not target conversational authority.
+  paths, not target conversational authority, and to separate runtime Teacher
+  overlays from git-versioned conversational sources.
 - [ ] `[should]` Add Builder authoring affordances for editing conversational
   artifacts without exposing provider-specific model internals as source.
 - [ ] `[should]` Record direct-coding-agent comparison metrics: diagnosis time,
@@ -642,8 +662,11 @@ for their detailed gates and evidence.
 
 - [ ] `[could]` Add generated Markdown documentation for a skill/scenario's
   conversational capabilities, examples, repair behavior, and outputs.
-- [ ] `[could]` Add story mutation tests that remove guards, examples, or output
-  templates and prove the conversational artifact pipeline fails.
+- [x] `[could]` Add story/package mutation tests that remove required examples
+  or output templates, introduce an unknown repair policy, or alter expected
+  story behavior and prove the conversational artifact pipeline fails. Guard
+  removal is not a universal invalid mutation because guardless transitions
+  are legal workflow definitions.
 - [ ] `[could]` Add education-on-the-go exports that turn accepted stories into
   user-facing walkthroughs or contextual training cards.
 

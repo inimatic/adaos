@@ -814,10 +814,10 @@ remain discoverable from one map:
 ## Source Of Truth And Projection Rules
 
 - `scenario.yaml` / `skill.yaml` remain canonical artifact manifests.
-- `conversational/` package sources beside a skill/scenario own reusable
-  input, output, affordance, repair, example, locale, and story data; runtime
-  learned overlays and Teacher candidates are not package truth until Builder
-  promotes them.
+- `conversational/` package sources beside a skill/scenario own reusable input,
+  entity, output, affordance, repair, example, optional deterministic matcher,
+  locale, and story data; runtime learned overlays and Teacher candidates are
+  not package truth until Builder promotes them.
 - Project/Change/Issue/Run records live in backend-owned durable storage or a
   versioned project contract during migration.
 - `webui.json` is the active declarative UI source; UI revisions are immutable
