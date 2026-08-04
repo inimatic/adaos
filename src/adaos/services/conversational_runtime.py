@@ -18,6 +18,8 @@ CONVERSATION_OUTPUT_SCHEMA = "adaos.conversation.output.v1"
 RESPONSE_ENVELOPE_SCHEMA = "adaos.conversation.response_envelope.v1"
 WORKFLOW_COMMAND_SCHEMA = "adaos.workflow.command.v1"
 WORKFLOW_INVOCATION_SCHEMA = "adaos.workflow.invocation.v1"
+SKILL_INVOCATION_SCHEMA = "adaos.skill.invocation.v1"
+ACTION_POLICY_SCHEMA = "adaos.conversation.action_policy.v1"
 
 _CONVERSATION_RISK_BY_WORKFLOW_RISK = {
     "read": "none",
@@ -40,6 +42,25 @@ _RESPONSE_CATEGORY_BY_OUTPUT_KIND = {
     "handoff": "notification",
 }
 
+_ACTION_POLICY_RISK_BY_OUTPUT_RISK = {
+    "none": "read",
+    "low": "local_reversible",
+    "medium": "isolated_write",
+    "high": "workspace_activation",
+    "destructive": "destructive",
+}
+
+_TASK_STATUS_BY_OUTPUT_KIND = {
+    "clarification": "input_required",
+    "confirmation": "input_required",
+    "accepted": "submitted",
+    "progress": "working",
+    "result": "completed",
+    "repair": "input_required",
+    "refusal": "failed",
+    "handoff": "unknown",
+}
+
 _AUTHORIZATION_REJECTION_MARKERS = (
     "actor_not_authorized",
     "missing_permission",
@@ -48,6 +69,27 @@ _AUTHORIZATION_REJECTION_MARKERS = (
     "invalid_principal",
     "principal_actor_mismatch",
 )
+
+_LEGACY_SIDE_EFFECT_POLICY = {
+    "none": ("read", "none", "none"),
+    "safe": ("read", "none", "none"),
+    "read_only": ("read", "none", "none"),
+    "readonly": ("read", "none", "none"),
+    "ui_navigation": ("local_reversible", "none", "none"),
+    "local_state_change": ("local_reversible", "reversible", "none"),
+    "local_write": ("local_reversible", "reversible", "none"),
+    "runtime_write": ("isolated_write", "reversible", "required"),
+    "reversible": ("local_reversible", "reversible", "none"),
+    "filesystem": ("isolated_write", "reversible", "required"),
+    "skill_action": ("isolated_write", "reversible", "required"),
+    "device_control": ("workspace_activation", "external", "required"),
+    "network": ("workspace_activation", "external", "required"),
+    "cross_node": ("workspace_activation", "external", "required"),
+    "external": ("workspace_activation", "external", "required"),
+    "external_io": ("workspace_activation", "external", "required"),
+    "publication": ("publication", "external", "rich_review"),
+    "destructive": ("destructive", "destructive", "rich_review"),
+}
 
 
 class ConversationalRuntimeError(ValueError):
@@ -86,6 +128,188 @@ def _generic_ref(
     }
 
 
+def _action_policy(
+    *,
+    risk_class: str = "read",
+    side_effect: str = "none",
+    confirmation: str = "none",
+    required_capabilities: Sequence[str] = (),
+    policy_refs: Sequence[str] = (),
+) -> dict[str, Any]:
+    return {
+        "schema": "adaos.conversation.action_policy.v1",
+        "risk_class": str(risk_class or "read").strip(),
+        "side_effect": str(side_effect or "none").strip(),
+        "confirmation": str(confirmation or "none").strip(),
+        "required_capabilities": [
+            str(item).strip() for item in required_capabilities if str(item).strip()
+        ],
+        "policy_refs": [str(item).strip() for item in policy_refs if str(item).strip()],
+    }
+
+
+def _input_context(
+    *,
+    channel: str = "text",
+    modality: str = "text",
+    actor_ref: Mapping[str, Any] | None = None,
+    principal_ref: Mapping[str, Any] | None = None,
+    reply_route_ref: Mapping[str, Any] | None = None,
+    context_ref: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "channel": str(channel or "text").strip(),
+        "modality": str(modality or "text").strip(),
+        "actor_ref": _deepcopy_mapping(actor_ref),
+        "principal_ref": _deepcopy_mapping(principal_ref),
+        "reply_route_ref": _deepcopy_mapping(reply_route_ref),
+        "context_ref": _deepcopy_mapping(context_ref),
+    }
+
+
+def _provenance(
+    *,
+    source: str = "deterministic",
+    package_ref: Mapping[str, Any] | None = None,
+    package_digest: str | None = None,
+    prompt_digest: str | None = None,
+    context_digest: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": str(source or "deterministic").strip(),
+        "package_ref": _deepcopy_mapping(package_ref),
+        "package_digest": str(package_digest).strip() if package_digest else None,
+        "prompt_digest": str(prompt_digest).strip() if prompt_digest else None,
+        "context_digest": str(context_digest).strip() if context_digest else None,
+    }
+
+
+def _trace(
+    *,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
+    traceparent: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "trace_id": str(trace_id).strip() if trace_id is not None else None,
+        "span_id": str(span_id).strip() if span_id is not None else None,
+        "parent_span_id": (
+            str(parent_span_id).strip() if parent_span_id is not None else None
+        ),
+        "traceparent": str(traceparent).strip() if traceparent is not None else None,
+    }
+
+
+def _output_provenance(
+    *,
+    source: str = "conversation",
+    package_ref: Mapping[str, Any] | None = None,
+    package_digest: str | None = None,
+    source_ref: Mapping[str, Any] | None = None,
+    source_digest: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": str(source or "conversation").strip(),
+        "package_ref": _deepcopy_mapping(package_ref),
+        "package_digest": str(package_digest).strip() if package_digest else None,
+        "source_ref": _deepcopy_mapping(source_ref),
+        "source_digest": str(source_digest).strip() if source_digest else None,
+    }
+
+
+def _output_reason(
+    *,
+    kind: str,
+    summary: str,
+    code: str | None = None,
+    explanation: str | None = None,
+    source: str = "conversation",
+    retryable: bool | None = None,
+) -> dict[str, Any]:
+    selected_retryable = (
+        bool(retryable)
+        if retryable is not None
+        else str(kind or "").strip() in {"clarification", "confirmation", "repair"}
+    )
+    return {
+        "code": str(code).strip() if code is not None else str(kind or "").strip(),
+        "explanation": (
+            str(explanation).strip()
+            if explanation is not None
+            else str(summary or "").strip() or None
+        ),
+        "retryable": selected_retryable,
+        "source": str(source or "conversation").strip(),
+    }
+
+
+def _output_lifecycle(
+    *,
+    kind: str,
+    sequence: int = 1,
+    update_kind: str = "snapshot",
+    supersedes_output_id: str | None = None,
+    terminal: bool | None = None,
+    task_status: str | None = None,
+) -> dict[str, Any]:
+    output_kind = str(kind or "").strip()
+    return {
+        "sequence": int(sequence),
+        "update_kind": str(update_kind or "snapshot").strip(),
+        "supersedes_output_id": (
+            str(supersedes_output_id).strip()
+            if supersedes_output_id is not None
+            else None
+        ),
+        "terminal": bool(terminal) if terminal is not None else output_kind in {"result", "refusal"},
+        "task_status": str(
+            task_status or _TASK_STATUS_BY_OUTPUT_KIND.get(output_kind, "none")
+        ).strip(),
+    }
+
+
+def _content_parts(summary: str, parts: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    if parts:
+        return [copy.deepcopy(dict(item)) for item in parts]
+    return [
+        {
+            "part_id": "part.1",
+            "kind": "text",
+            "text": str(summary or "").strip(),
+            "data": None,
+            "artifact_ref": None,
+            "media_type": "text/plain",
+            "sensitivity": "internal",
+        }
+    ]
+
+
+def _normalize_output_action(action: Mapping[str, Any]) -> dict[str, Any]:
+    record = copy.deepcopy(dict(action))
+    command = str(record.get("command") or "").strip() or None
+    action_id = str(record.get("action_id") or "").strip() or None
+    risk_level = str(record.get("risk_level") or "none").strip()
+    record.setdefault(
+        "binding",
+        {
+            "kind": "workflow_command" if command else "none",
+            "affordance_id": action_id,
+            "workflow_command": command,
+            "skill_operation": None,
+        },
+    )
+    record.setdefault(
+        "action_policy",
+        _action_policy(
+            risk_class=_ACTION_POLICY_RISK_BY_OUTPUT_RISK.get(risk_level, "read"),
+            side_effect="reversible" if command else "none",
+            confirmation="required" if bool(record.get("requires_confirmation")) else "none",
+        ),
+    )
+    return record
+
+
 @lru_cache(maxsize=16)
 def _abi_schema(schema_name: str) -> dict[str, Any]:
     filename = schema_name.removeprefix("adaos.")
@@ -108,6 +332,35 @@ def _validate_schema(schema_name: str, value: Mapping[str, Any]) -> dict[str, An
     return record
 
 
+def _schema_properties(schema_name: str) -> dict[str, Any]:
+    properties = _abi_schema(schema_name).get("properties")
+    return dict(properties) if isinstance(properties, Mapping) else {}
+
+
+def _intent_act_supports_skill_action_policy() -> bool:
+    semantic_acts = _schema_properties(INTENT_PROPOSAL_SCHEMA).get("semantic_acts")
+    items = dict(semantic_acts.get("items") or {}) if isinstance(semantic_acts, Mapping) else {}
+    properties = dict(items.get("properties") or {})
+    skill = properties.get("skill_invocation")
+    variants = []
+    if isinstance(skill, Mapping):
+        variants = list(skill.get("oneOf") or skill.get("anyOf") or [skill])
+    for variant in variants:
+        if not isinstance(variant, Mapping):
+            continue
+        variant_properties = dict(variant.get("properties") or {})
+        if "action_policy" in variant_properties:
+            return True
+    return False
+
+
+def _output_action_supports_policy() -> bool:
+    actions = _schema_properties(CONVERSATION_OUTPUT_SCHEMA).get("actions")
+    items = dict(actions.get("items") or {}) if isinstance(actions, Mapping) else {}
+    properties = dict(items.get("properties") or {})
+    return "binding" in properties or "action_policy" in properties
+
+
 def validate_intent_proposal(value: Mapping[str, Any]) -> dict[str, Any]:
     return _validate_schema(INTENT_PROPOSAL_SCHEMA, value)
 
@@ -118,6 +371,99 @@ def validate_conversation_output(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def validate_response_envelope(value: Mapping[str, Any]) -> dict[str, Any]:
     return _validate_schema(RESPONSE_ENVELOPE_SCHEMA, value)
+
+
+def validate_action_policy(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _validate_schema(ACTION_POLICY_SCHEMA, value)
+
+
+def validate_skill_invocation(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _validate_schema(SKILL_INVOCATION_SCHEMA, value)
+
+
+def action_policy(
+    *,
+    risk_class: str = "read",
+    side_effect: str = "none",
+    confirmation: str = "none",
+    required_capabilities: Sequence[str] = (),
+    policy_refs: Sequence[str] = (),
+) -> dict[str, Any]:
+    return validate_action_policy(
+        {
+            "schema": ACTION_POLICY_SCHEMA,
+            "risk_class": str(risk_class or "read").strip(),
+            "side_effect": str(side_effect or "none").strip(),
+            "confirmation": str(confirmation or "none").strip(),
+            "required_capabilities": list(dict.fromkeys(str(item) for item in required_capabilities)),
+            "policy_refs": list(dict.fromkeys(str(item) for item in policy_refs)),
+        }
+    )
+
+
+def action_policy_from_legacy_side_effect(value: str | None) -> dict[str, Any]:
+    token = str(value or "none").strip().lower().replace("-", "_")
+    risk_class, side_effect, confirmation = _LEGACY_SIDE_EFFECT_POLICY.get(
+        token,
+        ("workspace_activation", "external", "rich_review"),
+    )
+    return action_policy(
+        risk_class=risk_class,
+        side_effect=side_effect,
+        confirmation=confirmation,
+        policy_refs=(f"legacy-side-effect:{token or 'none'}",),
+    )
+
+
+def action_policy_from_workflow_risk(value: Mapping[str, Any] | str | None) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return action_policy(
+            risk_class=str(value.get("class") or "read"),
+            side_effect=str(value.get("side_effect") or "none"),
+            confirmation=str(value.get("confirmation") or "none"),
+        )
+    risk_class = str(value or "read").strip()
+    defaults = {
+        "read": ("none", "none"),
+        "local_reversible": ("reversible", "none"),
+        "isolated_write": ("reversible", "required"),
+        "trial_activation": ("reversible", "required"),
+        "workspace_activation": ("external", "required"),
+        "publication": ("external", "rich_review"),
+        "destructive": ("destructive", "rich_review"),
+    }
+    side_effect, confirmation = defaults.get(risk_class, ("external", "rich_review"))
+    return action_policy(
+        risk_class=risk_class if risk_class in defaults else "workspace_activation",
+        side_effect=side_effect,
+        confirmation=confirmation,
+    )
+
+
+def _trace_context(
+    value: Mapping[str, Any] | None,
+    *,
+    seed: Mapping[str, Any],
+) -> dict[str, Any]:
+    supplied = dict(value or {})
+    trace_id = str(supplied.get("trace_id") or "").strip() or hashlib.sha256(
+        _canonical_trace_bytes({"trace": seed})
+    ).hexdigest()[:32]
+    span_id = str(supplied.get("span_id") or "").strip() or hashlib.sha256(
+        _canonical_trace_bytes({"span": seed})
+    ).hexdigest()[:16]
+    parent_span_id = str(supplied.get("parent_span_id") or "").strip() or None
+    traceparent = str(supplied.get("traceparent") or "").strip() or f"00-{trace_id}-{span_id}-01"
+    return {
+        "trace_id": trace_id,
+        "span_id": span_id,
+        "parent_span_id": parent_span_id,
+        "traceparent": traceparent,
+    }
+
+
+def _canonical_trace_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _deepcopy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -164,6 +510,7 @@ def _semantic_act(
         "target_ref": _deepcopy_mapping(target_ref),
         "interaction_id": str(interaction_id).strip() if interaction_id is not None else None,
         "command": str(command).strip() if command is not None else None,
+        "skill_invocation": None,
         "arguments": copy.deepcopy(dict(arguments or {})),
         "confidence": float(confidence),
     }
@@ -181,6 +528,9 @@ def _proposal_record(
     semantic_acts: Sequence[Mapping[str, Any]],
     alternatives: Sequence[Mapping[str, Any]] = (),
     allowed_command_snapshot: Sequence[Mapping[str, Any]] = (),
+    input_context: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    trace: Mapping[str, Any] | None = None,
     model: Mapping[str, Any] | None = None,
     disposition: str = "proposed",
     clarification: Mapping[str, Any] | None = None,
@@ -199,6 +549,7 @@ def _proposal_record(
         "acts": [dict(item) for item in semantic_acts],
         "supersedes": supersedes_proposal_id,
     }
+    schema_properties = _schema_properties(INTENT_PROPOSAL_SCHEMA)
     record = {
         "schema": INTENT_PROPOSAL_SCHEMA,
         "proposal_id": str(proposal_id or _stable_id("intent", base)).strip(),
@@ -233,6 +584,16 @@ def _proposal_record(
         "created_at": timestamp,
         "updated_at": timestamp,
     }
+    if "input_context" in schema_properties:
+        record["input_context"] = copy.deepcopy(
+            dict(input_context) if isinstance(input_context, Mapping) else _input_context()
+        )
+    if "provenance" in schema_properties:
+        record["provenance"] = copy.deepcopy(
+            dict(provenance) if isinstance(provenance, Mapping) else _provenance()
+        )
+    if "trace" in schema_properties:
+        record["trace"] = copy.deepcopy(dict(trace) if isinstance(trace, Mapping) else _trace())
     return validate_intent_proposal(record)
 
 
@@ -261,6 +622,11 @@ def build_workflow_intent_proposal(
     clarification: Mapping[str, Any] | None = None,
     alternatives: Sequence[Mapping[str, Any]] = (),
     allowed_command_snapshot: Sequence[Mapping[str, Any]] = (),
+    input_context: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    trace: Mapping[str, Any] | None = None,
+    channel: str = "text",
+    modality: str = "text",
     retention_class: str = "normal",
     redaction: str = "policy",
     supersedes_proposal_id: str | None = None,
@@ -286,6 +652,16 @@ def build_workflow_intent_proposal(
         "risk": str(risk or "read").strip(),
         "confirmation_required": bool(confirmation_required),
     }
+    proposal_input_context = (
+        copy.deepcopy(dict(input_context))
+        if isinstance(input_context, Mapping)
+        else _input_context(
+            channel=channel,
+            modality=modality,
+            reply_route_ref=arguments["reply_route_ref"],
+            context_ref=arguments["context_ref"],
+        )
+    )
     act = _semantic_act(
         act_id="act.1",
         kind="workflow_command",
@@ -304,6 +680,9 @@ def build_workflow_intent_proposal(
         semantic_acts=(act,),
         alternatives=alternatives,
         allowed_command_snapshot=allowed_command_snapshot,
+        input_context=proposal_input_context,
+        provenance=provenance,
+        trace=trace,
         model=model,
         disposition=disposition,
         clarification=clarification,
@@ -332,6 +711,12 @@ def build_skill_intent_proposal(
     disposition: str = "proposed",
     clarification: Mapping[str, Any] | None = None,
     alternatives: Sequence[Mapping[str, Any]] = (),
+    input_context: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    trace: Mapping[str, Any] | None = None,
+    action_policy: Mapping[str, Any] | None = None,
+    channel: str = "text",
+    modality: str = "text",
     retention_class: str = "normal",
     redaction: str = "policy",
     supersedes_proposal_id: str | None = None,
@@ -343,6 +728,12 @@ def build_skill_intent_proposal(
         "operation_id": str(operation_id or "").strip(),
         "arguments": copy.deepcopy(dict(arguments or {})),
     }
+    if _intent_act_supports_skill_action_policy():
+        skill_invocation["action_policy"] = copy.deepcopy(
+            dict(action_policy)
+            if isinstance(action_policy, Mapping)
+            else _action_policy(risk_class="read", side_effect="none", confirmation="none")
+        )
     act = _semantic_act(
         act_id="act.1",
         kind="skill_invocation",
@@ -362,6 +753,13 @@ def build_skill_intent_proposal(
         semantic_acts=(act,),
         alternatives=alternatives,
         allowed_command_snapshot=(),
+        input_context=(
+            copy.deepcopy(dict(input_context))
+            if isinstance(input_context, Mapping)
+            else _input_context(channel=channel, modality=modality)
+        ),
+        provenance=provenance,
+        trace=trace,
         model=model,
         disposition=disposition,
         clarification=clarification,
@@ -497,9 +895,83 @@ def workflow_invocation_from_intent_proposal(
             "intent_act_id": act["act_id"],
             "source_message_id": record["source_message_id"],
             "model": copy.deepcopy(dict(record["model"])),
+            "action_policy": action_policy_from_workflow_risk(selected_risk),
+            "provenance": copy.deepcopy(dict(record["provenance"])),
+            "trace": copy.deepcopy(dict(record["trace"])),
         },
     }
     return validate_workflow_record(WORKFLOW_INVOCATION_SCHEMA, invocation)
+
+
+def skill_invocation_from_intent_proposal(
+    proposal: Mapping[str, Any],
+    *,
+    actor_id: str,
+    idempotency_key: str | None = None,
+    action_policy_value: Mapping[str, Any] | None = None,
+    target_ref: Mapping[str, Any] | None = None,
+    now: str | None = None,
+) -> dict[str, Any]:
+    record = validate_intent_proposal(proposal)
+    if record["disposition"] != "proposed":
+        raise ConversationalRuntimeError(
+            f"intent proposal is not invocable: {record['disposition']}"
+        )
+    act = _single_act(record, "skill_invocation")
+    declared = dict(act.get("skill_invocation") or {})
+    skill_id = str(declared.get("skill_id") or "").strip()
+    operation_id = str(declared.get("operation_id") or "").strip()
+    if not skill_id or not operation_id:
+        raise ConversationalRuntimeError(
+            "skill intent proposal requires exact skill_id and operation_id"
+        )
+    selected_target = (
+        copy.deepcopy(dict(target_ref))
+        if isinstance(target_ref, Mapping)
+        else _deepcopy_mapping(act.get("target_ref"))
+        or _generic_ref("skill", skill_id)
+    )
+    selected_policy = validate_action_policy(
+        action_policy_value
+        if isinstance(action_policy_value, Mapping)
+        else dict(declared.get("action_policy") or {})
+    )
+    timestamp = now or str(record.get("created_at") or _now())
+    key = str(
+        idempotency_key or f"intent:{record['proposal_id']}:{act['act_id']}"
+    ).strip()
+    seed = {
+        "proposal_id": record["proposal_id"],
+        "act_id": act["act_id"],
+        "skill_id": skill_id,
+        "operation_id": operation_id,
+        "actor_id": actor_id,
+    }
+    invocation = {
+        "schema": SKILL_INVOCATION_SCHEMA,
+        "invocation_id": _stable_id("skill-invocation", seed),
+        "conversation_id": record["conversation_id"],
+        "proposal_ref": _generic_ref(
+            "intent_proposal",
+            str(record["proposal_id"]),
+            schema=INTENT_PROPOSAL_SCHEMA,
+        ),
+        "actor_ref": _generic_ref("principal", actor_id),
+        "target_ref": selected_target,
+        "operation": {"skill_id": skill_id, "operation_id": operation_id},
+        "input": copy.deepcopy(dict(declared.get("arguments") or {})),
+        "action_policy": selected_policy,
+        "idempotency_key": key,
+        "trace": copy.deepcopy(dict(record["trace"])),
+        "created_at": timestamp,
+        "metadata": {
+            "intent_act_id": act["act_id"],
+            "source_message_id": record["source_message_id"],
+            "model": copy.deepcopy(dict(record["model"])),
+            "provenance": copy.deepcopy(dict(record["provenance"])),
+        },
+    }
+    return validate_skill_invocation(invocation)
 
 
 def build_conversation_output(
@@ -510,6 +982,8 @@ def build_conversation_output(
     summary: str,
     audience: str = "user",
     risk_level: str = "none",
+    reason: Mapping[str, Any] | None = None,
+    content_parts: Sequence[Mapping[str, Any]] = (),
     details: Sequence[Mapping[str, Any]] = (),
     actions: Sequence[Mapping[str, Any]] = (),
     fields: Sequence[Mapping[str, Any]] = (),
@@ -517,10 +991,19 @@ def build_conversation_output(
     correlation: Mapping[str, Any] | None = None,
     next_expected_input: Mapping[str, Any] | None = None,
     channel_constraints: Mapping[str, Any] | None = None,
+    handoff_target: Mapping[str, Any] | None = None,
+    lifecycle: Mapping[str, Any] | None = None,
+    provenance: Mapping[str, Any] | None = None,
+    trace: Mapping[str, Any] | None = None,
     response_envelope_ref: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
+    selected_kind = str(kind or "").strip()
+    selected_summary = str(summary or "").strip()
+    selected_risk = str(risk_level or "none").strip()
+    schema_properties = _schema_properties(CONVERSATION_OUTPUT_SCHEMA)
+    actions_support_policy = _output_action_supports_policy()
     merged_correlation = {
         "turn_trace_id": None,
         "intent_proposal_id": None,
@@ -548,12 +1031,17 @@ def build_conversation_output(
         "schema": CONVERSATION_OUTPUT_SCHEMA,
         "output_id": str(output_id or "").strip(),
         "conversation_id": str(conversation_id or "").strip(),
-        "kind": str(kind or "").strip(),
+        "kind": selected_kind,
         "audience": str(audience or "user").strip(),
-        "risk_level": str(risk_level or "none").strip(),
-        "summary": str(summary or "").strip(),
+        "risk_level": selected_risk,
+        "summary": selected_summary,
         "details": [copy.deepcopy(dict(item)) for item in details],
-        "actions": [copy.deepcopy(dict(item)) for item in actions],
+        "actions": [
+            _normalize_output_action(item)
+            if actions_support_policy
+            else copy.deepcopy(dict(item))
+            for item in actions
+        ],
         "fields": [copy.deepcopy(dict(item)) for item in fields],
         "evidence_refs": [copy.deepcopy(dict(item)) for item in evidence_refs],
         "correlation": merged_correlation,
@@ -563,6 +1051,30 @@ def build_conversation_output(
         "metadata": copy.deepcopy(dict(metadata or {})),
         "created_at": now or _now(),
     }
+    if "reason" in schema_properties:
+        record["reason"] = copy.deepcopy(
+            dict(reason)
+            if isinstance(reason, Mapping)
+            else _output_reason(kind=selected_kind, summary=selected_summary)
+        )
+    if "content_parts" in schema_properties:
+        record["content_parts"] = _content_parts(selected_summary, content_parts)
+    if "handoff_target" in schema_properties:
+        record["handoff_target"] = _deepcopy_mapping(handoff_target)
+    if "lifecycle" in schema_properties:
+        record["lifecycle"] = copy.deepcopy(
+            dict(lifecycle)
+            if isinstance(lifecycle, Mapping)
+            else _output_lifecycle(kind=selected_kind)
+        )
+    if "provenance" in schema_properties:
+        record["provenance"] = copy.deepcopy(
+            dict(provenance)
+            if isinstance(provenance, Mapping)
+            else _output_provenance()
+        )
+    if "trace" in schema_properties:
+        record["trace"] = copy.deepcopy(dict(trace) if isinstance(trace, Mapping) else _trace())
     return validate_conversation_output(record)
 
 
@@ -689,6 +1201,14 @@ def conversation_output_from_workflow_execution(
         kind=output_kind,
         summary=summary,
         risk_level=_CONVERSATION_RISK_BY_WORKFLOW_RISK.get(risk, "medium"),
+        reason=_output_reason(
+            kind=output_kind,
+            summary=summary,
+            code=reason_code or output_kind,
+            explanation=summary,
+            source="workflow",
+            retryable=output_kind in {"clarification", "confirmation", "repair"},
+        ),
         details=details,
         evidence_refs=[
             copy.deepcopy(dict(item))
@@ -709,6 +1229,16 @@ def conversation_output_from_workflow_execution(
                 fallback_kind="reply_route",
             ),
         },
+        lifecycle=_output_lifecycle(
+            kind=output_kind,
+            task_status=_TASK_STATUS_BY_OUTPUT_KIND.get(output_kind, "unknown"),
+        ),
+        provenance=_output_provenance(
+            source="workflow",
+            source_ref=_generic_ref("workflow_event", workflow_event_id)
+            if workflow_event_id
+            else None,
+        ),
         response_envelope_ref=response_ref,
         metadata={
             "invocation_id": invocation.get("invocation_id"),

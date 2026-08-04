@@ -28,6 +28,7 @@ WORKFLOW_REGISTRY_ENTRY_SCHEMA = "adaos.workflow.registry_entry.v1"
 WORKFLOW_BINDING_SCHEMA = "adaos.workflow.binding.v1"
 WORKFLOW_PRINCIPAL_SCHEMA = "adaos.workflow.principal.v1"
 WORKFLOW_STATIC_REPORT_SCHEMA = "adaos.workflow.static_report.v1"
+WORKFLOW_TRACE_IDENTITY_SCHEMA = "adaos.workflow.trace_identity.v1"
 _MAX_LEDGER = 200
 
 
@@ -1624,6 +1625,7 @@ def workflow_contract_snapshot() -> dict[str, Any]:
             "WorkflowBinding": WORKFLOW_BINDING_SCHEMA,
             "WorkflowPrincipal": WORKFLOW_PRINCIPAL_SCHEMA,
             "WorkflowStaticReport": WORKFLOW_STATIC_REPORT_SCHEMA,
+            "WorkflowTraceIdentity": WORKFLOW_TRACE_IDENTITY_SCHEMA,
         },
         "invariants": {
             "resolver": "pure",

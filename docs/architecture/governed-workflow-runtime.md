@@ -1338,6 +1338,12 @@ Every describe/projection response should answer:
 Operational telemetry correlates conversation message, intent proposal,
 workflow command/event, task/activity attempt, artifact digest, evidence, and
 delivery attempt. Trace success is not acceptance evidence by itself.
+Cross-surface workflow traces can also be captured as
+`adaos.workflow.trace_identity.v1`: a compact report that links the turn trace,
+intent proposal, interaction/response when present, canonical invocation,
+workflow event, semantic conversation output, response envelope, and delivery
+attempt. The report is valid only when those records preserve the same command,
+workflow identity, event, envelope, and reply route lineage.
 
 ## Builder Reference Workflow
 

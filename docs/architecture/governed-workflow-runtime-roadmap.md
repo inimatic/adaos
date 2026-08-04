@@ -768,9 +768,14 @@ story summaries, and state/command/transition/output coverage.
   `conversational_package_static_report` generate non-authoritative statechart,
   definition review, conformance, story summary, and coverage sections from
   compiled workflow and package sources while omitting exact chat prose.
-- [ ] `[should]` `GWR5-34` Preserve trace identity across turn, proposal,
+- [x] `[should]` `GWR5-34` Preserve trace identity across turn, proposal,
   dialog frame, interaction, response, command, workflow event, Run/activity,
-  semantic output, and delivery attempt.
+  semantic output, and delivery attempt. The first proof ABI is
+  `adaos.workflow.trace_identity.v1`; `workflow_trace_identity_report` links
+  `IntentProposal`, canonical `WorkflowInvocation`, workflow decision event,
+  semantic `ConversationOutput`, `ResponseEnvelope`, and delivery attempt IDs
+  and fails the report on command, workflow identity, event, envelope, or reply
+  route mismatches.
 - [ ] `[must]` `GWR5-35` Extend story assertions to full dialog repair,
   `ConversationInteraction`, and channel fallback coverage once the workflow
   contract slice is stable.
