@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -1911,6 +1912,82 @@ def _reconcile_failed_target_mismatch_after_active_switch(
     )
 
 
+def _reconcile_failed_root_restart_after_runtime_recovery(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Commit a promoted target once its replacement runtime becomes ready.
+
+    A root restart timeout is not proof that promotion failed: systemd may
+    restart successfully while the promoted runtime is temporarily unhealthy.
+    Root updates intentionally stay out of the fast slot-rollback path, so a
+    later supervisor self-heal must be able to validate the already-active
+    target and close the durable attempt.
+    """
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(attempt_map.get("state") or "").strip().lower() != "failed":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    timed_out = (
+        str(attempt_map.get("completion_reason") or "").strip().lower() == "root restart timeout"
+        or (
+            str(status_map.get("phase") or "").strip().lower() == "root_restart_timeout"
+            and bool(status_map.get("supervisor_timeout_at"))
+        )
+    )
+    if not timed_out or not _runtime_payload_ready(runtime):
+        return None
+    target_version = str(attempt_map.get("target_version") or status_map.get("target_version") or "").strip()
+    if not target_version:
+        return None
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    if not _manifest_matches_target_version(manifest, target_version):
+        return None
+
+    now = time.time()
+    slot = str((manifest or {}).get("slot") or active_slot() or "").strip().upper()
+    recovered_status = write_core_update_status(
+        {
+            **status_map,
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": str(attempt_map.get("target_rev") or status_map.get("target_rev") or ""),
+            "target_version": target_version,
+            "target_slot": slot,
+            "reason": "supervisor.root_restart_runtime_recovered",
+            "message": (
+                f"runtime boot validated on slot {slot} after root restart timeout"
+                if slot
+                else "runtime boot validated after root restart timeout"
+            ),
+            "manifest": manifest if isinstance(manifest, dict) else {},
+            "root_restart_timeout_reconciled": True,
+            "root_restart_timeout_reconciled_at": now,
+            "validated_at": now,
+            "finished_at": now,
+            "scheduled_for": None,
+            "candidate_prewarm_state": None,
+            "candidate_prewarm_message": None,
+            "candidate_prewarm_ready_at": None,
+        }
+    )
+    with contextlib.suppress(Exception):
+        clear_core_update_plan()
+    return _complete_update_attempt(
+        state="completed",
+        status=recovered_status,
+        reason="root restart timeout reconciled after runtime recovery",
+    )
+
+
 def _fail_root_restart_attempt(
     *,
     status: dict[str, Any],
@@ -2008,6 +2085,16 @@ def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
         payload["status"] = read_core_update_status() or status
         payload["attempt"] = recovered_attempt
         payload["_served_by"] = "supervisor_failed_target_mismatch_reconciled"
+        return payload
+    recovered_attempt = _reconcile_failed_root_restart_after_runtime_recovery(
+        status=status,
+        attempt=attempt,
+        runtime=runtime,
+    )
+    if isinstance(recovered_attempt, dict):
+        payload["status"] = read_core_update_status() or status
+        payload["attempt"] = recovered_attempt
+        payload["_served_by"] = "supervisor_root_restart_timeout_reconciled"
         return payload
 
     now = time.time()
@@ -7061,6 +7148,27 @@ class SupervisorManager:
             "unhealthy_kind": self._runtime_unhealthy_kind,
         }
 
+    async def _maybe_self_heal_runtime(self) -> bool:
+        """Restart a live process whose listener or API stayed unhealthy.
+
+        This is deliberately callable both from the normal monitor path and
+        from its exception boundary. Auxiliary monitor failures must not keep
+        a live-but-unresponsive runtime alive indefinitely.
+        """
+        restart_decision = self._runtime_self_heal_decision()
+        if restart_decision is None:
+            return False
+        recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
+        self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
+        self._runtime_unhealthy_since = None
+        self._runtime_unhealthy_kind = None
+        self._persist_runtime_state()
+        try:
+            await self.restart_runtime(reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy"))
+        except Exception:
+            _LOG.warning("failed to self-heal active runtime", exc_info=True)
+        return True
+
     def _memory_sessions_index_compact(self, *, limit: int = 10) -> dict[str, Any]:
         index = read_memory_session_index()
         items = index.get("sessions") if isinstance(index.get("sessions"), list) else []
@@ -8638,19 +8746,7 @@ class SupervisorManager:
                     await self._maybe_maintain_required_upstream_link()
                 except Exception:
                     _LOG.warning("required-upstream-link supervisor watchdog failed", exc_info=True)
-                restart_decision = self._runtime_self_heal_decision()
-                if restart_decision is not None:
-                    recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
-                    self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
-                    self._runtime_unhealthy_since = None
-                    self._runtime_unhealthy_kind = None
-                    self._persist_runtime_state()
-                    try:
-                        await self.restart_runtime(
-                            reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy")
-                        )
-                    except Exception:
-                        _LOG.warning("failed to self-heal active runtime", exc_info=True)
+                if await self._maybe_self_heal_runtime():
                     continue
                 continue
             self._last_exit_code = int(rc)
@@ -8707,7 +8803,16 @@ class SupervisorManager:
                 self._monitor_last_failure = f"{type(exc).__name__}: {exc}"
                 self._last_error = f"supervisor monitor recovered after {self._monitor_last_failure}"
                 self._persist_runtime_state()
-                delay_sec = min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                self_heal_attempted = False
+                try:
+                    self_heal_attempted = await self._maybe_self_heal_runtime()
+                except Exception:
+                    _LOG.warning("runtime self-heal fault boundary failed after monitor error", exc_info=True)
+                delay_sec = (
+                    1.0
+                    if self_heal_attempted
+                    else min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                )
                 _LOG.exception(
                     "supervisor monitor iteration failed; resuming from durable state in %.1fs",
                     delay_sec,

@@ -675,6 +675,65 @@ def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkey
     assert attempt["completion_reason"] == "root restart timeout"
 
 
+def test_reconcile_root_restart_timeout_after_runtime_self_heal(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 300.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "git_commit": "target-commit",
+            "target_version": "target-commit",
+        },
+    )
+    write_status(
+        {
+            "state": "failed",
+            "phase": "root_restart_timeout",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-commit",
+            "supervisor_timeout_at": 240.0,
+            "updated_at": 240.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "failed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-commit",
+            "completion_reason": "root restart timeout",
+            "completed_at": 240.0,
+            "updated_at": 240.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "listener_running": True,
+                "runtime_api_ready": True,
+                "active_slot": "B",
+            },
+            "_served_by": "supervisor_fallback",
+        }
+    )
+
+    assert payload["status"]["state"] == "succeeded"
+    assert payload["status"]["phase"] == "validate"
+    assert payload["status"]["root_restart_timeout_reconciled"] is True
+    assert payload["_served_by"] == "supervisor_root_restart_timeout_reconciled"
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+    assert attempt["completion_reason"] == "root restart timeout reconciled after runtime recovery"
+
+
 def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_runtime_can_finalize(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
@@ -4264,6 +4323,46 @@ def test_supervisor_monitor_recovers_scheduler_after_iteration_failure(monkeypat
     assert manager._monitor_recovery_total == 1
     assert manager._monitor_failure_total == 1
     assert manager._monitor_last_failure == "RuntimeError: transient monitor failure"
+
+
+def test_supervisor_monitor_failure_boundary_still_self_heals_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    iteration_calls: list[int] = []
+    restart_reasons: list[str] = []
+
+    async def _iteration_loop() -> None:
+        iteration_calls.append(len(iteration_calls) + 1)
+        if len(iteration_calls) == 1:
+            raise NameError("auxiliary monitor defect")
+        manager._stopping = True
+
+    async def _restart_runtime(*, reason: str) -> dict[str, object]:
+        restart_reasons.append(reason)
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "_monitor_iteration_loop", _iteration_loop)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_self_heal_decision",
+        lambda: {
+            "reason": "supervisor.runtime.api_unready",
+            "message": "runtime API stayed unavailable",
+        },
+    )
+    monkeypatch.setattr(manager, "_record_runtime_self_heal_restart", lambda decision: dict(decision))
+    monkeypatch.setattr(manager, "restart_runtime", _restart_runtime)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(manager.monitor_forever())
+
+    assert iteration_calls == [1, 2]
+    assert restart_reasons == ["supervisor.runtime.api_unready"]
+    assert manager._monitor_last_failure == "NameError: auxiliary monitor defect"
+
+
+def test_safe_evidence_label_is_available_to_monitor_diagnostics() -> None:
+    assert supervisor._safe_evidence_label("runtime/API unhealthy") == "runtime_API_unhealthy"
 
 
 def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
