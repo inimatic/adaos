@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import struct
 import sys
+from contextlib import suppress
 from types import ModuleType
 from types import SimpleNamespace
 
@@ -19,6 +20,7 @@ class _DummyDataChannel:
         self.sent: list[bytes] = []
         self.close_called = 0
         self.bufferedAmount = 0
+        self.readyState = "open"
 
     def on(self, _event):
         def decorator(fn):
@@ -51,6 +53,7 @@ def _load_yjs_adapter(
     enabled: str = "1",
     drain_timeout_ms: str = "1",
     drain_poll_ms: str = "1",
+    block_room_serve: bool = False,
 ):
     called = {
         "start": 0,
@@ -60,6 +63,7 @@ def _load_yjs_adapter(
         "last_webspace_id": "",
         "last_dev_id": "",
         "last_attempt_id": "",
+        "room": None,
     }
 
     async def _start_y_server() -> None:
@@ -69,15 +73,23 @@ def _load_yjs_adapter(
         called["server_serve"] += 1
 
     class _FakeRoom:
+        def __init__(self) -> None:
+            self.clients = []
+
         async def serve(self, _adapter) -> None:
             called["room_serve"] += 1
+            self.clients.append(_adapter)
+            if block_room_serve:
+                await asyncio.Future()
 
     async def _acquire_yws_room(webspace_id: str, dev_id: str, *, yws_attempt_id: str | None = None):
         called["acquire"] += 1
         called["last_webspace_id"] = webspace_id
         called["last_dev_id"] = dev_id
         called["last_attempt_id"] = str(yws_attempt_id or "")
-        return _FakeRoom()
+        room = _FakeRoom()
+        called["room"] = room
+        return room
 
     fake_gateway = SimpleNamespace(
         _acquire_yws_room=_acquire_yws_room,
@@ -171,6 +183,18 @@ def test_datachannel_yjs_adapter_chunks_large_outbound_messages(monkeypatch) -> 
     assert dc.close_called == 0
     assert len(dc.sent) > 1
     assert _reassemble_chunk_frames(dc.sent) == payload
+
+
+def test_datachannel_yjs_adapter_rejects_broadcast_after_close(monkeypatch) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+    dc = _DummyDataChannel()
+    adapter = yjs_adapter.DataChannelYjsAdapter(dc, "desktop")
+    adapter.close()
+
+    with pytest.raises(RuntimeError, match="adapter_closed"):
+        asyncio.run(adapter.send(b"x" * (600 * 1024)))
+
+    assert dc.sent == []
 
 
 def test_datachannel_yjs_adapter_reassembles_inbound_chunked_messages(monkeypatch) -> None:
@@ -286,3 +310,21 @@ def test_datachannel_yjs_adapter_serves_acquired_yws_room_when_enabled(monkeypat
     assert called["last_webspace_id"] == "desktop"
     assert called["last_dev_id"] == "dev-1"
     assert called["last_attempt_id"] == "webrtc-yjs:dev-1"
+    assert called["room"].clients == []
+
+
+def test_datachannel_yjs_adapter_removes_cancelled_binding_from_room(monkeypatch) -> None:
+    yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="1", block_room_serve=True)
+
+    async def _cancel_binding() -> None:
+        adapter = yjs_adapter.DataChannelYjsAdapter(_DummyDataChannel(), "dev1-dev", device_id="dev-1")
+        task = asyncio.create_task(adapter.serve())
+        while called["room"] is None or called["room_serve"] == 0:
+            await asyncio.sleep(0)
+        assert called["room"].clients == [adapter]
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        assert called["room"].clients == []
+
+    asyncio.run(_cancel_binding())

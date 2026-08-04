@@ -1626,6 +1626,32 @@ class DiagnosticYRoom(YRoom):
                 message_bytes=len(message),
             )
             await client.send(message)
+        except Exception as exc:
+            # A failed transport must stop participating in the room.  Keeping
+            # it in ``clients`` makes every later update retry the dead
+            # recipient and turns reconnect churn into broadcast
+            # amplification.  Isolate the failure here instead of letting it
+            # cancel the room task group.
+            self.clients = [current for current in list(getattr(self, "clients", []) or []) if current is not client]
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    maybe_awaitable = close()
+                    if inspect.isawaitable(maybe_awaitable):
+                        await maybe_awaitable
+                except Exception:
+                    self.log.debug(
+                        "failed closing rejected YRoom client webspace=%s",
+                        self._diag_room_id(),
+                        exc_info=True,
+                    )
+            self.log.warning(
+                "pruned failed YRoom client webspace=%s update_bytes=%s error=%s remaining_clients=%s",
+                self._diag_room_id(),
+                int(update_bytes or 0),
+                type(exc).__name__,
+                len(getattr(self, "clients", []) or []),
+            )
         finally:
             if live_refresh_key is not None:
                 _record_live_refresh_client_send(live_refresh_key, elapsed_ms=_elapsed_ms_since(started))
@@ -1854,6 +1880,29 @@ class DiagnosticYRoom(YRoom):
                 int(self._diag_effective_repair_total),
             )
         return repair_update
+
+    async def _repair_authoritative_selector_after_update(
+        self,
+        *,
+        update_bytes: int,
+    ) -> bytes | None:
+        authoritative_scenario = _authoritative_current_scenario(self._diag_room_id())
+        if not authoritative_scenario:
+            return None
+        current_scenario = _room_current_scenario(self.ydoc)
+        if current_scenario == authoritative_scenario:
+            return None
+        self.log.warning(
+            "blocked stale YRoom selector update webspace=%s bytes=%s current=%s authoritative=%s",
+            self._diag_room_id(),
+            int(update_bytes or 0),
+            current_scenario,
+            authoritative_scenario,
+        )
+        return await self._repair_effective_branches_after_client_update(
+            update_bytes=int(update_bytes or 0),
+            reason="authoritative_selector_drift",
+        )
 
     async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> None:
         if not _YROOM_EFFECTIVE_INITIAL_REPLAY:
@@ -2102,6 +2151,29 @@ class DiagnosticYRoom(YRoom):
                                 reset_route_runtime=True,
                             )
                         )
+                    continue
+                authoritative_repair = await self._repair_authoritative_selector_after_update(
+                    update_bytes=update_len,
+                )
+                if authoritative_repair is not None:
+                    repair_update = authoritative_repair
+                    if repair_update:
+                        repair_message = create_update_message(repair_update)
+                        clients = list(getattr(self, "clients", []) or [])
+                        if not clients:
+                            self._queue_effective_repair_replay(
+                                repair_update,
+                                reason="authoritative_selector_drift",
+                            )
+                        for client in clients:
+                            self._task_group.start_soon(
+                                self._tracked_client_send,
+                                client,
+                                repair_message,
+                                len(repair_update),
+                            )
+                    # The stale update is already integrated in the room and
+                    # has been reconciled above.  Never broadcast or persist it.
                     continue
                 previous_effective_ready = bool(
                     isinstance(self._diag_effective_branch_snapshot, dict)
@@ -6818,6 +6890,8 @@ async def _apply_room_materialized_payload(
     if not isinstance(payload, Mapping):
         phase_timings_ms["total"] = _elapsed_ms_since(total_started)
         return b"", {"ok": False, "ready": False, "error": "missing_materialized_payload", "phase_timings_ms": phase_timings_ms}
+    payload_scenario = str(payload.get("scenario_id") or "").strip()
+    previous_authoritative_scenario = _authoritative_current_scenario(webspace_id)
     try:
         import y_py as Y  # pylint: disable=import-outside-toplevel
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
@@ -6826,6 +6900,17 @@ async def _apply_room_materialized_payload(
         before = Y.encode_state_vector(ydoc)
         phase_timings_ms["encode_state_vector"] = _elapsed_ms_since(stage_started)
         runtime = WebspaceScenarioRuntime()
+        # Publish the selector authority before mutating the room.  The room
+        # observer fans YDoc updates out asynchronously; without this ordering
+        # an already-connected browser can merge and re-emit its stale selector
+        # between the atomic materialization commit and the old post-apply
+        # lease publication.
+        if payload_scenario:
+            note_authoritative_current_scenario(
+                webspace_id,
+                payload_scenario,
+                reason=f"{reason}:materialized_prepare",
+            )
         suppress_attr = "_suppress_backend_ystore_persist"
         previous_suppress = int(getattr(room, suppress_attr, 0) or 0)
         stage_started = time.perf_counter()
@@ -7059,6 +7144,18 @@ async def _apply_room_materialized_payload(
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):
             raise
+        if payload_scenario and _authoritative_current_scenario(webspace_id) == payload_scenario:
+            if previous_authoritative_scenario:
+                note_authoritative_current_scenario(
+                    webspace_id,
+                    previous_authoritative_scenario,
+                    reason=f"{reason}:materialized_rollback",
+                )
+            else:
+                _clear_authoritative_current_scenario(
+                    webspace_id,
+                    reason=f"{reason}:materialized_failed",
+                )
         _ylog.warning(
             "YRoom materialized payload apply failed webspace=%s reason=%s: %s",
             webspace_id,

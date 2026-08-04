@@ -329,6 +329,29 @@ def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> N
     assert room._diag_native_preflight_last_reason == "native_panic"
 
 
+def test_tracked_client_send_prunes_failed_transport_without_failing_room() -> None:
+    class _FailedClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def send(self, _message: bytes) -> None:
+            raise RuntimeError("transport_closed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    failed = _FailedClient()
+    healthy = object()
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = [failed, healthy]
+
+    asyncio.run(room._tracked_client_send(failed, b"update", 6))
+
+    assert failed.closed is True
+    assert room.clients == [healthy]
+    assert room._diag_pending_send_tasks == 0
+
+
 def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch) -> None:
     processed: list[bytes] = []
 
@@ -480,6 +503,37 @@ def test_repair_room_effective_branches_skips_wrong_thread_without_owner_loop(mo
     assert update == b""
     assert mode == "skipped_no_owner_loop"
     assert calls == []
+
+
+def test_authoritative_selector_drift_is_repaired_before_update_broadcast(monkeypatch) -> None:
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room._webspace_id = "selector-guard"
+    room.ydoc = y_py.YDoc()
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "builder")
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    gateway_module.note_authoritative_current_scenario(
+        "selector-guard",
+        "test04_recipes",
+        reason="unit_switch",
+    )
+    calls: list[tuple[int, str]] = []
+
+    async def _repair(*, update_bytes: int, reason: str) -> bytes:
+        calls.append((update_bytes, reason))
+        return b"selector-repair"
+
+    monkeypatch.setattr(room, "_repair_effective_branches_after_client_update", _repair)
+
+    repair = asyncio.run(room._repair_authoritative_selector_after_update(update_bytes=123))
+
+    assert repair == b"selector-repair"
+    assert calls == [(123, "authoritative_selector_drift")]
+
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
+    assert asyncio.run(room._repair_authoritative_selector_after_update(update_bytes=10)) is None
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
 
 
 def test_pending_effective_repair_replay_flushes_to_yws_adapter(monkeypatch) -> None:
@@ -2411,6 +2465,57 @@ def test_materialized_payload_apply_ready_snapshot_trusts_successful_summary() -
         payload,
         {"failed_branches": 0, "stale_fingerprint_branches": 1},
     ) is None
+
+
+def test_materialized_payload_establishes_selector_authority_before_room_mutation(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    key = "materialized-selector-authority"
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    ydoc = y_py.YDoc()
+    room = SimpleNamespace(ydoc=ydoc, clients=[])
+    observed_authority: list[str | None] = []
+
+    def _fake_apply(
+        self,
+        target_ydoc,
+        webspace_id,
+        _payload,
+        **_kwargs,
+    ) -> None:
+        observed_authority.append(gateway_module._authoritative_current_scenario(webspace_id))
+        with target_ydoc.begin_transaction() as txn:
+            target_ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
+        self._last_apply_summary = {"failed_branches": 0, "changed_branches": 0}
+        self._last_rebuild_timings_ms = {"total": 1.0}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "apply_materialized_payload_to_doc",
+        _fake_apply,
+    )
+
+    _update, result = asyncio.run(
+        gateway_module._apply_room_materialized_payload(
+            key,
+            None,
+            room,
+            {
+                "scenario_id": "test04_recipes",
+                "metadata": {
+                    "materialization": {
+                        "required_branches": [],
+                    },
+                },
+            },
+            reason="unit",
+        )
+    )
+
+    assert result["ready"] is True
+    assert observed_authority == ["test04_recipes"]
+    assert gateway_module._authoritative_current_scenario(key) == "test04_recipes"
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
 
 
 def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypatch) -> None:

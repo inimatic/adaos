@@ -84,6 +84,12 @@ class DataChannelYjsAdapter:
             raise StopAsyncIteration()
 
     async def send(self, message: bytes) -> None:
+        if self._closed:
+            raise RuntimeError("webrtc_yjs_adapter_closed")
+        channel_state = str(getattr(self._dc, "readyState", "") or "").strip().lower()
+        if channel_state and channel_state != "open":
+            self.close()
+            raise RuntimeError(f"webrtc_yjs_datachannel_not_open:{channel_state}")
         payload = bytes(message or b"")
         if len(payload) > _MAX_MESSAGE_BYTES:
             self._close_for_pressure(
@@ -113,8 +119,9 @@ class DataChannelYjsAdapter:
     async def _send_frame(self, payload: bytes) -> None:
         try:
             self._dc.send(payload)
-        except Exception:
-            return
+        except Exception as exc:
+            self.close()
+            raise RuntimeError("webrtc_yjs_datachannel_send_failed") from exc
 
     async def _send_chunked(self, payload: bytes) -> None:
         chunk_size = max(1, _CHUNK_PAYLOAD_BYTES)
@@ -368,6 +375,7 @@ class DataChannelYjsAdapter:
             _log.info("yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED webspace=%s", self._path)
             return
         await yjs_gateway.start_y_server()
+        room = None
         try:
             acquire_room = getattr(yjs_gateway, "_acquire_yws_room", None)
             if callable(acquire_room):
@@ -385,4 +393,15 @@ class DataChannelYjsAdapter:
         except Exception:
             _log.debug("yjs datachannel serve ended with error webspace=%s", self._path, exc_info=True)
         finally:
+            # ``Peer._close_yjs_binding`` cancels this task after closing the
+            # adapter.  ypy-websocket's YRoom.serve removes a client only on
+            # its normal/Exception path; asyncio cancellation is a
+            # BaseException and used to strand the adapter in ``room.clients``.
+            # Every later room update was then fanned out to every leaked
+            # adapter (170 copies of one ~296 KiB payload were observed).  Make
+            # membership cleanup an adapter-owned invariant as well.
+            clients = getattr(room, "clients", None) if room is not None else None
+            if isinstance(clients, list):
+                room.clients = [client for client in clients if client is not self]
+            self.close()
             _log.info("yjs datachannel closed webspace=%s", self._path)
