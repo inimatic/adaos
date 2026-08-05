@@ -1520,6 +1520,14 @@ Autonomy, evidence, and acceptance:
   final live restart reports three connected/open direct peers, one initial
   document send per peer, zero effective initial replays, six dedupes, and no
   storm.
+- [x] `[must]` Make startup Preview preparation resumable across a failed first
+  control-WebSocket open without replaying state mutation. A pre-command
+  failure registers one bounded continuation; an attempted command remains a
+  terminal/unknown outcome for explicit reconciliation. Client `0.0.266`
+  passes the complete 125/125 YDoc suite.
+- [x] `[must]` Expose member-published public browser assets through the routed
+  hub boundary. Backend `f2b018d` validates method, SHA-256 shards, digest, and
+  bounded filename before relaying; backend tests pass 19/19.
 - [ ] `[should]` Move synchronous cold-start inventory and skill readiness work
   off the API event-loop critical path. It currently delays first readiness
   and may cause multi-second event-loop lag, but is not a Preview switch and

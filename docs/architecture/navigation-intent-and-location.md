@@ -112,6 +112,17 @@ the renderer shows a bounded preparation state and must not expose the
 persisted/home scenario. Failure releases the hold into the normal explainable
 resolver; it does not retry the state-changing command.
 
+Control transport establishment and scenario preparation are separate
+protocol steps. If the initial control WebSocket cannot open, no scenario
+command has been attempted: startup records an observable
+`control_transport_unavailable` outcome and installs one one-shot continuation
+for the next confirmed control-session open. The continuation unregisters
+before it sends the command and first verifies that the URL still names the
+same Webspace and scenario. If a scenario command was already attempted, its
+failed or unknown outcome is never repaired by transport reconnect. This rule
+prevents both an indefinitely synthetic `Checking destination` state and an
+unsafe replay of a state-changing command.
+
 If authentication is absent, the client presents login but preserves the
 complete `webspace.open` destination. Successful login continues resolution;
 it does not discard the requested subnet/Webspace. One-time registration

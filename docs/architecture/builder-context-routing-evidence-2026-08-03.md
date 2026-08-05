@@ -116,6 +116,16 @@ runtime browser surfaces use exact topology resolution.
   recovery.
 - [x] `[must]` Reopen the same exact target after it is current: no Webspace or
   scenario command is repeated and no navigation overlay is rendered.
+- [x] `[must]` Bound startup navigation when the first control WebSocket cannot
+  open. A pre-command transport failure becomes observable and resumes once on
+  the next confirmed control-session open; a command that was already attempted
+  is never replayed. Client `0.0.266` covers this with the complete 125/125 YDoc
+  suite.
+- [x] `[must]` Relay public immutable browser assets through the routed hub
+  boundary. The exact `en.json` blob exists and returns locally; Root previously
+  returned `404` because it routed only `/api/*`. Backend commit `f2b018d`
+  admits only validated content-addressed `GET/HEAD` paths and passes 19/19
+  backend tests.
 - [ ] `[should]` Reduce full-page cold-start time for links opened in a new tab.
   This is client boot/transport restoration, not Preview switching. Navigation
   of an already materialized target is now a deterministic no-op.
@@ -133,7 +143,7 @@ source build `0.1.667+4391.89ec14a3`, not a core slot, and an HTTP
 `desktop` and `dev1` with a button presentation plan. The registry publication
 commits are local and were not pushed. The AdaOS core commits are also local.
 Only the client repository was pushed remotely in this iteration. Client
-commits through `b8b4c68` contain the topology-confirmed startup room,
+commits through `ade734a` contain the topology-confirmed startup room,
 single-command scenario preparation, and stale-render hold; 271/271 client
 navigation tests, the focused 10/10 WebRTC transport suite, the production
 build, and the exact unmodified local raw-link route passed. The release path
@@ -149,6 +159,15 @@ one `bs_*` identity and one attempt id. Separate tabs on the same device used
 separate `rp_*` WebRTC peer ids. Client `0.0.265` additionally keeps a connected
 peer through a bounded DataChannel-opening grace period and removes all wait
 listeners on every outcome.
+
+The 2026-08-05 delayed-link trace separates the remaining startup phases. Once
+`desktop.scenario.set` reached the runtime, `builder -> test04_recipes`
+materialized in 2.3-2.5 seconds. The hundreds-of-seconds delay happened before
+that send: a failed initial control open was followed by successful Yjs startup,
+leaving a URL-derived synthetic preparation state with no continuation. Client
+`0.0.266` makes this phase resumable exactly once before command execution.
+Cancelled short status probes are diagnostics of the same unavailable startup
+window, not evidence of a long-running scenario transition.
 
 The remaining same-peer `3x` payload was separately traced to protocol
 redundancy, not leaked clients: the gateway sent an eager effective-state
