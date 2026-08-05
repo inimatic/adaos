@@ -113,7 +113,11 @@ from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscri
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
 from adaos.services.bounded_io import bounded_text_tail_lines
-from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator, RootTransportService
+from adaos.services.bootstrap_runtime import (
+    BootstrapLifecycleCoordinator,
+    BootstrapStatusWatchdogService,
+    RootTransportService,
+)
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
@@ -2308,135 +2312,6 @@ class BootstrapService:
             default=_env_truthy(os.getenv("HUB_TRACE"), default=False),
         )
 
-        async def _report_control_lifecycle(trigger: str) -> None:
-            try:
-                if getattr(conf, "role", None) != "hub":
-                    return
-                if not _control_lifecycle_report_enabled:
-                    return
-                done_box: dict[str, Any] = {"thread_done_at": None, "dumped": False}
-                main_tid = threading.get_ident()
-
-                def _is_idle_event_loop_stack(stack_text: str) -> bool:
-                    try:
-                        st = stack_text.replace("\\", "/")
-                        return (
-                            "asyncio/base_events.py" in st
-                            and "in _run_once" in st
-                            and (
-                                ("selectors.py" in st and "select.select(" in st)
-                                or ("asyncio/windows_events.py" in st and "_overlapped.GetQueuedCompletionStatus" in st)
-                            )
-                        )
-                    except Exception:
-                        return False
-
-                def _safe_thread_stack(frame: Any, *, limit: int) -> tuple[str | None, str | None]:
-                    try:
-                        frames: list[str] = []
-                        cur = frame
-                        remaining = max(1, int(limit))
-                        while cur is not None and remaining > 0:
-                            filename = str(getattr(getattr(cur, "f_code", None), "co_filename", "") or "")
-                            func = str(getattr(getattr(cur, "f_code", None), "co_name", "") or "")
-                            lineno = int(getattr(cur, "f_lineno", 0) or 0)
-                            norm = filename.replace("\\", "/")
-                            if "y_py" in norm or "site-packages/y_py" in norm:
-                                return None, "y_py_frame"
-                            frames.append(f'  File "{filename}", line {lineno}, in {func}')
-                            cur = getattr(cur, "f_back", None)
-                            remaining -= 1
-                        return "\n".join(reversed(frames)), None
-                    except Exception as exc:
-                        return None, f"{type(exc).__name__}: {exc}"
-
-                def _run_report() -> Any:
-                    try:
-                        return report_hub_control_lifecycle_state(conf)
-                    finally:
-                        done_box["thread_done_at"] = time.monotonic()
-
-                def _watch_resume() -> None:
-                    while True:
-                        time.sleep(0.25)
-                        finished_at = done_box.get("thread_done_at")
-                        if finished_at is None:
-                            continue
-                        if done_box.get("dumped"):
-                            return
-                        lag_s = time.monotonic() - float(finished_at)
-                        if lag_s < 1.0:
-                            continue
-                        done_box["dumped"] = True
-                        try:
-                            fr = sys._current_frames().get(main_tid)  # type: ignore[attr-defined]
-                            if fr is None:
-                                self._log.warning(
-                                    "control lifecycle await resume delayed lag_s=%.3f main_frame=missing trigger=%s",
-                                    lag_s,
-                                    trigger,
-                                )
-                                return
-                            st, stack_error = _safe_thread_stack(fr, limit=40)
-                            if stack_error:
-                                self._log.warning(
-                                    "control lifecycle await resume delayed lag_s=%.3f trigger=%s stack_unavailable=%s",
-                                    lag_s,
-                                    trigger,
-                                    stack_error,
-                                )
-                                return
-                            st = st or ""
-                            if _is_idle_event_loop_stack(st):
-                                self._log.debug(
-                                    "control lifecycle await resume delayed but main loop idle lag_s=%.3f trigger=%s",
-                                    lag_s,
-                                    trigger,
-                                )
-                                return
-                            self._log.warning(
-                                "control lifecycle await resume delayed lag_s=%.3f trigger=%s stack=\n%s",
-                                lag_s,
-                                trigger,
-                                st.rstrip(),
-                            )
-                        except Exception:
-                            return
-
-                # The await-resume watcher is diagnostic-only. Starting a fresh
-                # thread from the event loop on every control heartbeat can add
-                # avoidable Windows jitter, so keep it opt-in outside HUB_TRACE.
-                if _control_lifecycle_await_watch_enabled:
-                    watcher = threading.Thread(
-                        target=_watch_resume,
-                        name="adaos-control-lifecycle-await-watch",
-                        daemon=True,
-                    )
-                    watcher.start()
-                await asyncio.to_thread(_run_report)
-            except Exception as exc:
-                # This is best-effort telemetry to Root; never break hub boot/loop on failures.
-                # Include the error string in the structured log so JSON log collectors still show it.
-                self._log.debug(
-                    "control lifecycle report failed trigger=%s error=%s",
-                    trigger,
-                    str(exc),
-                    exc_info=True,
-                )
-
-        _control_lifecycle_heartbeat_s = _bounded_interval_seconds(
-            os.getenv("HUB_CONTROL_LIFECYCLE_HEARTBEAT_S", "15") or "15",
-            default=15.0,
-            minimum=5.0,
-        )
-
-        async def _control_lifecycle_heartbeat() -> None:
-            if getattr(conf, "role", None) != "hub":
-                return
-            while True:
-                await asyncio.sleep(_control_lifecycle_heartbeat_s)
-                await _report_control_lifecycle("heartbeat")
-
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
                 from adaos.services.release_validation_autorun import (
@@ -2504,60 +2379,30 @@ class BootstrapService:
             _current_node_status_push_payload = None
             _node_status_push_heartbeat_s = None
 
-        _last_node_status_emit_at = 0.0
-        _last_node_status_fingerprint: tuple[Any, ...] | None = None
-        _suppressed_duplicate_node_status_total = 0
-
-        async def _emit_node_status(trigger: str) -> None:
-            nonlocal _last_node_status_emit_at, _last_node_status_fingerprint, _suppressed_duplicate_node_status_total
-            try:
-                if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
-                    return
-                if not callable(_current_node_status_push_payload):
-                    return
-                payload = _current_node_status_push_payload()
-                payload["trigger"] = str(trigger or "").strip() or "runtime"
-                now = time.time()
-                should_emit, fingerprint = _should_emit_node_status(
-                    payload=payload,
-                    now=now,
-                    last_emitted_at=_last_node_status_emit_at,
-                    last_fingerprint=_last_node_status_fingerprint,
-                )
-                if not should_emit:
-                    _suppressed_duplicate_node_status_total += 1
-                    if _suppressed_duplicate_node_status_total in {1, 10} or (
-                        _suppressed_duplicate_node_status_total % 100 == 0
-                    ):
-                        self._log.warning(
-                            "suppressed duplicate node.status trigger=%s total=%s",
-                            payload["trigger"],
-                            _suppressed_duplicate_node_status_total,
-                        )
-                    return
-                _last_node_status_emit_at = now
-                _last_node_status_fingerprint = fingerprint
-                await bus.emit(
-                    "node.status",
-                    payload,
-                    source="lifecycle",
-                    actor="system",
-                )
-            except Exception:
-                self._log.debug("failed to emit node.status trigger=%s", trigger, exc_info=True)
-
-        _node_status_push_heartbeat_interval_s = _bounded_interval_seconds(
-            _node_status_push_heartbeat_s() if callable(_node_status_push_heartbeat_s) else 5.0,
-            default=5.0,
-            minimum=2.0,
+        self._status_watchdog = BootstrapStatusWatchdogService(
+            config=conf,
+            logger=self._log,
+            control_report_enabled=_control_lifecycle_report_enabled,
+            control_await_watch_enabled=_control_lifecycle_await_watch_enabled,
+            control_heartbeat_s=_bounded_interval_seconds(
+                os.getenv("HUB_CONTROL_LIFECYCLE_HEARTBEAT_S", "15") or "15",
+                default=15.0,
+                minimum=5.0,
+            ),
+            node_status_heartbeat_s=_bounded_interval_seconds(
+                _node_status_push_heartbeat_s() if callable(_node_status_push_heartbeat_s) else 5.0,
+                default=5.0,
+                minimum=2.0,
+            ),
+            report_control=lambda config: report_hub_control_lifecycle_state(config),
+            node_status_payload=_current_node_status_push_payload,
+            should_emit_node_status=lambda **kwargs: _should_emit_node_status(**kwargs),
+            emit_event=lambda *args, **kwargs: bus.emit(*args, **kwargs),
         )
-
-        async def _node_status_push_heartbeat() -> None:
-            if getattr(conf, "role", None) != "hub":
-                return
-            while True:
-                await asyncio.sleep(_node_status_push_heartbeat_interval_s)
-                await _emit_node_status("heartbeat")
+        _report_control_lifecycle = self._status_watchdog.report_control_lifecycle
+        _control_lifecycle_heartbeat = self._status_watchdog.control_lifecycle_heartbeat
+        _emit_node_status = self._status_watchdog.emit_node_status
+        _node_status_push_heartbeat = self._status_watchdog.node_status_heartbeat
 
         self._prepare_environment()
         # local adapter over LocalEventBus
