@@ -22,6 +22,9 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services.agent_context import get_ctx
 from adaos.services.builder.action_contracts import build_builder_action
+from adaos.services.builder.activity_executors import (
+    builder_lifecycle_executor_registrations,
+)
 from adaos.services.builder.governed import (
     admit_legacy_transition,
     compiled_builder_change_definition,
@@ -896,6 +899,13 @@ class BuilderWorkflowService:
         except Exception:
             return
 
+    @staticmethod
+    def _executor_registry() -> WorkflowExecutorRegistry:
+        return WorkflowExecutorRegistry(
+            platform_workflow_adapter_registry(),
+            builder_lifecycle_executor_registrations(),
+        )
+
     def project_root(self, object_type: str, object_id: str) -> Path:
         kind = _kind(object_type)
         project_id = _project_id(object_id)
@@ -1544,7 +1554,7 @@ class BuilderWorkflowService:
         projection["workflow_description"] = description_with_executor_readiness(
             description,
             self._governed_definition(),
-            WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
+            self._executor_registry(),
         )
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)
@@ -2441,6 +2451,26 @@ class BuilderWorkflowService:
     ) -> dict[str, Any]:
         command_record = _mapping(invocation.get("command"))
         command = str(command_record.get("command_id") or "").strip()
+        from adaos.sdk.builder import lifecycle as builder_lifecycle
+
+        if command in builder_lifecycle.ACTIVITY_COMMANDS:
+            result = builder_lifecycle.invoke_activity_command(
+                command,
+                object_type,
+                object_id,
+                actor=actor,
+                idempotency_key=str(command_record.get("idempotency_key") or "").strip(),
+                input_value=_mapping(command_record.get("input")),
+                metadata={
+                    **dict(metadata or {}),
+                    "conversation_id": invocation.get("conversation_id"),
+                },
+            )
+            output = dict(result)
+            output.setdefault("ok", True)
+            output.setdefault("workflow", self.describe(object_type, object_id))
+            output["invocation"] = copy.deepcopy(dict(invocation))
+            return output
         action = legacy_action_for_command(command)
         if action is None:
             raise BuilderWorkflowError(f"Builder command has no compatibility activity adapter: {command}")
@@ -2820,7 +2850,7 @@ class BuilderWorkflowService:
                 definition=self._governed_definition(),
             ),
             self._governed_definition(),
-            WorkflowExecutorRegistry(platform_workflow_adapter_registry()),
+            self._executor_registry(),
         )
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)

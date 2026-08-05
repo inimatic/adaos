@@ -371,6 +371,43 @@ def test_conversation_interaction_uses_localized_shared_action_registry(
     assert interaction["actions"][0]["label"] == "Дополнить изменение"
 
 
+def test_dependent_surface_exposes_only_registered_canonical_continuation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-automation-bridge",
+            "request": "Implement deterministic recipe export.",
+            "issues": [
+                {
+                    "issue_id": "recipe-export",
+                    "title": "Implement recipe export",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Export is covered by a test."],
+                }
+            ],
+        },
+    )
+
+    described = service.describe("scenario", "recipes")
+    frame = service.interaction_frame("scenario", "recipes")
+    continuation = next(
+        item
+        for item in frame["actions"]
+        if item["command"] == "builder.implementation.start"
+    )
+
+    assert continuation["workflow_command"] == "start_automation"
+    assert continuation["workflow_generation"] == described["governed"]["generation"]
+    assert continuation["target_ref"] == "change:CH-automation-bridge"
+    assert continuation["risk"] == "isolated_write"
+    assert described["workflow_description"]["executor_readiness"]["blocked"] == 0
+
+
 def test_interaction_context_rejects_stale_generation_without_mutation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
