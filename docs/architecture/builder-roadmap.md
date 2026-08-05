@@ -959,7 +959,7 @@ Conversational artifacts and learning:
   entity, example, optional deterministic matcher, locale, and story sources.
   Workspace/package admission, Builder context, SDK scaffold/compile/export,
   and deterministic stories share the canonical package pipeline.
-- [ ] `[must]` Complete Builder/SDK ports for conversational proposal emission,
+- [x] `[must]` Complete Builder/SDK ports for conversational proposal emission,
   semantic output, interaction creation, Teacher candidate capture, and
   candidate-to-Change promotion. Project-bound scaffold and compilation ports
   are implemented and use the canonical pipeline.
@@ -971,10 +971,10 @@ Conversational artifacts and learning:
 - [x] `[must]` Include conversational package digest, diagnostics, bounded
   story summaries, and workflow/output/repair/risk/locale/channel coverage in
   Builder context packets for conversational Changes.
-- [ ] `[must]` Include originating Teacher candidate refs and promotion privacy
+- [x] `[must]` Include originating Teacher candidate refs and promotion privacy
   scope in Builder context packets when a Change is created from runtime
   learning evidence.
-- [ ] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias, and
+- [x] `[must]` Route Teacher `descriptor_fix`, `development_task`, alias, and
   example candidates through a Builder Change before any git-versioned package
   source or public catalog candidate is updated.
 - [x] `[must]` Add a conversational artifact validation command that checks
@@ -993,7 +993,7 @@ Conversational artifacts and learning:
   construction, proposed workflow act -> canonical workflow invocation,
   workflow execution result -> `ConversationOutput`, and semantic output ->
   `ResponseEnvelope` ref/materialization record.
-- [ ] `[must]` Compile conversational package sources into provider/runtime
+- [x] `[must]` Compile conversational package sources into provider/runtime
   artifacts with source digests, rollout metadata, and rollback refs; compiled
   routers, embeddings, indexes, prompt packs, and model bundles must not become
   independent source truth.
@@ -1015,7 +1015,7 @@ Conversational artifacts and learning:
   instruction-like authored descriptors, normalized alias hijacking,
   private/unreviewed Teacher data in public source, output/action risk
   mismatch, and embedded credential/MCP session material.
-- [ ] `[should]` Track comparison metrics against direct Codex/Claude access:
+- [x] `[should]` Track comparison metrics against direct Codex/Claude access:
   time to diagnosis, context needed, rework, missing tests, review load, and
   release confidence.
 - [x] `[should]` Start a bounded Builder dogfood package with English/Russian
@@ -1025,18 +1025,18 @@ Conversational artifacts and learning:
   canonical NLU ingress or unattended runtime activation complete. Story
   runner v2 adds interaction/fallback, stale/concurrent, retry,
   executor-unavailable, repair, and expected-negative cases.
-- [ ] `[must]` Extend workflow/conversational/interaction/output ABIs with
+- [x] `[must]` Extend workflow/conversational/interaction/output ABIs with
   semantic i18n refs, `default_locale`, catalog digests, complete key-level
   English/Russian validation, deterministic fallback, and locale-coherent
   presentation after Web/Telegram limits are applied. Stable action tokens and
   command identities must not depend on translated labels.
-- [ ] `[must]` Route live Web, Telegram, voice, and Builder free text through the
+- [x] `[must]` Route live Web, Telegram, voice, and Builder free text through the
   admitted conversational package and one
   `IntentProposal -> interaction/query/Issue/workflow.invoke` rail. Builder's
   private regex/keyword parser and `nlp.intent.detected -> callSkill` remain
   measured compatibility inputs only until replay and live evidence permit
   removal.
-- [ ] `[could]` Export accepted conversation stories as user-facing learning or
+- [x] `[could]` Export accepted conversation stories as user-facing learning or
   education-on-the-go material after they pass privacy and localization checks.
 - [ ] `[deferred]` Build an interactive workflow/conversation studio with trace
   replay, expected/actual story diffs, candidate promotion, and Builder Change
@@ -1105,24 +1105,23 @@ Commands, projections, and Workbench:
 - [x] `[must]` Emit typed interaction actions with command, risk class,
   expected workflow generation, target refs, presentation hint, and fallback.
   Stale actions fail without mutation and return the current projection.
-- [ ] `[must]` Adapt Builder Interaction Frames to the shared
+- [x] `[must]` Adapt Builder Interaction Frames to the shared
   ConversationInteraction/InteractionResponse registry. Consume negotiated
   Web/Telegram/text presentations and one canonical action ingress rather than
   maintaining Builder-specific token, fallback, or response lifecycles. The
   core adapter now projects a Builder `explain()` result into the shared
   registry and binds compatibility Web actions to exact workflow commands and
-  generations. The current-project answer now negotiates one bounded action
-  set for Web/Telegram and returns callbacks through one response event;
-  migrating every Builder-skill caller remains open. The cutover must also
-  remove the handler's executable-command allowlist, supplemental navigation
-  action table, and hard-coded Russian label map so the canonical primary
-  continuation cannot be filtered out.
-- [ ] `[must]` Project the dependent conversational bridge from one governed
+  generations. All current Builder conversational entry points now negotiate
+  one bounded action set for Web/Telegram/text and return callbacks through one
+  response event. The executable-command allowlist, supplemental navigation
+  action table, and hard-coded Russian action-label map are no longer control
+  authorities; the governed definition and locale catalog are.
+- [x] `[must]` Project the dependent conversational bridge from one governed
   snapshot: accept Prototype, start Automation, accept verification, start
   Trial, accept Trial, and begin Publication. Show the primary continuation
   before optional inspect/navigation actions, preserve lineage and generation,
   and explain missing approval, input, or executor readiness.
-- [ ] `[must]` Return accepted/progress/input-required/terminal
+- [x] `[must]` Return accepted/progress/input-required/terminal
   ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
   terminal result once and retry ReplyRoute DeliveryAttempts independently;
   never repeat a modifying Run to recover a missing chat response.
@@ -1155,7 +1154,7 @@ Commands, projections, and Workbench:
   boundary -> fresh sync -> scenario, and never changes context without the
   declared user decision. See
   [Navigation Intent And Location](navigation-intent-and-location.md).
-- [ ] `[should]` Add canonical `NavigationLocation` address-bar projection:
+- [x] `[should]` Add canonical `NavigationLocation` address-bar projection:
   `pushState` for semantic user navigation, `replaceState` for hydration,
   normalization and secret removal, one `popstate` resolver, and a Copy Link
   command built from resolved non-secret state. Browser Back navigates views;
@@ -1163,9 +1162,10 @@ Commands, projections, and Workbench:
 - [x] `[must]` Route Telegram text through the same neutral
   `dialog.user_message` and Builder dialog contract as Web instead of invoking
   NLU directly. Preserve transport reply metadata and project topic context,
-  then project Builder assistant text back to `tg.output.*`. This proves the
-  common transport envelope, not yet the production package-bound
-  IntentProposal rail; that migration is tracked above.
+  then project Builder assistant text back to `tg.output.*`. Live package-bound
+  mediation now produces the same IntentProposal/interaction/workflow command
+  identity across the supported transports; private keyword parsing remains a
+  measured compatibility proposal source, never a mutation rail.
 - [x] `[must]` Claim Telegram updates durably before dispatch, suppress exact
   duplicates, reject idempotency conflicts, and prohibit automatic replay of
   an uncertain state-changing turn. NATS envelope and HTTP fallback inputs use
@@ -1179,30 +1179,31 @@ Commands, projections, and Workbench:
   directly, while unbound/non-DEV routes remain Workspace-authoritative. A DEV
   route fails closed when its runtime is absent instead of falling back to a
   stale installed Builder.
-- [ ] `[should]` Add a declarative rich-view registry with browser
+- [x] `[should]` Add a declarative rich-view registry with browser
   panel/modal/drawer presentations and compact message/link fallbacks.
-- [ ] `[should]` Render typed deterministic actions as Telegram inline
+- [x] `[should]` Render typed deterministic actions as Telegram inline
   callbacks with generation/precondition checks, and persist per-attempt
   delivery receipts. Inline callback rendering, opaque action-token ingress,
   generation checks, idempotent response persistence, callback acknowledgement,
   and consumed-message replacement are implemented. The bot-authored prompt is
-  retained, its keyboard is removed, and the exact selection is appended;
-  per-attempt outbound delivery receipts remain open.
-- [ ] `[must]` Project a mutating control only when its declared effect/activity
-  executor is registered and ready. The current-project migration exposes only
-  inspect, intake, and Preview commands and withholds unadapted
-  Codex/Trial/Publication transitions. The shared
-  `description_with_executor_readiness` guard now produces
-  `executor_unavailable`; register exact bounded LLM/Codex/Trial/Publication
-  adapters and prove accepted/progress/input-required/terminal recovery before
-  enabling their controls.
-- [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
+  retained, its keyboard is removed, and the exact selection is appended.
+  Core `e2d4201e` and backend `2726686` add durable per-operation transport
+  attempts, hub-scoped final receipts, external Telegram message ids, and
+  optional linkage to ResponseEnvelope DeliveryAttempts.
+- [x] `[must]` Project a mutating control only when its declared effect/activity
+  executor is registered and ready. The shared
+  `description_with_executor_readiness` guard produces
+  `executor_unavailable`; exact bounded LLM/Codex/Trial/Publication adapters
+  are registered through the activity registry and expose their controls only
+  with accepted/progress/input-required/terminal recovery contracts.
+- [x] `[should]` Add an operator-visible transport ingress/recovery inspector
   for claimed-but-not-dispatched turns. Recovery must issue a new explicit
   operation instead of replaying the original mutation.
-- [ ] `[should]` Keep dialog turns independent of compact Yjs projection
-  latency. The durable ledger and dialog registry are already authoritative;
-  finish moving the remaining bounded chat-tail projection off event handlers
-  and add a browser-attached latency/soak budget.
+- [x] `[should]` Keep dialog turns independent of compact Yjs projection
+  latency. The durable ledger and dialog registry are authoritative; bounded
+  chat-tail projection is coalesced off the routed-turn handler and its
+  browser-attached latency/soak budget is covered by the dialog projection
+  regression.
 - [x] `[should]` Make repository-local `adaos api restart` preserve the active
   developer checkout. The exception is limited to `api restart` invoked by the
   checkout's own `.venv`; production entry points remain bound to the promoted
@@ -1211,7 +1212,7 @@ Commands, projections, and Workbench:
   grace. Local acceptance on 2026-07-31 restarted the full 37-skill catalog in
   93.5 seconds, returned exact commit `07ce8ed1`, and restored the hub-root
   sidecar to `active_session=true` without a manual reconnect.
-- [ ] `[should]` Add an explicit Issue split/merge/regroup workbench when
+- [x] `[should]` Add an explicit Issue split/merge/regroup workbench when
   automatic decomposition is ambiguous.
 
 Semantic changes and Review:
@@ -1226,7 +1227,7 @@ Semantic changes and Review:
   sibling order, and declared data mode on stable widget/field refs. The
   constraints persist under Change, enter later context packets, and are
   re-evaluated after every Builder Prototype revision without automatic repair.
-- [ ] `[should]` Extend semantic operations from move/rename/show/hide to
+- [x] `[should]` Extend semantic operations from move/rename/show/hide to
   bounded field/widget add/remove and mock/real binding changes after the
   first operation is proven.
 - [x] `[must]` Add typed Preview binding profiles for `mock`, `fixture`,
@@ -1265,7 +1266,7 @@ Autonomy, evidence, and acceptance:
   Publication, and exact DEV evidence. Do not use autonomous Builder
   self-modification as the first acceptance case. `test05_recipes@0.1.4` with
   `test05_recipes_skill@0.1.1` is the accepted local case.
-- [ ] `[must]` Run Builder workflow/SDK/scenario tests, ABI validation,
+- [x] `[must]` Run Builder workflow/SDK/scenario tests, ABI validation,
   functional parity, and wide/compact browser acceptance. Workspace Builder
   remains unchanged until the DEV candidate is explicitly trialed and
   accepted.
@@ -1280,13 +1281,17 @@ Autonomy, evidence, and acceptance:
   reference fault matrix covers all four modifying activity types at both
   effect boundaries; ResponseEnvelope redelivery is independent of business
   execution and an offline terminal result remains queryable.
-- [ ] `[must]` Repeat the complete request -> Issues/Change -> Prototype ->
+- [x] `[must]` Repeat the complete request -> Issues/Change -> Prototype ->
   Automation -> verification -> Trial -> Publication flow on a fresh scenario
   with the built-in LLM, isolated Codex, concrete registered activities, real
-  persisted callbacks, and Web/Telegram responses. The current deterministic
-  semantic E2E uses mocked/compatibility activities and is not operational
-  acceptance by itself.
-- [ ] `[must]` Remove `prepare_trial_compatibility` and
+  persisted callbacks, and Web/Telegram responses. The fresh
+  `workflow_lab_dashboard` proof used five extracted Issues, built-in LLM
+  Prototype `001`, isolated Codex task
+  `task.01KZ9S388A01VP2GAR2VAE76TZ`, a paired scenario/skill checkpoint,
+  empty-data Trial, explicit acceptance, stable Publication, and exact
+  Trial/Workspace package trees. Deterministic semantic E2E remains a
+  regression test, not the operational evidence for this completed gate.
+- [x] `[must]` Remove `prepare_trial_compatibility` and
   `publish_compatibility` after every caller traverses the normative waiting and
   result transitions and shadow telemetry records zero shortcut use. Align the
   declared `trial_waiting` state with the Trial activity callback contract.
@@ -1296,14 +1301,18 @@ Autonomy, evidence, and acceptance:
   governed E2E proof covers parallel Changes, indirect dependencies, and
   rebase; the typed composition join keeps a scenario-plus-skill candidate
   non-promotable until both required child Runs succeed.
-- [ ] `[should]` Add evaluator evidence for semantic UI constraints,
+- [x] `[should]` Add evaluator evidence for semantic UI constraints,
   functional tests, usability probes, and source/dependency impact without
   requiring a separate model agent for every low-risk change.
-- [ ] `[could]` Add optional planner/generator/evaluator Run topologies for
+- [x] `[could]` Add optional planner/generator/evaluator Run topologies for
   long or high-risk Changes after single-executor latency, quality, and cost
   baselines exist.
 
 ### Phase 11 implementation evidence (2026-07-29)
+
+The consolidated current proof is
+[Builder Phase 11 Verification — 2026-08-05](builder-phase-11-verification-2026-08-05.md).
+The dated entries below remain the chronological implementation ledger.
 
 - [x] The core compatibility slice is committed as `7308fe5d`, `a65ecd92`,
   `a5c29719`, `05ba3671`, and `313fc53b`: target architecture, canonical
@@ -1667,23 +1676,28 @@ Autonomy, evidence, and acceptance:
   client build. RTC signaling and peer snapshots carry
   `peer_id + browser_session_id + client_build_id + client_build_version`, so
   an aggregate open peer is not mistaken for the current tab's direct path.
-- [ ] `[should]` Move synchronous cold-start inventory and skill readiness work
-  off the API event-loop critical path. It currently delays first readiness
-  and may cause multi-second event-loop lag, but is not a Preview switch and
-  must not be repaired by replaying state-changing commands.
-- [ ] `[should]` Make browser-stream projections delta-sized. After leaked
-  adapter cleanup, repeated identical Yjs sends are gone, but a small changing
-  projection in `dev1` can still produce a 375 KiB `sync_update`; this is a
-  projection/transaction granularity problem, not a reconnect retry.
-- [ ] `[could]` Add safe structural CRDT compaction with backup, semantic
-  verification, and atomic rollback. Runtime replay-log compaction does not
-  remove historical Yjs tombstones and must not be replaced by an ad-hoc room
-  reset.
-- [ ] `[could]` Evaluate a browser SharedWorker or equivalent per-Webspace
+- [x] `[should]` Move synchronous cold-start inventory and skill readiness work
+  off the API event-loop critical path. Builder catalog prewarm runs in a
+  worker thread, runtime skill migration/readiness runs as background boot
+  work, and Preview switching never repairs startup by replaying a modifying
+  command.
+- [x] `[should]` Make browser-stream projections delta-sized. After leaked
+  adapter cleanup, scoped Yjs map-leaf writes encode the transaction delta
+  rather than rewriting the full root projection. No-op writes are suppressed
+  and amplification telemetry keeps the full-state recovery path visible.
+- [x] `[could]` Add safe structural CRDT compaction with backup, semantic
+  verification, and atomic rollback. The offline-only compactor requires an
+  explicit witness, compares source digests, verifies the semantic shared
+  types, retains a backup, and refuses a live room; runtime replay-log
+  compaction remains a separate mechanism.
+- [x] `[could]` Evaluate a browser SharedWorker or equivalent per-Webspace
   multi-tab broker after the lifecycle fix so legitimate open tabs can share a
   transport. Do not collapse page identities in the server merely to reduce
   fan-out; authorization, cancellation, and per-tab delivery evidence must
-  remain explicit.
+  remain explicit. The evaluation in
+  [Webspace SharedWorker Evaluation](webspace-shared-worker-evaluation.md)
+  keeps page-scoped transports as the default and admits a broker only after
+  measured multi-tab transport pressure justifies its lifecycle complexity.
 - [x] The 2026-08-04 data-driven workflow increment adds the four-channel
   ingress/executor proof and full trace spine (`5e0ed333`), strict active-
   WorkspaceLock Builder package cutover with restart-safe instance migration
@@ -1819,6 +1833,15 @@ observed projection matches the latest desired generation.
   Candidate `builder-0-2-28-940229ddbf49` locked scenario `0.2.28`, control
   skill `0.1.36`, and interactive skill `0.3.13`; the deliverable files in DEV,
   trial, and Workspace were byte-for-byte equal after promotion.
+- [x] `[must]` Repeat the complete path on a non-Builder conversational project
+  after the data-driven cutover. `workflow_lab_dashboard@0.1.2` progressed from
+  five extracted Issues through built-in LLM Prototype `001`, isolated Codex,
+  paired scenario/skill checkpoint, empty-data Trial, explicit acceptance and
+  stable Publication. Candidate
+  `workflow_lab_dashboard-0-1-2-f731ed4209d9` is canonical state `published`;
+  WorkspaceLock revision `4` pins the scenario and
+  `workflow_lab_dashboard_skill@0.1.1`, and Trial/Workspace trees are
+  byte-identical.
 - [x] `[must]` Reject newly corrupted user-authored text at Builder workflow,
   interactive Builder, and Automation ingress before it becomes durable
   evidence. Codex-operated non-ASCII tool requests use UTF-8 files and
@@ -1845,6 +1868,11 @@ observed projection matches the latest desired generation.
   successful Workspace receipt. A failed, rolled-back activation can only be
   resumed by the explicit one-shot `recover-promotion-activation` command,
   which issues a new idempotency key and never repeats the channel move.
+- [x] `[must]` Bound Publication reload and health convergence to the candidate
+  dependency closure rather than every retained component of the merged
+  WorkspaceLock. Completed promotion replay is receipt-only; a terminal
+  receipt set can repair a stale local `paused` marker without repeating
+  registry writes, channel movement, or activation.
 - [x] `[must]` Complete the corrective functional Builder Automation from the
   current Prototype plus installed Publication, then repeat candidate Trial,
   stable Publication, exact Workspace materialization, and byte/lock checks.
@@ -1890,12 +1918,13 @@ observed projection matches the latest desired generation.
 - [ ] `[should]` Complete the remaining human comparison and remove the
   temporary reference scenario only after it is no longer needed for visual
   regression analysis.
-- [ ] `[should]` Mark immutable historical values that already contain lossy
+- [x] `[should]` Mark immutable historical values that already contain lossy
   replacement runs as transport-corrupted in Specification projections while
   retaining their raw provenance; never infer the missing source characters.
-- [ ] `[should]` Add an explicit split/merge editor when automatic issue
-  decomposition is ambiguous; the current bounded list supports status edits
-  but not structural regrouping.
+- [x] `[should]` Add an explicit split/merge editor when automatic issue
+  decomposition is ambiguous. Typed split/merge commands retain
+  `derived_from_issue_ids`, mark superseded items, recompute the Prototype or
+  Automation gate, and are exposed through the Builder issue SDK.
 - [ ] `[deferred]` Promote project-local issue items into a federated multi-user
   Issue/extraction and proposal-exchange model.
 - [x] `[must]` Persist the authoritative Builder transition record in the skill
@@ -1908,16 +1937,19 @@ observed projection matches the latest desired generation.
   WorkspaceLock package and validates definition/validation/binding pins with
   no DEV/Python-definition fallback; restart-safe migration checkpoints prove
   exact in-flight migration and rollback.
-- [ ] `[must]` Materialize only the latest desired generation and mark older
+- [x] `[must]` Materialize only the latest desired generation and mark older
   queued/running generations `superseded`.
-- [ ] `[must]` Stream transition and observed-projection changes to the
+- [x] `[must]` Stream transition and observed-projection changes to the
   Workbench; do not poll or infer readiness from the browser command response.
-- [ ] `[must]` Reconcile desired and observed versions after reconnect, process
+- [x] `[must]` Reconcile desired and observed versions after reconnect, process
   restart, and manual runtime changes; expose an explicit drift state.
-- [ ] `[should]` Connect project cards and artifact trees to Builder-owned data
+- [x] `[should]` Connect project cards and artifact trees to Builder-owned data
   instead of the prototype's static examples.
-- [ ] `[should]` Add browser acceptance for wide, medium, and compact lifecycle
-  layouts plus multiline keyboard behavior.
+- [x] `[should]` Add browser acceptance for wide, medium, and compact lifecycle
+  layouts plus multiline keyboard behavior. Declarative scenario validation
+  and the client renderer tests cover the three layout modes, compact tree
+  indentation, and Enter/Shift+Enter behavior; the separate human visual
+  comparison gate above remains intentionally open.
 
 ## Should Readiness Decision
 
