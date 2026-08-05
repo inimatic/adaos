@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -25,6 +26,19 @@ _VERSION_PATTERN = re.compile(
 
 def _yaml_text(value: Mapping[str, Any]) -> str:
     return yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=False)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Atomically replace a path despite transient Windows scanner locks."""
+
+    for attempt in range(6):
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 def _project_root(kind: ArtifactKind, project_id: str) -> Path:
@@ -253,14 +267,14 @@ def scaffold_package(
             destination = temporary_dir / relative
             destination.write_text(_yaml_text(payload), encoding="utf-8")
             generated_files.append(f"conversational/{relative}")
-        temporary_dir.replace(package_dir)
+        _replace_with_retry(temporary_dir, package_dir)
         package_installed = True
 
         if component_path.read_bytes() != component_raw:
             raise RuntimeError(f"{manifest_name} changed while the package was being generated")
         component["conversational"] = {"manifest": "conversational/manifest.yaml"}
         temporary_manifest.write_text(_yaml_text(component), encoding="utf-8")
-        temporary_manifest.replace(component_path)
+        _replace_with_retry(temporary_manifest, component_path)
     except Exception:
         temporary_manifest.unlink(missing_ok=True)
         if temporary_dir.exists():
