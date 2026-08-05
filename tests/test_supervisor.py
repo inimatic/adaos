@@ -1484,6 +1484,78 @@ def test_required_upstream_link_uses_node_role_before_transition_role(monkeypatc
     assert payload["current_owner"] == "sidecar"
 
 
+def test_required_upstream_link_uses_ready_sidecar_handoff_over_stale_route_degradation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._hub_root_watchdog_last_state = "degraded"
+    manager._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(supervisor, "realtime_sidecar_enabled", lambda *, role=None: role == "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_sidecar_runtime_payload",
+        lambda: {
+            "enabled": True,
+            "status": "ready",
+            "remote_session_state": "ready",
+            "transport_ready": True,
+            "route_tunnel_contract": {
+                "ws": {
+                    "current_owner": "sidecar",
+                    "listener_ready": True,
+                    "handoff_ready": True,
+                    "blockers": [],
+                },
+                "yws": {
+                    "current_owner": "sidecar",
+                    "listener_ready": True,
+                    "handoff_ready": True,
+                    "blockers": [],
+                },
+            },
+        },
+    )
+
+    payload = manager._required_upstream_link_state_payload(role="hub")
+
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+    assert payload["handoff_state"] == "ready"
+    assert payload["handoff_ready"] is True
+    assert payload["served_by"] == "supervisor_sidecar"
+    assert payload["watchdog"]["last_state"] == "degraded"
+
+
+def test_required_upstream_link_does_not_hide_failed_sidecar_transport(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._hub_root_watchdog_last_state = "degraded"
+    manager._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(supervisor, "realtime_sidecar_enabled", lambda *, role=None: role == "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_sidecar_runtime_payload",
+        lambda: {
+            "enabled": True,
+            "status": "degraded",
+            "remote_session_state": "down",
+            "transport_ready": False,
+            "route_tunnel_contract": {
+                "ws": {"current_owner": "sidecar", "listener_ready": True, "handoff_ready": True},
+                "yws": {"current_owner": "sidecar", "listener_ready": True, "handoff_ready": True},
+            },
+        },
+    )
+
+    payload = manager._required_upstream_link_state_payload(role="hub")
+
+    assert payload["state"] == "degraded"
+    assert payload["ready"] is False
+    assert payload["handoff_ready"] is False
+    assert payload["served_by"] == "supervisor"
+
+
 def test_read_jsonl_tail_uses_bounded_tail_window(tmp_path) -> None:
     path = tmp_path / "watchdog.jsonl"
     lines = [{"i": i, "payload": "x" * 20} for i in range(10)]

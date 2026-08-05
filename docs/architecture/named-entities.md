@@ -610,6 +610,16 @@ substitute for post-deploy event-loop soak measurements.
 
 The UI should call a shared name resolver instead of duplicating fallback rules.
 
+Assistant chrome is a subnet label, not a hub-node label. Its authoritative
+source is `.adaos/node.yaml: subnet.names`, exposed as
+`GET /api/subnet/alias` with the `adaos.subnet.identity.v1` contract
+(`subnet_id`, `subnet_names`, `primary_subnet_name`). The same endpoint accepts
+`POST` for Settings mutations and returns the resulting identity. Clients must
+not derive an assistant name from `node_names`, `primary_node_name`,
+`hub_name`, a generic `name`, or a profile `display_name`; those fields name
+different entities. Cached assistant labels are subnet-scoped hints and are
+replaced by this authoritative read after connecting or switching subnets.
+
 For node/device labels:
 
 - Use `display_name` when present.

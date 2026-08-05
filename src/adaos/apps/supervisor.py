@@ -5136,6 +5136,39 @@ class SupervisorManager:
         role_norm = str(role or "").strip().lower()
         return "member_hub" if role_norm == "member" else "hub_root"
 
+    @staticmethod
+    def _hub_root_sidecar_handoff_evidence(sidecar_runtime: Any) -> dict[str, Any]:
+        sidecar = sidecar_runtime if isinstance(sidecar_runtime, dict) else {}
+        route_tunnel = (
+            sidecar.get("route_tunnel_contract")
+            if isinstance(sidecar.get("route_tunnel_contract"), dict)
+            else {}
+        )
+        blockers: list[str] = []
+        route_ready: dict[str, bool] = {}
+        for kind in ("ws", "yws"):
+            entry = route_tunnel.get(kind) if isinstance(route_tunnel.get(kind), dict) else {}
+            entry_blockers = [str(item).strip() for item in list(entry.get("blockers") or []) if str(item).strip()]
+            blockers.extend(f"{kind}: {item}" for item in entry_blockers)
+            route_ready[kind] = (
+                str(entry.get("current_owner") or "").strip().lower() == "sidecar"
+                and bool(entry.get("listener_ready"))
+                and bool(entry.get("handoff_ready"))
+                and not entry_blockers
+            )
+        status = str(sidecar.get("status") or "").strip().lower()
+        remote_state = str(sidecar.get("remote_session_state") or "").strip().lower()
+        transport_ready = bool(sidecar.get("transport_ready")) or status == "ready" or remote_state == "ready"
+        enabled = bool(sidecar.get("enabled"))
+        ready = enabled and transport_ready and route_ready.get("ws", False) and route_ready.get("yws", False)
+        return {
+            "ready": ready,
+            "state": "ready" if ready else (status or remote_state or "unknown"),
+            "transport_ready": transport_ready,
+            "routes": route_ready,
+            "blockers": blockers,
+        }
+
     def _required_upstream_link_state_payload(self, *, role: str | None = None) -> dict[str, Any]:
         transition_role = str(self._managed_transition_role or "").strip().lower()
         managed_role = transition_role if transition_role in {"hub", "member"} else None
@@ -5164,7 +5197,7 @@ class SupervisorManager:
             planned_owner = "runtime"
             future_owner = "sidecar"
             continuity_mode = "runtime_bound"
-        return {
+        result = {
             "kind": kind,
             "role": role_norm,
             "owner": "supervisor",
@@ -5185,6 +5218,29 @@ class SupervisorManager:
             "watchdog": dict(payload),
             "blockers": [],
         }
+        if kind == "hub_root" and sidecar_enabled:
+            try:
+                evidence = self._hub_root_sidecar_handoff_evidence(self._runtime_sidecar_runtime_payload())
+            except Exception:
+                evidence = {"ready": False, "state": "unknown", "blockers": []}
+            result["handoff_state"] = str(evidence.get("state") or "unknown")
+            result["handoff_ready"] = bool(evidence.get("ready"))
+            reason = str(result.get("reason") or "").strip().lower()
+            if (
+                not ready
+                and bool(evidence.get("ready"))
+                and "browser route degraded" in reason
+                and not list(result.get("blockers") or [])
+            ):
+                result.update(
+                    {
+                        "state": "ready",
+                        "reason": "sidecar browser route handoff is ready after stale runtime route degradation",
+                        "ready": True,
+                        "served_by": "supervisor_sidecar",
+                    }
+                )
+        return result
 
     def _required_upstream_link_snapshot(
         self,

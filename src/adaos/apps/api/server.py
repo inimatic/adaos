@@ -1407,6 +1407,22 @@ class SetAliasRequest(BaseModel):
     webspace_id: str | None = Field(default=None, max_length=128)
 
 
+def _subnet_identity_payload() -> dict[str, Any]:
+    conf = get_ctx().config
+    subnet_id = str(getattr(conf, "subnet_id", "") or "").strip()
+    primary_name = str(load_subnet_alias(subnet_id=subnet_id) or "").strip()
+    names = [primary_name] if primary_name else []
+    return {
+        "schema": "adaos.subnet.identity.v1",
+        "subnet_id": subnet_id,
+        "subnet_names": names,
+        "primary_subnet_name": primary_name,
+        # Compatibility with the existing alias mutation response. New clients
+        # must use the explicitly subnet-scoped fields above.
+        "alias": primary_name or None,
+    }
+
+
 class ShutdownRequest(BaseModel):
     reason: str = Field(default="cli.stop", min_length=1, max_length=128)
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
@@ -1504,6 +1520,11 @@ def _schedule_promoted_runtime_service_start(reason: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/subnet/alias")
+async def get_alias(token=Depends(require_token)):
+    return {"ok": True, **_subnet_identity_payload()}
+
+
 @app.post("/api/subnet/alias")
 async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
     try:
@@ -1552,7 +1573,11 @@ async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
             )
         except Exception:
             pass
-        return {"ok": True, "alias": body.alias, "projection_refreshed": projection_refreshed}
+        return {
+            "ok": True,
+            **_subnet_identity_payload(),
+            "projection_refreshed": projection_refreshed,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

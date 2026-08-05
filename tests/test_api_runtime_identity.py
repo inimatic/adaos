@@ -197,6 +197,38 @@ def test_node_status_overlays_fresh_sidecar_runtime(monkeypatch) -> None:
     assert supervisor_runtime["runtime"]["sidecar_source"] == "reliability.sidecar_runtime_snapshot"
 
 
+def test_subnet_identity_is_distinct_from_hub_node_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                subnet_id="sn_92ffc943",
+                node_names=["homepoint"],
+                primary_node_name="homepoint",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "load_subnet_alias",
+        lambda *, subnet_id=None: "ruhub" if subnet_id == "sn_92ffc943" else None,
+    )
+
+    payload = asyncio.run(api_server.get_alias())
+
+    assert payload == {
+        "ok": True,
+        "schema": "adaos.subnet.identity.v1",
+        "subnet_id": "sn_92ffc943",
+        "subnet_names": ["ruhub"],
+        "primary_subnet_name": "ruhub",
+        "alias": "ruhub",
+    }
+    assert "node_names" not in payload
+    assert "primary_node_name" not in payload
+
+
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
 def test_private_network_access_middleware_allows_cross_origin_loopback_probe(origin: str) -> None:
     scope = {
