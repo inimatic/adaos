@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.evaluation_evidence.v1",
+  "title": "AdaOS Builder Evaluation Evidence",
+  "type": "object",
+  "required": ["schema", "evidence_id", "change_id", "status", "categories", "summary"],
+  "properties": {
+    "schema": { "const": "adaos.builder.evaluation_evidence.v1" },
+    "evidence_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "status": { "enum": ["passed", "failed", "incomplete"] },
+    "categories": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["category", "status", "required", "checks"],
+        "properties": {
+          "category": { "enum": ["semantic_constraints", "functional_tests", "usability_probes", "dependency_impact"] },
+          "status": { "enum": ["passed", "failed", "missing", "not_applicable"] },
+          "required": { "type": "boolean" },
+          "checks": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["required_passed", "required_total", "confidence"],
+      "properties": {
+        "required_passed": { "type": "integer", "minimum": 0 },
+        "required_total": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "evidence_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}
