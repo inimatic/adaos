@@ -773,9 +773,9 @@ def _build_hub_route_http_bases(
         bases.append(runtime_port_base)
     if runtime_port.isdigit():
         bases.append(f"http://127.0.0.1:{runtime_port}")
+    bases.extend(state_bases)
     _append_local_http_base(bases, env_base)
     _append_local_http_base(bases, cfg_base)
-    bases.extend(state_bases)
 
     if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base()
@@ -817,12 +817,12 @@ def _build_hub_route_ws_bases(
     if runtime_port_base:
         _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
         bases.append(_http_base_to_ws_base(runtime_port_base))
+    for state_base in state_bases:
+        bases.append(_http_base_to_ws_base(state_base))
     if env_base and _is_local_http_base(env_base):
         bases.append(_http_base_to_ws_base(env_base))
     if cfg_base and _is_local_http_base(cfg_base):
         bases.append(_http_base_to_ws_base(cfg_base))
-    for state_base in state_bases:
-        bases.append(_http_base_to_ws_base(state_base))
 
     if not runtime_port_base and not state_bases:
         active_runtime_base = _discover_active_runtime_local_base()

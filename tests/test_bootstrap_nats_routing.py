@@ -705,6 +705,58 @@ def test_build_hub_route_http_bases_prefers_process_runtime_port_over_stale_stat
     ]
 
 
+def test_build_hub_route_http_bases_prefers_supervisor_state_over_legacy_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
+    monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setenv("ADAOS_API_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_active_runtime_state_local_http_bases",
+        lambda ctx=None: ["http://127.0.0.1:8778"],
+    )
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_discover_active_runtime_local_base",
+        lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+    )
+
+    cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
+
+    assert bootstrap_mod._build_hub_route_http_bases(
+        path_norm="/api/node/reliability/summary",
+        method="GET",
+        cfg=cfg,
+    )[:2] == [
+        "http://127.0.0.1:8778",
+        "http://127.0.0.1:8777",
+    ]
+
+
+def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
+    monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_active_runtime_state_local_http_bases",
+        lambda ctx=None: ["http://127.0.0.1:8778"],
+    )
+    monkeypatch.setattr(bootstrap_mod, "realtime_sidecar_route_tunnel_ws_bases", lambda **_: [])
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_discover_active_runtime_local_base",
+        lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+    )
+
+    cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
+
+    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg, path="/ws")[:2] == [
+        "ws://127.0.0.1:8778",
+        "ws://127.0.0.1:8777",
+    ]
+
+
 def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert bootstrap_mod._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
     assert bootstrap_mod._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
