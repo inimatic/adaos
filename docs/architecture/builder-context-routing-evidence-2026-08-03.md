@@ -239,6 +239,31 @@ granularity, not the fixed identical-payload amplification. Structural Yjs
 history compaction also needs a transactional design; no live room was reset
 during this investigation.
 
+The next same-page raw-link trace exposed two startup-order defects rather than
+a scenario-switch defect. For one browser session the new document first
+registered and negotiated RTC in persisted Webspace `desktop`, then repeated
+the sequence in destination `dev1-dev`. In addition, YDoc initialization
+awaited direct transport before it created the YWS provider. This made
+authoritative state appear fresh at the server while the page remained
+`local-doc=unsynced:degraded` for the duration of ICE/DataChannel setup.
+
+Client startup now treats a same-zone and same-subnet `webspace.open` target as
+the initial room at the earliest AdaOS registration boundary. The subnet must
+be proven by the restored authorization hint or by the already routed
+`/hubs/<subnet>` base; a destination for another topology cannot override the
+stored room. Synchronization is relay-first: YWS attaches immediately, direct
+preparation runs asynchronously, and the existing isolated candidate probe
+promotes to WebRTC only after sync and stability. A failed or slow direct path
+therefore remains a quality downgrade, not a state-availability blocker.
+
+Entering a URL in the address bar still performs a full browser document
+navigation and necessarily destroys that page's old JavaScript/WebRTC peer.
+The invariant is that this page creates one replacement peer in the correct
+room, not that a browser process preserves a peer across document replacement.
+Other pages and devices in `dev1-dev` remain attached throughout, and the
+replacement page joins their one shared Yjs room. Focused regression suites
+pass 126/126 for YDoc and 29/29 for the early AdaOS route.
+
 Client commit `734023b` was first pushed to `main`; CI advanced the package to
 `0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
 pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra

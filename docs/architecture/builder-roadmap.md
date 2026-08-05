@@ -1546,6 +1546,15 @@ Autonomy, evidence, and acceptance:
   subsequent changes from that room.
   The observed `builder -> test04_recipes` runtime transition took 838 ms, so
   an already visible target must not remain obscured by a transport wait.
+- [x] `[must]` Make routed startup relay-first and direct-promoting. A verified
+  `webspace.open` destination is now used by the first member registration,
+  control socket and RTC peer instead of briefly attaching the page to its
+  persisted `desktop` room. YWS establishes the shared authoritative baseline
+  without waiting for ICE/DataChannels; WebRTC preparation runs concurrently
+  and replaces YWS only after an isolated make-before-break sync/stability
+  probe. This changes transport selection, not state ownership: every page and
+  device for one `webspace_id` still converges through the same Yjs document.
+  Focused YDoc and AdaOS client suites pass 126/126 and 29/29.
 - [x] `[must]` Correlate direct peers with the originating browser page and
   client build. RTC signaling and peer snapshots carry
   `peer_id + browser_session_id + client_build_id + client_build_version`, so

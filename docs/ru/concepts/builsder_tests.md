@@ -207,6 +207,16 @@ Project Builder или workflow. В URL используется `intent=webspac
     `peer_id + browser_session_id + client_build_id + client_build_version`.
     Агрегат `openYjsChannels > 0` от других вкладок не является доказательством
     direct-связи проверяемой вкладки.
+25. Находясь в `dev1-dev:builder`, открыть в той же вкладке точную raw-ссылку на
+    `dev1-dev:test04_recipes`. В журнале этой browser session первая
+    `device.register`, YWS room и WebRTC peer должны сразу относиться к
+    `dev1-dev`; промежуточного подключения к `desktop` быть не должно. YWS
+    обязан дать общий авторитетный baseline, не ожидая ICE/DataChannels.
+    WebRTC поднимается параллельно и заменяет relay только после успешной
+    make-before-break проверки. До продвижения допустим статус relay/recovering,
+    но не блокировка stateful UI при уже fresh YWS. Остальные вкладки и
+    устройства `dev1-dev` не переподключаются и продолжают получать изменения
+    из того же Yjs room.
 
 Контрольный результат 2026-08-04 для source build
 `0.1.667+4391.89ec14a3`: три подключённых WebRTC peer с открытым Yjs-каналом,
