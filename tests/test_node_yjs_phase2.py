@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib
 import sys
 import types
@@ -3747,8 +3748,16 @@ def test_webspace_runtime_apply_uses_effective_branch_fingerprints_fast_path(mon
         "data.desktop": ydoc.get_map("data")["desktop"],
         "data.webio": ydoc.get_map("data")["webio"],
     }
-    for _ in range(5):
-        runtime._apply_resolved_state_in_doc(ydoc, "default", resolved, inputs=inputs)
+    # A reload/reconnect producer is free to reconstruct equal Python objects.
+    # Semantic equality must still hit the no-op path and retain live Yjs
+    # identities instead of replacing four coarse roots on every observation.
+    for _ in range(32):
+        runtime._apply_resolved_state_in_doc(
+            ydoc,
+            "default",
+            copy.deepcopy(resolved),
+            inputs=copy.deepcopy(inputs),
+        )
 
     assert ydoc.get_map("ui")["application"] is stable_identity["ui.application"]
     assert ydoc.get_map("data")["catalog"] is stable_identity["data.catalog"]
