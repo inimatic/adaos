@@ -1556,6 +1556,15 @@ Autonomy, evidence, and acceptance:
   device for one `webspace_id` still converges through the same Yjs document.
   Focused YDoc and AdaOS client suites pass 126/126 and 29/29. Client
   `0.0.269+2a6d09f` was deployed by successful Firebase run `30988292760`.
+- [x] `[must]` Remove the control-channel wait and state-changing no-op from an
+  already satisfied Preview link. Startup now checks the authoritative
+  materialization endpoint in parallel with control setup and accepts it only
+  for an exact, ready, non-degraded Webspace/scenario snapshot. Mismatch,
+  timeout, unavailable evidence, or an unusable render snapshot fail closed to
+  the existing single `desktop.scenario.set`; an unsuccessful read does not
+  suppress the one-shot control-open continuation. Client commit `f9e9b96`
+  passes the combined 249/249 YDoc and navigation resolver tests and a
+  production build.
 - [x] `[must]` Correlate direct peers with the originating browser page and
   client build. RTC signaling and peer snapshots carry
   `peer_id + browser_session_id + client_build_id + client_build_version`, so

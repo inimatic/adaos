@@ -269,6 +269,17 @@ package to `0.0.269`. Firebase Hosting run `30988292760` completed successfully,
 and public `https://inimatic.com/version.json` reports
 `0.0.269+2a6d09f`.
 
+The next exact-target trace showed that the remaining six-second
+`Checking destination` interval was not a scenario transition. The runtime
+received `desktop.scenario.set` only after about 4.8 seconds of control setup
+and rejected it as `already_current_ready` in 13.8 ms; YWS and direct RTC then
+continued independently. Client commit `f9e9b96` adds a bounded read-only
+materialization proof in parallel with control connection. It accepts only the
+exact ready/non-degraded Webspace and scenario and applies that authoritative
+render snapshot; otherwise it preserves the former one-command transition.
+Focused exact/mismatch/unavailable cases and the complete App/YDoc navigation
+matrix pass 249/249, and the production bundle succeeds.
+
 Client commit `734023b` was first pushed to `main`; CI advanced the package to
 `0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
 pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra

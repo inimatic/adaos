@@ -106,15 +106,23 @@ is not yet confirmed, the client resumes its current location only for the
 zone/subnet handoff and enters the destination after that decision.
 
 When `expected_scenario_id` is present on an already confirmed subnet, startup
-performs exactly one idempotent `desktop.scenario.set` before joining the Yjs
-room. Until that command has prepared a scenario-consistent materialization,
-the renderer shows a bounded preparation state and must not expose the
-persisted/home scenario. Failure releases the hold into the normal explainable
-resolver; it does not retry the state-changing command.
+first performs a bounded read-only materialization preflight in parallel with
+control setup. The preflight is sufficient only when the server reports the
+exact Webspace and scenario, `ready` and non-degraded materialization, and a
+complete renderable snapshot. That proof closes destination resolution without
+issuing `desktop.scenario.set`; direct transport promotion remains independent.
+If any identity, readiness, or snapshot check is absent or differs, startup
+falls through to exactly one idempotent `desktop.scenario.set` before joining
+the Yjs room. Until either proof has prepared a scenario-consistent
+materialization, the renderer shows a bounded preparation state and must not
+expose the persisted/home scenario. Failure releases the hold into the normal
+explainable resolver; it does not retry the state-changing command.
 
 Control transport establishment and scenario preparation are separate
-protocol steps. If the initial control WebSocket cannot open, no scenario
-command has been attempted: startup records an observable
+protocol steps. A successful read-only exact-target proof does not require a
+control WebSocket and is not recorded as a mutation attempt. If that proof is
+unavailable or inconclusive and the initial control WebSocket cannot open, no
+scenario command has been attempted: startup records an observable
 `control_transport_unavailable` outcome and installs one one-shot continuation
 for the next confirmed control-session open. The continuation unregisters
 before it sends the command and first verifies that the URL still names the
