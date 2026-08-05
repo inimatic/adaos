@@ -1527,7 +1527,15 @@ Autonomy, evidence, and acceptance:
   passes the complete 125/125 YDoc suite.
 - [x] `[must]` Expose member-published public browser assets through the routed
   hub boundary. Backend `f2b018d` validates method, SHA-256 shards, digest, and
-  bounded filename before relaying; backend tests pass 19/19.
+  bounded filename before relaying; backend tests pass 19/19. Infra runs
+  `30979052485` and `30979428815` deployed the route and immutable cache
+  contract; the exact live blob passes byte-digest and UTF-8 JSON checks.
+- [x] `[must]` Prevent a root cutover from trapping the hub NATS reconnect loop
+  in unbounded route-tunnel cleanup. Core `0e836930` closes live tunnels
+  concurrently with bounded cleanup; 74/74 NATS routing tests pass and an
+  8-WS/7-YWS controlled reconnect restored the public route in 9.2 seconds.
+- [x] Client Infra run `30979460239` deployed the bounded startup continuation
+  as `0.0.266+ade734a`.
 - [ ] `[should]` Move synchronous cold-start inventory and skill readiness work
   off the API event-loop critical path. It currently delays first readiness
   and may cause multi-second event-loop lag, but is not a Preview switch and

@@ -169,6 +169,24 @@ leaving a URL-derived synthetic preparation state with no continuation. Client
 Cancelled short status probes are diagnostics of the same unavailable startup
 window, not evidence of a long-running scenario transition.
 
+Production acceptance on 2026-08-05 deployed backend commits `f2b018d` and
+`44a237a` through successful Infra runs `30979052485` and `30979428815`.
+The exact routed dictionary returns `200 application/json`, 9,657 bytes, and a
+byte SHA-256 equal to the URL digest; forged shards return `404` and `POST`
+returns `405`. The final response is classified as `asset` and carries
+`public, max-age=31536000, immutable`. Client run `30979460239` deployed
+`0.0.266+ade734a`.
+
+The deploy trace also exposed an independent reconnect boundary. A root
+cutover can terminate the hub's NATS route while live WebSocket tunnels are
+open. Sequential unbounded `ws.close()` calls kept the bridge inside
+`finalizing` and prevented its retry loop from running. Core commit `0e836930`
+closes all route tunnels concurrently behind one-second per-operation bounds.
+The complete NATS routing suite passes 74/74. With the corrected source runtime
+and 8 WS / 7 YWS sessions observed, a controlled reconnect moved from
+`finalizing` to `bridge connected` in 3.9 seconds and restored the public route
+in 9.2 seconds.
+
 The remaining same-peer `3x` payload was separately traced to protocol
 redundancy, not leaked clients: the gateway sent an eager effective-state
 replay, answered the client's `SYNC_STEP1`, and replayed once more after
