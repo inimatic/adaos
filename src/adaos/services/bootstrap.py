@@ -4791,8 +4791,34 @@ class BootstrapService:
                             pass
                     else:
                         await _sub(subj, cb=cb)
+                        receipt_subj = f"tg.receipt.{hub_id}"
+
+                        async def _telegram_receipt_cb(msg):
+                            try:
+                                receipt_payload = _json.loads(msg.data.decode("utf-8"))
+                            except Exception:
+                                receipt_payload = {}
+                            if not isinstance(receipt_payload, dict):
+                                return
+                            try:
+                                self.ctx.bus.publish(
+                                    Event(
+                                        type="tg.delivery.receipt",
+                                        payload=receipt_payload,
+                                        source="io.nats",
+                                        ts=time.time(),
+                                    )
+                                )
+                            except Exception:
+                                pass
+
+                        await _sub(receipt_subj, cb=_telegram_receipt_cb)
                         try:
-                            self._log.info("nats bridge subscribed subject=%s", subj)
+                            self._log.info(
+                                "nats bridge subscribed subjects=%s,%s",
+                                subj,
+                                receipt_subj,
+                            )
                         except Exception:
                             pass
 

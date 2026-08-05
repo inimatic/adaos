@@ -7,6 +7,61 @@ from collections.abc import Mapping
 from typing import Any
 
 from adaos.services.agent_context import get_ctx
+from adaos.services import durable_delivery, telegram_delivery
+
+
+def _claim_response_delivery(
+    *,
+    payload: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    operation_key: str,
+    hub_id: str,
+    bot_id: str,
+    chat_id: str,
+    message_count: int,
+) -> dict[str, Any] | None:
+    """Claim transport delivery without making projection depend on the DB.
+
+    Direct chat responses still receive a Telegram transport attempt.  When a
+    durable ResponseEnvelope is present, the transport attempt is additionally
+    linked to its authorized Telegram ReplyRoute/DeliveryAttempt.
+    """
+
+    envelope_id = str(meta.get("response_envelope_id") or "").strip() or None
+    durable_attempt: dict[str, Any] | None = None
+    if envelope_id:
+        try:
+            envelope = durable_delivery.get_envelope(envelope_id)
+            for route_id in (envelope or {}).get("reply_route_ids") or []:
+                route = durable_delivery.get_reply_route(str(route_id))
+                if not route or str(route.get("transport") or "").lower() not in {"telegram", "tg"}:
+                    continue
+                destination = route.get("destination_ref") if isinstance(route.get("destination_ref"), Mapping) else {}
+                if str(destination.get("chat_id") or chat_id) != chat_id:
+                    continue
+                durable_attempt = durable_delivery.claim_delivery(
+                    envelope_id,
+                    str(route_id),
+                    presentation_id=operation_key,
+                )
+                break
+        except Exception:
+            durable_attempt = None
+    try:
+        return telegram_delivery.claim_outbound(
+            operation_key,
+            hub_id=hub_id or "hub",
+            bot_id=bot_id,
+            chat_id=chat_id,
+            message_count=message_count,
+            response_envelope_id=envelope_id,
+            durable_attempt_id=str((durable_attempt or {}).get("attempt_id") or "").strip() or None,
+        )
+    except Exception:
+        # Transport projection stays available during early bootstrap and
+        # read-only tests where the durable SQLite context is intentionally
+        # absent. Runtime diagnostics still expose a missing receipt identity.
+        return None
 
 
 def _telegram_text_chunks(text: str, *, limit: int = 3500) -> list[str]:
@@ -85,6 +140,15 @@ def _telegram_output_projection(
             f"{chat_id}:{text}:{payload.get('ts') or ''}".encode("utf-8")
         ).hexdigest()[:24]
     operation_key = f"tg-dialog:{hub_id or 'hub'}:{bot_id}:{chat_id}:{correlation}"
+    delivery_attempt = _claim_response_delivery(
+        payload=payload,
+        meta=meta,
+        operation_key=operation_key,
+        hub_id=hub_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+        message_count=len(messages),
+    )
     out = {
         "target": {"bot_id": bot_id, "hub_id": hub_id, "chat_id": chat_id},
         "messages": messages,
@@ -99,6 +163,10 @@ def _telegram_output_projection(
             "authority_epoch": f"hub:{hub_id or 'unknown'}",
             "issued_at": time.time(),
             "ttl_ms": 600_000,
+            "receipt_subject": f"tg.receipt.{hub_id or 'hub'}",
+            "delivery_attempt_id": str((delivery_attempt or {}).get("attempt_id") or "") or None,
+            "response_envelope_id": str((delivery_attempt or {}).get("response_envelope_id") or "") or None,
+            "durable_attempt_id": str((delivery_attempt or {}).get("durable_attempt_id") or "") or None,
         },
     }
     return f"tg.output.{bot_id}.chat.{chat_id}", out
@@ -163,6 +231,15 @@ def _telegram_interaction_consumed_projection(
         f"tg-interaction-consumed:{hub_id or 'hub'}:{bot_id}:{chat_id}:"
         f"{response_id or interaction_id or message_id}"
     )
+    delivery_attempt = _claim_response_delivery(
+        payload={"id": response_id or interaction_id, "text": text},
+        meta=meta,
+        operation_key=operation_key,
+        hub_id=hub_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+        message_count=1,
+    )
     callback_query_id = str(meta.get("telegram_callback_query_id") or "").strip()
     out = {
         "target": {"bot_id": bot_id, "hub_id": hub_id, "chat_id": chat_id},
@@ -183,6 +260,10 @@ def _telegram_interaction_consumed_projection(
             "ttl_ms": 600_000,
             "presentation_state": "consumed",
             "source_message_id": str(message_id),
+            "receipt_subject": f"tg.receipt.{hub_id or 'hub'}",
+            "delivery_attempt_id": str((delivery_attempt or {}).get("attempt_id") or "") or None,
+            "response_envelope_id": str((delivery_attempt or {}).get("response_envelope_id") or "") or None,
+            "durable_attempt_id": str((delivery_attempt or {}).get("durable_attempt_id") or "") or None,
         },
     }
     return f"tg.output.{bot_id}.chat.{chat_id}", out

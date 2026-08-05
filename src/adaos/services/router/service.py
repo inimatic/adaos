@@ -33,7 +33,14 @@ from adaos.services.scenario.projection_service import _merge_nested_path
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
-from adaos.services import conversation_context, conversation_response, conversation_store, dialog_runtime
+from adaos.services import (
+    conversation_context,
+    conversation_response,
+    conversation_store,
+    dialog_runtime,
+    durable_delivery,
+    telegram_delivery,
+)
 from adaos.services.nlu.text_correction import correct_light_text
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
@@ -528,6 +535,55 @@ class RouterService:
                 logging.getLogger("adaos.router").warning("router: ui.notify background delivery failed", exc_info=True)
 
         task.add_done_callback(_forget)
+
+    async def _on_telegram_delivery_receipt(self, ev: Event) -> None:
+        payload = ev.payload if isinstance(ev.payload, dict) else {}
+        try:
+            payload = telegram_delivery.validate_receipt(payload)
+        except Exception:
+            _log.warning("router: invalid Telegram delivery receipt", exc_info=True)
+            return
+        attempt_id = str(payload.get("delivery_attempt_id") or "").strip()
+        if not attempt_id:
+            return
+        delivered = bool(payload.get("delivered"))
+        error = str(payload.get("error") or "").strip() or None
+        receipt = {
+            "schema": "adaos.telegram.delivery_receipt.v1",
+            "receipt_id": str(payload.get("receipt_id") or "").strip() or None,
+            "operation_key": str(payload.get("operation_key") or "").strip() or None,
+            "transport": str(payload.get("transport") or "telegram").strip() or "telegram",
+            "external_message_ids": [
+                str(item) for item in payload.get("external_message_ids") or [] if str(item)
+            ],
+            "duplicate_suppressed": int(payload.get("duplicate_suppressed") or 0),
+            "completed_at": str(payload.get("completed_at") or "").strip() or None,
+        }
+        try:
+            attempt = telegram_delivery.complete_outbound(
+                attempt_id,
+                delivered=delivered,
+                receipt=receipt,
+                error=error,
+            )
+        except Exception:
+            _log.warning("router: unknown Telegram delivery receipt attempt=%s", attempt_id, exc_info=True)
+            return
+        durable_attempt_id = str(attempt.get("durable_attempt_id") or "").strip()
+        if durable_attempt_id:
+            try:
+                durable_delivery.complete_delivery(
+                    durable_attempt_id,
+                    delivered=delivered,
+                    receipt=receipt,
+                    error=error,
+                )
+            except Exception:
+                _log.warning(
+                    "router: durable response receipt could not be completed attempt=%s",
+                    durable_attempt_id,
+                    exc_info=True,
+                )
 
     async def _handle_notify_event(self, ev: Event) -> None:
         payload = ev.payload or {}
@@ -5703,6 +5759,7 @@ class RouterService:
             ("dialog.channel.activated", _on_dialog_channel_event),
             ("dialog.channel.deactivated", _on_dialog_channel_event),
             ("conversation.interaction.responded", _on_conversation_interaction_responded),
+            ("tg.delivery.receipt", self._on_telegram_delivery_receipt),
             ("io.out.chat.append", _on_io_out_chat_append),
             ("io.out.say", _on_io_out_say),
             ("io.out.media.route", _on_io_out_media_route),
