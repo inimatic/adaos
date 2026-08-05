@@ -356,6 +356,22 @@ class ArtifactPublicationService:
             ),
         )
 
+    def get_candidate_release(self, candidate_id: str) -> ReleasePlan:
+        """Return the immutable release plan bound to one candidate.
+
+        Runtime activation callers use this read-only projection to constrain
+        reload and health checks to the candidate dependency closure.  A
+        merged WorkspaceLock may contain unrelated, independently managed
+        projects whose runtime versions are intentionally newer than their
+        last package-lock projection.
+        """
+
+        candidate = self.candidate_store.load(str(candidate_id or "").strip())
+        return self.release_cache.get_release(
+            candidate.project_id,
+            candidate.release_digest,
+        )
+
     def _workspace_slot_id(
         self,
         project_id: str,

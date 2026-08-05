@@ -2189,20 +2189,38 @@ class RootDeveloperService:
         )
 
     @staticmethod
-    def _workspace_lock_components(lock: Any, *, kind: str) -> list[Any]:
+    def _workspace_lock_components(
+        lock: Any,
+        *,
+        kind: str,
+        component_keys: frozenset[str] | None = None,
+    ) -> list[Any]:
         expected = str(kind or "").strip().lower().rstrip("s")
         return [
             component
             for component in getattr(lock, "components", ()) or ()
             if str(getattr(component, "kind", "") or "").strip().lower().rstrip("s") == expected
+            and (
+                component_keys is None
+                or str(getattr(component, "key", "") or "") in component_keys
+            )
         ]
 
-    def _reload_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
-        """Converge every installed skill runtime to the just-activated WorkspaceLock."""
+    def _reload_published_workspace_runtime(
+        self,
+        lock: Any,
+        *,
+        component_keys: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """Converge skill runtimes in the activated project dependency closure."""
 
         manager = _get_skill_manager(self.ctx)
         refreshed: list[dict[str, Any]] = []
-        for component in self._workspace_lock_components(lock, kind="skill"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="skill",
+            component_keys=component_keys,
+        ):
             skill_id = str(getattr(component, "artifact_id", "") or "").strip()
             version = str(getattr(component, "version", "") or "").strip()
             if not skill_id or not version:
@@ -2228,14 +2246,24 @@ class RootDeveloperService:
         return {
             "status": "completed",
             "lock_revision": getattr(lock, "lock_revision", None),
+            "component_keys": sorted(component_keys or ()),
             "skills": refreshed,
         }
 
-    def _health_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+    def _health_published_workspace_runtime(
+        self,
+        lock: Any,
+        *,
+        component_keys: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         manager = _get_skill_manager(self.ctx)
         checks: list[dict[str, Any]] = []
         failures: list[str] = []
-        for component in self._workspace_lock_components(lock, kind="skill"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="skill",
+            component_keys=component_keys,
+        ):
             skill_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             status = manager.runtime_status(skill_id)
@@ -2253,7 +2281,11 @@ class RootDeveloperService:
             )
             if not ready:
                 failures.append(f"skill:{skill_id} expected={expected} active={active or 'none'}")
-        for component in self._workspace_lock_components(lock, kind="scenario"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="scenario",
+            component_keys=component_keys,
+        ):
             scenario_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             manifest_path = Path(self.ctx.paths.scenarios_dir()) / scenario_id / "scenario.yaml"
@@ -2276,6 +2308,7 @@ class RootDeveloperService:
         return {
             "status": "healthy",
             "lock_revision": getattr(lock, "lock_revision", None),
+            "component_keys": sorted(component_keys or ()),
             "checks": checks,
         }
 
@@ -2399,12 +2432,29 @@ class RootDeveloperService:
     ) -> dict[str, Any]:
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
+        candidate_release = publication.get_candidate_release(candidate_id)
+        affected_component_keys = frozenset(
+            package.key for package in candidate_release.packages
+        )
+
+        def reload_candidate_runtime(lock: Any) -> dict[str, Any]:
+            return self._reload_published_workspace_runtime(
+                lock,
+                component_keys=affected_component_keys,
+            )
+
+        def health_candidate_runtime(lock: Any) -> dict[str, Any]:
+            return self._health_published_workspace_runtime(
+                lock,
+                component_keys=affected_component_keys,
+            )
+
         try:
             promoted = publication.promote(
                 candidate_id,
                 permission_decision=permission_decision,
-                reload_runtime=self._reload_published_workspace_runtime,
-                health_check=self._health_published_workspace_runtime,
+                reload_runtime=reload_candidate_runtime,
+                health_check=health_candidate_runtime,
             )
         except PublicationStaleError as exc:
             return {

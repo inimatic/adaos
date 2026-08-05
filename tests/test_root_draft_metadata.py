@@ -270,6 +270,15 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     )
 
     class _Publication:
+        def get_candidate_release(self, candidate_id: str):
+            assert candidate_id == "candidate-1"
+            return SimpleNamespace(
+                packages=(
+                    SimpleNamespace(key="scenario:builder"),
+                    SimpleNamespace(key="skill:builder_skill"),
+                )
+            )
+
         def promote(self, candidate_id: str, **kwargs):
             captured["candidate_id"] = candidate_id
             captured.update(kwargs)
@@ -289,15 +298,26 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     service = object.__new__(RootDeveloperService)
     service._load_config = lambda: SimpleNamespace()
     service._artifact_publication_service = lambda _cfg: _Publication()
-    service._reload_published_workspace_runtime = lambda _lock: {"status": "completed"}
-    service._health_published_workspace_runtime = lambda _lock: {"status": "healthy"}
+    reload_scopes: list[frozenset[str] | None] = []
+    health_scopes: list[frozenset[str] | None] = []
+    service._reload_published_workspace_runtime = lambda _lock, component_keys=None: (
+        reload_scopes.append(component_keys) or {"status": "completed"}
+    )
+    service._health_published_workspace_runtime = lambda _lock, component_keys=None: (
+        health_scopes.append(component_keys) or {"status": "healthy"}
+    )
 
     result = service.promote_artifact_candidate("candidate-1")
 
     assert result["ok"] is True
     assert captured["candidate_id"] == "candidate-1"
-    assert captured["reload_runtime"] is service._reload_published_workspace_runtime
-    assert captured["health_check"] is service._health_published_workspace_runtime
+    assert callable(captured["reload_runtime"])
+    assert callable(captured["health_check"])
+    captured["reload_runtime"](SimpleNamespace())
+    captured["health_check"](SimpleNamespace())
+    expected_scope = frozenset({"scenario:builder", "skill:builder_skill"})
+    assert reload_scopes == [expected_scope]
+    assert health_scopes == [expected_scope]
     assert "reload_policy" not in captured
     assert "health_policy" not in captured
     assert result["apply_evidence"]["activation"]["operation_id"] == "activation-1"
@@ -366,6 +386,85 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
     ]
     assert healthy["status"] == "healthy"
     assert all(check["ok"] for check in healthy["checks"])
+
+
+def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario_root = tmp_path / "scenarios"
+    dashboard_root = scenario_root / "dashboard"
+    dashboard_root.mkdir(parents=True)
+    (dashboard_root / "scenario.yaml").write_text(
+        "id: dashboard\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    manager = SimpleNamespace(
+        runtime_status=lambda skill_id: {
+            "ready": True,
+            "active_slot": "B",
+            "version": "1.0.0" if skill_id == "dashboard_skill" else "9.9.9",
+        }
+    )
+    refresh_calls: list[str] = []
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _ctx: manager)
+    monkeypatch.setattr(
+        root_service_module,
+        "refresh_skill_runtime",
+        lambda _manager, skill_id, **_kwargs: (
+            refresh_calls.append(skill_id)
+            or {
+                "active_version_after": "1.0.0",
+                "active_slot_after": "B",
+                "runtime_migrated": True,
+            }
+        ),
+    )
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(scenarios_dir=lambda: scenario_root)
+    )
+    lock = SimpleNamespace(
+        lock_revision=10,
+        components=[
+            SimpleNamespace(
+                kind="scenario",
+                key="scenario:dashboard",
+                artifact_id="dashboard",
+                version="1.0.0",
+            ),
+            SimpleNamespace(
+                kind="skill",
+                key="skill:dashboard_skill",
+                artifact_id="dashboard_skill",
+                version="1.0.0",
+            ),
+            SimpleNamespace(
+                kind="skill",
+                key="skill:unrelated_skill",
+                artifact_id="unrelated_skill",
+                version="0.1.0",
+            ),
+        ],
+    )
+    scope = frozenset({"scenario:dashboard", "skill:dashboard_skill"})
+
+    reloaded = service._reload_published_workspace_runtime(
+        lock,
+        component_keys=scope,
+    )
+    healthy = service._health_published_workspace_runtime(
+        lock,
+        component_keys=scope,
+    )
+
+    assert refresh_calls == ["dashboard_skill"]
+    assert reloaded["component_keys"] == sorted(scope)
+    assert healthy["component_keys"] == sorted(scope)
+    assert {check["artifact_id"] for check in healthy["checks"]} == {
+        "dashboard",
+        "dashboard_skill",
+    }
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:
