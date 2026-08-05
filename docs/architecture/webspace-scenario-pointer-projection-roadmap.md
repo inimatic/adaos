@@ -1015,18 +1015,26 @@ Use this checklist as the authoritative progress tracker for the migration.
 
 This is implementation cleanup, not a new scenario-switch design.
 
-- [ ] Replace module-level task and cache aliases with owner APIs that control
+- [x] Replace module-level task and cache aliases with owner APIs that control
   mutation, TTL/LRU policy, coalescing, cancellation, and invalidation.
-- [ ] Add a semantic recovery coordinator for reload, reset, restore, switch,
+- [x] Add a semantic recovery coordinator for reload, reset, restore, switch,
   and post-restore reconcile; keep transport resync separate.
-- [ ] Make projection refresh an explicit lifecycle dependency rather than a
+- [x] Make projection refresh an explicit lifecycle dependency rather than a
   hidden side effect of rebuild.
-- [ ] Put materialization execution and pointer switching behind typed services
+- [x] Put materialization execution and pointer switching behind typed services
   while preserving the atomic pointer contract.
-- [ ] Reduce `webspace_runtime.py` to composition and compatibility exports;
+- [x] Reduce `webspace_runtime.py` to composition and compatibility exports;
   new components must not call back into its private globals.
 - [ ] Preserve public commands and events, no-op branch identity, partial
   readiness, and bounded fanout in component tests and `.30` stand evidence.
+
+The 2026-08-06 ownership tranche removed mutable task/cache aliases, introduced
+the recovery coordinator, made projection refresh explicit, and transferred
+materialization subprocess plus scenario-switch task execution to typed
+owners. The compatibility module still contains pure transformation helpers
+and public entry points; it is no longer an alternate mutable-state owner.
+Local characterization and component coverage passed before rollout. The last
+item remains open until the bounded `.30` checkpoint is recorded.
 
 ## Builder Materialization PoC: First Iteration
 

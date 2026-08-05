@@ -604,6 +604,20 @@ preserving delivery and idempotency contracts. `run_boot_sequence()` remains
 composition-only. Stand evidence must cover transport policy, rooted A/B
 cutover, and reconnect soak acceptance.
 
+Implementation status, 2026-08-06:
+
+- lifecycle now owns boot serialization, readiness, app binding, task
+  adoption/replacement, and cancellation
+- root transport owns bridge/watchdog execution and bounded route reset
+- status/watchdog owns environment policy plus heartbeat registration
+- NATS decisions are consumed through a typed composed policy
+- hub-route local-runtime discovery cache and diagnostics are instance-owned
+  by the route proxy policy
+- module functions remain compatibility exports for focused tests and callers;
+  physically moving the long-lived NATS subscription/tunnel loop out of the
+  compatibility body is a later code-size tranche, not a second state-owner
+  migration
+
 ### Exit criteria
 
 - [x] `[must]` Route pressure cannot starve control readiness.

@@ -326,6 +326,28 @@ complete when dependencies are one-way, component tests cover each owner, and
 the public API and persisted attempt contract remain unchanged through restart,
 A/B cutover, recovery, and profiling flows.
 
+Implementation status, 2026-08-06:
+
+- `ProcessSupervisor` owns active/candidate/sidecar handles, desired lifecycle,
+  the monitor task, listener discovery, signals, and the bounded
+  graceful/TERM/KILL ladder
+- `UpdateStateMachine` owns update task/cancellation lifecycle and persists
+  causally linked status/attempt transitions
+- `RuntimeRecoveryPolicy` owns the unhealthy window plus last decision and
+  evidence
+- `MemoryProfilingService` owns mutable profile session, baseline, suspicion,
+  telemetry, and critical-memory state in addition to policy
+- `SupervisorApiAdapter` is now the registered FastAPI handler surface and only
+  validates/maps/delegates
+- compatibility properties/functions remain for existing tests and imports;
+  `SupervisorManager` uses them as views over component state and remains the
+  orchestration/status composition surface
+
+The component suites and the full supervisor regression passed with the public
+API and persisted attempt shapes unchanged. Removal of the compatibility views
+and further physical file-size reduction are follow-up cleanup, not parallel
+state ownership.
+
 ## Local control surfaces
 
 The target local APIs are:
