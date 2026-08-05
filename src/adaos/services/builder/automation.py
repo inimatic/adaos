@@ -1874,6 +1874,11 @@ class BuilderAutomationService:
                         actor="builder.automation",
                         reason="Automation result checkpointed in Forge",
                         metadata={
+                            # This is a system-authored acknowledgement of the exact
+                            # Forge checkpoint identities below, not a human Trial
+                            # approval.  The workflow still requires an explicit
+                            # accept_trial command before publication can proceed.
+                            "confirmed": True,
                             "change_id": change_id,
                             "package_digest": package_digest,
                             "source_revision": source_revision,
