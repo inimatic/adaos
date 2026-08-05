@@ -302,6 +302,9 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
     ]
     if not criteria:
         raise BuilderWorkflowError("every change set issue requires acceptance_criteria")
+    structural_status = str(value.get("structural_status") or "active").strip().lower()
+    if structural_status not in {"active", "split", "merged"}:
+        raise BuilderWorkflowError("issue structural_status must be active, split, or merged")
     return {
         "issue_id": issue_id,
         "title": title,
@@ -321,6 +324,21 @@ def _normalize_issue(value: Any, *, index: int) -> dict[str, Any]:
                 if str(item).strip()
             )
         )[:100],
+        "structural_status": structural_status,
+        "derived_from_issue_ids": list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value.get("derived_from_issue_ids") or []
+                if str(item).strip()
+            )
+        )[:50],
+        "superseded_by_issue_ids": list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value.get("superseded_by_issue_ids") or []
+                if str(item).strip()
+            )
+        )[:50],
     }
 
 
@@ -3637,6 +3655,80 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(f"unknown change set issue_id: {issue_id}")
             issue["status"] = status
             update_change_set(status="in_progress" if status == "in_progress" else None)
+            return
+        if action == "change_issue_split":
+            current = require_change_set(metadata.get("change_set_id"))
+            issue_id = str(metadata.get("issue_id") or "").strip()
+            source = next(
+                (item for item in current.get("issues") or [] if item.get("issue_id") == issue_id),
+                None,
+            )
+            if not isinstance(source, dict):
+                raise BuilderWorkflowError(f"unknown change set issue_id: {issue_id}")
+            if source.get("structural_status") != "active":
+                raise BuilderWorkflowError("only an active issue can be split")
+            raw_children = metadata.get("issues")
+            if not isinstance(raw_children, (list, tuple)) or len(raw_children) < 2:
+                raise BuilderWorkflowError("issue split requires at least two replacement issues")
+            existing = [item for item in current.get("issues") or [] if isinstance(item, dict)]
+            if len(existing) + len(raw_children) > _MAX_CHANGE_ISSUES:
+                raise BuilderWorkflowError(f"change set supports at most {_MAX_CHANGE_ISSUES} issues")
+            known = {str(item.get("issue_id") or "") for item in existing}
+            children: list[dict[str, Any]] = []
+            for index, raw in enumerate(raw_children, start=len(existing) + 1):
+                child = _normalize_issue(raw, index=index)
+                if child["issue_id"] in known:
+                    raise BuilderWorkflowError(f"duplicate change set issue_id: {child['issue_id']}")
+                known.add(child["issue_id"])
+                child["derived_from_issue_ids"] = [issue_id]
+                children.append(child)
+            source["status"] = "deferred"
+            source["structural_status"] = "split"
+            source["superseded_by_issue_ids"] = [item["issue_id"] for item in children]
+            current["issues"] = [*existing, *children]
+            prototype_pending = any(
+                item.get("structural_status") == "active"
+                and item.get("lane") == "prototype"
+                and item.get("status") not in {"resolved", "deferred"}
+                for item in current["issues"]
+            )
+            update_change_set(
+                status="changes_requested",
+                gate="prototype" if prototype_pending else "automation",
+            )
+            invalidate_delivery("issue_structure_changed")
+            return
+        if action == "change_issues_merged":
+            current = require_change_set(metadata.get("change_set_id"))
+            issue_ids = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in metadata.get("issue_ids") or []
+                    if str(item).strip()
+                )
+            )
+            if len(issue_ids) < 2:
+                raise BuilderWorkflowError("issue merge requires at least two source issues")
+            existing = [item for item in current.get("issues") or [] if isinstance(item, dict)]
+            sources = [item for item in existing if item.get("issue_id") in issue_ids]
+            if len(sources) != len(issue_ids):
+                raise BuilderWorkflowError("issue merge contains an unknown issue_id")
+            if any(item.get("structural_status") != "active" for item in sources):
+                raise BuilderWorkflowError("only active issues can be merged")
+            merged = _normalize_issue(metadata.get("issue"), index=len(existing) + 1)
+            if any(item.get("issue_id") == merged["issue_id"] for item in existing):
+                raise BuilderWorkflowError(f"duplicate change set issue_id: {merged['issue_id']}")
+            merged["derived_from_issue_ids"] = issue_ids
+            for source in sources:
+                source["status"] = "deferred"
+                source["structural_status"] = "merged"
+                source["superseded_by_issue_ids"] = [merged["issue_id"]]
+            current["issues"] = [*existing, merged]
+            update_change_set(
+                status="changes_requested",
+                gate="prototype" if merged["lane"] == "prototype" else "automation",
+            )
+            invalidate_delivery("issue_structure_changed")
             return
         if action == "change_evidence_recorded":
             require_change_set(metadata.get("change_set_id"))

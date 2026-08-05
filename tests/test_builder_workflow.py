@@ -349,6 +349,80 @@ def test_interaction_context_rejects_stale_generation_without_mutation(
     assert current["interaction"]["preview_target"] is None
 
 
+def test_issue_split_and_merge_preserve_structural_lineage(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "request": "Improve the recipe form and its saving behavior.",
+            "issues": [
+                {
+                    "issue_id": "ambiguous",
+                    "title": "Improve the form",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The resulting form is approved."],
+                }
+            ],
+        },
+    )["workflow"]
+    split = service.transition(
+        "scenario",
+        "recipes",
+        "change_issue_split",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "issue_id": "ambiguous",
+            "issues": [
+                {
+                    "issue_id": "layout",
+                    "title": "Arrange form fields",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The field order is approved."],
+                },
+                {
+                    "issue_id": "save",
+                    "title": "Persist the recipe",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Saving is covered by a functional test."],
+                },
+            ],
+        },
+        expected_generation=planned["generation"],
+    )["workflow"]
+    issues = {item["issue_id"]: item for item in split["change"]["issues"]}
+    assert issues["ambiguous"]["structural_status"] == "split"
+    assert issues["ambiguous"]["superseded_by_issue_ids"] == ["layout", "save"]
+    assert issues["layout"]["derived_from_issue_ids"] == ["ambiguous"]
+    assert split["change"]["gate"] == "prototype"
+
+    merged = service.transition(
+        "scenario",
+        "recipes",
+        "change_issues_merged",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "issue_ids": ["layout", "save"],
+            "issue": {
+                "issue_id": "form-delivery",
+                "title": "Deliver the approved recipe form",
+                "lane": "prototype",
+                "acceptance_criteria": ["The approved form saves a recipe."],
+            },
+        },
+        expected_generation=split["generation"],
+    )["workflow"]
+    issues = {item["issue_id"]: item for item in merged["change"]["issues"]}
+    assert issues["layout"]["structural_status"] == "merged"
+    assert issues["save"]["superseded_by_issue_ids"] == ["form-delivery"]
+    assert issues["form-delivery"]["derived_from_issue_ids"] == ["layout", "save"]
+    assert service.describe("scenario", "recipes")["change"]["issues"] == merged["change"]["issues"]
+
+
 def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
