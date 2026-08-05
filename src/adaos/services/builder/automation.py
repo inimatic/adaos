@@ -392,6 +392,7 @@ class BuilderAutomationService:
                 actor="builder.automation",
                 reason="approved prototype handed to Automation",
                 metadata={
+                    "confirmed": True,
                     "source_prototype_revision": (
                         workflow_before.get("prototype", {}).get("head_revision")
                         if isinstance(workflow_before.get("prototype"), Mapping)
@@ -695,6 +696,7 @@ class BuilderAutomationService:
                     actor="builder.automation",
                     reason="Automation result is being adapted into a safe prototype",
                     metadata={
+                        "confirmed": True,
                         "task_id": session.get("current_task_id"),
                         "change_id": session.get("change_id"),
                         "run_id": session.get("change_id"),
@@ -709,6 +711,7 @@ class BuilderAutomationService:
                     actor="builder.automation",
                     reason="a new Automation iteration was queued",
                     metadata={
+                        "confirmed": True,
                         "task_id": session.get("current_task_id"),
                         "change_id": session.get("change_id"),
                         "run_id": session.get("change_id"),
@@ -1756,6 +1759,7 @@ class BuilderAutomationService:
                         actor="builder.automation.recovery",
                         reason="reconciled a completed legacy Automation session",
                         metadata={
+                            "confirmed": True,
                             "source_prototype_revision": current.get("source_prototype_version"),
                             "task_id": current.get("current_task_id"),
                             "change_id": current.get("change_id"),

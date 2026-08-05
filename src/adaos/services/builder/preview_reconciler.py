@@ -20,7 +20,10 @@ _LOCK_REGISTRY_GUARD = threading.Lock()
 _APPLY_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS: dict[str, threading.RLock] = {}
 _TERMINAL_STATUSES = frozenset({"ready", "failed", "superseded", "drifted"})
-_HISTORY_LIMIT = 50
+# The durable record is a current projection, not an audit log.  Transition
+# events carry the long history; retaining a small diagnostic tail prevents a
+# frequently switched Preview from becoming a large browser projection.
+_HISTORY_LIMIT = 24
 
 
 def _source_lock(registry: dict[str, Any], source_webspace_id: str, factory: Callable[[], Any]) -> Any:

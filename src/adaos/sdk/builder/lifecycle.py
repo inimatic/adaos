@@ -165,6 +165,7 @@ def prepare_trial(
         "candidate_prepared",
         actor=actor,
         metadata={
+            "confirmed": True,
             "candidate_id": candidate_id,
             "release": f"{release.get('project_id')}@{release.get('version')}",
             "release_digest": release_digest,
@@ -208,6 +209,7 @@ def decide_trial(
         "candidate_accepted" if accepted else "candidate_rejected",
         actor=actor,
         metadata={
+            "confirmed": True,
             "candidate_id": candidate_id,
             "candidate_digest": candidate_digest,
             "observations": _mapping(decided.get("candidate")).get("trials") or [],
