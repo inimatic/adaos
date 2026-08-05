@@ -13,6 +13,26 @@ from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflo
 ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
 
 
+def _apply_evidence(*, draft_id: str = "draft.recipes") -> dict[str, object]:
+    return {
+        "draft_ref": {"draft_id": draft_id, "revision": "ui:001"},
+        "validation_evidence": [{"type": "test_run", "id": "tests:passed", "status": "passed"}],
+        "approval": {
+            "approval_id": "pa.builder.publish.1",
+            "actor_id": "user:owner",
+            "actor_type": "user",
+            "approved_at": "2026-08-05T00:00:00+00:00",
+            "policy_evidence": [{"policy": "builder.publish", "decision": "allow"}],
+        },
+        "activation": {
+            "operation_id": "activate.1",
+            "runtime_slot": "B",
+            "health_receipt": {"status": "passed"},
+        },
+        "rollback": {"mode": "slot_switch", "operation_ref": "activate.1:rollback"},
+    }
+
+
 @pytest.fixture
 def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
     skills = tmp_path / "skills"
@@ -884,6 +904,7 @@ def test_change_set_advances_through_automation_trial_and_publication(
             "candidate_id": "candidate-sync",
             "candidate_digest": "sha256:" + "3" * 64,
             "version": "0.2.0",
+            "apply_evidence": _apply_evidence(),
         },
     )["workflow"]
     assert published["change_set"]["status"] == "published"
@@ -1073,11 +1094,18 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
             "task_id": "task.1",
             "candidate_id": "recipes-0-1-1-abc",
             "candidate_digest": "sha256:" + "2" * 64,
+            "apply_evidence": _apply_evidence(),
         },
     )["workflow"]
     assert published["active_phase"] == "automation"
     assert published["publication"]["current_version"] == "0.1.1"
     assert published["publication"]["status"] == "published"
+    release_record = published["publication"]["release_record"]
+    assert release_record["approval"]["actor_id"] == "user:owner"
+    assert release_record["activation"]["runtime_slot"] == "B"
+    Draft202012Validator(
+        json.loads((ABI_ROOT / "builder.applied_release.v1.schema.json").read_text(encoding="utf-8"))
+    ).validate(release_record)
 
     persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
     assert persisted["workflow_state"] == "automation"
@@ -1320,6 +1348,35 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
     assert checkpoint["delivery"]["status"] == "checkpoint"
     assert checkpoint["delivery"]["replaces_candidate_id"] is None
     assert checkpoint["delivery"]["rebase_plan"] is None
+
+
+def test_checkpoint_rejects_same_semantic_version_with_different_bytes(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-1",
+            "version": "0.1.0",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    with pytest.raises(BuilderWorkflowError, match="semantic version already maps to different bytes"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "checkpoint_recorded",
+            metadata={
+                "change_id": "change-2",
+                "version": "0.1.0",
+                "package_digest": "sha256:" + "2" * 64,
+                "source_revision": "b" * 40,
+            },
+        )
 
 
 def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(

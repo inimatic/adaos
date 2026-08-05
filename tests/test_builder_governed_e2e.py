@@ -12,6 +12,29 @@ PACKAGE_DIGEST = "sha256:" + "a" * 64
 RELEASE_DIGEST = "sha256:" + "b" * 64
 
 
+def _apply_evidence() -> dict[str, object]:
+    return {
+        "draft_ref": {"draft_id": "draft.empty", "revision": "UI-002"},
+        "validation_evidence": [{"type": "test_run", "id": "test:automation-passed", "status": "passed"}],
+        "approval": {
+            "approval_id": "pa.builder.publish.empty",
+            "actor_id": "user:owner",
+            "actor_type": "user",
+            "approved_at": "2026-08-05T00:00:00+00:00",
+            "policy_evidence": [{"policy": "builder.publication", "decision": "allow"}],
+        },
+        "activation": {
+            "operation_id": "activation.empty.020",
+            "runtime_slot": "B",
+            "health_receipt": {"status": "passed"},
+        },
+        "rollback": {
+            "mode": "workspace_lock_restore",
+            "operation_ref": "activation.empty.020:rollback",
+        },
+    }
+
+
 def _service(tmp_path: Path, project_id: str = "empty_scenario") -> BuilderWorkflowService:
     skills = tmp_path / "skills"
     scenarios = tmp_path / "scenarios"
@@ -213,6 +236,7 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
             "release": "empty_scenario@0.2.0",
             "task_id": "RUN-empty-1",
             "evidence_refs": ["registry:published"],
+            "apply_evidence": _apply_evidence(),
         },
     )["workflow"]
 

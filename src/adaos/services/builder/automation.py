@@ -1873,6 +1873,7 @@ class BuilderAutomationService:
                             "change_id": change_id,
                             "package_digest": package_digest,
                             "source_revision": source_revision,
+                            "version": self._project_version(object_type, object_id),
                             "task_id": current.get("current_task_id"),
                         },
                     )

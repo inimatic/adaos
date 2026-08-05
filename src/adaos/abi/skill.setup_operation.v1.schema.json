@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/skill.setup_operation.v1.schema.json",
+  "title": "AdaOS Skill Setup Operation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "operation_id", "idempotency_key", "status", "skill_id", "release_digest",
+    "plan_digest", "webspace_id", "dry_run", "attempts", "logs", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.skill.setup_operation.v1" },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["approval_pending", "running", "input_required", "completed", "failed", "cancelled"] },
+    "skill_id": { "type": "string", "minLength": 1 },
+    "release_digest": { "$ref": "#/$defs/digest" },
+    "plan_digest": { "$ref": "#/$defs/digest" },
+    "webspace_id": { "type": "string", "minLength": 1 },
+    "dry_run": { "type": "boolean" },
+    "pending_action_id": { "type": ["string", "null"] },
+    "approval": { "type": ["object", "null"] },
+    "attempts": { "type": "integer", "minimum": 0 },
+    "result": {},
+    "error": { "type": ["object", "null"] },
+    "recovery": { "type": ["object", "null"] },
+    "logs": { "type": "array", "items": { "type": "object" } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

@@ -58,6 +58,7 @@ from adaos.services.governed_workflow import (
     verified_workflow_principal,
     workflow_definition_digest,
 )
+from adaos.services.builder.release_evidence import applied_release_record
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -1416,6 +1417,7 @@ class BuilderWorkflowService:
                 or None,
             },
             "pending_transition": _mapping(raw.get("pending_transition")) or None,
+            "checkpoint_versions": _mapping(raw.get("checkpoint_versions")),
             "history": [
                 dict(item)
                 for item in raw.get("history") or []
@@ -2564,7 +2566,13 @@ class BuilderWorkflowService:
                         "canonical Builder transition rejected: "
                         f"{governed_decision.get('reason_code') or 'transition_not_allowed'}"
                     )
-            self._apply_transition(workflow, action_token, details, changed_at=changed_at)
+            self._apply_transition(
+                workflow,
+                action_token,
+                details,
+                changed_at=changed_at,
+                project_id=project_id,
+            )
             if governed_decision is not None:
                 workflow["governed"] = copy.deepcopy(governed_decision["after"])
             workflow["generation"] = int(workflow.get("generation") or 0) + 1
@@ -3293,6 +3301,7 @@ class BuilderWorkflowService:
         metadata: Mapping[str, Any],
         *,
         changed_at: str,
+        project_id: str,
     ) -> None:
         prototype = workflow["prototype"]
         automation = workflow["automation"]
@@ -3838,6 +3847,22 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     "checkpoint requires change, package, and source identities"
                 )
+            checkpoint_version = str(metadata.get("version") or "").strip() or None
+            checkpoint_versions = _mapping(workflow.get("checkpoint_versions"))
+            if checkpoint_version:
+                previous = _mapping(checkpoint_versions.get(checkpoint_version))
+                previous_digest = str(previous.get("package_digest") or "").strip()
+                if previous_digest and previous_digest != package_digest:
+                    raise BuilderWorkflowError(
+                        "DEV checkpoint semantic version already maps to different bytes; "
+                        "bump the version before checkpointing"
+                    )
+                checkpoint_versions[checkpoint_version] = {
+                    "package_digest": package_digest,
+                    "source_revision": source_revision,
+                    "recorded_at": changed_at,
+                }
+                workflow["checkpoint_versions"] = checkpoint_versions
             rebase_plan = delivery.get("rebase_plan")
             has_rebase_plan = isinstance(rebase_plan, Mapping)
             replaces_candidate_id = (
@@ -3852,6 +3877,7 @@ class BuilderWorkflowService:
                     "checkpoint_change_id": change_id,
                     "package_digest": package_digest,
                     "source_revision": source_revision,
+                    "version": checkpoint_version,
                     "checkpoint_at": changed_at,
                     "candidate_id": None,
                     "release_digest": None,
@@ -3959,6 +3985,20 @@ class BuilderWorkflowService:
             version = str(metadata.get("version") or "").strip()
             if not version:
                 raise BuilderWorkflowError("publication version is required")
+            release_digest = str(delivery.get("release_digest") or "").strip()
+            package_digest = str(delivery.get("package_digest") or "").strip()
+            try:
+                release_record = applied_release_record(
+                    project_id=project_id,
+                    candidate_id=candidate_id,
+                    version=version,
+                    release_digest=release_digest,
+                    package_digest=package_digest,
+                    apply_evidence=_mapping(metadata.get("apply_evidence")),
+                    recorded_at=changed_at,
+                )
+            except ValueError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
             publication.update(
                 {
                     "status": "published",
@@ -3966,9 +4006,18 @@ class BuilderWorkflowService:
                     "published_at": changed_at,
                     "source_automation_task": metadata.get("task_id") or automation.get("head_task_id"),
                     "release": metadata.get("release"),
+                    "release_record": release_record,
                 }
             )
-            delivery.update({"status": "published", "published_at": changed_at})
+            delivery.update(
+                {
+                    "status": "published",
+                    "published_at": changed_at,
+                    "approval": release_record["approval"],
+                    "activation": release_record["activation"],
+                    "rollback": release_record["rollback"],
+                }
+            )
             update_change_set(status="published", gate="complete")
             return
         raise BuilderWorkflowError(f"unsupported Builder workflow transition: {action}")
