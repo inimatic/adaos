@@ -52,3 +52,21 @@ async def test_update_state_machine_owns_worker_lifecycle() -> None:
     assert task.cancelled()
     assert machine.task is None
     assert machine.cancel_mode is None
+
+
+def test_update_state_machine_persists_linked_status_and_attempt() -> None:
+    statuses: list[dict] = []
+    attempts: list[dict] = []
+    machine = UpdateStateMachine()
+    machine.bind_persistence(
+        write_status=lambda payload: statuses.append({**payload, "revision": 2}) or statuses[-1],
+        write_attempt=lambda payload: attempts.append(payload),
+    )
+
+    status = machine.persist_transition(
+        status_payload={"state": "countdown"},
+        attempt_payload=lambda persisted: {"state": "active", "last_status": persisted},
+    )
+
+    assert status["revision"] == 2
+    assert attempts == [{"state": "active", "last_status": status}]

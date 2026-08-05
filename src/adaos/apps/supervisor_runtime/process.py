@@ -5,7 +5,8 @@ import os
 import signal
 import socket
 import subprocess
-from typing import Any
+import time
+from typing import Any, Callable
 
 
 class ProcessSupervisor:
@@ -56,6 +57,44 @@ class ProcessSupervisor:
             return
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+    @staticmethod
+    async def _wait_for_exit(process: Any, timeout_sec: float, *, interval_sec: float) -> bool:
+        deadline = time.time() + max(0.0, float(timeout_sec))
+        checks = max(1, int(max(0.0, float(timeout_sec)) / interval_sec) + 2)
+        while time.time() < deadline and checks > 0:
+            checks -= 1
+            if process.poll() is not None:
+                return True
+            await asyncio.sleep(interval_sec)
+        return process.poll() is not None
+
+    async def terminate_process(
+        self,
+        process: Any,
+        *,
+        graceful_wait_sec: float,
+        terminate_wait_sec: float,
+        before_signal: Callable[[str], Any] | None = None,
+        signal_process: Callable[[Any, int], Any] | None = None,
+    ) -> None:
+        """Own the bounded graceful/TERM/KILL process termination ladder."""
+        if process is None or process.poll() is not None:
+            return
+        if await self._wait_for_exit(process, graceful_wait_sec, interval_sec=0.2):
+            return
+        if before_signal is not None:
+            before_signal("forced_terminate")
+        signaler = signal_process or self.signal_family
+        signaler(process, signal.SIGTERM)
+        if await self._wait_for_exit(process, terminate_wait_sec, interval_sec=0.1):
+            return
+        if before_signal is not None:
+            before_signal("forced_kill")
+        signaler(process, getattr(signal, "SIGKILL", 9))
+        if await self._wait_for_exit(process, terminate_wait_sec, interval_sec=0.1):
+            return
+        raise RuntimeError("process did not exit after forced kill")
 
     @staticmethod
     def listener_running(host: str, port: int, *, timeout: float = 0.35) -> bool:

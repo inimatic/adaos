@@ -14,6 +14,31 @@ class UpdateStateMachine:
     def __init__(self) -> None:
         self.task: asyncio.Task[Any] | None = None
         self.cancel_mode: str | None = None
+        self._write_status: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self._write_attempt: Callable[[dict[str, Any]], Any] | None = None
+
+    def bind_persistence(
+        self,
+        *,
+        write_status: Callable[[dict[str, Any]], dict[str, Any]],
+        write_attempt: Callable[[dict[str, Any]], Any],
+    ) -> None:
+        self._write_status = write_status
+        self._write_attempt = write_attempt
+
+    def persist_transition(
+        self,
+        *,
+        status_payload: dict[str, Any],
+        attempt_payload: dict[str, Any] | Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Persist a status and its causally-linked attempt through one owner."""
+        if self._write_status is None or self._write_attempt is None:
+            raise RuntimeError("update persistence is not bound")
+        status = self._write_status(dict(status_payload))
+        attempt = attempt_payload(status) if callable(attempt_payload) else dict(attempt_payload)
+        self._write_attempt(attempt)
+        return status
 
     def task_running(self) -> bool:
         return self.task is not None and not self.task.done()

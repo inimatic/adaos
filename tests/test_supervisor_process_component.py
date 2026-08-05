@@ -51,3 +51,36 @@ async def test_process_supervisor_owns_handles_and_monitor_task() -> None:
     assert owner.stopping is True
     await owner.stop_monitor()
     assert first.cancelled()
+
+
+@pytest.mark.anyio
+async def test_process_supervisor_owns_bounded_termination_ladder() -> None:
+    class _Process:
+        pid = 42
+
+        def __init__(self) -> None:
+            self.exited = False
+            self.terminated = False
+
+        def poll(self):
+            return 0 if self.exited else None
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exited = True
+
+        def kill(self) -> None:
+            self.exited = True
+
+    process = _Process()
+    stages: list[str] = []
+
+    await ProcessSupervisor(None).terminate_process(
+        process,
+        graceful_wait_sec=0.0,
+        terminate_wait_sec=0.1,
+        before_signal=stages.append,
+    )
+
+    assert process.terminated is True
+    assert stages == ["forced_terminate"]

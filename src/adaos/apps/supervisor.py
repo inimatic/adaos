@@ -2631,6 +2631,10 @@ class SupervisorManager:
         self.token = str(token or "").strip() or None
         self._process_supervisor = ProcessSupervisor(psutil)
         self._update_state_machine = UpdateStateMachine()
+        self._update_state_machine.bind_persistence(
+            write_status=write_core_update_status,
+            write_attempt=_write_update_attempt,
+        )
         self._recovery_policy = RuntimeRecoveryPolicy()
         self._memory_profiling = MemoryProfilingService(
             default_profiler_adapter=DEFAULT_PROFILER_ADAPTER,
@@ -7756,46 +7760,27 @@ class SupervisorManager:
                         shutdown_error=shutdown_error,
                         reason=reason,
                     )
-            deadline = time.time() + float(graceful_wait_sec)
-            graceful_checks = max(1, int(float(graceful_wait_sec) / 0.2) + 2)
-            while time.time() < deadline and graceful_checks > 0:
-                graceful_checks -= 1
-                if proc.poll() is not None:
-                    return
-                await asyncio.sleep(0.2)
-        with contextlib.suppress(Exception):
-            self._capture_runtime_stop_evidence(
-                reason=reason,
-                stage="forced_terminate",
-                proc=proc,
+
+        def _capture_before_signal(stage: str) -> None:
+            with contextlib.suppress(Exception):
+                self._capture_runtime_stop_evidence(
+                    reason=reason,
+                    stage=stage,
+                    proc=proc,
+                )
+
+        try:
+            await self._process_supervisor.terminate_process(
+                proc,
+                graceful_wait_sec=graceful_wait_sec if graceful else 0.0,
+                terminate_wait_sec=terminate_wait_sec,
+                before_signal=_capture_before_signal,
+                signal_process=_signal_process_family,
             )
-        with contextlib.suppress(Exception):
-            _signal_process_family(proc, signal.SIGTERM)
-        deadline = time.time() + float(terminate_wait_sec)
-        terminate_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
-        while time.time() < deadline and terminate_checks > 0:
-            terminate_checks -= 1
-            if proc.poll() is not None:
-                return
-            await asyncio.sleep(0.1)
-        with contextlib.suppress(Exception):
-            self._capture_runtime_stop_evidence(
-                reason=reason,
-                stage="forced_kill",
-                proc=proc,
-            )
-        with contextlib.suppress(Exception):
-            _signal_process_family(proc, getattr(signal, "SIGKILL", 9))
-        kill_deadline = time.time() + float(terminate_wait_sec)
-        kill_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
-        while time.time() < kill_deadline and kill_checks > 0:
-            kill_checks -= 1
-            if proc.poll() is not None:
-                return
-            await asyncio.sleep(0.1)
-        self._last_error = f"runtime process did not exit after forced kill: {reason}"
-        self._persist_runtime_state()
-        raise RuntimeError(self._last_error)
+        except RuntimeError as exc:
+            self._last_error = f"runtime process did not exit after forced kill: {reason}"
+            self._persist_runtime_state()
+            raise RuntimeError(self._last_error) from exc
 
     async def _terminate_candidate_proc_locked(self, *, graceful: bool, reason: str) -> None:
         candidate_proc = self._candidate_proc
@@ -8816,8 +8801,10 @@ class SupervisorManager:
 
     def _begin_countdown_transition(self, request: dict[str, Any], *, countdown_sec: float | None = None) -> dict[str, Any]:
         countdown_value = max(0.0, float(request.get("countdown_sec") if countdown_sec is None else countdown_sec))
-        status = write_core_update_status(
-            {
+        request_payload = dict(request)
+        request_payload["countdown_sec"] = countdown_value
+        status = self._update_state_machine.persist_transition(
+            status_payload={
                 "state": "countdown",
                 "phase": "countdown",
                 "action": str(request.get("action") or "update"),
@@ -8829,17 +8816,13 @@ class SupervisorManager:
                 "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
                 "started_at": time.time(),
                 "scheduled_for": time.time() + countdown_value,
-            }
-        )
-        request_payload = dict(request)
-        request_payload["countdown_sec"] = countdown_value
-        _write_update_attempt(
-            _build_attempt_payload(
+            },
+            attempt_payload=lambda persisted_status: _build_attempt_payload(
                 action=str(request_payload.get("action") or "update"),
                 request=request_payload,
-                status=status,
+                status=persisted_status,
                 accepted=True,
-            )
+            ),
         )
         self._update_state_machine.start_task(
             f"adaos-supervisor-core-update-{request_payload.get('action') or 'update'}",
@@ -8878,41 +8861,46 @@ class SupervisorManager:
             created_at=started_at,
             timeout_sec=prepare_timeout_sec,
         )
-        status = write_core_update_status(
-            {
-                "state": "preparing",
-                "phase": "prepare",
-                "action": str(request.get("action") or "update"),
-                "target_rev": str(request.get("target_rev") or ""),
-                "target_version": str(request.get("target_version") or ""),
-                "reason": str(request.get("reason") or ""),
-                "countdown_sec": float(request.get("countdown_sec") or 0.0),
-                "drain_timeout_sec": float(request.get("drain_timeout_sec") or 10.0),
-                "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
-                "started_at": started_at,
-                "message": "preparing inactive slot before restart",
-                "prepare_timeout_sec": prepare_timeout_sec,
-                "prepare_lease_path": str(prepare_lease_path),
-                "prepare_lease_token": prepare_lease_token,
-                "candidate_prewarm_deferral_count": candidate_prewarm_deferral_count,
-                "candidate_prewarm_max_deferrals": _warm_switch_max_deferrals(),
-            }
+        status_payload = {
+            "state": "preparing",
+            "phase": "prepare",
+            "action": str(request.get("action") or "update"),
+            "target_rev": str(request.get("target_rev") or ""),
+            "target_version": str(request.get("target_version") or ""),
+            "reason": str(request.get("reason") or ""),
+            "countdown_sec": float(request.get("countdown_sec") or 0.0),
+            "drain_timeout_sec": float(request.get("drain_timeout_sec") or 10.0),
+            "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
+            "started_at": started_at,
+            "message": "preparing inactive slot before restart",
+            "prepare_timeout_sec": prepare_timeout_sec,
+            "prepare_lease_path": str(prepare_lease_path),
+            "prepare_lease_token": prepare_lease_token,
+            "candidate_prewarm_deferral_count": candidate_prewarm_deferral_count,
+            "candidate_prewarm_max_deferrals": _warm_switch_max_deferrals(),
+        }
+
+        def _prepare_attempt(persisted_status: dict[str, Any]) -> dict[str, Any]:
+            attempt_payload = dict(request)
+            attempt_payload.update(
+                {
+                    "state": "active",
+                    "accepted": True,
+                    "requested_at": _epoch(request.get("requested_at")) or started_at,
+                    "prepare_started_at": started_at,
+                    "prepare_timeout_sec": prepare_timeout_sec,
+                    "prepare_lease_path": str(prepare_lease_path),
+                    "prepare_lease_token": prepare_lease_token,
+                    "last_status": persisted_status,
+                    "updated_at": started_at,
+                }
+            )
+            return attempt_payload
+
+        status = self._update_state_machine.persist_transition(
+            status_payload=status_payload,
+            attempt_payload=_prepare_attempt,
         )
-        attempt_payload = dict(request)
-        attempt_payload.update(
-            {
-                "state": "active",
-                "accepted": True,
-                "requested_at": _epoch(request.get("requested_at")) or started_at,
-                "prepare_started_at": started_at,
-                "prepare_timeout_sec": prepare_timeout_sec,
-                "prepare_lease_path": str(prepare_lease_path),
-                "prepare_lease_token": prepare_lease_token,
-                "last_status": status,
-                "updated_at": started_at,
-            }
-        )
-        _write_update_attempt(attempt_payload)
         self._update_state_machine.start_task(
             f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
             lambda: self._prepare_and_countdown_update_worker(
@@ -8959,22 +8947,28 @@ class SupervisorManager:
         }
         if isinstance(extra_status, dict):
             status_payload.update(extra_status)
-        status = write_core_update_status(status_payload)
-        payload = dict(request)
-        payload.update(
-            {
-                "state": "planned",
-                "accepted": True,
-                "scheduled_for": due_at,
-                "planned_reason": planned_reason,
-                "min_update_period_sec": _min_update_period_sec(),
-                "last_status": status,
-                "updated_at": time.time(),
-            }
+
+        def _planned_attempt(persisted_status: dict[str, Any]) -> dict[str, Any]:
+            payload = dict(request)
+            payload.update(
+                {
+                    "state": "planned",
+                    "accepted": True,
+                    "scheduled_for": due_at,
+                    "planned_reason": planned_reason,
+                    "min_update_period_sec": _min_update_period_sec(),
+                    "last_status": persisted_status,
+                    "updated_at": time.time(),
+                }
+            )
+            if isinstance(extra_attempt, dict):
+                payload.update(extra_attempt)
+            return payload
+
+        status = self._update_state_machine.persist_transition(
+            status_payload=status_payload,
+            attempt_payload=_planned_attempt,
         )
-        if isinstance(extra_attempt, dict):
-            payload.update(extra_attempt)
-        _write_update_attempt(payload)
         return {"ok": True, "accepted": True, "planned": True, "status": status, "_served_by": "supervisor"}
 
     def _deduplicate_active_slot_transition(
