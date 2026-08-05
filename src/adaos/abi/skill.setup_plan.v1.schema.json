@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/skill.setup_plan.v1.schema.json",
+  "title": "AdaOS Skill Setup Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "plan_id",
+    "version",
+    "skill_id",
+    "inputs",
+    "secrets",
+    "capabilities",
+    "side_effects",
+    "preconditions",
+    "steps",
+    "idempotency",
+    "verification",
+    "rollback"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.skill.setup_plan.v1" },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "skill_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$" },
+    "inputs": { "$ref": "#/$defs/fieldSet" },
+    "secrets": { "$ref": "#/$defs/fieldSet" },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "side_effects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["class", "target", "description"],
+        "properties": {
+          "class": {
+            "enum": ["none", "local_write", "filesystem", "network", "credential", "device_control", "external", "destructive"]
+          },
+          "target": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "reversible": { "type": "boolean" }
+        }
+      }
+    },
+    "preconditions": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "activity", "transaction_boundary"],
+        "properties": {
+          "step_id": { "type": "string", "minLength": 1 },
+          "activity": { "type": "string", "minLength": 1 },
+          "transaction_boundary": { "enum": ["none", "step", "plan"] },
+          "timeout_seconds": { "type": "integer", "minimum": 1 },
+          "retry": { "$ref": "#/$defs/retry" }
+        }
+      }
+    },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "key_fields", "replay"],
+      "properties": {
+        "scope": { "enum": ["skill_release", "workspace", "node"] },
+        "key_fields": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "replay": { "enum": ["return_recorded_result", "verify_then_resume", "reject"] }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks", "success_policy"],
+      "properties": {
+        "checks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/check" } },
+        "success_policy": { "enum": ["all", "required"] }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "activity"],
+      "properties": {
+        "mode": { "enum": ["automatic", "manual", "not_available", "not_required"] },
+        "activity": { "type": ["string", "null"] },
+        "verification": { "type": "array", "items": { "$ref": "#/$defs/check" } }
+      }
+    }
+  },
+  "$defs": {
+    "fieldSet": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "required"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" },
+          "schema": { "type": "object" },
+          "source": { "type": "string" }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "activity", "required"],
+      "properties": {
+        "check_id": { "type": "string", "minLength": 1 },
+        "activity": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_attempts", "backoff_seconds"],
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "backoff_seconds": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

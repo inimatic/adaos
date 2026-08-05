@@ -79,6 +79,7 @@ from adaos.services.workspace_registry import (
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
 )
+from adaos.services.skill.setup_plan import publication_setup_evidence
 
 
 PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
@@ -1226,6 +1227,12 @@ class ArtifactPublicationService:
         data_ref: str | None = None,
         data_isolation_evidence: Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
+        effective_validation_evidence = dict(validation_evidence)
+        if kind == "skill":
+            effective_validation_evidence["setup_publication_gate"] = publication_setup_evidence(
+                artifact_dir,
+                validation_evidence=validation_evidence,
+            )
         record = self.load_pushed_source(kind, artifact_id)
         built = self._verify_current_source(record, artifact_dir)
         if not record.source_tree:
@@ -1267,7 +1274,7 @@ class ArtifactPublicationService:
             components=(built.ref,),
             catalog=catalog,
             requirements_by_package=requirements_by_package,
-            validation_evidence=(validation_evidence,),
+            validation_evidence=(effective_validation_evidence,),
         )
         self.release_cache.put_release(plan)
         self.remote.put_release(
@@ -1283,7 +1290,7 @@ class ArtifactPublicationService:
             change_ids=change_ids,
             source_tree=record.source_tree,
         )
-        candidate = record_validation(candidate, validation_evidence, now=_now())
+        candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
         trial_workspace = self.state_root / "trials" / candidate_id / "workspace"
         trial_manager = WorkspaceActivationManager(
@@ -1336,7 +1343,7 @@ class ArtifactPublicationService:
             workflow_metrics=self._trial_workflow_metrics(
                 artifact_dir,
                 kind=kind,
-                validation_evidence=validation_evidence,
+                validation_evidence=effective_validation_evidence,
                 generated_at=trial_started_at,
             ),
         )
