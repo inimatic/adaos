@@ -60,7 +60,12 @@ from adaos.services.webui_contract import (
 )
 from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
-from .webspace_components import MaterializationExecutorOwner, WebspaceCacheState, WebspaceTaskState
+from .webspace_components import (
+    MaterializationExecutorOwner,
+    WebspaceCacheState,
+    WebspaceProjectionService,
+    WebspaceTaskState,
+)
 from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
@@ -68,6 +73,7 @@ _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
 _TASK_STATE = WebspaceTaskState()
 _CACHE_STATE = WebspaceCacheState()
 _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
+_PROJECTION_SERVICE = WebspaceProjectionService()
 _SCENARIO_SWITCH_REBUILD_TASKS = _TASK_STATE.scenario_switch_rebuild_tasks
 _WEBSPACE_REBUILD_STATUS = _TASK_STATE.webspace_rebuild_status
 _WEBSPACE_RECOVERY_COMMAND_CACHE = _TASK_STATE.webspace_recovery_command_cache
@@ -7710,7 +7716,7 @@ async def _resolve_rebuild_scenario_target(
 def _resolve_projection_refresh_space(webspace_id: str) -> str:
     try:
         row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-        return "dev" if str(getattr(row, "effective_source_mode", "") or "").strip().lower() == "dev" else "workspace"
+        return _PROJECTION_SERVICE.space_for_source(getattr(row, "effective_source_mode", ""))
     except Exception:
         return "workspace"
 
@@ -7740,42 +7746,15 @@ async def _refresh_projection_rules_for_rebuild(
             target_scenario = target_scenario or None
             target_resolution = target_resolution or None
     target_space = _resolve_projection_refresh_space(webspace_id)
-    if not target_scenario:
-        return {
-            "attempted": False,
-            "scenario_id": None,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": 0,
-            "source": "none",
-        }
-    try:
-        rules_loaded = int(ctx.projections.load_from_scenario(target_scenario, space=target_space) or 0)
-        return {
-            "attempted": True,
-            "scenario_id": target_scenario,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": rules_loaded,
-            "source": "scenario_manifest",
-        }
-    except Exception as exc:
-        try:
-            replace_scenario_entries = getattr(ctx.projections, "replace_scenario_entries", None)
-            if callable(replace_scenario_entries):
-                replace_scenario_entries([], scenario_id=target_scenario, space=target_space)
-        except Exception:
-            _log.debug("failed to clear stale scenario data_projections for scenario=%s", target_scenario, exc_info=True)
-        _log.debug("failed to refresh data_projections for scenario=%s", target_scenario, exc_info=True)
-        return {
-            "attempted": True,
-            "scenario_id": target_scenario,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": 0,
-            "source": "scenario_manifest",
-            "error": f"{exc.__class__.__name__}: {exc}",
-        }
+    result = _PROJECTION_SERVICE.refresh_rules(
+        registry=getattr(ctx, "projections", None),
+        scenario_id=target_scenario,
+        scenario_resolution=target_resolution,
+        space=target_space,
+    )
+    if result.get("error"):
+        _log.debug("failed to refresh data_projections for scenario=%s: %s", target_scenario, result["error"])
+    return result
 
 
 def _slugify_webspace_id(raw: str | None) -> str:
@@ -8029,37 +8008,12 @@ async def describe_webspace_projection_state(
     targeting and whether that matches the active scenario layer in memory.
     """
     operational = await describe_webspace_operational_state(webspace_id)
-    target_scenario = (
-        str(scenario_id or "").strip()
-        or str(operational.current_scenario or "").strip()
-        or str(operational.effective_home_scenario or "").strip()
-        or None
-    )
-
     registry = get_ctx().projections
-    snapshot: Dict[str, Any] = {}
-    try:
-        raw = registry.snapshot() if hasattr(registry, "snapshot") else {}
-        snapshot = dict(raw) if isinstance(raw, Mapping) else {}
-    except Exception:
-        snapshot = {}
-
-    active_scenario = str(snapshot.get("active_scenario_id") or "").strip() or None
-    active_space = str(snapshot.get("active_space") or "").strip() or "workspace"
-    target_space = "dev" if str(operational.source_mode or "").strip().lower() == "dev" else "workspace"
-    return {
-        "webspace_id": operational.webspace_id,
-        "target_scenario": target_scenario,
-        "target_space": target_space,
-        "active_scenario": active_scenario,
-        "active_space": active_space,
-        "active_matches_target": bool(target_scenario)
-        and active_scenario == target_scenario
-        and active_space == target_space,
-        "base_rule_count": int(snapshot.get("base_rule_count") or 0),
-        "scenario_rule_count": int(snapshot.get("scenario_rule_count") or 0),
-        "source": "projection_registry",
-    }
+    return _PROJECTION_SERVICE.describe(
+        operational=operational,
+        scenario_id=scenario_id,
+        registry=registry,
+    )
 
 
 async def _resolve_reload_scenario_target(
@@ -8928,32 +8882,29 @@ async def _project_webspace_from_scenario(
         source_mode,
         emit_event,
     )
-    try:
-        mgr = _build_scenario_manager()
-        timeout_s = _project_scenario_timeout_s()
-        projection = mgr.sync_to_yjs_async(
+    timeout_s = _project_scenario_timeout_s()
+    result = await _PROJECTION_SERVICE.project(
+        operation=lambda: _build_scenario_manager().sync_to_yjs_async(
             scenario_id or "web_desktop",
             webspace_id,
             space=source_mode,
             emit_event=emit_event,
-        )
-        if timeout_s > 0.0:
-            await asyncio.wait_for(projection, timeout=timeout_s)
-        else:
-            await projection
-    except asyncio.TimeoutError:
+        ),
+        timeout_s=timeout_s,
+    )
+    if result["status"] == "timed_out":
         _log.warning(
             "timed out projecting webspace=%s from scenario=%s timeout_s=%s",
             webspace_id,
             scenario_id,
             _project_scenario_timeout_s(),
         )
-    except Exception:
+    elif result["status"] == "failed":
         _log.warning(
-            "failed to project webspace=%s from scenario=%s",
+            "failed to project webspace=%s from scenario=%s: %s",
             webspace_id,
             scenario_id,
-            exc_info=True,
+            result.get("error"),
         )
 
 
