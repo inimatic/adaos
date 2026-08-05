@@ -1,3 +1,4 @@
+from .api import SupervisorRoute, create_supervisor_app
 from .memory import MemoryProfilingService
 from .process import AdoptedProcess, ProcessSupervisor
 from .recovery import RuntimeRecoveryFacts, RuntimeRecoveryPolicy
@@ -10,4 +11,6 @@ __all__ = [
     "RuntimeRecoveryFacts",
     "RuntimeRecoveryPolicy",
     "UpdateStateMachine",
+    "SupervisorRoute",
+    "create_supervisor_app",
 ]

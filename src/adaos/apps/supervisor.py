@@ -28,11 +28,8 @@ except Exception:  # pragma: no cover - optional dependency in some environments
 
 import requests
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi import HTTPException
 
-from adaos.apps.api.auth import require_token
 from adaos.apps.bootstrap import init_ctx
 from adaos.apps.supervisor_runtime import (
     AdoptedProcess,
@@ -40,7 +37,9 @@ from adaos.apps.supervisor_runtime import (
     ProcessSupervisor,
     RuntimeRecoveryFacts,
     RuntimeRecoveryPolicy,
+    SupervisorRoute,
     UpdateStateMachine,
+    create_supervisor_app,
 )
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
@@ -10471,14 +10470,6 @@ class SupervisorManager:
 
 
 init_ctx()
-_CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
-_CORS_ALLOW_HEADERS = ["*"]
-
-
-app = FastAPI(title="AdaOS Supervisor")
-
-
-@app.on_event("startup")
 async def _startup() -> None:
     args = _parse_args()
     manager = SupervisorManager(runtime_host=args.host, runtime_port=args.port, token=_resolved_token(args.token))
@@ -10486,50 +10477,10 @@ async def _startup() -> None:
     await manager.start()
 
 
-@app.on_event("shutdown")
 async def _shutdown() -> None:
     manager = getattr(app.state, "manager", None)
     if manager is not None:
         await manager.close()
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=_CORS_ALLOW_METHODS,
-    allow_headers=_CORS_ALLOW_HEADERS,
-    allow_credentials=False,
-)
-
-
-@app.middleware("http")
-async def private_network_access_middleware(request: Request, call_next):
-    origin = str(request.headers.get("origin") or "").strip()
-    requested_method = str(request.headers.get("access-control-request-method") or "").strip().upper()
-    requested_headers = str(request.headers.get("access-control-request-headers") or "").strip()
-    requested_private_network = str(request.headers.get("access-control-request-private-network") or "").strip().lower()
-    if (
-        origin
-        and request.method.upper() == "OPTIONS"
-        and requested_method
-        and requested_private_network == "true"
-    ):
-        response = Response(status_code=204)
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Methods"] = requested_method
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
-        if requested_headers:
-            response.headers["Access-Control-Allow-Headers"] = requested_headers
-        response.headers["Vary"] = "Origin"
-        return response
-
-    response = await call_next(request)
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
-        response.headers["Vary"] = "Origin"
-    return response
-
 
 def _manager() -> SupervisorManager:
     manager = getattr(app.state, "manager", None)
@@ -10538,32 +10489,26 @@ def _manager() -> SupervisorManager:
     return manager
 
 
-@app.get("/api/ping")
 async def ping() -> dict[str, Any]:
     return {"ok": True, "ts": time.time(), "service": "adaos-supervisor"}
 
 
-@app.get("/api/supervisor/status", dependencies=[Depends(require_token)])
 async def supervisor_status() -> dict[str, Any]:
     return _manager().status()
 
 
-@app.get("/api/supervisor/memory/status", dependencies=[Depends(require_token)])
 async def supervisor_memory_status() -> dict[str, Any]:
     return _manager().memory_status()
 
 
-@app.get("/api/supervisor/memory/telemetry", dependencies=[Depends(require_token)])
 async def supervisor_memory_telemetry(limit: int = 100) -> dict[str, Any]:
     return _manager().memory_telemetry(limit=limit)
 
 
-@app.get("/api/supervisor/public/memory-status")
 async def supervisor_public_memory_status() -> dict[str, Any]:
     return _manager().public_memory_status()
 
 
-@app.get("/api/supervisor/memory/sessions", dependencies=[Depends(require_token)])
 async def supervisor_memory_sessions(limit: int = 100) -> dict[str, Any]:
     manager = _manager()
     try:
@@ -10572,12 +10517,10 @@ async def supervisor_memory_sessions(limit: int = 100) -> dict[str, Any]:
         return manager.memory_sessions()
 
 
-@app.get("/api/supervisor/memory/incidents", dependencies=[Depends(require_token)])
 async def supervisor_memory_incidents(limit: int = 50) -> dict[str, Any]:
     return _manager().memory_incidents(limit=limit)
 
 
-@app.get("/api/supervisor/memory/sessions/{session_id}", dependencies=[Depends(require_token)])
 async def supervisor_memory_session(session_id: str) -> dict[str, Any]:
     payload = _manager().memory_session(session_id)
     if payload is None:
@@ -10585,7 +10528,6 @@ async def supervisor_memory_session(session_id: str) -> dict[str, Any]:
     return payload
 
 
-@app.get("/api/supervisor/memory/sessions/{session_id}/artifacts/{artifact_id}", dependencies=[Depends(require_token)])
 async def supervisor_memory_session_artifact(
     session_id: str,
     artifact_id: str,
@@ -10607,7 +10549,6 @@ async def supervisor_memory_session_artifact(
     return payload
 
 
-@app.post("/api/supervisor/memory/profile/start", dependencies=[Depends(require_token)])
 async def supervisor_memory_profile_start(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
     return _manager().start_memory_profile(
@@ -10617,19 +10558,16 @@ async def supervisor_memory_profile_start(payload: dict[str, Any] | None = None)
     )
 
 
-@app.post("/api/supervisor/memory/profile/{session_id}/stop", dependencies=[Depends(require_token)])
 async def supervisor_memory_profile_stop(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
     return _manager().stop_memory_profile(session_id, reason=str(body.get("reason") or "operator.stop"))
 
 
-@app.post("/api/supervisor/memory/profile/{session_id}/retry", dependencies=[Depends(require_token)])
 async def supervisor_memory_profile_retry(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
     return _manager().retry_memory_profile(session_id, reason=str(body.get("reason") or "operator.retry"))
 
 
-@app.post("/api/supervisor/memory/publish", dependencies=[Depends(require_token)])
 async def supervisor_memory_publish(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
     session_id = str(body.get("session_id") or "").strip()
@@ -10638,19 +10576,16 @@ async def supervisor_memory_publish(payload: dict[str, Any] | None = None) -> di
     return _manager().publish_memory_profile(session_id, reason=str(body.get("reason") or "operator.publish"))
 
 
-@app.get("/api/supervisor/sidecar/status", dependencies=[Depends(require_token)])
 async def supervisor_sidecar_status() -> dict[str, Any]:
     return _manager().sidecar_status()
 
 
-@app.post("/api/supervisor/runtime/restart", dependencies=[Depends(require_token)])
 async def supervisor_runtime_restart(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     body = payload if isinstance(payload, dict) else {}
     status = await _manager().restart_runtime(reason=str(body.get("reason") or "supervisor.restart"))
     return {"ok": True, "runtime": status}
 
 
-@app.post("/api/supervisor/runtime/candidate/start", dependencies=[Depends(require_token)])
 async def supervisor_runtime_candidate_start(payload: dict[str, Any]) -> dict[str, Any]:
     status = await _manager().start_candidate_runtime(
         slot=str(payload.get("slot") or "").strip().upper() or None,
@@ -10659,7 +10594,6 @@ async def supervisor_runtime_candidate_start(payload: dict[str, Any]) -> dict[st
     return {"ok": True, "runtime": status}
 
 
-@app.post("/api/supervisor/runtime/candidate/stop", dependencies=[Depends(require_token)])
 async def supervisor_runtime_candidate_stop(payload: dict[str, Any]) -> dict[str, Any]:
     status = await _manager().stop_candidate_runtime(
         reason=str(payload.get("reason") or "supervisor.candidate.stop")
@@ -10667,19 +10601,16 @@ async def supervisor_runtime_candidate_stop(payload: dict[str, Any]) -> dict[str
     return {"ok": True, "runtime": status}
 
 
-@app.post("/api/supervisor/sidecar/restart", dependencies=[Depends(require_token)])
 async def supervisor_sidecar_restart(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().restart_sidecar(
         reconnect_hub_root=bool(payload.get("reconnect_hub_root", True))
     )
 
 
-@app.get("/api/supervisor/update/status", dependencies=[Depends(require_token)])
 async def supervisor_update_status() -> dict[str, Any]:
     return _manager().supervisor_update_status()
 
 
-@app.get("/api/supervisor/public/update-status")
 async def supervisor_public_update_status() -> dict[str, Any]:
     return _manager().public_update_status()
 
@@ -10704,7 +10635,6 @@ def _payload_first_float(payload: dict[str, Any], keys: tuple[str, ...], default
     return float(default)
 
 
-@app.post("/api/supervisor/update/start", dependencies=[Depends(require_token)])
 async def supervisor_update_start(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().start_update(
         action="update",
@@ -10717,12 +10647,10 @@ async def supervisor_update_start(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@app.post("/api/supervisor/update/cancel", dependencies=[Depends(require_token)])
 async def supervisor_update_cancel(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().cancel_update(reason=str(payload.get("reason") or "user.cancelled"))
 
 
-@app.post("/api/supervisor/update/defer", dependencies=[Depends(require_token)])
 async def supervisor_update_defer(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().defer_update(
         delay_sec=_payload_first_float(payload, ("delay_sec", "countdown_sec"), 300.0),
@@ -10730,7 +10658,6 @@ async def supervisor_update_defer(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@app.post("/api/supervisor/update/rollback", dependencies=[Depends(require_token)])
 async def supervisor_update_rollback(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().start_update(
         action="rollback",
@@ -10743,14 +10670,81 @@ async def supervisor_update_rollback(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-@app.post("/api/supervisor/update/promote-root", dependencies=[Depends(require_token)])
 async def supervisor_update_promote_root(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().promote_root(reason=str(payload.get("reason") or "core.root_promotion"))
 
 
-@app.post("/api/supervisor/update/complete", dependencies=[Depends(require_token)])
 async def supervisor_update_complete(payload: dict[str, Any]) -> dict[str, Any]:
     return await _manager().complete_update(reason=str(payload.get("reason") or "core.update.complete"))
+
+
+app = create_supervisor_app(
+    startup=_startup,
+    shutdown=_shutdown,
+    routes=(
+        SupervisorRoute("/api/ping", ping, protected=False),
+        SupervisorRoute("/api/supervisor/status", supervisor_status),
+        SupervisorRoute("/api/supervisor/memory/status", supervisor_memory_status),
+        SupervisorRoute("/api/supervisor/memory/telemetry", supervisor_memory_telemetry),
+        SupervisorRoute(
+            "/api/supervisor/public/memory-status",
+            supervisor_public_memory_status,
+            protected=False,
+        ),
+        SupervisorRoute("/api/supervisor/memory/sessions", supervisor_memory_sessions),
+        SupervisorRoute("/api/supervisor/memory/incidents", supervisor_memory_incidents),
+        SupervisorRoute("/api/supervisor/memory/sessions/{session_id}", supervisor_memory_session),
+        SupervisorRoute(
+            "/api/supervisor/memory/sessions/{session_id}/artifacts/{artifact_id}",
+            supervisor_memory_session_artifact,
+        ),
+        SupervisorRoute(
+            "/api/supervisor/memory/profile/start",
+            supervisor_memory_profile_start,
+            method="POST",
+        ),
+        SupervisorRoute(
+            "/api/supervisor/memory/profile/{session_id}/stop",
+            supervisor_memory_profile_stop,
+            method="POST",
+        ),
+        SupervisorRoute(
+            "/api/supervisor/memory/profile/{session_id}/retry",
+            supervisor_memory_profile_retry,
+            method="POST",
+        ),
+        SupervisorRoute("/api/supervisor/memory/publish", supervisor_memory_publish, method="POST"),
+        SupervisorRoute("/api/supervisor/sidecar/status", supervisor_sidecar_status),
+        SupervisorRoute("/api/supervisor/runtime/restart", supervisor_runtime_restart, method="POST"),
+        SupervisorRoute(
+            "/api/supervisor/runtime/candidate/start",
+            supervisor_runtime_candidate_start,
+            method="POST",
+        ),
+        SupervisorRoute(
+            "/api/supervisor/runtime/candidate/stop",
+            supervisor_runtime_candidate_stop,
+            method="POST",
+        ),
+        SupervisorRoute("/api/supervisor/sidecar/restart", supervisor_sidecar_restart, method="POST"),
+        SupervisorRoute("/api/supervisor/update/status", supervisor_update_status),
+        SupervisorRoute(
+            "/api/supervisor/public/update-status",
+            supervisor_public_update_status,
+            protected=False,
+        ),
+        SupervisorRoute("/api/supervisor/update/start", supervisor_update_start, method="POST"),
+        SupervisorRoute("/api/supervisor/update/cancel", supervisor_update_cancel, method="POST"),
+        SupervisorRoute("/api/supervisor/update/defer", supervisor_update_defer, method="POST"),
+        SupervisorRoute("/api/supervisor/update/rollback", supervisor_update_rollback, method="POST"),
+        SupervisorRoute(
+            "/api/supervisor/update/promote-root",
+            supervisor_update_promote_root,
+            method="POST",
+        ),
+        SupervisorRoute("/api/supervisor/update/complete", supervisor_update_complete, method="POST"),
+    ),
+)
 
 
 def main() -> None:
