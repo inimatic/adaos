@@ -265,6 +265,33 @@ def test_set_subnet_alias_acknowledges_durable_identity_before_projection(monkey
     assert background.tasks[0].args[1] is bus
 
 
+def test_subnet_alias_background_refresh_publishes_timestamped_event(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+
+    published: list[object] = []
+
+    async def _request_projection(**_kwargs):
+        return {"pending": False}
+
+    monkeypatch.setattr(named_entity_projection, "default_webspace_id", lambda: "default")
+    monkeypatch.setattr(named_entity_projection, "request_named_entity_projection", _request_projection)
+    bus = types.SimpleNamespace(publish=published.append)
+    event_payload = {
+        "alias": "ruhub",
+        "subnet_id": "sn_92ffc943",
+        "webspace_id": None,
+    }
+
+    asyncio.run(api_server._refresh_subnet_alias_dependents(event_payload, bus))
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.type == "subnet.alias.changed"
+    assert event.payload == event_payload
+    assert event.source == "api"
+    assert isinstance(event.ts, float)
+
+
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
 def test_private_network_access_middleware_allows_cross_origin_loopback_probe(origin: str) -> None:
     scope = {

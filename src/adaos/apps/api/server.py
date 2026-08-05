@@ -1563,6 +1563,7 @@ async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any], bus: A
             type="subnet.alias.changed",
             payload=event_payload,
             source="api",
+            ts=time.time(),
         )
         await asyncio.to_thread(bus.publish, event)
     except Exception as exc:
