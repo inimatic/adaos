@@ -206,6 +206,31 @@ message. The selected `dev1-dev` room reported
 `effective_initial_replay_dedupe_total=6`; the log contained no peer
 replacement, DataChannel timeout, unexpected 1006, or eager full-state replay.
 
+The 2026-08-05 follow-up measured the transition independently from browser
+startup. `desktop.scenario.set` changed `dev1-dev` from `builder` to
+`test04_recipes` in 838 ms (784 ms of semantic rebuild). The renderer already
+held the exact authoritative target while the navigation overlay continued to
+wait for the live Yjs provider. Client `0.0.267` accepts that rendered target
+only when the one-shot startup preparation is `prepared` and Webspace/scenario
+identity is exact; transport quality remains visible as a separate status and
+cannot repeat the mutation.
+
+The same source-runtime restart loaded the page-peer and cancelled-adapter
+fixes that the preceding process had not executed. The old process repeatedly
+sent the same 298,207-byte state to historical adapters. After restart each
+live peer received one initial `SYNC_STEP2`; the reliability summary later
+reported three connected peers, three open Yjs channels, fresh state and idle
+pressure. Peer telemetry now carries the page `browser_session_id` and client
+build beside `peer_id`, which allows a `dc_open_timeout` to be attributed to
+the actual tab instead of an aggregate from other tabs.
+
+One performance issue remains deliberately separate: changing projections in
+`dev1` can still emit approximately 375 KiB `sync_update` messages even when
+their digests differ and no retry occurs. This is whole-document projection
+granularity, not the fixed identical-payload amplification. Structural Yjs
+history compaction also needs a transactional design; no live room was reset
+during this investigation.
+
 Client commit `734023b` was first pushed to `main`; CI advanced the package to
 `0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
 pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra

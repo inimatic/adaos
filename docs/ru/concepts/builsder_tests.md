@@ -194,6 +194,15 @@ Project Builder или workflow. В URL используется `intent=webspac
     аварийный full replay допустим только с явной причиной malformed/preflight.
 22. Проверить журнал: ни один шаг 1–21 не создал
     Codex/LLM/Automation Run.
+23. Во время перехода дождаться появления целевого сценария за overlay.
+    Если однократная startup-подготовка уже имеет статус `prepared`, а render
+    materialization точно совпадает по Webspace и scenario, overlay должен
+    закрыться сразу, не ожидая завершения первого live Yjs sync. Деградация
+    транспорта показывается отдельно и не повторяет `desktop.scenario.set`.
+24. При `dc_open_timeout` сопоставить именно текущую вкладку по набору
+    `peer_id + browser_session_id + client_build_id + client_build_version`.
+    Агрегат `openYjsChannels > 0` от других вкладок не является доказательством
+    direct-связи проверяемой вкладки.
 
 Контрольный результат 2026-08-04 для source build
 `0.1.667+4391.89ec14a3`: три подключённых WebRTC peer с открытым Yjs-каналом,

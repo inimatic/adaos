@@ -1536,10 +1536,28 @@ Autonomy, evidence, and acceptance:
   8-WS/7-YWS controlled reconnect restored the public route in 9.2 seconds.
 - [x] Client Infra run `30979460239` deployed the bounded startup continuation
   as `0.0.266+ade734a`.
+- [x] `[must]` Separate Preview completion from live transport promotion. A
+  one-shot startup preparation acknowledged as `prepared`, together with an
+  exact scenario-consistent render materialization, is sufficient to close the
+  navigation overlay; the live Yjs provider may finish first sync afterwards.
+  The observed `builder -> test04_recipes` runtime transition took 838 ms, so
+  an already visible target must not remain obscured by a transport wait.
+- [x] `[must]` Correlate direct peers with the originating browser page and
+  client build. RTC signaling and peer snapshots carry
+  `peer_id + browser_session_id + client_build_id + client_build_version`, so
+  an aggregate open peer is not mistaken for the current tab's direct path.
 - [ ] `[should]` Move synchronous cold-start inventory and skill readiness work
   off the API event-loop critical path. It currently delays first readiness
   and may cause multi-second event-loop lag, but is not a Preview switch and
   must not be repaired by replaying state-changing commands.
+- [ ] `[should]` Make browser-stream projections delta-sized. After leaked
+  adapter cleanup, repeated identical Yjs sends are gone, but a small changing
+  projection in `dev1` can still produce a 375 KiB `sync_update`; this is a
+  projection/transaction granularity problem, not a reconnect retry.
+- [ ] `[could]` Add safe structural CRDT compaction with backup, semantic
+  verification, and atomic rollback. Runtime replay-log compaction does not
+  remove historical Yjs tombstones and must not be replaced by an ad-hoc room
+  reset.
 - [ ] `[could]` Evaluate a browser SharedWorker or equivalent per-Webspace
   multi-tab broker after the lifecycle fix so legitimate open tabs can share a
   transport. Do not collapse page identities in the server merely to reduce
