@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -35,6 +34,7 @@ from fastapi.responses import Response
 
 from adaos.apps.api.auth import require_token
 from adaos.apps.bootstrap import init_ctx
+from adaos.apps.supervisor_runtime import AdoptedProcess, ProcessSupervisor
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
@@ -113,6 +113,7 @@ _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
 _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
+_PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -2430,11 +2431,7 @@ def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, A
 
 
 def _listener_running(host: str, port: int, *, timeout: float = 0.35) -> bool:
-    try:
-        with socket.create_connection((str(host or "127.0.0.1"), int(port)), timeout=max(0.05, float(timeout))):
-            return True
-    except Exception:
-        return False
+    return _PROCESS_SUPERVISOR.listener_running(host, port, timeout=timeout)
 
 
 def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.75) -> bool:
@@ -2514,20 +2511,7 @@ def _runtime_profile_graceful_shutdown_timeout_sec(profile_mode: str) -> tuple[f
 
 
 def _signal_process_family(proc: subprocess.Popen[Any], sig: int) -> None:
-    if os.name != "nt":
-        pid = getattr(proc, "pid", None)
-        if pid:
-            try:
-                os.killpg(int(pid), int(sig))
-                return
-            except ProcessLookupError:
-                pass
-            except Exception:
-                pass
-    if sig == getattr(signal, "SIGKILL", 9):
-        proc.kill()
-    else:
-        proc.terminate()
+    _PROCESS_SUPERVISOR.signal_family(proc, sig)
 
 
 def _runtime_profile_finalize_wait_sec() -> float:
@@ -2557,39 +2541,7 @@ def _memory_profile_max_runtime_sec(profile_mode: str) -> float:
 
 
 def _proc_details(proc: subprocess.Popen[Any] | None, *, cwd_hint: str | None = None) -> dict[str, Any]:
-    managed_pid = None
-    managed_alive = False
-    managed_cmdline: list[str] = []
-    managed_executable = None
-    managed_cwd = None
-    if proc is None:
-        return {
-            "managed_pid": None,
-            "managed_alive": False,
-            "managed_cmdline": [],
-            "managed_executable": None,
-            "managed_cwd": None,
-        }
-    try:
-        managed_pid = int(proc.pid or 0) or None
-        managed_alive = proc.poll() is None
-        raw_args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args or "")]
-        managed_cmdline = [str(item) for item in raw_args if str(item or "").strip()]
-        managed_executable = managed_cmdline[0] if managed_cmdline else None
-        managed_cwd = str(cwd_hint or getattr(proc, "cwd", None) or "").strip() or None
-    except Exception:
-        managed_pid = None
-        managed_alive = False
-        managed_cmdline = []
-        managed_executable = None
-        managed_cwd = None
-    return {
-        "managed_pid": managed_pid,
-        "managed_alive": managed_alive,
-        "managed_cmdline": managed_cmdline,
-        "managed_executable": managed_executable,
-        "managed_cwd": managed_cwd,
-    }
+    return _PROCESS_SUPERVISOR.describe(proc, cwd_hint=cwd_hint)
 
 
 def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
@@ -2908,80 +2860,13 @@ def _positive_int_or_none(value: Any) -> int | None:
     return item if item > 0 else None
 
 
-class _AdoptedProcess:
-    """Small Popen-compatible handle for a listener inherited across supervisor restart."""
-
+class _AdoptedProcess(AdoptedProcess):
     def __init__(self, pid: int) -> None:
-        if psutil is None:
-            raise RuntimeError("psutil is required to adopt an existing process")
-        process = psutil.Process(int(pid))
-        self.pid = int(pid)
-        self._created_at = float(process.create_time())
-        try:
-            self.args = list(process.cmdline())
-        except Exception:
-            self.args = []
-        try:
-            self.cwd = str(process.cwd())
-        except Exception:
-            self.cwd = None
-
-    def _process(self) -> Any | None:
-        if psutil is None:
-            return None
-        try:
-            process = psutil.Process(self.pid)
-            if abs(float(process.create_time()) - self._created_at) > 0.001:
-                return None
-            return process
-        except Exception:
-            return None
-
-    def poll(self) -> int | None:
-        process = self._process()
-        return None if process is not None and process.is_running() else 0
-
-    def terminate(self) -> None:
-        process = self._process()
-        if process is not None:
-            process.terminate()
-
-    def kill(self) -> None:
-        process = self._process()
-        if process is not None:
-            process.kill()
+        super().__init__(pid, psutil_module=psutil)
 
 
 def _listener_owner_pid(host: str, port: int) -> int | None:
-    if psutil is None:
-        return None
-    expected_port = int(port)
-    expected_host = str(host or "127.0.0.1").strip()
-    try:
-        connections = psutil.net_connections(kind="tcp")
-    except Exception:
-        return None
-    for connection in connections:
-        if str(getattr(connection, "status", "")).upper() != "LISTEN":
-            continue
-        address = getattr(connection, "laddr", None)
-        if not address or int(getattr(address, "port", 0) or 0) != expected_port:
-            continue
-        bound_host = str(getattr(address, "ip", "") or "")
-        if expected_host not in {"0.0.0.0", "::", ""} and bound_host not in {
-            expected_host,
-            "0.0.0.0",
-            "::",
-            "::1" if expected_host == "127.0.0.1" else expected_host,
-        }:
-            continue
-        try:
-            pid = int(getattr(connection, "pid", 0) or 0)
-        except Exception:
-            pid = 0
-        if pid > 0:
-            return pid
-    return None
+    return _PROCESS_SUPERVISOR.listener_owner_pid(host, port)
 
 
 def _format_slot_value(template: str, values: dict[str, str]) -> str:
