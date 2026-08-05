@@ -2140,19 +2140,8 @@ class RouterService:
         except Exception:
             return None
 
-    async def start(self) -> None:
-        if self._started:
-            return
-        self._started = True
-        try:
-            conversation_store.ensure_schema()
-            _seed_conversation_registry()
-        except Exception:
-            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
-        # Subscribe to ui.notify on local event bus
+    def _compose_handlers(self) -> list[tuple[str, Callable[[Event], Any]]]:
         if not self._subscribed:
-            self.bus.subscribe("ui.notify", self._on_event)
-
             # ui.say routing (TTS)
             def _say_via_system(text: str) -> bool:
                 try:
@@ -2236,9 +2225,6 @@ class RouterService:
                         print_text(text.strip(), node_id=conf.node_id, origin={"source": ev.source})
                     except Exception:
                         pass
-
-            self.bus.subscribe("ui.say", _on_say)
-            self._subscribed = True
 
         # ------------------------------------------------------------
         # Web voice chat routing (per-webspace)
@@ -7087,30 +7073,33 @@ class RouterService:
             except Exception:
                 pass
 
+        return [
+            ("ui.notify", self._on_event),
+            ("ui.say", _on_say),
+            ("voice.chat.open", _on_voice_open),
+            ("voice.chat.user", _on_voice_user),
+            ("dialog.user_message", _on_voice_user),
+            ("dialog.channel.select", _on_dialog_channel_select),
+            ("dialog.channel.activated", _on_dialog_channel_event),
+            ("dialog.channel.deactivated", _on_dialog_channel_event),
+            ("conversation.interaction.responded", _on_conversation_interaction_responded),
+            ("io.out.chat.append", _on_io_out_chat_append),
+            ("io.out.say", _on_io_out_say),
+            ("io.out.media.route", _on_io_out_media_route),
+            ("io.out.stream.publish", _on_io_out_stream_publish),
+            ("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot),
+            ("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot),
+            ("conversation.history.more", _on_conversation_history_more),
+            ("browser.session.changed", _on_browser_session_changed),
+            ("subnet.member.snapshot.changed", _on_member_media_inventory_changed),
+            ("subnet.member.link.up", _on_member_media_inventory_changed),
+            ("subnet.member.link.down", _on_member_media_inventory_changed),
+            ("capacity.changed", _on_member_media_inventory_changed),
+            ("nlp.intent.not_obtained", _on_nlp_intent_not_obtained),
+            ("nlp.teacher.candidate.proposed", _on_nlp_teacher_candidate_proposed),
+        ]
 
-        self.bus.subscribe("voice.chat.open", _on_voice_open)
-        self.bus.subscribe("voice.chat.user", _on_voice_user)
-        self.bus.subscribe("dialog.user_message", _on_voice_user)
-        self.bus.subscribe("dialog.channel.select", _on_dialog_channel_select)
-        self.bus.subscribe("dialog.channel.activated", _on_dialog_channel_event)
-        self.bus.subscribe("dialog.channel.deactivated", _on_dialog_channel_event)
-        self.bus.subscribe("conversation.interaction.responded", _on_conversation_interaction_responded)
-        self.bus.subscribe("io.out.chat.append", _on_io_out_chat_append)
-        self.bus.subscribe("io.out.say", _on_io_out_say)
-        self.bus.subscribe("io.out.media.route", _on_io_out_media_route)
-        self.bus.subscribe("io.out.stream.publish", _on_io_out_stream_publish)
-        self.bus.subscribe("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot)
-        self.bus.subscribe("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot)
-        self.bus.subscribe("conversation.history.more", _on_conversation_history_more)
-        self.bus.subscribe("browser.session.changed", _on_browser_session_changed)
-        self.bus.subscribe("subnet.member.snapshot.changed", _on_member_media_inventory_changed)
-        self.bus.subscribe("subnet.member.link.up", _on_member_media_inventory_changed)
-        self.bus.subscribe("subnet.member.link.down", _on_member_media_inventory_changed)
-        self.bus.subscribe("capacity.changed", _on_member_media_inventory_changed)
-        self.bus.subscribe("nlp.intent.not_obtained", _on_nlp_intent_not_obtained)
-        self.bus.subscribe("nlp.teacher.candidate.proposed", _on_nlp_teacher_candidate_proposed)
-
-        # Watch rules file
+    def _start_rules_watch(self) -> None:
         def _reload(rules: list[dict]):
             self._rules = rules or []
 
@@ -7122,6 +7111,21 @@ class RouterService:
             node_id = ""
         self._rules = load_rules(self.base_dir, node_id)
         self._stop_watch = watch_rules(self.base_dir, node_id, _reload)
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        try:
+            conversation_store.ensure_schema()
+            _seed_conversation_registry()
+        except Exception:
+            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
+        if not self._subscribed:
+            for event_type, handler in self._compose_handlers():
+                self.bus.subscribe(event_type, handler)
+            self._subscribed = True
+        self._start_rules_watch()
 
     async def stop(self) -> None:
         if self._stop_watch:
