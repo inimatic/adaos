@@ -113,6 +113,7 @@ from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscri
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
 from adaos.services.bounded_io import bounded_text_tail_lines
+from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
@@ -1520,14 +1521,7 @@ class BootstrapService:
         self.heartbeat = heartbeat
         self.skills_loader = skills_loader
         self.subnet_registry = subnet_registry
-        self._boot_tasks: List[asyncio.Task] = []
-        self._boot_lock = asyncio.Lock()
-        self._boot_done = asyncio.Event()
-        self._boot_done.set()
-        self._boot_in_progress = False
-        self._ready = asyncio.Event()
-        self._booted = False
-        self._app: Any = None
+        self._lifecycle = BootstrapLifecycleCoordinator()
         self._io_bus: Any = None
         self._log = logging.getLogger("adaos.hub-io")
         # Current hub-root NATS client (when connected). Used for forced reconnects without full process restart.
@@ -1540,7 +1534,60 @@ class BootstrapService:
         self._hub_root_bridge_watchdog_rearm_total = 0
         self._hub_root_authority_waiters: set[asyncio.Event] = set()
         self._hub_root_authority_ready_at: float | None = None
-        self._member_ready_callback: Callable[[], Awaitable[None]] | None = None
+
+    # Compatibility facades for callers and tests that still inspect the
+    # historical BootstrapService lifecycle attributes directly.
+    @property
+    def _boot_tasks(self) -> list[asyncio.Task[Any]]:
+        return self._lifecycle.boot_tasks
+
+    @_boot_tasks.setter
+    def _boot_tasks(self, value: list[asyncio.Task[Any]]) -> None:
+        self._lifecycle.boot_tasks = value
+
+    @property
+    def _boot_lock(self) -> asyncio.Lock:
+        return self._lifecycle.boot_lock
+
+    @property
+    def _boot_done(self) -> asyncio.Event:
+        return self._lifecycle.boot_done
+
+    @property
+    def _boot_in_progress(self) -> bool:
+        return self._lifecycle.boot_in_progress
+
+    @_boot_in_progress.setter
+    def _boot_in_progress(self, value: bool) -> None:
+        self._lifecycle.boot_in_progress = bool(value)
+
+    @property
+    def _ready(self) -> asyncio.Event:
+        return self._lifecycle.ready
+
+    @property
+    def _booted(self) -> bool:
+        return self._lifecycle.booted
+
+    @_booted.setter
+    def _booted(self, value: bool) -> None:
+        self._lifecycle.booted = bool(value)
+
+    @property
+    def _app(self) -> Any:
+        return self._lifecycle.app
+
+    @_app.setter
+    def _app(self, value: Any) -> None:
+        self._lifecycle.app = value
+
+    @property
+    def _member_ready_callback(self) -> Callable[[], Awaitable[None]] | None:
+        return self._lifecycle.member_ready_callback
+
+    @_member_ready_callback.setter
+    def _member_ready_callback(self, value: Callable[[], Awaitable[None]] | None) -> None:
+        self._lifecycle.member_ready_callback = value
 
     def _mark_hub_root_authority_ready(self) -> None:
         """Release cutover waiters only after the active Root route subscription is flushed."""
@@ -1549,25 +1596,10 @@ class BootstrapService:
             waiter.set()
 
     def _find_live_boot_task(self, task_name: str) -> asyncio.Task | None:
-        live_tasks: list[asyncio.Task] = []
-        found: asyncio.Task | None = None
-        for task in self._boot_tasks:
-            if task.done():
-                continue
-            live_tasks.append(task)
-            if found is None and task.get_name() == task_name:
-                found = task
-        if len(live_tasks) != len(self._boot_tasks):
-            self._boot_tasks = live_tasks
-        return found
+        return self._lifecycle.find_live_task(task_name)
 
     def _start_boot_task_once(self, task_name: str, coro_factory: Callable[[], Awaitable[Any]]) -> asyncio.Task:
-        existing = self._find_live_boot_task(task_name)
-        if existing is not None:
-            return existing
-        task = asyncio.create_task(coro_factory(), name=task_name)
-        self._boot_tasks.append(task)
-        return task
+        return self._lifecycle.start_task_once(task_name, coro_factory)
 
     def _start_hub_root_bridge_task(
         self,
@@ -1707,7 +1739,7 @@ class BootstrapService:
             }
 
     def is_ready(self) -> bool:
-        return self._ready.is_set()
+        return self._lifecycle.is_ready()
 
     async def _reset_hub_root_route_runtime(
         self,
@@ -2290,22 +2322,7 @@ class BootstrapService:
         return asyncio.create_task(loop(), name="adaos-heartbeat")
 
     async def run_boot_sequence(self, app: Any) -> None:
-        while True:
-            async with self._boot_lock:
-                if self._booted:
-                    return
-                if not self._boot_in_progress:
-                    self._boot_in_progress = True
-                    self._boot_done.clear()
-                    break
-                boot_done = self._boot_done
-            await boot_done.wait()
-        try:
-            await self._run_boot_sequence_impl(app)
-        finally:
-            async with self._boot_lock:
-                self._boot_in_progress = False
-                self._boot_done.set()
+        await self._lifecycle.run_once(app, self._run_boot_sequence_impl)
 
     async def _run_boot_sequence_impl(self, app: Any) -> None:
         if self._booted:
@@ -11032,18 +11049,7 @@ class BootstrapService:
             await stop_scheduler()
         except Exception:
             pass
-        for t in list(self._boot_tasks):
-            try:
-                t.cancel()
-            except Exception:
-                pass
-        if self._boot_tasks:
-            await asyncio.gather(*self._boot_tasks, return_exceptions=True)
-            self._boot_tasks.clear()
-        self._boot_in_progress = False
-        self._boot_done.set()
-        self._booted = False
-        self._ready.clear()
+        await self._lifecycle.stop()
         await bus.emit("sys.stopped", {}, source="lifecycle", actor="system")
 
     async def switch_role(self, app: Any, role: str, *, hub_url: str | None = None, subnet_id: str | None = None) -> NodeConfig:
