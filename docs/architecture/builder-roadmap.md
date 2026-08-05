@@ -1540,6 +1540,10 @@ Autonomy, evidence, and acceptance:
   one-shot startup preparation acknowledged as `prepared`, together with an
   exact scenario-consistent render materialization, is sufficient to close the
   navigation overlay; the live Yjs provider may finish first sync afterwards.
+  This is navigation evidence only: it does not replace, fork, reset or become
+  the continuing state authority. All browser tabs and devices attached to the
+  same `webspace_id` remain clients of one shared Yjs room and must converge on
+  subsequent changes from that room.
   The observed `builder -> test04_recipes` runtime transition took 838 ms, so
   an already visible target must not remain obscured by a transport wait.
 - [x] `[must]` Correlate direct peers with the originating browser page and

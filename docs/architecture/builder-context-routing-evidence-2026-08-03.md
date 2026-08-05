@@ -215,6 +215,14 @@ only when the one-shot startup preparation is `prepared` and Webspace/scenario
 identity is exact; transport quality remains visible as a separate status and
 cannot repeat the mutation.
 
+That acceptance is deliberately scoped to navigation completion. It does not
+detach the page from the provider or promote the render snapshot into an
+independent state store. Browser pages and devices that resolve the same
+`webspace_id` still acquire one shared Yjs room; page/device identities only
+distinguish transport connections. A regression test now asserts both the
+shared-room property and that an inactive startup preparation cannot use a
+stale render snapshot in place of live Yjs state.
+
 The same source-runtime restart loaded the page-peer and cancelled-adapter
 fixes that the preceding process had not executed. The old process repeatedly
 sent the same 298,207-byte state to historical adapters. After restart each

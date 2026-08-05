@@ -5145,6 +5145,44 @@ def test_acquire_yws_room_uses_cache_when_bootstrap_lags(monkeypatch) -> None:
     assert resolved is room
 
 
+def test_acquire_yws_room_shares_one_room_across_devices_in_same_webspace(monkeypatch) -> None:
+    """Browser identity selects a connection, never a private Webspace state."""
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.0)
+    rooms: dict[str, object] = {}
+
+    async def _fake_get_room(name: str) -> object:
+        await asyncio.sleep(0)
+        return rooms.setdefault(name, object())
+
+    async def _exercise() -> tuple[object, object, object]:
+        first, second, other = await asyncio.gather(
+            gateway_module._acquire_yws_room(
+                "dev1-dev",
+                "browser-device-a",
+                yws_attempt_id="webrtc-yjs:page-a",
+            ),
+            gateway_module._acquire_yws_room(
+                "dev1-dev",
+                "browser-device-b",
+                yws_attempt_id="webrtc-yjs:page-b",
+            ),
+            gateway_module._acquire_yws_room(
+                "desktop",
+                "browser-device-a",
+                yws_attempt_id="webrtc-yjs:page-c",
+            ),
+        )
+        return first, second, other
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _fake_get_room)
+
+    first, second, other = asyncio.run(_exercise())
+
+    assert first is second
+    assert first is not other
+    assert set(rooms) == {"dev1-dev", "desktop"}
+
+
 def test_acquire_yws_room_leaves_bootstrap_running_after_wait_timeout(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.01)
     monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_MAX_S", 0.01)

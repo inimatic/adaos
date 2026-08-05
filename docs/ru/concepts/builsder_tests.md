@@ -199,6 +199,10 @@ Project Builder или workflow. В URL используется `intent=webspac
     materialization точно совпадает по Webspace и scenario, overlay должен
     закрыться сразу, не ожидая завершения первого live Yjs sync. Деградация
     транспорта показывается отдельно и не повторяет `desktop.scenario.set`.
+    Затем открыть тот же Webspace во второй вкладке и на другом устройстве:
+    изменение состояния в любом браузере должно прийти остальным через один
+    общий Yjs room. Render snapshot разрешает только закрытие overlay и не
+    является отдельной локальной копией состояния вкладки.
 24. При `dc_open_timeout` сопоставить именно текущую вкладку по набору
     `peer_id + browser_session_id + client_build_id + client_build_version`.
     Агрегат `openYjsChannels > 0` от других вкладок не является доказательством
