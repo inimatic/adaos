@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from adaos.services.scenario.webspace_components import WebspaceScenarioSwitchingService
+from adaos.services.scenario.webspace_components import (
+    WebspaceScenarioSwitchingService,
+    WebspaceTaskState,
+)
 
 
 def test_scenario_switching_service_normalizes_request() -> None:
@@ -74,3 +79,36 @@ def test_scenario_switching_service_rebuilds_on_materialization_mismatch() -> No
     )
 
     assert decision.action == "switch"
+
+
+@pytest.mark.asyncio
+async def test_scenario_switching_service_owns_task_replacement_and_cleanup() -> None:
+    service = WebspaceScenarioSwitchingService()
+    state = WebspaceTaskState()
+    blocker = asyncio.Event()
+    cancelled: list[str] = []
+
+    first = service.schedule_rebuild(
+        task_state=state,
+        webspace_id="desktop",
+        scenario_id="one",
+        operation=blocker.wait,
+        on_cancel=lambda: cancelled.append("one"),
+    )
+    await asyncio.sleep(0)
+
+    async def complete() -> None:
+        return None
+
+    second = service.schedule_rebuild(
+        task_state=state,
+        webspace_id="desktop",
+        scenario_id="two",
+        operation=complete,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+
+    assert cancelled == ["one"]
+    assert state.task_count(state.SCENARIO_SWITCH) == 0

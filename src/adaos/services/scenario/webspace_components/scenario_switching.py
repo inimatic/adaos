@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Awaitable, Callable, Mapping
+
+from .state import WebspaceTaskState
 
 
 @dataclass(frozen=True)
@@ -79,3 +83,67 @@ class WebspaceScenarioSwitchingService:
             return str(row.effective_source_mode or "").strip() or "workspace"
         except Exception:
             return "workspace"
+
+    @staticmethod
+    async def _notify(
+        callback: Callable[..., Any] | None,
+        *args: Any,
+    ) -> None:
+        if callback is None:
+            return
+        result = callback(*args)
+        if inspect.isawaitable(result):
+            await result
+
+    def schedule_rebuild(
+        self,
+        *,
+        task_state: WebspaceTaskState,
+        webspace_id: str,
+        scenario_id: str,
+        operation: Callable[[], Awaitable[Any]],
+        on_cancel: Callable[[], Any] | None = None,
+        on_error: Callable[[Exception], Any] | None = None,
+    ) -> asyncio.Task[Any]:
+        """Own replacement, completion cleanup, and failure boundaries."""
+
+        async def _runner() -> None:
+            try:
+                await operation()
+            except asyncio.CancelledError:
+                await self._notify(on_cancel)
+                raise
+            except Exception as exc:
+                await self._notify(on_error, exc)
+            finally:
+                task_state.pop_task(
+                    task_state.SCENARIO_SWITCH,
+                    webspace_id,
+                    expected=task,
+                )
+
+        task = asyncio.create_task(
+            _runner(),
+            name=f"webspace-scenario-switch:{webspace_id}:{scenario_id}",
+        )
+        task_state.put_task(
+            task_state.SCENARIO_SWITCH,
+            webspace_id,
+            task,
+            cancel_existing=True,
+        )
+        return task
+
+    @staticmethod
+    async def await_existing_rebuild(
+        task_state: WebspaceTaskState,
+        webspace_id: str,
+    ) -> bool:
+        task = task_state.active_task(task_state.SCENARIO_SWITCH, webspace_id)
+        if task is None:
+            return False
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            pass
+        return True

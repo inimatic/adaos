@@ -7,16 +7,13 @@ from collections.abc import Iterable, Mapping
 import atexit
 import asyncio
 import base64
-from functools import partial
 import hashlib
 import json
 import logging
 import os
 import re
 import secrets
-import subprocess
 import sys
-import tempfile
 import time
 import traceback
 
@@ -3816,10 +3813,6 @@ def _materialization_cpu_workers() -> int:
     return max(1, min(value, 4))
 
 
-def _get_materialization_cpu_executor() -> Any:
-    return _MATERIALIZATION_EXECUTOR.get(max_workers=_materialization_cpu_workers())
-
-
 def _shutdown_materialization_cpu_executor() -> None:
     _MATERIALIZATION_EXECUTOR.shutdown()
 
@@ -3830,11 +3823,13 @@ async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) 
     # make its YDoc finalize on the worker thread during interpreter shutdown.
     # Keep this rare diagnostic/control path single-threaded; persistent API
     # runtimes continue to use the bounded executor.
-    if str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() == "oneshot":
-        return function(*args, **kwargs)
-    loop = asyncio.get_running_loop()
-    call = partial(function, *args, **kwargs)
-    return await loop.run_in_executor(_get_materialization_cpu_executor(), call)
+    return await _MATERIALIZATION_EXECUTOR.run_cpu(
+        function,
+        *args,
+        max_workers=_materialization_cpu_workers(),
+        oneshot=str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() == "oneshot",
+        **kwargs,
+    )
 
 
 atexit.register(_shutdown_materialization_cpu_executor)
@@ -3896,176 +3891,13 @@ async def _run_materialization_worker(
         "skill_decls_fingerprint": str(skill_decls_fingerprint or "").strip() or None,
     }
 
-    started = time.perf_counter()
-    peak_rss = 0
-    with tempfile.TemporaryDirectory(prefix="adaos-materialize-") as temp_dir:
-        root = Path(temp_dir)
-        request_path = root / "request.json"
-        result_path = root / "result.json"
-        stdout_path = root / "stdout.log"
-        stderr_path = root / "stderr.log"
-        request_path.write_text(
-            json.dumps(request, ensure_ascii=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        cmd = [
-            sys.executable,
-            "-m",
-            "adaos.services.scenario.materialization_worker",
-            str(request_path),
-            str(result_path),
-        ]
-        env = os.environ.copy()
-        env["ADAOS_MATERIALIZATION_WORKER"] = "0"
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
-
-        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr_file:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                creationflags=creationflags,
-            )
-            try:
-                import psutil
-
-                process = psutil.Process(proc.pid)
-            except Exception:
-                process = None
-
-            def _process_tree() -> list[Any]:
-                if process is None:
-                    return []
-                try:
-                    return [process, *process.children(recursive=True)]
-                except Exception:
-                    return [process]
-
-            def _process_tree_rss() -> int:
-                total = 0
-                for item in _process_tree():
-                    try:
-                        total += int(item.memory_info().rss)
-                    except Exception:
-                        continue
-                return total
-
-            async def _stop_process_tree() -> None:
-                descendants = _process_tree()[1:]
-                for child in reversed(descendants):
-                    try:
-                        child.terminate()
-                    except Exception:
-                        continue
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            pass
-                        await proc.wait()
-                deadline = time.monotonic() + 5.0
-                alive = list(descendants)
-                while alive and time.monotonic() < deadline:
-                    remaining = []
-                    for child in alive:
-                        try:
-                            if child.is_running():
-                                remaining.append(child)
-                        except Exception:
-                            continue
-                    alive = remaining
-                    if alive:
-                        await asyncio.sleep(0.05)
-                for child in alive:
-                    try:
-                        child.kill()
-                    except Exception:
-                        continue
-
-            timeout_s = _materialization_worker_timeout_s()
-            max_rss = _materialization_worker_max_rss_bytes()
-            failure: str | None = None
-            wait_task = asyncio.create_task(proc.wait())
-            try:
-                while not wait_task.done():
-                    elapsed_s = time.perf_counter() - started
-                    if elapsed_s > timeout_s:
-                        failure = "materialization_worker_timeout"
-                        break
-                    if process is not None:
-                        try:
-                            current_rss = _process_tree_rss()
-                            peak_rss = max(peak_rss, current_rss)
-                            if current_rss > max_rss:
-                                failure = "materialization_worker_rss_limit"
-                                break
-                        except Exception:
-                            process = None
-                    try:
-                        await asyncio.wait_for(asyncio.shield(wait_task), timeout=0.05)
-                    except asyncio.TimeoutError:
-                        continue
-                if failure:
-                    await _stop_process_tree()
-                    await wait_task
-                    raise RuntimeError(
-                        f"{failure}: elapsed_ms={_elapsed_ms(started)} peak_rss_bytes={peak_rss}"
-                    )
-                returncode = int(await wait_task)
-            except BaseException:
-                await _stop_process_tree()
-                if not wait_task.done():
-                    await asyncio.shield(wait_task)
-                raise
-
-        stderr_tail = ""
-        try:
-            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        except Exception:
-            pass
-        if not result_path.exists():
-            raise RuntimeError(
-                f"materialization_worker_no_result: returncode={returncode} stderr={stderr_tail}"
-            )
-        result_size = int(result_path.stat().st_size)
-        if result_size > _materialization_worker_max_result_bytes():
-            raise RuntimeError(f"materialization_worker_result_limit: bytes={result_size}")
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        if not isinstance(result, dict) or returncode != 0 or not bool(result.get("ok")):
-            detail = str(result.get("detail") if isinstance(result, dict) else "")
-            raise RuntimeError(
-                f"materialization_worker_failed: returncode={returncode} detail={detail} stderr={stderr_tail}"
-            )
-        child_final_rss = int(result.get("worker_rss_bytes") or 0)
-        worker_peak_rss = max(peak_rss, child_final_rss)
-        if worker_peak_rss > max_rss:
-            raise RuntimeError(
-                f"materialization_worker_rss_limit: peak_rss_bytes={worker_peak_rss}"
-            )
-        result["worker_peak_rss_bytes"] = worker_peak_rss
-        result["worker_result_bytes"] = result_size
-        result["worker_parent_elapsed_ms"] = _elapsed_ms(started)
-        snapshot_b64 = result.pop("snapshot_update_b64", None)
-        state_vector_b64 = result.pop("state_vector_b64", None)
-        if isinstance(snapshot_b64, str):
-            result["snapshot_update"] = base64.b64decode(snapshot_b64.encode("ascii"))
-        if isinstance(state_vector_b64, str):
-            result["state_vector"] = base64.b64decode(state_vector_b64.encode("ascii"))
-        payload = result.get("materialized_payload")
-        if isinstance(payload, Mapping):
-            result["entry"] = _resolved_outputs_from_cache_payload(payload).to_registry_entry()
-        return result
-
+    return await _MATERIALIZATION_EXECUTOR.run_worker(
+        request,
+        timeout_s=_materialization_worker_timeout_s(),
+        max_rss_bytes=_materialization_worker_max_rss_bytes(),
+        max_result_bytes=_materialization_worker_max_result_bytes(),
+        result_adapter=lambda payload: _resolved_outputs_from_cache_payload(payload).to_registry_entry(),
+    )
 
 def _scenario_switch_mode() -> str:
     return _SCENARIO_SWITCHING.mode()
@@ -10248,112 +10080,101 @@ def _schedule_scenario_switch_rebuild(
         phase_timings_ms=initial_phase_timings,
         materialization=initial_materialization,
     )
-    async def _runner() -> None:
-        try:
-            route_yield_s = _scenario_switch_background_route_yield_s()
-            if route_yield_s > 0:
-                await asyncio.sleep(route_yield_s)
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="running",
-                pending=True,
-                background=True,
-                switch_mode=str(switch_mode or "") or None,
-                started_at=time.time(),
-                finished_at=None,
-                error=None,
-                projection_refresh=None,
-                registry_summary=None,
-                resolver=None,
-                apply_summary=None,
-                timings_ms=None,
-                semantic_rebuild_timings_ms=None,
-                materialization=_pending_materialization_snapshot(
-                    webspace_id,
-                    scenario_id=scenario_id,
-                    snapshot_source="rebuild:running",
-                ),
-            )
-            result = await _complete_scenario_switch_rebuild(
+    async def _operation() -> None:
+        route_yield_s = _scenario_switch_background_route_yield_s()
+        if route_yield_s > 0:
+            await asyncio.sleep(route_yield_s)
+        _set_webspace_rebuild_status_if_current(
+            webspace_id,
+            request_id,
+            status="running",
+            pending=True,
+            background=True,
+            switch_mode=str(switch_mode or "") or None,
+            started_at=time.time(),
+            finished_at=None,
+            error=None,
+            projection_refresh=None,
+            registry_summary=None,
+            resolver=None,
+            apply_summary=None,
+            timings_ms=None,
+            semantic_rebuild_timings_ms=None,
+            materialization=_pending_materialization_snapshot(
                 webspace_id,
                 scenario_id=scenario_id,
-                scenario_resolution=scenario_resolution,
-                request_id=request_id,
-                switch_mode=switch_mode,
-                switch_timings_ms=None,
-            )
-            if not bool(result.get("accepted")):
-                if str(result.get("error") or "").strip() == "stale_rebuild_superseded":
-                    return
-                _set_webspace_rebuild_status_if_current(
-                    webspace_id,
-                    request_id,
-                    status="failed",
-                    pending=False,
-                    background=True,
-                    finished_at=time.time(),
-                    error=str(result.get("error") or "scenario_switch_rebuild_failed"),
-                    switch_mode=str(switch_mode or "") or None,
-                    projection_refresh=result.get("projection_refresh"),
-                    resolver=result.get("resolver"),
-                    apply_summary=result.get("apply_summary"),
-                    timings_ms=_copy_timing_map(result.get("timings_ms")),
-                    switch_timings_ms=_copy_timing_map(result.get("switch_timings_ms") or switch_timings_ms),
-                    semantic_rebuild_timings_ms=_copy_timing_map(result.get("semantic_rebuild_timings_ms")),
-                    phase_timings_ms=_copy_timing_map(result.get("phase_timings_ms")),
-                )
-                _log.warning(
-                    "background scenario switch rebuild rejected webspace=%s scenario=%s error=%s",
-                    webspace_id,
-                    scenario_id,
-                    result.get("error"),
-                )
-        except asyncio.CancelledError:
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="cancelled",
-                pending=False,
-                background=True,
-                finished_at=time.time(),
-                error="cancelled",
-            )
-            raise
-        except BaseException as exc:
-            if _is_control_flow_base_exception(exc):
-                raise
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="failed",
-                pending=False,
-                background=True,
-                finished_at=time.time(),
-                error=f"background_scenario_switch_rebuild_failed:{type(exc).__name__}",
-            )
-            _log.warning(
-                "background scenario switch rebuild failed webspace=%s scenario=%s",
-                webspace_id,
-                scenario_id,
-                exc_info=True,
-            )
-        finally:
-            _TASK_STATE.pop_task(
-                _TASK_STATE.SCENARIO_SWITCH,
-                webspace_id,
-                expected=task,
-            )
+                snapshot_source="rebuild:running",
+            ),
+        )
+        result = await _complete_scenario_switch_rebuild(
+            webspace_id,
+            scenario_id=scenario_id,
+            scenario_resolution=scenario_resolution,
+            request_id=request_id,
+            switch_mode=switch_mode,
+            switch_timings_ms=None,
+        )
+        if bool(result.get("accepted")) or str(result.get("error") or "").strip() == "stale_rebuild_superseded":
+            return
+        _set_webspace_rebuild_status_if_current(
+            webspace_id,
+            request_id,
+            status="failed",
+            pending=False,
+            background=True,
+            finished_at=time.time(),
+            error=str(result.get("error") or "scenario_switch_rebuild_failed"),
+            switch_mode=str(switch_mode or "") or None,
+            projection_refresh=result.get("projection_refresh"),
+            resolver=result.get("resolver"),
+            apply_summary=result.get("apply_summary"),
+            timings_ms=_copy_timing_map(result.get("timings_ms")),
+            switch_timings_ms=_copy_timing_map(result.get("switch_timings_ms") or switch_timings_ms),
+            semantic_rebuild_timings_ms=_copy_timing_map(result.get("semantic_rebuild_timings_ms")),
+            phase_timings_ms=_copy_timing_map(result.get("phase_timings_ms")),
+        )
+        _log.warning(
+            "background scenario switch rebuild rejected webspace=%s scenario=%s error=%s",
+            webspace_id,
+            scenario_id,
+            result.get("error"),
+        )
 
-    task = asyncio.create_task(
-        _runner(),
-        name=f"webspace-scenario-switch:{webspace_id}:{scenario_id}",
-    )
-    _TASK_STATE.put_task(
-        _TASK_STATE.SCENARIO_SWITCH,
-        webspace_id,
-        task,
-        cancel_existing=True,
+    def _on_cancel() -> None:
+        _set_webspace_rebuild_status_if_current(
+            webspace_id,
+            request_id,
+            status="cancelled",
+            pending=False,
+            background=True,
+            finished_at=time.time(),
+            error="cancelled",
+        )
+
+    def _on_error(exc: Exception) -> None:
+        _set_webspace_rebuild_status_if_current(
+            webspace_id,
+            request_id,
+            status="failed",
+            pending=False,
+            background=True,
+            finished_at=time.time(),
+            error=f"background_scenario_switch_rebuild_failed:{type(exc).__name__}",
+        )
+        _log.warning(
+            "background scenario switch rebuild failed webspace=%s scenario=%s",
+            webspace_id,
+            scenario_id,
+            exc_info=True,
+        )
+
+    _SCENARIO_SWITCHING.schedule_rebuild(
+        task_state=_TASK_STATE,
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        operation=_operation,
+        on_cancel=_on_cancel,
+        on_error=_on_error,
     )
 
 
@@ -11109,13 +10930,8 @@ async def switch_webspace_scenario(
             _record_timing(timings_ms, "sync_listing", stage_started)
 
         if wait_for_rebuild:
-            existing_task = _TASK_STATE.get_task(_TASK_STATE.SCENARIO_SWITCH, webspace_id)
-            if existing_task and not existing_task.done():
-                stage_started = time.perf_counter()
-                try:
-                    await asyncio.shield(existing_task)
-                except Exception:
-                    pass
+            stage_started = time.perf_counter()
+            if await _SCENARIO_SWITCHING.await_existing_rebuild(_TASK_STATE, webspace_id):
                 _record_timing(timings_ms, "wait_existing_rebuild", stage_started)
                 rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
 

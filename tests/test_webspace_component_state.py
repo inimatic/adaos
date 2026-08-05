@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -123,3 +124,46 @@ def test_materialization_executor_owner_reuses_and_replaces_executor() -> None:
 
     assert second is not first
     owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_materialization_executor_owner_runs_cpu_work_in_both_modes() -> None:
+    owner = MaterializationExecutorOwner()
+
+    assert await owner.run_cpu(lambda value: value + 1, 4, max_workers=1, oneshot=True) == 5
+    assert await owner.run_cpu(lambda value: value * 2, 4, max_workers=1, oneshot=False) == 8
+
+    owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_materialization_executor_owner_decodes_worker_result(monkeypatch) -> None:
+    owner = MaterializationExecutorOwner()
+
+    class Process:
+        pid = 2_000_000_000
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    async def create_subprocess(*cmd, **_kwargs):
+        Path(cmd[-1]).write_text(
+            '{"ok":true,"worker_rss_bytes":0,"snapshot_update_b64":"YQ==",'
+            '"state_vector_b64":"Yg==","materialized_payload":{"scenario_id":"home"}}',
+            encoding="utf-8",
+        )
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess)
+    result = await owner.run_worker(
+        {"schema": "test"},
+        timeout_s=1.0,
+        max_rss_bytes=1024,
+        max_result_bytes=4096,
+        result_adapter=lambda payload: payload["scenario_id"],
+    )
+
+    assert result["snapshot_update"] == b"a"
+    assert result["state_vector"] == b"b"
+    assert result["entry"] == "home"
