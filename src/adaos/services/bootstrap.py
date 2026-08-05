@@ -113,7 +113,7 @@ from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscri
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
 from adaos.services.bounded_io import bounded_text_tail_lines
-from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator
+from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator, RootTransportService
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
@@ -1524,16 +1524,15 @@ class BootstrapService:
         self._lifecycle = BootstrapLifecycleCoordinator()
         self._io_bus: Any = None
         self._log = logging.getLogger("adaos.hub-io")
-        # Current hub-root NATS client (when connected). Used for forced reconnects without full process restart.
-        self._hub_root_nc: Any = None
-        # Best-effort route relay reset hook installed by the hub-route runtime once subscriptions are live.
-        self._hub_root_route_reset: Any = None
-        self._hub_root_bridge_task_name = "adaos-nats-io-bridge"
-        self._hub_root_bridge_watchdog_task_name = "adaos-nats-io-bridge-watchdog"
-        self._hub_root_bridge_factory: Callable[[], Awaitable[Any]] | None = None
-        self._hub_root_bridge_watchdog_rearm_total = 0
-        self._hub_root_authority_waiters: set[asyncio.Event] = set()
-        self._hub_root_authority_ready_at: float | None = None
+        self._root_transport = RootTransportService(
+            lifecycle=self._lifecycle,
+            role=lambda: str(getattr(self.ctx.config, "role", "") or ""),
+            candidate_passive=lambda: _hub_root_candidate_passive_mode(),
+            reconnect=lambda **kwargs: self.request_hub_root_reconnect(**kwargs),
+            watchdog_interval=lambda: _hub_root_bridge_watchdog_interval_s(),
+            record_event=lambda *args, **kwargs: record_hub_root_transport_event(*args, **kwargs),
+            logger=self._log,
+        )
 
     # Compatibility facades for callers and tests that still inspect the
     # historical BootstrapService lifecycle attributes directly.
@@ -1589,11 +1588,61 @@ class BootstrapService:
     def _member_ready_callback(self, value: Callable[[], Awaitable[None]] | None) -> None:
         self._lifecycle.member_ready_callback = value
 
+    @property
+    def _hub_root_nc(self) -> Any:
+        return self._root_transport.nats_client
+
+    @_hub_root_nc.setter
+    def _hub_root_nc(self, value: Any) -> None:
+        self._root_transport.nats_client = value
+
+    @property
+    def _hub_root_route_reset(self) -> Any:
+        return self._root_transport.route_reset
+
+    @_hub_root_route_reset.setter
+    def _hub_root_route_reset(self, value: Any) -> None:
+        self._root_transport.route_reset = value
+
+    @property
+    def _hub_root_bridge_task_name(self) -> str:
+        return self._root_transport.bridge_task_name
+
+    @property
+    def _hub_root_bridge_watchdog_task_name(self) -> str:
+        return self._root_transport.bridge_watchdog_task_name
+
+    @property
+    def _hub_root_bridge_factory(self) -> Callable[[], Awaitable[Any]] | None:
+        return self._root_transport.bridge_factory
+
+    @_hub_root_bridge_factory.setter
+    def _hub_root_bridge_factory(self, value: Callable[[], Awaitable[Any]] | None) -> None:
+        self._root_transport.bridge_factory = value
+
+    @property
+    def _hub_root_bridge_watchdog_rearm_total(self) -> int:
+        return self._root_transport.bridge_watchdog_rearm_total
+
+    @_hub_root_bridge_watchdog_rearm_total.setter
+    def _hub_root_bridge_watchdog_rearm_total(self, value: int) -> None:
+        self._root_transport.bridge_watchdog_rearm_total = int(value)
+
+    @property
+    def _hub_root_authority_waiters(self) -> set[asyncio.Event]:
+        return self._root_transport.authority_waiters
+
+    @property
+    def _hub_root_authority_ready_at(self) -> float | None:
+        return self._root_transport.authority_ready_at
+
+    @_hub_root_authority_ready_at.setter
+    def _hub_root_authority_ready_at(self, value: float | None) -> None:
+        self._root_transport.authority_ready_at = value
+
     def _mark_hub_root_authority_ready(self) -> None:
         """Release cutover waiters only after the active Root route subscription is flushed."""
-        self._hub_root_authority_ready_at = time.time()
-        for waiter in tuple(self._hub_root_authority_waiters):
-            waiter.set()
+        self._root_transport.mark_authority_ready()
 
     def _find_live_boot_task(self, task_name: str) -> asyncio.Task | None:
         return self._lifecycle.find_live_task(task_name)
@@ -1607,68 +1656,19 @@ class BootstrapService:
         *,
         start_immediately: bool = True,
     ) -> asyncio.Task | None:
-        self._hub_root_bridge_factory = coro_factory
-        if not start_immediately:
-            return None
-        return self._start_boot_task_once(self._hub_root_bridge_task_name, coro_factory)
+        return self._root_transport.start_bridge_task(
+            coro_factory,
+            start_immediately=start_immediately,
+        )
 
     def _hub_root_bridge_required(self) -> bool:
-        try:
-            role = str(getattr(self.ctx.config, "role", "") or "").strip().lower()
-        except Exception:
-            role = ""
-        if role != "hub":
-            return False
-        try:
-            if _hub_root_candidate_passive_mode():
-                return False
-        except Exception:
-            pass
-        return callable(self._hub_root_bridge_factory)
+        return self._root_transport.bridge_required()
 
     async def _repair_missing_hub_root_bridge(self, *, reason: str) -> dict[str, Any]:
-        if not self._hub_root_bridge_required():
-            return {"attempted": False, "state": "not_required"}
-        live = self._find_live_boot_task(self._hub_root_bridge_task_name)
-        if live is not None:
-            return {"attempted": False, "state": "running", "task_name": live.get_name()}
-        result = await self.request_hub_root_reconnect(_reason=f"bridge_watchdog:{reason}")
-        bridge = result.get("bridge") if isinstance(result, dict) else None
-        started = bool(isinstance(bridge, dict) and bridge.get("started"))
-        if started:
-            self._hub_root_bridge_watchdog_rearm_total += 1
-            self._log.warning(
-                "hub-root bridge watchdog rearmed missing bridge reason=%s total=%s",
-                str(reason or "watchdog"),
-                self._hub_root_bridge_watchdog_rearm_total,
-            )
-            try:
-                record_hub_root_transport_event(
-                    "bridge_watchdog_rearmed",
-                    summary="runtime watchdog rearmed missing hub-root bridge",
-                    details={
-                        "reason": str(reason or "watchdog"),
-                        "rearm_total": self._hub_root_bridge_watchdog_rearm_total,
-                    },
-                )
-            except Exception:
-                pass
-        return {
-            "attempted": True,
-            "state": "rearmed" if started else "rearm_failed",
-            "result": result,
-        }
+        return await self._root_transport.repair_missing_bridge(reason=reason)
 
     async def _hub_root_bridge_watchdog(self) -> None:
-        interval_s = _hub_root_bridge_watchdog_interval_s()
-        while True:
-            await asyncio.sleep(interval_s)
-            try:
-                await self._repair_missing_hub_root_bridge(reason="periodic_watchdog")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self._log.warning("hub-root bridge watchdog repair failed", exc_info=True)
+        await self._root_transport.watchdog()
 
     def _ensure_hub_root_bridge_task(
         self,
@@ -1676,67 +1676,10 @@ class BootstrapService:
         force_rearm: bool = False,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        factory = self._hub_root_bridge_factory
-        task_name = self._hub_root_bridge_task_name
-        if not callable(factory):
-            return {
-                "attempted": False,
-                "started": False,
-                "task_name": task_name,
-                "reason": "bridge_factory_unavailable",
-            }
-        existing = self._find_live_boot_task(task_name)
-        if existing is not None:
-            if not force_rearm:
-                return {
-                    "attempted": True,
-                    "started": False,
-                    "task_name": task_name,
-                    "state": "already_running",
-                }
-            try:
-                existing.cancel()
-            except Exception:
-                pass
-            self._boot_tasks = [task for task in self._boot_tasks if task is not existing]
-            try:
-                task = asyncio.create_task(factory(), name=task_name)
-                self._boot_tasks.append(task)
-                return {
-                    "attempted": True,
-                    "started": True,
-                    "task_name": task_name,
-                    "state": "rearmed",
-                    "reason": str(reason or "forced_rearm"),
-                    "cancelled_previous": True,
-                }
-            except Exception as exc:
-                return {
-                    "attempted": True,
-                    "started": False,
-                    "task_name": task_name,
-                    "state": "failed",
-                    "reason": str(reason or "forced_rearm"),
-                    "cancelled_previous": True,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-        try:
-            task = asyncio.create_task(factory(), name=task_name)
-            self._boot_tasks.append(task)
-            return {
-                "attempted": True,
-                "started": True,
-                "task_name": task_name,
-                "state": "started",
-            }
-        except Exception as exc:
-            return {
-                "attempted": True,
-                "started": False,
-                "task_name": task_name,
-                "state": "failed",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+        return self._root_transport.ensure_bridge_task(
+            force_rearm=force_rearm,
+            reason=reason,
+        )
 
     def is_ready(self) -> bool:
         return self._lifecycle.is_ready()
