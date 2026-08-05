@@ -123,6 +123,7 @@ def build_builder_action(
     fallback: Any = "compact_action",
     workflow_command: Any = None,
     workflow_generation: Any = None,
+    label_ref: Any = None,
 ) -> dict[str, Any]:
     command_token = str(command or "").strip()
     label_token = str(label or "").strip()
@@ -143,6 +144,9 @@ def build_builder_action(
     fallback_token = str(fallback or "").strip() or None
     policy = builder_action_risk_policy(risk)
     workflow_command_token = str(workflow_command or "").strip() or None
+    label_ref_token = str(label_ref or "").strip() or None
+    if label_ref_token and len(label_ref_token) > 160:
+        raise BuilderActionContractError("label_ref must be at most 160 characters")
     if workflow_command_token and len(workflow_command_token) > 160:
         raise BuilderActionContractError("workflow_command must be at most 160 characters")
     if workflow_generation is None:
@@ -157,6 +161,7 @@ def build_builder_action(
     return {
         "command": command_token,
         "label": label_token,
+        "label_ref": label_ref_token,
         "risk": policy["risk_class"],
         "risk_policy": policy,
         "expected_generation": generation,

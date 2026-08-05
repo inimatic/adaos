@@ -48,7 +48,7 @@ from adaos.services.builder.project_aggregate import (
     set_dependencies,
     set_focus,
 )
-from adaos.services.conversation_interactions import interaction_from_workflow_description
+from adaos.services.conversation_interactions import create_interaction
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.governed_workflow import (
     CompiledWorkflowDefinition,
@@ -59,6 +59,13 @@ from adaos.services.governed_workflow import (
     workflow_definition_digest,
 )
 from adaos.services.builder.release_evidence import applied_release_record
+from adaos.services.builder.surface import (
+    builder_action_label,
+    builder_action_label_ref,
+    builder_surface_locale_context,
+    localize_builder_explanation,
+    normalize_builder_locale,
+)
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -1946,7 +1953,13 @@ class BuilderWorkflowService:
             "blockers": copy.deepcopy(description.get("blockers") or []),
         }
 
-    def interaction_frame(self, object_type: str, object_id: str) -> dict[str, Any]:
+    def interaction_frame(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        locale: str | None = None,
+    ) -> dict[str, Any]:
         """Project the current workflow into channel-neutral deterministic actions."""
 
         projection = self.describe(object_type, object_id)
@@ -1970,6 +1983,7 @@ class BuilderWorkflowService:
         }
 
         actions: list[dict[str, Any]] = []
+        selected_locale = normalize_builder_locale(locale)
 
         def add_action(
             command: str,
@@ -1985,10 +1999,15 @@ class BuilderWorkflowService:
                 return
             canonical = canonical_actions.get(str(workflow_command or ""))
             canonical_risk = str(_mapping((canonical or {}).get("risk")).get("class") or risk)
+            translated_label = builder_action_label(
+                command,
+                locale=selected_locale,
+                fallback=label,
+            )
             actions.append(
                 build_builder_action(
                     command,
-                    label,
+                    translated_label,
                     canonical_risk,
                     expected_generation=generation,
                     target_ref=target_ref,
@@ -1996,25 +2015,15 @@ class BuilderWorkflowService:
                     fallback=fallback,
                     workflow_command=workflow_command,
                     workflow_generation=canonical_generation if workflow_command else None,
+                    label_ref=builder_action_label_ref(command),
                 )
             )
-
-        add_action(
-            "builder.process.inspect",
-            "Show process",
-            "read",
-            target_ref=change and f"change:{change['change_id']}" or project_ref,
-            presentation="panel",
-            fallback="compact_status",
-        )
         if change is None:
             add_action("builder.change.plan", "Plan change", "local_reversible", target_ref=project_ref)
-            message = str(compact_explanation["text"])
         else:
             change_ref = f"change:{change['change_id']}"
             gate = str(change.get("gate") or active_phase)
             status = str(change.get("status") or "planned")
-            message = str(compact_explanation["text"])
             if capabilities.get("can_update_change_set"):
                 add_action("builder.change.extend", "Add to change", "local_reversible", target_ref=change_ref)
             if capabilities.get("can_plan_change_set"):
@@ -2107,14 +2116,14 @@ class BuilderWorkflowService:
                 ).strip()
                 add_action(
                     "builder.publication.publish",
-                    "Publish",
+                    "Begin publication",
                     "publication",
                     target_ref=(
                         f"candidate:{candidate_id}@{candidate_digest}"
                         if candidate_id and candidate_digest
                         else change_ref
                     ),
-                    workflow_command="publish_compatibility",
+                    workflow_command="begin_publication",
                 )
 
         if capabilities.get("can_preview_prototype"):
@@ -2139,6 +2148,21 @@ class BuilderWorkflowService:
                 target_ref=f"publication:{projection['object_id']}:{_mapping(projection.get('publication')).get('current_version') or 'current'}",
             )
 
+        # Optional inspection and navigation are deliberately last.  Limited
+        # channels therefore retain the primary dependent continuation when
+        # their button budget truncates the presentation.
+        add_action(
+            "builder.process.inspect",
+            "Show process",
+            "read",
+            target_ref=change and f"change:{change['change_id']}" or project_ref,
+            presentation="panel",
+            fallback="compact_status",
+        )
+        add_action("builder.project.list", "Show projects", "read", target_ref=project_ref)
+        add_action("builder.preview.link", "Preview link", "read", target_ref=project_ref)
+        add_action("builder.help", "Help", "read", target_ref=project_ref)
+
         views = [
             {"kind": "conversation", "presentation": "primary", "fallback": "messages"},
             {"kind": "process", "presentation": "panel", "fallback": "compact_status"},
@@ -2148,7 +2172,10 @@ class BuilderWorkflowService:
         ]
         return {
             "schema": BUILDER_INTERACTION_FRAME_SCHEMA,
-            "message": message,
+            "message": localize_builder_explanation(
+                compact_explanation,
+                locale=selected_locale,
+            ),
             "context": {
                 "project_ref": project_ref,
                 "change_ref": f"change:{change['change_id']}" if change else None,
@@ -2170,6 +2197,7 @@ class BuilderWorkflowService:
             "actions": actions,
             "views": views,
             "generation": generation,
+            "locale_context": builder_surface_locale_context(selected_locale),
         }
 
     def conversation_interaction(
@@ -2182,41 +2210,117 @@ class BuilderWorkflowService:
         command_context_id: str,
         prompt: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        locale: str | None = None,
     ) -> dict[str, Any]:
         """Project the same canonical commands into the shared interaction protocol."""
 
         projection = self.describe(object_type, object_id)
-        frame = self.interaction_frame(object_type, object_id)
-        action_labels = {
-            str(item.get("workflow_command") or ""): str(item.get("label") or "")
-            for item in frame.get("actions") or []
-            if isinstance(item, Mapping)
-            and str(item.get("workflow_command") or "").strip()
-            and str(item.get("label") or "").strip()
+        selected_locale = normalize_builder_locale(locale)
+        frame = self.interaction_frame(object_type, object_id, locale=selected_locale)
+        governed = _mapping(projection.get("governed"))
+        workflow_ref = {
+            "schema": "adaos.workflow.ref.v1",
+            "kind": "workflow",
+            "id": str(governed.get("instance_id") or ""),
+            "version": str(governed.get("definition_version") or ""),
+            "generation": int(governed.get("generation") or 0),
         }
-        interaction = interaction_from_workflow_description(
-            _mapping(projection.get("workflow_description")),
+        context_ref = {
+            "schema": "adaos.workflow.ref.v1",
+            "kind": "view",
+            "id": command_context_id,
+        }
+        input_only = {
+            "builder.change.plan",
+            "builder.change.extend",
+            "builder.prototype.edit",
+            "builder.implementation.iterate",
+        }
+
+        def target_ref(value: Any) -> dict[str, Any] | None:
+            token = str(value or "").strip()
+            if not token:
+                return None
+            kind, separator, identifier = token.partition(":")
+            return {
+                "schema": "adaos.workflow.ref.v1",
+                "kind": kind if separator else "builder_target",
+                "id": identifier if separator else token,
+            }
+
+        actions: list[dict[str, Any]] = []
+        for index, raw in enumerate(frame.get("actions") or []):
+            item = _mapping(raw)
+            surface_command = str(item.get("command") or "").strip()
+            workflow_command = str(item.get("workflow_command") or "").strip()
+            command = (
+                workflow_command
+                if workflow_command and surface_command not in input_only
+                else surface_command
+            )
+            policy = _mapping(item.get("risk_policy"))
+            actions.append(
+                {
+                    "action_id": f"builder:{index}:{surface_command}",
+                    "label": str(item.get("label") or command),
+                    "label_ref": str(item.get("label_ref") or "").strip() or None,
+                    "command": command,
+                    "value": surface_command,
+                    "risk": str(item.get("risk") or "read"),
+                    "confirmation_required": bool(policy.get("confirmation_required")),
+                    "target_ref": target_ref(item.get("target_ref")),
+                    "expected_generation": int(
+                        item.get("workflow_generation")
+                        if workflow_command and surface_command not in input_only
+                        else governed.get("generation") or 0
+                    ),
+                    "principal_scope": ["user", "transport"],
+                    "command_context_ref": context_ref,
+                }
+            )
+        interaction = create_interaction(
             conversation_id=conversation_id,
             owner=principal_id,
             thread_id=command_context_id,
-            workflow_ref={
-                "schema": "adaos.workflow.ref.v1",
-                "kind": "workflow",
-                "id": str(_mapping(projection.get("governed")).get("instance_id") or ""),
-                "version": str(_mapping(projection.get("governed")).get("definition_version") or ""),
-                "generation": int(_mapping(projection.get("governed")).get("generation") or 0),
-            },
-            command_context_ref={
-                "schema": "adaos.workflow.ref.v1",
-                "kind": "view",
-                "id": command_context_id,
-            },
+            workflow_ref=workflow_ref,
             prompt=prompt or frame["message"],
-            action_labels=action_labels,
+            prompt_ref="builder.prompt.current_state",
+            locale_context=builder_surface_locale_context(selected_locale),
+            input_spec={
+                "kind": "choice",
+                "required_fields": [],
+                "choices": [
+                    {
+                        "value": str(item["value"]),
+                        "label": str(item["label"]),
+                        "description": None,
+                    }
+                    for item in actions
+                ],
+                "sensitive": False,
+            },
+            actions=actions,
+            optional_capabilities=("buttons",),
+            fallbacks=("numbered_text", "plain_text", "unsupported"),
             metadata={
                 "domain": "builder",
                 "project_ref": f"{projection['object_type']}:{projection['object_id']}",
                 "process_generation": _mapping(projection.get("process")).get("generation"),
+                "workflow_type": str(governed.get("workflow_type") or "builder.change"),
+                "surface_commands": {
+                    str(item["action_id"]): str(
+                        next(
+                            (
+                                source.get("command")
+                                for source in frame.get("actions") or []
+                                if isinstance(source, Mapping)
+                                and str(source.get("label_ref") or "") == str(item.get("label_ref") or "")
+                            ),
+                            item["command"],
+                        )
+                    )
+                    for item in actions
+                },
                 **copy.deepcopy(dict(metadata or {})),
             },
         )

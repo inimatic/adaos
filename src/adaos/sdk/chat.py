@@ -134,6 +134,12 @@ def request(
         thread_id=thread_id,
         owner=owner,
         prompt=prompt,
+        prompt_ref=str(specification.get("prompt_ref") or "").strip() or None,
+        locale_context=(
+            specification.get("locale_context")
+            if isinstance(specification.get("locale_context"), Mapping)
+            else None
+        ),
         input_spec=specification.get("input_spec") if isinstance(specification.get("input_spec"), Mapping) else input_spec,
         actions=specification.get("actions") if isinstance(specification.get("actions"), list) else actions,
         required_capabilities=specification.get("required_capabilities") or required_capabilities,

@@ -277,6 +277,53 @@ def test_interaction_frame_projects_risk_actions_and_independent_context(
     )["risk_policy"]["inline_callback"] == "confirm"
 
 
+def test_conversation_interaction_uses_localized_shared_action_registry(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-conversation-surface",
+            "request": "Уточнить интерфейс карточки.",
+            "issues": [
+                {
+                    "issue_id": "card-layout",
+                    "title": "Уточнить интерфейс карточки",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Карточка соответствует согласованному прототипу."],
+                }
+            ],
+        },
+    )
+
+    interaction = service.conversation_interaction(
+        "scenario",
+        "recipes",
+        conversation_id="conversation.builder.surface",
+        principal_id="skill:builder_skill",
+        command_context_id="thread.builder.surface",
+        locale="ru-RU",
+    )
+
+    commands = [item["command"] for item in interaction["actions"]]
+    values = [item["value"] for item in interaction["actions"]]
+    assert values[0] == "builder.change.extend"
+    assert "builder.prototype.approve" in values
+    assert commands[values.index("builder.prototype.approve")] == "accept_prototype"
+    assert values[-4:] == [
+        "builder.process.inspect",
+        "builder.project.list",
+        "builder.preview.link",
+        "builder.help",
+    ]
+    assert interaction["locale_context"]["locale"] == "ru"
+    assert interaction["actions"][0]["label_ref"] == "builder.action.change_extend"
+    assert interaction["actions"][0]["label"] == "Дополнить изменение"
+
+
 def test_interaction_context_rejects_stale_generation_without_mutation(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

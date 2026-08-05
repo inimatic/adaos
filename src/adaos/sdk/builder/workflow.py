@@ -16,8 +16,13 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
-def get_interaction_frame(object_type: str, object_id: str) -> dict[str, Any]:
-    return dict(_service().interaction_frame(object_type, object_id))
+def get_interaction_frame(
+    object_type: str,
+    object_id: str,
+    *,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    return dict(_service().interaction_frame(object_type, object_id, locale=locale))
 
 
 def create_conversation_interaction(
@@ -29,6 +34,7 @@ def create_conversation_interaction(
     command_context_id: str,
     prompt: str | None = None,
     metadata: Mapping[str, Any] | None = None,
+    locale: str | None = None,
 ) -> dict[str, Any]:
     return dict(
         _service().conversation_interaction(
@@ -39,6 +45,7 @@ def create_conversation_interaction(
             command_context_id=command_context_id,
             prompt=prompt,
             metadata=metadata,
+            locale=locale,
         )
     )
 
