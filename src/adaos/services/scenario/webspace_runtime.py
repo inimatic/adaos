@@ -93,11 +93,8 @@ _LIVE_ROOM_REFRESH_TASKS = _TASK_STATE.live_room_refresh_tasks
 _LIVE_ROOM_REFRESH_PENDING = _TASK_STATE.live_room_refresh_pending
 _LIVE_ROOM_REFRESH_STATS = _TASK_STATE.live_room_refresh_stats
 _BUILDER_YSTORE_BACKUP_TASKS = _TASK_STATE.builder_ystore_backup_tasks
-_WEBUI_DECL_CACHE = _CACHE_STATE.webui_declarations
 _SKILL_DECLS_CACHE_TTL_S = 300.0
-_SKILL_DECLS_CACHE = _CACHE_STATE.skill_declarations
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
-_SKILL_SOURCE_FINGERPRINT_CACHE = _CACHE_STATE.skill_source_fingerprints
 _MEMBER_SNAPSHOT_REBUILD_AT = _TASK_STATE.member_snapshot_rebuild_at
 _MEMBER_SNAPSHOT_REBUILD_TASKS = _TASK_STATE.member_snapshot_rebuild_tasks
 _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS = _TASK_STATE.member_snapshot_rebuild_delayed_tasks
@@ -108,13 +105,10 @@ def _is_control_flow_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
 _MEMBER_SNAPSHOT_REBUILD_STATS = _TASK_STATE.member_snapshot_rebuild_stats
 _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT = _TASK_STATE.member_snapshot_rebuild_material_fingerprint
-_RESOLVED_WEBSPACE_CACHE = _CACHE_STATE.resolved_webspaces
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
-_MATERIALIZED_WEBSPACE_CACHE = _CACHE_STATE.materialized_webspaces
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
-_DESKTOP_SCENARIOS_CACHE = _CACHE_STATE.desktop_scenarios
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
 _EFFECTIVE_BRANCH_PATHS = (
     "ui.application",
@@ -879,7 +873,7 @@ def _local_node_label() -> str:
 
 
 def _local_node_display() -> dict[str, Any]:
-    cached_at, cached = _CACHE_STATE.local_node_display
+    cached_at, cached = _CACHE_STATE.get_local_node_display()
     now = time.monotonic()
     if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
         return dict(cached)
@@ -892,7 +886,7 @@ def _local_node_display() -> dict[str, Any]:
             "node_index": 0,
             "node_color": "",
         }
-    _CACHE_STATE.local_node_display = (now, dict(display))
+    _CACHE_STATE.put_local_node_display(now, display)
     return dict(display)
 
 
@@ -2680,10 +2674,9 @@ def _get_cached_resolved_outputs(fingerprint: str) -> WebspaceResolverOutputs | 
     token = str(fingerprint or "").strip()
     if not token:
         return None
-    cached = _RESOLVED_WEBSPACE_CACHE.get(token)
+    cached = _CACHE_STATE.get_resolved_webspace(token)
     if not isinstance(cached, Mapping):
         return None
-    _RESOLVED_WEBSPACE_CACHE.move_to_end(token)
     return _resolved_outputs_from_cache_payload(cached)
 
 
@@ -2745,14 +2738,12 @@ def _remember_resolved_outputs(fingerprint: str, resolved: WebspaceResolverOutpu
     if payload_size > max_bytes:
         return
     payload["_cache_size_bytes"] = payload_size
-    _RESOLVED_WEBSPACE_CACHE[token] = payload
-    _RESOLVED_WEBSPACE_CACHE.move_to_end(token)
-    while (
-        len(_RESOLVED_WEBSPACE_CACHE) > _RESOLVED_WEBSPACE_CACHE_LIMIT
-        or sum(int(item.get("_cache_size_bytes") or 0) for item in _RESOLVED_WEBSPACE_CACHE.values())
-        > max_bytes
-    ):
-        _RESOLVED_WEBSPACE_CACHE.popitem(last=False)
+    _CACHE_STATE.put_resolved_webspace(
+        token,
+        payload,
+        max_entries=_RESOLVED_WEBSPACE_CACHE_LIMIT,
+        max_bytes=max_bytes,
+    )
 
 
 def _materialized_webspace_cache_enabled() -> bool:
@@ -2919,14 +2910,12 @@ def _remember_materialized_worker_result_in_memory(
     if cached_size > max_bytes:
         return
     cached_value["_cache_size_bytes"] = cached_size
-    _MATERIALIZED_WEBSPACE_CACHE[cache_key] = cached_value
-    _MATERIALIZED_WEBSPACE_CACHE.move_to_end(cache_key)
-    while (
-        len(_MATERIALIZED_WEBSPACE_CACHE) > _materialized_webspace_cache_limit()
-        or sum(int(item.get("_cache_size_bytes") or 0) for item in _MATERIALIZED_WEBSPACE_CACHE.values())
-        > max_bytes
-    ):
-        _MATERIALIZED_WEBSPACE_CACHE.popitem(last=False)
+    _CACHE_STATE.put_materialized_webspace(
+        cache_key,
+        cached_value,
+        max_entries=_materialized_webspace_cache_limit(),
+        max_bytes=max_bytes,
+    )
 
 
 def _load_materialized_worker_result_from_disk(
@@ -3049,14 +3038,13 @@ def _get_cached_materialized_worker_result(
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     if not key:
         return None
-    cached = _MATERIALIZED_WEBSPACE_CACHE.get(key)
+    cached = _CACHE_STATE.get_materialized_webspace(key)
     if not isinstance(cached, Mapping):
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
     cloned = _clone_materialized_worker_result(cached, cache_key=key, require_snapshot=require_snapshot)
     if cloned is None:
-        _MATERIALIZED_WEBSPACE_CACHE.pop(key, None)
+        _CACHE_STATE.discard_materialized_webspace(key)
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
-    _MATERIALIZED_WEBSPACE_CACHE.move_to_end(key)
     return cloned
 
 
@@ -3071,7 +3059,7 @@ def _remember_materialized_worker_result(
         return
     limit = _materialized_webspace_cache_limit()
     if limit <= 0:
-        _MATERIALIZED_WEBSPACE_CACHE.clear()
+        _CACHE_STATE.clear_materialized_webspaces()
         return
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     payload = worker_result.get("materialized_payload") if isinstance(worker_result.get("materialized_payload"), Mapping) else None
@@ -3120,11 +3108,13 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
     target = str(webspace_id or "").strip()
     if not target:
         return {"memory": 0, "disk": 0}
-    memory_removed = 0
-    for key, value in list(_MATERIALIZED_WEBSPACE_CACHE.items()):
-        if isinstance(value, Mapping) and _materialized_cache_value_matches(value, webspace_id=target, scenario_id=scenario_id):
-            _MATERIALIZED_WEBSPACE_CACHE.pop(key, None)
-            memory_removed += 1
+    memory_removed = _CACHE_STATE.discard_materialized_webspaces(
+        lambda _key, value: _materialized_cache_value_matches(
+            value,
+            webspace_id=target,
+            scenario_id=scenario_id,
+        )
+    )
     disk_removed = 0
     root = _materialized_webspace_cache_dir()
     if root is not None and root.exists():
@@ -3143,9 +3133,7 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
 
 
 def _invalidate_resolved_webspace_cache(*, scenario_id: str | None = None, reason: str | None = None) -> int:
-    count = len(_RESOLVED_WEBSPACE_CACHE)
-    if count:
-        _RESOLVED_WEBSPACE_CACHE.clear()
+    count = _CACHE_STATE.clear_resolved_webspaces()
     try:
         _log.debug(
             "invalidated resolved webspace cache scenario=%s reason=%s count=%d",
@@ -3612,7 +3600,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
     mode = _scenario_loader_space(source_mode)
     cache_key = mode
     now = time.monotonic()
-    cached = _SKILL_SOURCE_FINGERPRINT_CACHE.get(cache_key)
+    cached = _CACHE_STATE.get_skill_source_fingerprint(cache_key)
     if cached is not None and now - float(cached[0]) <= _skill_source_fingerprint_cache_ttl_s():
         return str(cached[1] or "")
     try:
@@ -3671,7 +3659,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
             "stamps": stamps,
         }
     )
-    _SKILL_SOURCE_FINGERPRINT_CACHE[cache_key] = (now, fingerprint)
+    _CACHE_STATE.put_skill_source_fingerprint(cache_key, now, fingerprint)
     return fingerprint
 
 
@@ -4686,8 +4674,8 @@ def invalidate_webspace_materialization_cache(
         materialization["previous_observed_at"] = current_materialization.get("observed_at")
     explicit_scenario = str(scenario_id or "").strip() or None
     dropped_cache = _drop_materialized_cache_for_webspace(target, scenario_id=explicit_scenario)
-    _SKILL_DECLS_CACHE.clear()
-    _SKILL_SOURCE_FINGERPRINT_CACHE.clear()
+    _CACHE_STATE.clear_skill_declarations()
+    _CACHE_STATE.clear_skill_source_fingerprints()
     materialization["cache_dropped"] = dropped_cache
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
     return _set_webspace_rebuild_status(
@@ -5101,7 +5089,7 @@ class WebspaceScenarioRuntime:
             root = self.ctx.paths.scenarios_dir()
             now = time.monotonic()
             cache_key = f"{space}:{root}"
-            cached = _DESKTOP_SCENARIOS_CACHE.get(cache_key)
+            cached = _CACHE_STATE.get_desktop_scenarios(cache_key)
             if cached is not None and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S:
                 return list(cached[2])
             children = [child for child in root.iterdir() if child.is_dir()]
@@ -5116,7 +5104,7 @@ class WebspaceScenarioRuntime:
                 )
             )
             if cached is not None and cached[1] == stamp:
-                _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(cached[2]))
+                _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, cached[2])
                 return list(cached[2])
             for child in children:
                 scenario_id = child.name
@@ -5134,7 +5122,7 @@ class WebspaceScenarioRuntime:
                     continue
                 title = str(manifest.get("title") or manifest.get("name") or scenario_id)
                 entries.append((scenario_id, title))
-            _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(entries))
+            _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
         return entries
@@ -5162,7 +5150,7 @@ class WebspaceScenarioRuntime:
             except Exception:
                 pass
         if not path.exists():
-            _WEBUI_DECL_CACHE.pop(str(path), None)
+            _CACHE_STATE.discard_webui_declaration(str(path))
             if log_missing and _log.isEnabledFor(logging.DEBUG):
                 stack = " <- ".join(
                     f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
@@ -5187,7 +5175,7 @@ class WebspaceScenarioRuntime:
         except Exception:
             stamp = None
         if stamp is not None:
-            cached = _WEBUI_DECL_CACHE.get(cache_key)
+            cached = _CACHE_STATE.get_webui_declaration(cache_key)
             if cached is not None and cached[0] == stamp:
                 return cached[1]
         try:
@@ -5196,12 +5184,12 @@ class WebspaceScenarioRuntime:
         except Exception as exc:
             _log.warning("failed to read webui.json for %s: %s", skill_name, exc)
             if stamp is not None:
-                _WEBUI_DECL_CACHE[cache_key] = (stamp, {})
+                _CACHE_STATE.put_webui_declaration(cache_key, stamp, {})
             return {}
         if not isinstance(raw, dict):
             _log.warning("webui.json must be an object for %s", skill_name)
             if stamp is not None:
-                _WEBUI_DECL_CACHE[cache_key] = (stamp, {})
+                _CACHE_STATE.put_webui_declaration(cache_key, stamp, {})
             return {}
 
         catalog = raw.get("catalog") or {}
@@ -5261,13 +5249,13 @@ class WebspaceScenarioRuntime:
             },
         }
         if stamp is not None:
-            _WEBUI_DECL_CACHE[cache_key] = (stamp, payload)
+            _CACHE_STATE.put_webui_declaration(cache_key, stamp, payload)
         return payload
 
     def _collect_skill_decls(self, mode: str = "mixed", *, include_remote: bool = True) -> List[Dict[str, Any]]:
         cache_key = f"{str(mode or '').strip() or 'mixed'}:{1 if include_remote else 0}"
         now = time.monotonic()
-        cached = _SKILL_DECLS_CACHE.get(cache_key)
+        cached = _CACHE_STATE.get_skill_declarations(cache_key)
         if cached is not None and now - float(cached[0]) <= _skill_decls_cache_ttl_s():
             try:
                 self._last_skill_decls_fingerprint = str(cached[1] or "")
@@ -5337,7 +5325,12 @@ class WebspaceScenarioRuntime:
             self._last_skill_decls_fingerprint = fingerprint
         except Exception:
             pass
-        _SKILL_DECLS_CACHE[cache_key] = (now, fingerprint, _clone_json_like(decls))
+        _CACHE_STATE.put_skill_declarations(
+            cache_key,
+            now,
+            fingerprint,
+            _clone_json_like(decls),
+        )
         return decls
 
     def _collect_remote_skill_decls(self) -> List[Dict[str, Any]]:
