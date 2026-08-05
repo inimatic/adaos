@@ -1025,7 +1025,7 @@ This is implementation cleanup, not a new scenario-switch design.
   while preserving the atomic pointer contract.
 - [x] Reduce `webspace_runtime.py` to composition and compatibility exports;
   new components must not call back into its private globals.
-- [ ] Preserve public commands and events, no-op branch identity, partial
+- [x] Preserve public commands and events, no-op branch identity, partial
   readiness, and bounded fanout in component tests and `.30` stand evidence.
 
 The 2026-08-06 ownership tranche removed mutable task/cache aliases, introduced
@@ -1033,8 +1033,17 @@ the recovery coordinator, made projection refresh explicit, and transferred
 materialization subprocess plus scenario-switch task execution to typed
 owners. The compatibility module still contains pure transformation helpers
 and public entry points; it is no longer an alternate mutable-state owner.
-Local characterization and component coverage passed before rollout. The last
-item remains open until the bounded `.30` checkpoint is recorded.
+Local characterization and component coverage passed before rollout.
+
+The bounded `.30` checkpoint completed on 2026-08-06 at core commit
+`5422f6c7` (`0.1.679+1.5422f6c`, slot `B`). Root promotion and runtime
+validation completed with update state `succeeded`; the refactored component
+imports, webspace catalog/runtime/materialization reads, and active `desktop`
+state-sync path remained available. The thin reliability surface reported
+`semanticState=ready`, `freshnessState=fresh`, materialization `ready`, and
+`requiredUpstreamLink.transportState=ready`. The target identity also remained
+subnet-scoped: `/api/subnet/alias` returned `sn_92ffc943` / `ruhub`, while the
+Settings header payload returned `current_subnet=sn_92ffc943`.
 
 ## Builder Materialization PoC: First Iteration
 

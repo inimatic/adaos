@@ -618,6 +618,21 @@ Implementation status, 2026-08-06:
   compatibility body is a later code-size tranche, not a second state-owner
   migration
 
+The 2026-08-06 `.30` delivery checkpoint promoted commit `5422f6c7` through
+the rooted A/B path to slot `B`; supervisor update state finished as
+`succeeded` and the replacement root supervisor validated the active runtime.
+The sidecar remained a single long-lived process with `/ws` and `/yws` route
+listeners ready. The thin reliability contract reported the required
+`hub_root` link as `ready`, served by `supervisor_sidecar`, with no blockers;
+state sync was attached, complete, semantically ready, and fresh.
+
+The checkpoint is not a pressure-soak claim. During build/root-promotion disk
+pressure the runtime logged seven event-loop-lag warnings and one observable
+subnet link-down/reconnect cycle; after 23:27 UTC the bounded observation
+window showed no additional lag, `recovering`, traceback, or error records.
+The remaining fanout/blocking-work investigation stays tracked separately
+under `RT-FANOUT` / `LRLT-001` / `LRLT-002`.
+
 ### Exit criteria
 
 - [x] `[must]` Route pressure cannot starve control readiness.

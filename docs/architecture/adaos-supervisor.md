@@ -348,6 +348,13 @@ API and persisted attempt shapes unchanged. Removal of the compatibility views
 and further physical file-size reduction are follow-up cleanup, not parallel
 state ownership.
 
+Target-stand evidence, 2026-08-06: `.30` accepted commit `5422f6c7`, built
+slot `B` as `0.1.679+1.5422f6c`, completed root promotion, restarted the root
+supervisor, and reached terminal update state `succeeded` / attempt state
+`completed`. The replacement supervisor API, active slot runtime, and the
+pre-existing realtime sidecar each ran as one process; direct imports of the
+process/update/recovery/memory/API owners succeeded from the promoted root.
+
 ## Local control surfaces
 
 The target local APIs are:
