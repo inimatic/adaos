@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from adaos.apps.supervisor_runtime import SupervisorRoute, create_supervisor_app, create_supervisor_routes
+from adaos.apps.supervisor_runtime import (
+    SupervisorApiAdapter,
+    SupervisorRoute,
+    create_supervisor_app,
+    create_supervisor_routes,
+)
 
 
 def test_supervisor_api_component_registers_public_and_protected_routes(monkeypatch) -> None:
@@ -94,3 +99,19 @@ def test_supervisor_route_groups_preserve_public_and_post_routes() -> None:
     assert by_path["/api/supervisor/public/update-status"].protected is False
     assert by_path["/api/supervisor/update/start"].method == "POST"
     assert by_path["/api/supervisor/runtime/candidate/stop"].method == "POST"
+
+
+def test_supervisor_api_adapter_delegates_and_validates_payloads() -> None:
+    class _Manager:
+        async def start_update(self, **kwargs):
+            return kwargs
+
+    adapter = SupervisorApiAdapter(lambda: _Manager())
+
+    import asyncio
+
+    result = asyncio.run(adapter.supervisor_update_start({"target_rev": "rev-a"}))
+
+    assert result["action"] == "update"
+    assert result["target_rev"] == "rev-a"
+    assert result["countdown_sec"] == 60.0

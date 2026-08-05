@@ -63,3 +63,17 @@ def test_recovery_policy_prioritizes_slot_mismatch_over_apply_guard() -> None:
 
     assert result.decision is not None
     assert result.decision["reason"] == "supervisor.runtime.slot_mismatch"
+
+
+def test_recovery_policy_owns_unhealthy_window_and_evidence() -> None:
+    policy = RuntimeRecoveryPolicy()
+    evaluation = policy.evaluate(_facts())
+
+    assert policy.record_evaluation(evaluation) is None
+    assert policy.unhealthy_kind == "listener_lost"
+    assert policy.unhealthy_since == 100.0
+
+    policy.record_evidence({"pid": 42})
+    assert policy.last_evidence == {"pid": 42}
+    policy.clear_unhealthy_window()
+    assert policy.unhealthy_kind is None

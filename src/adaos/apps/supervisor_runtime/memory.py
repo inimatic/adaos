@@ -11,6 +11,38 @@ DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 class MemoryProfilingService:
     """Own memory profiling timing policy and process-family snapshots."""
 
+    def __init__(self, *, default_profiler_adapter: str = "none") -> None:
+        self.profiler_adapter_name = self.profiler_adapter(default_profiler_adapter)
+        self.profile_mode = "normal"
+        self.requested_profile_mode: str | None = None
+        self.publish_request_session_id: str | None = None
+        self.profile_current_trigger_source: str | None = None
+        self.suspicion_state = "idle"
+        self.suspicion_reason: str | None = None
+        self.suspicion_since: float | None = None
+        self.active_session_id: str | None = None
+        self.profile_finalizing_session_id: str | None = None
+        self.last_session_id: str | None = None
+        self.baseline_scope_key: str | None = None
+        self.baseline_pid: int | None = None
+        self.baseline_family_rss_bytes: int | None = None
+        self.baseline_started_at: float | None = None
+        self.baseline_matured_at: float | None = None
+        self.baseline_phase = "uninitialized"
+        self.baseline_last_adjusted_at: float | None = None
+        self.baseline_last_adjustment_reason: str | None = None
+        self.baseline_adjustment_total = 0
+        self.last_growth_bytes: int | None = None
+        self.last_growth_bytes_per_min: float | None = None
+        self.last_available_bytes: int | None = None
+        self.last_available_percent: float | None = None
+        self.last_telemetry_at: float | None = None
+        self.auto_profile_last_block_reason: str | None = None
+        self.auto_profile_last_block_at: float | None = None
+        self.critical_since: float | None = None
+        self.critical_reason: str | None = None
+        self.critical_restart_last_at: float | None = None
+
     @staticmethod
     def profiler_adapter(default_adapter: str) -> str:
         token = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILER") or "").strip().lower()

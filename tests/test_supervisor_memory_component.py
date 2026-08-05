@@ -65,3 +65,16 @@ def test_memory_profiling_service_preserves_policy_env_contract(monkeypatch) -> 
 
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC", "30")
     assert service.auto_profile_cooldown_sec() == 60.0
+
+
+def test_memory_profiling_service_owns_mutable_session_and_baseline_state() -> None:
+    service = MemoryProfilingService(default_profiler_adapter="sampled")
+
+    service.active_session_id = "mem-001"
+    service.baseline_family_rss_bytes = 512
+    service.suspicion_state = "suspected"
+
+    assert service.profiler_adapter_name == "sampled"
+    assert service.active_session_id == "mem-001"
+    assert service.baseline_family_rss_bytes == 512
+    assert service.suspicion_state == "suspected"

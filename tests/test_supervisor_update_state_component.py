@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from adaos.apps.supervisor_runtime import UpdateStateMachine
 
 
@@ -30,3 +34,21 @@ def test_update_state_machine_recognizes_resolved_target() -> None:
     assert machine.transition_request_has_resolved_target({"action": "update", "target_version": "abc1234"})
     assert not machine.transition_request_has_resolved_target({"action": "update", "target_version": "latest"})
     assert machine.transition_request_has_resolved_target({"action": "rollback"})
+
+
+@pytest.mark.anyio
+async def test_update_state_machine_owns_worker_lifecycle() -> None:
+    machine = UpdateStateMachine()
+    release = asyncio.Event()
+
+    async def _worker() -> None:
+        await release.wait()
+
+    task = machine.start_task("supervisor-update", _worker)
+
+    assert machine.task is task
+    assert machine.task_running() is True
+    assert await machine.cancel_task(mode="rescheduled") is True
+    assert task.cancelled()
+    assert machine.task is None
+    assert machine.cancel_mode is None

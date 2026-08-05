@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+import asyncio
+from typing import Any, Awaitable, Callable, Mapping
 
 
 class UpdateStateMachine:
@@ -9,6 +10,48 @@ class UpdateStateMachine:
     TERMINAL_STATES = frozenset(
         {"failed", "validated", "succeeded", "rolled_back", "expired", "cancelled", "idle"}
     )
+
+    def __init__(self) -> None:
+        self.task: asyncio.Task[Any] | None = None
+        self.cancel_mode: str | None = None
+
+    def task_running(self) -> bool:
+        return self.task is not None and not self.task.done()
+
+    def start_task(
+        self,
+        task_name: str,
+        worker: Callable[[], Awaitable[Any]],
+    ) -> asyncio.Task[Any]:
+        if self.task_running():
+            raise RuntimeError("supervisor update task is already running")
+        self.cancel_mode = None
+        self.task = asyncio.create_task(worker(), name=task_name)
+        return self.task
+
+    async def cancel_task(self, *, mode: str) -> bool:
+        task = self.task
+        if task is None or task.done():
+            self.task = None
+            self.cancel_mode = None
+            return False
+        self.cancel_mode = str(mode or "cancelled")
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.task = None
+        self.cancel_mode = None
+        return True
+
+    def release_finished_task(self, task: asyncio.Task[Any] | None = None) -> None:
+        current = self.task
+        if current is None:
+            self.cancel_mode = None
+            return
+        if task is not None and current is not task:
+            return
+        if current.done():
+            self.task = None
+            self.cancel_mode = None
 
     @staticmethod
     def state(payload: Mapping[str, Any] | None) -> str:

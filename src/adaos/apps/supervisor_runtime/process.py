@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import socket
@@ -12,6 +13,49 @@ class ProcessSupervisor:
 
     def __init__(self, psutil_module: Any | None) -> None:
         self.psutil = psutil_module
+        self.active: Any | None = None
+        self.candidate: Any | None = None
+        self.sidecar: Any | None = None
+        self.desired_running = True
+        self.stopping = False
+        self.lock = asyncio.Lock()
+        self.monitor_task: asyncio.Task[Any] | None = None
+
+    def track_active(self, process: Any | None) -> Any | None:
+        self.active = process
+        return process
+
+    def track_candidate(self, process: Any | None) -> Any | None:
+        self.candidate = process
+        return process
+
+    def track_sidecar(self, process: Any | None) -> Any | None:
+        self.sidecar = process
+        return process
+
+    def request_running(self) -> None:
+        self.desired_running = True
+        self.stopping = False
+
+    def request_stop(self) -> None:
+        self.desired_running = False
+        self.stopping = True
+
+    def start_monitor(self, monitor: Any, *, name: str = "adaos-supervisor-monitor") -> asyncio.Task[Any]:
+        existing = self.monitor_task
+        if existing is not None and not existing.done():
+            return existing
+        task = asyncio.create_task(monitor(), name=name)
+        self.monitor_task = task
+        return task
+
+    async def stop_monitor(self) -> None:
+        task = self.monitor_task
+        self.monitor_task = None
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     @staticmethod
     def listener_running(host: str, port: int, *, timeout: float = 0.35) -> bool:

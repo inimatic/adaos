@@ -37,6 +37,7 @@ from adaos.apps.supervisor_runtime import (
     ProcessSupervisor,
     RuntimeRecoveryFacts,
     RuntimeRecoveryPolicy,
+    SupervisorApiAdapter,
     UpdateStateMachine,
     create_supervisor_app,
     create_supervisor_routes,
@@ -2561,11 +2562,79 @@ def _format_slot_value(template: str, values: dict[str, str]) -> str:
     return template.format(**payload)
 
 
+def _owned_field(owner_name: str, field_name: str) -> property:
+    """Expose a temporary manager-compatible view over component-owned state."""
+
+    def _get(instance: Any) -> Any:
+        return getattr(getattr(instance, owner_name), field_name)
+
+    def _set(instance: Any, value: Any) -> None:
+        setattr(getattr(instance, owner_name), field_name, value)
+
+    return property(_get, _set)
+
+
 class SupervisorManager:
+    _proc = _owned_field("_process_supervisor", "active")
+    _candidate_proc = _owned_field("_process_supervisor", "candidate")
+    _sidecar_proc = _owned_field("_process_supervisor", "sidecar")
+    _desired_running = _owned_field("_process_supervisor", "desired_running")
+    _stopping = _owned_field("_process_supervisor", "stopping")
+    _lock = _owned_field("_process_supervisor", "lock")
+    _monitor_task = _owned_field("_process_supervisor", "monitor_task")
+    _update_task = _owned_field("_update_state_machine", "task")
+    _update_task_cancel_mode = _owned_field("_update_state_machine", "cancel_mode")
+    _runtime_unhealthy_since = _owned_field("_recovery_policy", "unhealthy_since")
+    _runtime_unhealthy_kind = _owned_field("_recovery_policy", "unhealthy_kind")
+    _runtime_self_heal_last_decision = _owned_field("_recovery_policy", "last_decision")
+    _runtime_self_heal_last_evidence = _owned_field("_recovery_policy", "last_evidence")
+    _memory_profiler_adapter = _owned_field("_memory_profiling", "profiler_adapter_name")
+    _memory_profile_mode = _owned_field("_memory_profiling", "profile_mode")
+    _memory_requested_profile_mode = _owned_field("_memory_profiling", "requested_profile_mode")
+    _memory_publish_request_session_id = _owned_field("_memory_profiling", "publish_request_session_id")
+    _memory_profile_current_trigger_source = _owned_field("_memory_profiling", "profile_current_trigger_source")
+    _memory_suspicion_state = _owned_field("_memory_profiling", "suspicion_state")
+    _memory_suspicion_reason = _owned_field("_memory_profiling", "suspicion_reason")
+    _memory_suspicion_since = _owned_field("_memory_profiling", "suspicion_since")
+    _memory_active_session_id = _owned_field("_memory_profiling", "active_session_id")
+    _memory_profile_finalizing_session_id = _owned_field("_memory_profiling", "profile_finalizing_session_id")
+    _memory_last_session_id = _owned_field("_memory_profiling", "last_session_id")
+    _memory_baseline_scope_key = _owned_field("_memory_profiling", "baseline_scope_key")
+    _memory_baseline_pid = _owned_field("_memory_profiling", "baseline_pid")
+    _memory_baseline_family_rss_bytes = _owned_field("_memory_profiling", "baseline_family_rss_bytes")
+    _memory_baseline_started_at = _owned_field("_memory_profiling", "baseline_started_at")
+    _memory_baseline_matured_at = _owned_field("_memory_profiling", "baseline_matured_at")
+    _memory_baseline_phase = _owned_field("_memory_profiling", "baseline_phase")
+    _memory_baseline_last_adjusted_at = _owned_field("_memory_profiling", "baseline_last_adjusted_at")
+    _memory_baseline_last_adjustment_reason = _owned_field(
+        "_memory_profiling",
+        "baseline_last_adjustment_reason",
+    )
+    _memory_baseline_adjustment_total = _owned_field("_memory_profiling", "baseline_adjustment_total")
+    _memory_last_growth_bytes = _owned_field("_memory_profiling", "last_growth_bytes")
+    _memory_last_growth_bytes_per_min = _owned_field("_memory_profiling", "last_growth_bytes_per_min")
+    _memory_last_available_bytes = _owned_field("_memory_profiling", "last_available_bytes")
+    _memory_last_available_percent = _owned_field("_memory_profiling", "last_available_percent")
+    _memory_last_telemetry_at = _owned_field("_memory_profiling", "last_telemetry_at")
+    _memory_auto_profile_last_block_reason = _owned_field(
+        "_memory_profiling",
+        "auto_profile_last_block_reason",
+    )
+    _memory_auto_profile_last_block_at = _owned_field("_memory_profiling", "auto_profile_last_block_at")
+    _memory_critical_since = _owned_field("_memory_profiling", "critical_since")
+    _memory_critical_reason = _owned_field("_memory_profiling", "critical_reason")
+    _memory_critical_restart_last_at = _owned_field("_memory_profiling", "critical_restart_last_at")
+
     def __init__(self, *, runtime_host: str, runtime_port: int, token: str | None) -> None:
         self.runtime_host = str(runtime_host or "127.0.0.1").strip() or "127.0.0.1"
         self.runtime_port = int(runtime_port)
         self.token = str(token or "").strip() or None
+        self._process_supervisor = ProcessSupervisor(psutil)
+        self._update_state_machine = UpdateStateMachine()
+        self._recovery_policy = RuntimeRecoveryPolicy()
+        self._memory_profiling = MemoryProfilingService(
+            default_profiler_adapter=DEFAULT_PROFILER_ADAPTER,
+        )
         ensure_memory_store()
         self._proc: Any | None = None
         self._candidate_proc: Any | None = None
@@ -6811,8 +6880,8 @@ class SupervisorManager:
         )
         compact_evidence = _compact_runtime_stop_evidence(evidence)
         payload["pre_restart_evidence"] = compact_evidence
-        self._runtime_self_heal_last_decision = payload
-        self._runtime_self_heal_last_evidence = compact_evidence
+        self._recovery_policy.last_decision = payload
+        self._recovery_policy.record_evidence(compact_evidence)
         return payload
 
     def _runtime_self_heal_status_payload(self) -> dict[str, Any]:
@@ -7283,8 +7352,7 @@ class SupervisorManager:
     def _runtime_self_heal_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
         proc = self._proc
         if proc is None or proc.poll() is not None or self._stopping or not self._desired_running:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
+            self._recovery_policy.clear_unhealthy_window()
             return None
         update_status = read_core_update_status()
         update_state = str(update_status.get("state") or "").strip().lower()
@@ -7304,7 +7372,7 @@ class SupervisorManager:
         listener_running = _listener_running(self.runtime_host, runtime_port)
         api_ready = bool(listener_running and _runtime_api_ready(runtime_url, token=self.token))
         current_time = time.time() if now is None else float(now)
-        evaluation = _RUNTIME_RECOVERY_POLICY.evaluate(
+        evaluation = self._recovery_policy.evaluate(
             RuntimeRecoveryFacts(
                 process_running=bool(proc is not None and proc.poll() is None),
                 stopping=self._stopping,
@@ -7331,9 +7399,7 @@ class SupervisorManager:
                 api_restart_timeout_sec=_runtime_api_restart_timeout_sec(),
             )
         )
-        self._runtime_unhealthy_kind = evaluation.unhealthy_kind
-        self._runtime_unhealthy_since = evaluation.unhealthy_since
-        return evaluation.decision
+        return self._recovery_policy.record_evaluation(evaluation)
 
     def _local_supervisor_update_status_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = _local_update_payload()
@@ -7410,7 +7476,7 @@ class SupervisorManager:
             raise RuntimeError(
                 f"runtime listener on {runtime_url} reports transition role {reported_role or 'unknown'}"
             )
-        self._proc = adopted
+        self._process_supervisor.track_active(adopted)
         self._managed_runtime_instance_id = str(identity.get("runtime_instance_id") or "").strip() or None
         self._managed_transition_role = "active"
         self._managed_slot = current_slot
@@ -7467,7 +7533,7 @@ class SupervisorManager:
             start_new_session=(os.name != "nt"),
             creationflags=(int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0),
         )
-        self._proc = proc
+        self._process_supervisor.track_active(proc)
         managed_slot = str(env.get("ADAOS_ACTIVE_CORE_SLOT") or active_slot() or "").strip().upper() or None
         try:
             managed_port = int(env.get("ADAOS_RUNTIME_PORT") or self.slot_runtime_port(managed_slot))
@@ -7509,12 +7575,14 @@ class SupervisorManager:
                 timeout_s=1.5,
             )
         if listener_ready:
-            self._sidecar_proc = _AdoptedProcess(int(listener_pid))
+            self._process_supervisor.track_sidecar(_AdoptedProcess(int(listener_pid)))
             _LOG.info("supervisor adopted realtime sidecar listener pid=%s", listener_pid)
         else:
-            self._sidecar_proc = await start_realtime_sidecar_subprocess(
-                role=self._sidecar_role(),
-                repo_root=repo_root,
+            self._process_supervisor.track_sidecar(
+                await start_realtime_sidecar_subprocess(
+                    role=self._sidecar_role(),
+                    repo_root=repo_root,
+                )
             )
         self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
         self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
@@ -7563,7 +7631,7 @@ class SupervisorManager:
             start_new_session=(os.name != "nt"),
             creationflags=(int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0),
         )
-        self._candidate_proc = proc
+        self._process_supervisor.track_candidate(proc)
         self._candidate_slot = resolved_slot
         self._candidate_runtime_instance_id = runtime_instance_id
         self._candidate_transition_role = transition_role
@@ -7573,8 +7641,7 @@ class SupervisorManager:
 
     async def ensure_started(self, *, reason: str = "supervisor.start") -> None:
         async with self._lock:
-            self._stopping = False
-            self._desired_running = True
+            self._process_supervisor.request_running()
             await self._spawn_runtime_locked(reason=reason, adopt_existing=True)
 
     async def ensure_sidecar_started(self) -> dict[str, Any]:
@@ -7743,7 +7810,7 @@ class SupervisorManager:
             reason=reason,
         )
         self._candidate_last_stop_reason = str(reason or "supervisor.candidate.stop")
-        self._candidate_proc = None
+        self._process_supervisor.track_candidate(None)
         self._candidate_slot = None
         self._candidate_runtime_instance_id = None
         self._candidate_transition_role = None
@@ -7799,7 +7866,7 @@ class SupervisorManager:
         if decision is not None:
             self._raise_restart_continuity_block(decision)
         async with self._lock:
-            self._desired_running = True
+            self._process_supervisor.desired_running = True
             await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.restart")
             await self._spawn_runtime_locked(reason=reason)
@@ -7809,8 +7876,7 @@ class SupervisorManager:
 
     async def stop(self, *, reason: str = "supervisor.stop") -> None:
         async with self._lock:
-            self._desired_running = False
-            self._stopping = True
+            self._process_supervisor.request_stop()
             await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.stop")
             await self._terminate_candidate_proc_locked(graceful=True, reason=f"{reason}.candidate")
@@ -7819,7 +7885,7 @@ class SupervisorManager:
     async def stop_sidecar(self, *, reason: str = "supervisor.sidecar.stop") -> dict[str, Any]:
         async with self._lock:
             await stop_realtime_sidecar_subprocess(self._sidecar_proc)
-            self._sidecar_proc = None
+            self._process_supervisor.track_sidecar(None)
             self._sidecar_last_restart_reason = str(reason or "supervisor.sidecar.stop")
             self._persist_runtime_state()
             return self._sidecar_status_payload()
@@ -7863,7 +7929,7 @@ class SupervisorManager:
                     proc=self._sidecar_proc,
                     role=self._sidecar_role(),
                 )
-            self._sidecar_proc = new_proc
+            self._process_supervisor.track_sidecar(new_proc)
             code_state = self._sidecar_code_state()
             self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
             self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
@@ -8143,14 +8209,14 @@ class SupervisorManager:
             proc = self._candidate_proc
             if proc is None or proc.poll() is not None:
                 raise RuntimeError("candidate runtime exited before supervisor adopted it")
-            self._proc = proc
+            self._process_supervisor.track_active(proc)
             self._managed_runtime_instance_id = promoted_instance_id
             self._managed_transition_role = "active"
             self._managed_slot = resolved_slot
             self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
             self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
             self._managed_runtime_cwd = self._candidate_runtime_cwd
-            self._candidate_proc = None
+            self._process_supervisor.track_candidate(None)
             self._candidate_slot = None
             self._candidate_runtime_instance_id = None
             self._candidate_transition_role = None
@@ -8169,7 +8235,7 @@ class SupervisorManager:
             sidecar_proc = self._sidecar_proc
             if sidecar_proc is not None and sidecar_proc.poll() is not None:
                 self._sidecar_last_restart_reason = "supervisor.sidecar.exited"
-                self._sidecar_proc = None
+                self._process_supervisor.track_sidecar(None)
                 self._persist_runtime_state()
             if realtime_sidecar_enabled(role=self._sidecar_role()) and not self._stopping:
                 sync_result = self._sync_sidecar_controlled_files_from_validated_slot()
@@ -8222,7 +8288,7 @@ class SupervisorManager:
                             candidate_rc = candidate_proc.poll()
                             if candidate_rc is not None:
                                 self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                                self._candidate_proc = None
+                                self._process_supervisor.track_candidate(None)
                                 self._candidate_slot = None
                                 self._candidate_runtime_instance_id = None
                                 self._candidate_transition_role = None
@@ -8271,7 +8337,7 @@ class SupervisorManager:
                                     role=self._sidecar_role(),
                                     repo_root=str(self._sidecar_repo_root() or "").strip() or None,
                                 )
-                                self._sidecar_proc = new_proc
+                                self._process_supervisor.track_sidecar(new_proc)
                                 self._sidecar_launch_cwd = str(code_state.get("repo_root") or self._sidecar_launch_cwd or "") or None
                                 self._sidecar_code_fingerprint = current_fingerprint
                                 self._sidecar_code_fingerprint_updated_at = time.time() if current_fingerprint else None
@@ -8299,7 +8365,7 @@ class SupervisorManager:
                 candidate_rc = candidate_proc.poll()
                 if candidate_rc is not None:
                     self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                    self._candidate_proc = None
+                    self._process_supervisor.track_candidate(None)
                     self._candidate_slot = None
                     self._candidate_runtime_instance_id = None
                     self._candidate_transition_role = None
@@ -8396,7 +8462,7 @@ class SupervisorManager:
                     reason="runtime_exited_during_profile_mode",
                     exit_code=int(rc),
                 )
-            self._proc = None
+            self._process_supervisor.track_active(None)
             self._managed_runtime_instance_id = None
             self._managed_transition_role = None
             self._managed_slot = None
@@ -8471,19 +8537,12 @@ class SupervisorManager:
         except Exception:
             _LOG.warning("failed to start adaos-realtime sidecar", exc_info=True)
         await self.ensure_started(reason="supervisor.start")
-        self._monitor_task = asyncio.create_task(self.monitor_forever(), name="adaos-supervisor-monitor")
+        self._process_supervisor.start_monitor(self.monitor_forever)
 
     async def close(self) -> None:
         self._stopping = True
-        if self._update_task is not None:
-            self._update_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._update_task
-            self._update_task = None
-        if self._monitor_task is not None:
-            self._monitor_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._monitor_task
+        await self._update_state_machine.cancel_task(mode="cancelled")
+        await self._process_supervisor.stop_monitor()
         preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
         if preserve_managed_children:
             reaper = self._schedule_managed_handoff_reaper()
@@ -8510,7 +8569,7 @@ class SupervisorManager:
         payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
         payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
         payload["update_attempt"] = _read_update_attempt()
-        payload["update_task_running"] = bool(self._update_task is not None and not self._update_task.done())
+        payload["update_task_running"] = self._update_state_machine.task_running()
         return payload
 
     def supervisor_update_status(self) -> dict[str, Any]:
@@ -8782,9 +8841,9 @@ class SupervisorManager:
                 accepted=True,
             )
         )
-        self._update_task_cancel_mode = None
-        self._update_task = asyncio.create_task(
-            self._countdown_update_worker(
+        self._update_state_machine.start_task(
+            f"adaos-supervisor-core-update-{request_payload.get('action') or 'update'}",
+            lambda: self._countdown_update_worker(
                 action=str(request_payload.get("action") or "update"),
                 target_rev=str(request_payload.get("target_rev") or ""),
                 target_version=str(request_payload.get("target_version") or ""),
@@ -8793,7 +8852,6 @@ class SupervisorManager:
                 drain_timeout_sec=float(request_payload.get("drain_timeout_sec") or 10.0),
                 signal_delay_sec=float(request_payload.get("signal_delay_sec") or 0.25),
             ),
-            name=f"adaos-supervisor-core-update-{request_payload.get('action') or 'update'}",
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
@@ -8855,9 +8913,9 @@ class SupervisorManager:
             }
         )
         _write_update_attempt(attempt_payload)
-        self._update_task_cancel_mode = None
-        self._update_task = asyncio.create_task(
-            self._prepare_and_countdown_update_worker(
+        self._update_state_machine.start_task(
+            f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
+            lambda: self._prepare_and_countdown_update_worker(
                 action=str(request.get("action") or "update"),
                 target_rev=str(request.get("target_rev") or ""),
                 target_version=str(request.get("target_version") or ""),
@@ -8870,7 +8928,6 @@ class SupervisorManager:
                 prepare_timeout_sec=prepare_timeout_sec,
                 candidate_prewarm_deferral_count=candidate_prewarm_deferral_count,
             ),
-            name=f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
@@ -10243,14 +10300,10 @@ class SupervisorManager:
                 }
             )
             _complete_update_attempt(state="cancelled", status=status, reason=reason)
-            self._update_task = None
+            self._update_state_machine.release_finished_task(task)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
 
-        self._update_task_cancel_mode = "cancelled"
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        self._update_task = None
+        await self._update_state_machine.cancel_task(mode="cancelled")
         current_phase = str((read_core_update_status() or {}).get("phase") or "").strip().lower() or "countdown"
         status = write_core_update_status(
             {
@@ -10276,11 +10329,7 @@ class SupervisorManager:
             raise HTTPException(status_code=409, detail="defer requires a planned update or active countdown")
 
         if self._update_task is not None and not self._update_task.done():
-            self._update_task_cancel_mode = "rescheduled"
-            self._update_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._update_task
-            self._update_task = None
+            await self._update_state_machine.cancel_task(mode="rescheduled")
 
         request = _request_from_attempt(current_attempt or current_status)
         scheduled_for = time.time() + delay_value
@@ -10437,6 +10486,9 @@ def _manager() -> SupervisorManager:
     if manager is None:
         raise HTTPException(status_code=503, detail="supervisor is not initialized")
     return manager
+
+
+_API_ADAPTER = SupervisorApiAdapter(lambda: _manager())
 
 
 async def ping() -> dict[str, Any]:
@@ -10631,36 +10683,7 @@ async def supervisor_update_complete(payload: dict[str, Any]) -> dict[str, Any]:
 app = create_supervisor_app(
     startup=_startup,
     shutdown=_shutdown,
-    routes=create_supervisor_routes(
-        {
-            "ping": ping,
-            "supervisor_status": supervisor_status,
-            "supervisor_memory_status": supervisor_memory_status,
-            "supervisor_memory_telemetry": supervisor_memory_telemetry,
-            "supervisor_public_memory_status": supervisor_public_memory_status,
-            "supervisor_memory_sessions": supervisor_memory_sessions,
-            "supervisor_memory_incidents": supervisor_memory_incidents,
-            "supervisor_memory_session": supervisor_memory_session,
-            "supervisor_memory_session_artifact": supervisor_memory_session_artifact,
-            "supervisor_memory_profile_start": supervisor_memory_profile_start,
-            "supervisor_memory_profile_stop": supervisor_memory_profile_stop,
-            "supervisor_memory_profile_retry": supervisor_memory_profile_retry,
-            "supervisor_memory_publish": supervisor_memory_publish,
-            "supervisor_sidecar_status": supervisor_sidecar_status,
-            "supervisor_runtime_restart": supervisor_runtime_restart,
-            "supervisor_runtime_candidate_start": supervisor_runtime_candidate_start,
-            "supervisor_runtime_candidate_stop": supervisor_runtime_candidate_stop,
-            "supervisor_sidecar_restart": supervisor_sidecar_restart,
-            "supervisor_update_status": supervisor_update_status,
-            "supervisor_public_update_status": supervisor_public_update_status,
-            "supervisor_update_start": supervisor_update_start,
-            "supervisor_update_cancel": supervisor_update_cancel,
-            "supervisor_update_defer": supervisor_update_defer,
-            "supervisor_update_rollback": supervisor_update_rollback,
-            "supervisor_update_promote_root": supervisor_update_promote_root,
-            "supervisor_update_complete": supervisor_update_complete,
-        }
-    ),
+    routes=create_supervisor_routes(_API_ADAPTER.handlers()),
 )
 
 

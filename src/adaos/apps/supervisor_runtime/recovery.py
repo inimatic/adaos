@@ -41,6 +41,26 @@ class RuntimeRecoveryEvaluation:
 class RuntimeRecoveryPolicy:
     """Decide whether an unhealthy managed runtime should be restarted."""
 
+    def __init__(self) -> None:
+        self.unhealthy_since: float | None = None
+        self.unhealthy_kind: str | None = None
+        self.last_decision: dict[str, Any] | None = None
+        self.last_evidence: dict[str, Any] | None = None
+
+    def clear_unhealthy_window(self) -> None:
+        self.unhealthy_since = None
+        self.unhealthy_kind = None
+
+    def record_evaluation(self, evaluation: RuntimeRecoveryEvaluation) -> dict[str, Any] | None:
+        self.unhealthy_kind = evaluation.unhealthy_kind
+        self.unhealthy_since = evaluation.unhealthy_since
+        if evaluation.decision is not None:
+            self.last_decision = dict(evaluation.decision)
+        return evaluation.decision
+
+    def record_evidence(self, evidence: dict[str, Any] | None) -> None:
+        self.last_evidence = dict(evidence) if isinstance(evidence, dict) else None
+
     @staticmethod
     def evaluate(facts: RuntimeRecoveryFacts) -> RuntimeRecoveryEvaluation:
         if not facts.process_running or facts.stopping or not facts.desired_running:
