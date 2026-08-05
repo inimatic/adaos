@@ -1438,6 +1438,25 @@ def test_unknown_publication_requires_explicit_evidenced_reconciliation(
     assert resumed["governed"]["state"] == "publication_waiting"
     assert resumed["delivery"]["status"] == "publication_waiting"
 
+    # Model a crash after the compatibility mutation was durable but before
+    # the canonical transition result was persisted.  A new, explicitly
+    # versioned attempt must repair only that local projection.
+    state_path = _root / "prompt_state.json"
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    persisted["workflow"]["governed"] = {
+        **persisted["workflow"]["governed"],
+        "state": "publication_ready",
+    }
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+    repaired = service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"idempotency_key": "publish-after-recovery:2"}),
+    )["workflow"]
+    assert repaired["governed"]["state"] == "publication_waiting"
+    assert repaired["delivery"]["status"] == "publication_waiting"
+
 
 def test_new_automation_iteration_reopens_a_terminal_result(
     workflow_project: tuple[BuilderWorkflowService, Path],

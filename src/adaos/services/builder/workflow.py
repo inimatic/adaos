@@ -4253,6 +4253,16 @@ class BuilderWorkflowService:
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("publication requires completed automation")
+            if (
+                str(delivery.get("status") or "") == "publication_waiting"
+                and str(publication.get("status") or "") == "publishing"
+            ):
+                # The compatibility projection may already contain the local
+                # waiting mutation when an externally completed promotion is
+                # being reconciled into a newer canonical attempt.  Re-admit
+                # only the governed transition; do not reset timestamps or
+                # dispatch the publication activity here.
+                return
             if str(delivery.get("status") or "") != "accepted":
                 raise BuilderWorkflowError("publication requires an accepted candidate trial")
             delivery["status"] = "publication_waiting"
