@@ -172,6 +172,17 @@ class _DeveloperService:
             },
         }
 
+    def get_artifact_candidate(self, candidate_id):
+        return {
+            "ok": True,
+            "candidate": {
+                "candidate_id": candidate_id,
+                "status": "trial",
+                "package_digest": "sha256:" + "2" * 64,
+            },
+            "trial_workspace": f"/trials/{candidate_id}/workspace",
+        }
+
     def prepare_rebased_artifact_candidate(
         self,
         stale_candidate_id,
@@ -335,11 +346,14 @@ def test_candidate_lifecycle_requires_change_and_explicit_decision(monkeypatch) 
         change_ids=["change-1"],
         validation_evidence={"status": "passed"},
     )
+    inspected = projects.get_candidate(prepared["candidate"]["candidate_id"])
     accepted = projects.decide_candidate(
         prepared["candidate"]["candidate_id"],
         accepted=True,
         observations=[{"decision": "looks_good"}],
     )
+    assert inspected["candidate"]["status"] == "trial"
+    assert inspected["candidate"]["candidate_id"] == prepared["candidate"]["candidate_id"]
     promoted = projects.promote_candidate(
         prepared["candidate"]["candidate_id"],
         permission_decision={"approved": True, "actor": "user:test"},

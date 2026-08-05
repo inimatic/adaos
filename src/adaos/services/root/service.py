@@ -2325,6 +2325,23 @@ class RootDeveloperService:
         )
         return {"ok": True, "candidate": candidate.to_dict()}
 
+    def get_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        token = str(candidate_id or "").strip()
+        candidate = self._artifact_publication_service(cfg).get_candidate(token)
+        trial_workspace = (
+            Path(self.ctx.paths.state_dir())
+            / "artifact_pipeline"
+            / "trials"
+            / token
+            / "workspace"
+        )
+        return {
+            "ok": True,
+            "candidate": candidate.to_dict(),
+            "trial_workspace": str(trial_workspace),
+        }
+
     def recover_artifact_candidate_activation(
         self,
         candidate_id: str,

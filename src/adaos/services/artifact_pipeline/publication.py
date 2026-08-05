@@ -1428,6 +1428,14 @@ class ArtifactPublicationService:
             raise
         return candidate
 
+    def get_candidate(self, candidate_id: str) -> CandidateRecord:
+        """Return one immutable-identity candidate without changing its trial."""
+
+        token = str(candidate_id or "").strip()
+        if not token:
+            raise PublicationError("candidate_id is required")
+        return self.candidate_store.load(token)
+
     def prepare_rebased_candidate(
         self,
         stale_candidate_id: str,
