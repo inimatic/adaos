@@ -3245,6 +3245,124 @@ def append_messages_batch(messages: Sequence[Mapping[str, Any]]) -> list[dict[st
     return [_row_to_message(row) for row in rows]
 
 
+def update_message(
+    message_id: str,
+    *,
+    text: str | None = None,
+    payload: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update one durable message in place while preserving its ledger sequence."""
+
+    if not ensure_schema():
+        raise RuntimeError("conversation store is unavailable")
+    token = str(message_id or "").strip()
+    if not token:
+        raise ValueError("message_id is required")
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT * FROM conversation_messages WHERE message_id=?",
+                (token,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(token)
+            next_text = str(row["text"] if text is None else text)
+            current_payload = _json_load(row["payload_json"], {})
+            current_meta = _json_load(row["meta_json"], {})
+            if payload is not None:
+                current_payload.update(dict(payload))
+            if meta is not None:
+                current_meta.update(dict(meta))
+            now = time.time()
+            con.execute(
+                """
+                UPDATE conversation_messages
+                SET text=?, payload_json=?, meta_json=?, ts=?
+                WHERE message_id=?
+                """,
+                (next_text, _json_dump(current_payload), _json_dump(current_meta), now, token),
+            )
+            _message_fts_upsert(
+                con,
+                message_id=token,
+                conversation_id=str(row["conversation_id"]),
+                thread_id=str(row["thread_id"] or "") or None,
+                webspace_id=str(row["webspace_id"]),
+                channel_id=str(row["channel_id"]),
+                owner=str(row["owner"]),
+                role=str(row["role"]),
+                text=next_text,
+            )
+            updated = con.execute(
+                "SELECT * FROM conversation_messages WHERE message_id=?",
+                (token,),
+            ).fetchone()
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    return _row_to_message(updated)
+
+
+def upsert_job_message(
+    *,
+    job_id: str,
+    phase: str,
+    terminal: bool,
+    conversation_id: str,
+    thread_id: str | None = None,
+    webspace_id: str,
+    channel_id: str,
+    owner: str,
+    role: str,
+    text: str,
+    payload: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Materialize accepted/progress/terminal phases into one stable message."""
+
+    job = str(job_id or "").strip()
+    if not job:
+        raise ValueError("job_id is required")
+    phase_token = str(phase or "").strip() or "unknown"
+    idem = f"conversation.job:{job}"
+    message = append_message(
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id=webspace_id,
+        channel_id=channel_id,
+        owner=owner,
+        role=role,
+        text=text,
+        payload={
+            **dict(payload or {}),
+            "job_id": job,
+            "job_phase": phase_token,
+            "job_terminal": bool(terminal),
+        },
+        meta={**dict(meta or {}), "message_update_mode": "job_stable"},
+        idempotency_key=idem,
+    )
+    if message is None:
+        raise RuntimeError("conversation store is unavailable")
+    if str(message.get("job_phase") or "") == phase_token and str(message.get("text") or "") == text:
+        return message
+    return update_message(
+        str(message["id"]),
+        text=text,
+        payload={
+            **dict(payload or {}),
+            "job_id": job,
+            "job_phase": phase_token,
+            "job_terminal": bool(terminal),
+        },
+        meta={**dict(meta or {}), "message_update_mode": "job_stable"},
+    )
+
+
 def list_projection(
     conversation_id: str,
     *,

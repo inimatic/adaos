@@ -219,6 +219,11 @@ class BuilderReviewService:
         review.setdefault("superseded_by_ref", None)
         review.setdefault("tombstone", False)
         review.setdefault("updated_at", None)
+        review.setdefault("source_revision", None)
+        review.setdefault("current_revision", review.get("source_revision"))
+        review.setdefault("anchor_state", "stable")
+        review.setdefault("anchor_snapshot", {})
+        review.setdefault("revision_history", [])
         Draft202012Validator(_schema("builder.review_anchor.v1.schema.json")).validate(review)
         return review
 
@@ -274,19 +279,40 @@ class BuilderReviewService:
         *,
         expected_generation: int | None = None,
     ) -> dict[str, Any]:
-        submitted = self._normalized_review(
-            {
-                **dict(review),
-                "status": "submitted",
-                "tombstone": False,
-                "updated_at": _now(),
-            }
-        )
-        artifact_ref = str(submitted["artifact_ref"])
-        project_ref = artifact_ref.split("@", 1)[0]
+        raw_review = dict(review)
+        artifact_ref = str(raw_review.get("artifact_ref") or "")
+        project_ref, _, artifact_revision = artifact_ref.partition("@")
         if ":" not in project_ref:
             raise BuilderWorkflowError("Review artifact_ref must include a project ref")
         object_type, object_id = project_ref.split(":", 1)
+        source_revision = str(raw_review.get("source_revision") or artifact_revision).strip()
+        if not source_revision:
+            source_revision = str(
+                self.workflow.current_prototype_revision(object_type, object_id) or ""
+            ).strip()
+        observed_at = _now()
+        submitted = self._normalized_review(
+            {
+                **raw_review,
+                "status": "submitted",
+                "tombstone": False,
+                "source_revision": source_revision or None,
+                "current_revision": source_revision or None,
+                "anchor_state": "stable",
+                "revision_history": (
+                    [
+                        {
+                            "revision": source_revision,
+                            "observed_at": observed_at,
+                            "anchor_state": "stable",
+                        }
+                    ]
+                    if source_revision
+                    else []
+                ),
+                "updated_at": observed_at,
+            }
+        )
         workflow = self._persist_review(
             object_type,
             object_id,
@@ -295,6 +321,84 @@ class BuilderReviewService:
             create_only=True,
         )
         return {"ok": True, "review": submitted, "workflow": workflow}
+
+    def reconcile_revision(
+        self,
+        object_type: str,
+        object_id: str,
+        review_id: str,
+        *,
+        revision: str,
+        target_present: bool,
+    ) -> dict[str, Any]:
+        """Carry a semantic Review anchor forward without rebinding by coordinates."""
+
+        _workflow, review = self._find(object_type, object_id, review_id)
+        token = str(revision or "").strip()
+        if not token:
+            raise BuilderWorkflowError("review reconciliation requires a revision")
+        previous = str(review.get("current_revision") or review.get("source_revision") or "")
+        anchor_state = "stable" if target_present else "unresolved"
+        if target_present and previous and previous != token:
+            anchor_state = "moved"
+        history = [
+            dict(item)
+            for item in review.get("revision_history") or []
+            if isinstance(item, Mapping)
+        ]
+        if (
+            not history
+            or history[-1].get("revision") != token
+            or history[-1].get("anchor_state") != anchor_state
+        ):
+            history.append(
+                {"revision": token, "observed_at": _now(), "anchor_state": anchor_state}
+            )
+        review.update(
+            {
+                "current_revision": token,
+                "anchor_state": anchor_state,
+                "revision_history": history[-50:],
+                "updated_at": _now(),
+            }
+        )
+        updated = self._persist_review(object_type, object_id, review)
+        return {"ok": True, "review": review, "workflow": updated}
+
+    def context_for_next_request(self, object_type: str, object_id: str) -> dict[str, Any]:
+        workflow = self.workflow.describe(object_type, object_id)
+        active: list[dict[str, Any]] = []
+        for item in workflow.get("reviews") or []:
+            if not isinstance(item, Mapping) or item.get("status") in {
+                "withdrawn",
+                "dismissed",
+                "resolved",
+                "superseded",
+            }:
+                continue
+            active.append(
+                {
+                    "review_id": item.get("review_id"),
+                    "comment": item.get("comment"),
+                    "target_ref": item.get("target_ref"),
+                    "source_revision": item.get("source_revision"),
+                    "current_revision": item.get("current_revision"),
+                    "anchor_state": item.get("anchor_state"),
+                    "constraint_ref": item.get("constraint_ref"),
+                    "issue_id": item.get("issue_id"),
+                }
+            )
+        return {
+            "schema": "adaos.builder.review_context.v1",
+            "project_ref": f"{object_type}:{object_id}",
+            "change_id": (
+                workflow.get("change", {}).get("change_id")
+                if isinstance(workflow.get("change"), Mapping)
+                else None
+            ),
+            "reviews": active,
+            "generated_at": _now(),
+        }
 
     def _find(self, object_type: str, object_id: str, review_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
         workflow = self.workflow.describe(object_type, object_id)

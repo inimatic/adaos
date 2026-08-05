@@ -86,6 +86,59 @@ def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     assert [item["id"] for item in older["messages"]] == ["msg.1", "msg.2"]
 
 
+def test_job_progress_updates_one_durable_message_without_reexecuting_the_job() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.job.{suffix}"
+    job_id = f"builder-job-{suffix}"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+    accepted = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="accepted",
+        terminal=False,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Change accepted",
+    )
+    progress = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="tests_running",
+        terminal=False,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Tests are running",
+    )
+    terminal = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="completed",
+        terminal=True,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Change completed",
+        payload={"result_ref": "builder-run:1"},
+    )
+
+    assert accepted["id"] == progress["id"] == terminal["id"]
+    assert terminal["seq"] == accepted["seq"]
+    assert terminal["job_phase"] == "completed"
+    assert terminal["job_terminal"] is True
+    assert terminal["result_ref"] == "builder-run:1"
+    messages = conversation_store.list_messages(conversation_id, limit=20)
+    assert len([item for item in messages if item.get("job_id") == job_id]) == 1
+
+
 def test_conversation_store_merges_legacy_builder_conversation_and_tracks_change() -> None:
     suffix = uuid4().hex[:10]
     canonical_id = f"conv.builder.canonical.{suffix}"

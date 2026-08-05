@@ -212,3 +212,42 @@ def test_submitted_review_can_be_converted_to_issue(
     assert converted["review"]["status"] == "converted_to_issue"
     change = workflow.describe("scenario", "recipes")["change"]
     assert any(item["issue_id"] == "review-label-followup" for item in change["issues"])
+
+
+def test_review_anchor_follows_revisions_and_enters_next_request_context(
+    review_project: tuple[BuilderReviewService, BuilderWorkflowService, Path],
+) -> None:
+    service, _workflow, _root = review_project
+    submitted = service.submit(_review_anchor())["review"]
+    assert submitted["source_revision"] == "ui_revision:001"
+    assert submitted["revision_history"][0]["anchor_state"] == "stable"
+
+    moved = service.reconcile_revision(
+        "scenario",
+        "recipes",
+        "review.recipe-name",
+        revision="ui_revision:002",
+        target_present=True,
+    )["review"]
+    assert moved["anchor_state"] == "moved"
+    assert moved["target_ref"] == "field:recipe-form:recipe-name"
+    context = service.context_for_next_request("scenario", "recipes")
+    assert context["reviews"][0] == {
+        "review_id": "review.recipe-name",
+        "comment": "Use the full label Recipe name.",
+        "target_ref": "field:recipe-form:recipe-name",
+        "source_revision": "ui_revision:001",
+        "current_revision": "ui_revision:002",
+        "anchor_state": "moved",
+        "constraint_ref": None,
+        "issue_id": None,
+    }
+
+    unresolved = service.reconcile_revision(
+        "scenario",
+        "recipes",
+        "review.recipe-name",
+        revision="ui_revision:003",
+        target_present=False,
+    )["review"]
+    assert unresolved["anchor_state"] == "unresolved"
