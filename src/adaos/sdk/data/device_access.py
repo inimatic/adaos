@@ -507,6 +507,7 @@ def send_endpoint_command(
     code: str | None = None,
     requested_by: Mapping[str, Any] | None = None,
     constraints: Mapping[str, Any] | None = None,
+    timeout: int | float | None = None,
 ) -> dict[str, Any]:
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
@@ -524,6 +525,7 @@ def send_endpoint_command(
             device_ref=target or None,
             requested_by=requested_by,
             constraints=constraints,
+            timeout=12 if timeout is None else timeout,
         )
     except Exception as exc:
         return {"ok": False, "error": "endpoint_command_failed", "detail": str(exc), "device_ref": target, "code": pair_code}

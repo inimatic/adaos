@@ -12,6 +12,7 @@ LinkKind = Literal["browser", "member", "redevice"]
 _NS = "access_links"
 _KEY = "registry"
 _DEFAULT_BROWSER_SESSION_ONLINE_STALE_S = 300.0
+_UNSET = object()
 
 
 def _now_ts() -> float:
@@ -1032,6 +1033,7 @@ def touch_redevice_link(
     active_surface: Mapping[str, Any] | None = None,
     assignment: str | None = None,
     endpoint_assignment: Mapping[str, Any] | None = None,
+    last_seen_at: Any = _UNSET,
 ) -> dict[str, Any] | None:
     requested_token = str(endpoint_id or "").strip()
     if not requested_token:
@@ -1116,7 +1118,7 @@ def touch_redevice_link(
             fallback_role=assignment,
             updated_at=updated_at,
         )
-    entry["last_seen_at"] = _now_ts()
+    entry["last_seen_at"] = _now_ts() if last_seen_at is _UNSET else _numeric_or_none(last_seen_at)
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)
     _save_registry(registry)

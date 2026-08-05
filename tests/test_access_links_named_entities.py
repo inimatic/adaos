@@ -361,6 +361,23 @@ def test_redevice_touch_merges_policy_identity_aliases(monkeypatch) -> None:
     assert [item["id"] for item in links] == [canonical]
 
 
+def test_redevice_touch_preserves_explicit_last_seen(monkeypatch) -> None:
+    _patch_registry_store(monkeypatch)
+    monkeypatch.setattr(access_links, "_emit_entity_registry_changed_if_needed", lambda *args, **kwargs: None)
+    monkeypatch.setattr(access_links, "_now_ts", lambda: 5000.0)
+
+    saved = access_links.touch_redevice_link(
+        "endpoint-1",
+        pair_code="PAIR1",
+        online=False,
+        connection_state="offline",
+        last_seen_at=1000.0,
+    )
+
+    assert saved is not None
+    assert saved["last_seen_at"] == 1000.0
+
+
 def test_yws_browser_session_metadata_accepts_client_handshake_fields() -> None:
     metadata = gateway_ws._browser_session_metadata(
         {

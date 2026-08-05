@@ -85,6 +85,23 @@ def test_redevice_root_scoped_list_overrides_legacy_embedded_scope(monkeypatch) 
     assert [item["code"] for item in synced] == ["READMITTED"]
 
 
+def test_redevice_module_list_accepts_custom_timeout(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
+
+    def fake_request(self: redevice.ReDeviceBridge, method: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        captured["timeout"] = self.timeout
+        return {"ok": True, "devices": [_endpoint("LOCAL", "sn_local")]}
+
+    monkeypatch.setattr(redevice.ReDeviceBridge, "request_json", fake_request)
+    monkeypatch.setattr(redevice.ReDeviceBridge, "sync_local_registry", lambda self, endpoints: None)
+
+    endpoints = redevice.list_endpoints(root_base="https://root.example", sync_registry=True, timeout=3.5)
+
+    assert [item["code"] for item in endpoints] == ["LOCAL"]
+    assert captured["timeout"] == 3.5
+
+
 def test_redevice_sync_local_registry_skips_foreign_subnet(monkeypatch) -> None:
     monkeypatch.setattr(redevice, "_local_scope", lambda: ("sn_local", "sn_local"))
 
@@ -108,6 +125,7 @@ def test_redevice_sync_local_registry_skips_foreign_subnet(monkeypatch) -> None:
 
     assert [item["pair_code"] for item in touched] == ["LOCAL"]
     assert touched[0]["hub_id"] == "sn_local"
+    assert touched[0]["last_seen_at"] == 1
 
 
 def test_redevice_command_request_is_scoped(monkeypatch) -> None:

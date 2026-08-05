@@ -492,6 +492,49 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
     assert calls == ["recipe_skill:list_recipes"]
 
 
+def test_call_tool_uses_installed_runtime_for_dev_webspace_without_dev_skill(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            raise RuntimeError("no versions installed")
+
+        def run_dev_tool(self, *_args, **_kwargs):
+            raise AssertionError("missing DEV skill must not hide the installed runtime")
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout=None):
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"ok": True, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda payload: True)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="slideshow_skill:refresh_redevice_slideshow_state",
+                arguments={"webspace_id": "dev1-dev"},
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["slideshow_skill:refresh_redevice_slideshow_state"]
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [

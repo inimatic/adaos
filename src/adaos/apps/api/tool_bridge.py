@@ -936,6 +936,32 @@ def _workspace_skill_source_exists(ctx: AgentContext, skill_name: str) -> bool:
     return _repo_workspace_skill_dir(ctx, skill_name) is not None
 
 
+def _dev_skill_source_exists(ctx: AgentContext, skill_name: str) -> bool:
+    try:
+        dev_root_attr = getattr(ctx.paths, "dev_skills_dir", None)
+        dev_root = dev_root_attr() if callable(dev_root_attr) else dev_root_attr
+        if not dev_root:
+            return False
+        candidate = Path(dev_root).expanduser().resolve() / skill_name
+        return candidate.exists() and any(candidate.iterdir())
+    except Exception:
+        return False
+
+
+def _implicit_dev_runtime_available(ctx: AgentContext, mgr: SkillManager, skill_name: str) -> bool:
+    if _dev_skill_source_exists(ctx, skill_name):
+        return True
+    try:
+        mgr.dev_runtime_status(skill_name)
+    except RuntimeError as exc:
+        if "no versions installed" in str(exc).lower():
+            return False
+        return True
+    except Exception:
+        return True
+    return True
+
+
 def _runtime_ready(mgr: SkillManager, skill_name: str) -> bool:
     try:
         status = mgr.runtime_status(skill_name)
@@ -1363,8 +1389,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
 
     # Используем общий путь исполнения как в CLI (SkillManager.run_tool)
     payload: Dict[str, Any] = dict(body.arguments or {})
-    if not body.dev and _webspace_uses_dev_runtime(payload):
-        body = body.model_copy(update={"dev": True})
+    implicit_dev_webspace = (not body.dev) and _webspace_uses_dev_runtime(payload)
 
     mgr = SkillManager(
         repo=ctx.skills_repo,
@@ -1375,6 +1400,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         caps=ctx.caps,
         settings=ctx.settings,
     )
+    if implicit_dev_webspace and _implicit_dev_runtime_available(ctx, mgr, skill_name):
+        body = body.model_copy(update={"dev": True})
 
     trace = attach_http_trace_headers(request.headers, response.headers)
     setup_done_at = time.perf_counter()
