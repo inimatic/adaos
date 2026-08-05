@@ -116,6 +116,7 @@ from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.bootstrap_runtime import (
     BootstrapLifecycleCoordinator,
     BootstrapStatusWatchdogService,
+    HubRouteProxyPolicy,
     NatsBridgePolicy,
     RootTransportService,
 )
@@ -641,6 +642,7 @@ class BootstrapService:
         self.subnet_registry = subnet_registry
         self._lifecycle = BootstrapLifecycleCoordinator()
         self._nats_policy = NatsBridgePolicy()
+        self._route_policy = HubRouteProxyPolicy()
         self._io_bus: Any = None
         self._log = logging.getLogger("adaos.hub-io")
         self._root_transport = RootTransportService(
@@ -1362,6 +1364,22 @@ class BootstrapService:
         _hub_nats_sidecar_quarantine_s = self._nats_policy.sidecar_quarantine_s
         _resolve_nats_log_server = self._nats_policy.resolve_log_server
         _canonical_hub_nats_identity = self._nats_policy.canonical_identity
+        _hub_route_max_chunk_raw_bytes = self._route_policy.max_chunk_raw_bytes
+        _hub_route_normalize_resend_chunk_indexes = self._route_policy.normalize_resend_chunk_indexes
+        _hub_route_semantic_flow_for_path = self._route_policy.semantic_flow_for_path
+        _hub_route_should_shed_sync_frame = self._route_policy.should_shed_sync_frame
+        _hub_route_sync_frame_force_flush_enabled = self._route_policy.sync_frame_force_flush_enabled
+        _hub_route_should_force_flush_reply = self._route_policy.should_force_flush_reply
+        _hub_route_subnet_sync_payload_type = self._route_policy.subnet_sync_payload_type
+        _hub_route_should_drop_subnet_sync_frame = self._route_policy.should_drop_subnet_sync_frame
+        _hub_route_prefers_supervisor_public_status = self._route_policy.prefers_supervisor_public_status
+        _hub_route_local_http_timeout = self._route_policy.local_http_timeout
+        _hub_route_should_retry_http_upstream_error = self._route_policy.should_retry_http_upstream_error
+        _hub_route_parse_resend_delays = self._route_policy.parse_resend_delays
+        _hub_route_should_resend_http_resp = self._route_policy.should_resend_http_resp
+        _build_hub_route_http_bases = self._route_policy.build_http_bases
+        _build_hub_route_ws_bases = self._route_policy.build_ws_bases
+        _hub_route_force_close_no_upstream_s = self._route_policy.force_close_no_upstream_s
         # Unified deep-trace switch for WS/NATS/route debugging.
         try:
             if os.getenv("HUB_TRACE", "0") == "1":

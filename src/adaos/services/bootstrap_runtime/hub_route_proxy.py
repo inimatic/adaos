@@ -367,23 +367,33 @@ def _supervisor_local_bases() -> list[str]:
         )
         if _is_local_http_base(base)
     ]
-_ROUTE_LOCAL_BASE_LOCK = threading.RLock()
-_ROUTE_LOCAL_BASE_CACHE: dict[str, Any] = {
-    "value": None,
-    "expires_at": 0.0,
-}
-_ROUTE_LOCAL_BASE_DIAG: dict[str, Any] = {
-    "local_base_discovery_total": 0,
-    "local_base_cache_hit_total": 0,
-    "local_base_error_total": 0,
-    "local_base_runtime_port_shortcut_total": 0,
-    "local_base_last_source": "",
-    "local_base_last_value": "",
-    "local_base_last_latency_ms": None,
-    "local_base_last_error": "",
-    "local_base_last_error_at": 0.0,
-    "local_base_last_discovered_at": 0.0,
-}
+
+
+class HubRouteDiscoveryState:
+    """Own local runtime route discovery cache and diagnostics."""
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.cache: dict[str, Any] = {"value": None, "expires_at": 0.0}
+        self.diagnostics: dict[str, Any] = {
+            "local_base_discovery_total": 0,
+            "local_base_cache_hit_total": 0,
+            "local_base_error_total": 0,
+            "local_base_runtime_port_shortcut_total": 0,
+            "local_base_last_source": "",
+            "local_base_last_value": "",
+            "local_base_last_latency_ms": None,
+            "local_base_last_error": "",
+            "local_base_last_error_at": 0.0,
+            "local_base_last_discovered_at": 0.0,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {"cache": dict(self.cache), "diagnostics": dict(self.diagnostics)}
+
+
+_DEFAULT_ROUTE_DISCOVERY_STATE = HubRouteDiscoveryState()
 
 
 def _route_local_base_cache_ttl_s() -> float:
@@ -602,26 +612,37 @@ def _probe_runtime_http_base(sess: Any, *, base: str, timeout_s: float) -> bool:
         return False
 
 
-def _observe_route_local_base_diag(**details: Any) -> None:
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG.update(details)
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
+def _observe_route_local_base_diag(
+    *,
+    state: HubRouteDiscoveryState | None = None,
+    **details: Any,
+) -> None:
+    owner = state or _DEFAULT_ROUTE_DISCOVERY_STATE
+    with owner.lock:
+        owner.diagnostics.update(details)
+        snapshot = dict(owner.diagnostics)
     try:
         observe_hub_root_route_runtime(**snapshot)
     except Exception:
         pass
 
 
-def _note_route_local_base_shortcut(*, source: str, value: str | None) -> None:
+def _note_route_local_base_shortcut(
+    *,
+    source: str,
+    value: str | None,
+    state: HubRouteDiscoveryState | None = None,
+) -> None:
+    owner = state or _DEFAULT_ROUTE_DISCOVERY_STATE
     now = time.time()
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG["local_base_runtime_port_shortcut_total"] = int(
-            _ROUTE_LOCAL_BASE_DIAG.get("local_base_runtime_port_shortcut_total") or 0
+    with owner.lock:
+        owner.diagnostics["local_base_runtime_port_shortcut_total"] = int(
+            owner.diagnostics.get("local_base_runtime_port_shortcut_total") or 0
         ) + 1
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = str(source or "").strip() or "runtime_port_env"
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = str(value or "").strip()
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_discovered_at"] = now
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
+        owner.diagnostics["local_base_last_source"] = str(source or "").strip() or "runtime_port_env"
+        owner.diagnostics["local_base_last_value"] = str(value or "").strip()
+        owner.diagnostics["local_base_last_discovered_at"] = now
+        snapshot = dict(owner.diagnostics)
     try:
         observe_hub_root_route_runtime(**snapshot)
     except Exception:
@@ -629,25 +650,29 @@ def _note_route_local_base_shortcut(*, source: str, value: str | None) -> None:
 
 
 def _discover_active_runtime_local_base(
-    *, timeout_s: float = 0.6, allow_network_probe: bool = False
+    *,
+    timeout_s: float = 0.6,
+    allow_network_probe: bool = False,
+    state: HubRouteDiscoveryState | None = None,
 ) -> str | None:
     try:
         import requests  # type: ignore
     except Exception:
         return None
 
+    owner = state or _DEFAULT_ROUTE_DISCOVERY_STATE
     now = time.time()
     ttl_s = _route_local_base_cache_ttl_s()
-    with _ROUTE_LOCAL_BASE_LOCK:
-        cached_value = str(_ROUTE_LOCAL_BASE_CACHE.get("value") or "").strip() or None
-        cached_expires_at = float(_ROUTE_LOCAL_BASE_CACHE.get("expires_at") or 0.0)
+    with owner.lock:
+        cached_value = str(owner.cache.get("value") or "").strip() or None
+        cached_expires_at = float(owner.cache.get("expires_at") or 0.0)
         if cached_value and cached_expires_at > now:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_cache_hit_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_cache_hit_total") or 0
+            owner.diagnostics["local_base_cache_hit_total"] = int(
+                owner.diagnostics.get("local_base_cache_hit_total") or 0
             ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = "cache"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = cached_value
-            snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
+            owner.diagnostics["local_base_last_source"] = "cache"
+            owner.diagnostics["local_base_last_value"] = cached_value
+            snapshot = dict(owner.diagnostics)
             try:
                 observe_hub_root_route_runtime(**snapshot)
             except Exception:
@@ -658,14 +683,14 @@ def _discover_active_runtime_local_base(
         # skip synchronous network probing in the hot path and fall back to static
         # localhost candidates instead of blocking the loop on connect timeouts.
         if not allow_network_probe:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_cache_miss_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_cache_miss_total") or 0
+            owner.diagnostics["local_base_cache_miss_total"] = int(
+                owner.diagnostics.get("local_base_cache_miss_total") or 0
             ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = "cache_miss_no_probe"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = ""
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = "network_probe_skipped"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error_at"] = now
-            snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
+            owner.diagnostics["local_base_last_source"] = "cache_miss_no_probe"
+            owner.diagnostics["local_base_last_value"] = ""
+            owner.diagnostics["local_base_last_error"] = "network_probe_skipped"
+            owner.diagnostics["local_base_last_error_at"] = now
+            snapshot = dict(owner.diagnostics)
             try:
                 observe_hub_root_route_runtime(**snapshot)
             except Exception:
@@ -718,31 +743,31 @@ def _discover_active_runtime_local_base(
             pass
 
     latency_ms = round((time.monotonic() - started) * 1000.0, 3)
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG["local_base_discovery_total"] = int(
-            _ROUTE_LOCAL_BASE_DIAG.get("local_base_discovery_total") or 0
+    with owner.lock:
+        owner.diagnostics["local_base_discovery_total"] = int(
+            owner.diagnostics.get("local_base_discovery_total") or 0
         ) + 1
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_latency_ms"] = latency_ms
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = (
+        owner.diagnostics["local_base_last_latency_ms"] = latency_ms
+        owner.diagnostics["local_base_last_source"] = (
             str(result_source or "").strip()
             if result
             else "supervisor_public_status_failed"
         )
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = str(result or "").strip()
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_discovered_at"] = time.time()
+        owner.diagnostics["local_base_last_value"] = str(result or "").strip()
+        owner.diagnostics["local_base_last_discovered_at"] = time.time()
         if result:
-            _ROUTE_LOCAL_BASE_CACHE["value"] = result
-            _ROUTE_LOCAL_BASE_CACHE["expires_at"] = time.time() + max(0.0, ttl_s)
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = ""
+            owner.cache["value"] = result
+            owner.cache["expires_at"] = time.time() + max(0.0, ttl_s)
+            owner.diagnostics["local_base_last_error"] = ""
         else:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_error_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_error_total") or 0
+            owner.diagnostics["local_base_error_total"] = int(
+                owner.diagnostics.get("local_base_error_total") or 0
             ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = last_error
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error_at"] = time.time()
-            _ROUTE_LOCAL_BASE_CACHE["value"] = None
-            _ROUTE_LOCAL_BASE_CACHE["expires_at"] = 0.0
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
+            owner.diagnostics["local_base_last_error"] = last_error
+            owner.diagnostics["local_base_last_error_at"] = time.time()
+            owner.cache["value"] = None
+            owner.cache["expires_at"] = 0.0
+        snapshot = dict(owner.diagnostics)
     try:
         observe_hub_root_route_runtime(**snapshot)
     except Exception:
@@ -751,7 +776,12 @@ def _discover_active_runtime_local_base(
 
 
 def _build_hub_route_http_bases(
-    *, path_norm: str, method: str, cfg: Any | None, ctx: Any | None = None
+    *,
+    path_norm: str,
+    method: str,
+    cfg: Any | None,
+    ctx: Any | None = None,
+    state: HubRouteDiscoveryState | None = None,
 ) -> list[str]:
     bases: list[str] = []
     env_base = (
@@ -769,7 +799,11 @@ def _build_hub_route_http_bases(
         bases.extend(_supervisor_local_bases())
 
     if runtime_port_base:
-        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
+        _note_route_local_base_shortcut(
+            source="runtime_port_env",
+            value=runtime_port_base,
+            state=state,
+        )
         bases.append(runtime_port_base)
     if runtime_port.isdigit():
         bases.append(f"http://127.0.0.1:{runtime_port}")
@@ -778,7 +812,7 @@ def _build_hub_route_http_bases(
     _append_local_http_base(bases, cfg_base)
 
     if not runtime_port_base and not state_bases:
-        active_runtime_base = _discover_active_runtime_local_base()
+        active_runtime_base = _discover_active_runtime_local_base(state=state)
         if active_runtime_base:
             _append_local_http_base(bases, active_runtime_base)
 
@@ -804,7 +838,11 @@ def _http_base_to_ws_base(base: str) -> str:
 
 
 def _build_hub_route_ws_bases(
-    *, cfg: Any | None, path: str | None = None, ctx: Any | None = None
+    *,
+    cfg: Any | None,
+    path: str | None = None,
+    ctx: Any | None = None,
+    state: HubRouteDiscoveryState | None = None,
 ) -> list[str]:
     bases: list[str] = []
     role = str(getattr(cfg, "role", None) or "").strip().lower() or None
@@ -815,7 +853,11 @@ def _build_hub_route_ws_bases(
     state_bases = _active_runtime_state_local_http_bases(ctx)
 
     if runtime_port_base:
-        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
+        _note_route_local_base_shortcut(
+            source="runtime_port_env",
+            value=runtime_port_base,
+            state=state,
+        )
         bases.append(_http_base_to_ws_base(runtime_port_base))
     for state_base in state_bases:
         bases.append(_http_base_to_ws_base(state_base))
@@ -825,7 +867,7 @@ def _build_hub_route_ws_bases(
         bases.append(_http_base_to_ws_base(cfg_base))
 
     if not runtime_port_base and not state_bases:
-        active_runtime_base = _discover_active_runtime_local_base()
+        active_runtime_base = _discover_active_runtime_local_base(state=state)
         if active_runtime_base:
             bases.append(_http_base_to_ws_base(active_runtime_base))
 
@@ -850,3 +892,77 @@ def _hub_route_force_close_no_upstream_s() -> float:
     if value > 30.0:
         value = 30.0
     return value
+
+
+class HubRouteProxyPolicy:
+    """Typed route policy with an instance-owned discovery cache."""
+
+    def __init__(self) -> None:
+        self.discovery = HubRouteDiscoveryState()
+
+    max_chunk_raw_bytes = staticmethod(_hub_route_max_chunk_raw_bytes)
+    normalize_resend_chunk_indexes = staticmethod(_hub_route_normalize_resend_chunk_indexes)
+    path_token = staticmethod(_hub_route_path_token)
+    semantic_flow_for_path = staticmethod(_hub_route_semantic_flow_for_path)
+    should_shed_sync_frame = staticmethod(_hub_route_should_shed_sync_frame)
+    sync_frame_force_flush_enabled = staticmethod(_hub_route_sync_frame_force_flush_enabled)
+    should_force_flush_reply = staticmethod(_hub_route_should_force_flush_reply)
+    subnet_sync_payload_type = staticmethod(_hub_route_subnet_sync_payload_type)
+    should_drop_subnet_sync_frame = staticmethod(_hub_route_should_drop_subnet_sync_frame)
+    is_local_http_base = staticmethod(_is_local_http_base)
+    prefers_supervisor_public_status = staticmethod(_hub_route_prefers_supervisor_public_status)
+    local_http_timeout = staticmethod(_hub_route_local_http_timeout)
+    tools_call_has_idempotency = staticmethod(_hub_route_tools_call_has_idempotency)
+    should_retry_http_upstream_error = staticmethod(_hub_route_should_retry_http_upstream_error)
+    parse_resend_delays = staticmethod(_hub_route_parse_resend_delays)
+    should_resend_http_resp = staticmethod(_hub_route_should_resend_http_resp)
+    http_base_to_ws_base = staticmethod(_http_base_to_ws_base)
+    force_close_no_upstream_s = staticmethod(_hub_route_force_close_no_upstream_s)
+
+    def observe_local_base(self, **details: Any) -> None:
+        _observe_route_local_base_diag(state=self.discovery, **details)
+
+    def note_local_base_shortcut(self, *, source: str, value: str | None) -> None:
+        _note_route_local_base_shortcut(source=source, value=value, state=self.discovery)
+
+    def discover_active_runtime_local_base(
+        self,
+        *,
+        timeout_s: float = 0.6,
+        allow_network_probe: bool = False,
+    ) -> str | None:
+        return _discover_active_runtime_local_base(
+            timeout_s=timeout_s,
+            allow_network_probe=allow_network_probe,
+            state=self.discovery,
+        )
+
+    def build_http_bases(
+        self,
+        *,
+        path_norm: str,
+        method: str,
+        cfg: Any | None,
+        ctx: Any | None = None,
+    ) -> list[str]:
+        return _build_hub_route_http_bases(
+            path_norm=path_norm,
+            method=method,
+            cfg=cfg,
+            ctx=ctx,
+            state=self.discovery,
+        )
+
+    def build_ws_bases(
+        self,
+        *,
+        cfg: Any | None,
+        path: str | None = None,
+        ctx: Any | None = None,
+    ) -> list[str]:
+        return _build_hub_route_ws_bases(
+            cfg=cfg,
+            path=path,
+            ctx=ctx,
+            state=self.discovery,
+        )

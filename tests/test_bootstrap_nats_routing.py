@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services import bootstrap as bootstrap_mod
-from adaos.services.bootstrap_runtime import NatsBridgePolicy
+from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
 from adaos.services.system_model import service as system_model_service
 
 
@@ -30,6 +30,15 @@ def test_nats_bridge_policy_is_typed_bootstrap_dependency() -> None:
     assert policy.url_needs_public_ws_refresh("nats://api.inimatic.com:4222") is True
     assert policy.transport_kind("wss://api.inimatic.com/nats") == "ws"
     assert policy.canonical_identity(local_hub_id="hub-a", nats_user=None) == ("hub-a", "hub_hub-a")
+
+
+def test_hub_route_proxy_policy_owns_discovery_cache() -> None:
+    first = HubRouteProxyPolicy()
+    second = HubRouteProxyPolicy()
+    first.discovery.cache.update({"value": "http://127.0.0.1:8778", "expires_at": 10**12})
+
+    assert first.discover_active_runtime_local_base() == "http://127.0.0.1:8778"
+    assert second.discovery.snapshot()["cache"]["value"] is None
 
 
 def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
