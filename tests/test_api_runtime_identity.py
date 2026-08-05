@@ -229,6 +229,41 @@ def test_subnet_identity_is_distinct_from_hub_node_identity(monkeypatch) -> None
     assert "primary_node_name" not in payload
 
 
+def test_set_subnet_alias_acknowledges_durable_identity_before_projection(monkeypatch) -> None:
+    saved: list[tuple[str, str]] = []
+    bus = types.SimpleNamespace(publish=lambda _event: None)
+    config = types.SimpleNamespace(subnet_id="sn_92ffc943")
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=config, bus=bus),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "save_subnet_alias",
+        lambda alias, *, subnet_id=None: saved.append((alias, subnet_id)),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "load_subnet_alias",
+        lambda *, subnet_id=None: "ruhub" if subnet_id == "sn_92ffc943" else None,
+    )
+    background = BackgroundTasks()
+
+    payload = asyncio.run(
+        api_server.set_alias(
+            api_server.SetAliasRequest(alias="ruhub"),
+            background,
+        )
+    )
+
+    assert saved == [("ruhub", "sn_92ffc943")]
+    assert payload["primary_subnet_name"] == "ruhub"
+    assert payload["projection_refreshed"] is False
+    assert payload["projection_refresh_scheduled"] is True
+    assert len(background.tasks) == 1
+
+
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
 def test_private_network_access_middleware_allows_cross_origin_loopback_probe(origin: str) -> None:
     scope = {

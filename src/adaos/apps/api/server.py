@@ -1525,8 +1525,52 @@ async def get_alias(token=Depends(require_token)):
     return {"ok": True, **_subnet_identity_payload()}
 
 
+async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any]) -> None:
+    """Refresh derived views after the durable subnet identity is saved.
+
+    Projection materialization and local event handlers are deliberately kept
+    out of the Settings request path.  Either may wait on Yjs or perform slow
+    synchronous I/O; neither is required to acknowledge the authoritative
+    ``node.yaml`` mutation.
+    """
+    try:
+        from adaos.services import named_entity_projection
+
+        webspace_ids: list[str] = []
+        requested_webspace_id = str(event_payload.get("webspace_id") or "").strip()
+        if requested_webspace_id:
+            webspace_ids.append(requested_webspace_id)
+        default_webspace_id = named_entity_projection.default_webspace_id()
+        if default_webspace_id not in webspace_ids:
+            webspace_ids.append(default_webspace_id)
+        for webspace_id in webspace_ids:
+            await asyncio.wait_for(
+                named_entity_projection.request_named_entity_projection(
+                    webspace_id=webspace_id,
+                    reason="subnet.alias.changed",
+                    refresh=True,
+                    wait=True,
+                ),
+                timeout=2.5,
+            )
+    except Exception:
+        _runtime_log.warning("subnet alias projection refresh failed", exc_info=True)
+
+    try:
+        from adaos.domain import Event as _Ev
+
+        event = _Ev(
+            type="subnet.alias.changed",
+            payload=event_payload,
+            source="api",
+        )
+        await asyncio.to_thread(get_ctx().bus.publish, event)
+    except Exception:
+        _runtime_log.warning("subnet alias event publication failed", exc_info=True)
+
+
 @app.post("/api/subnet/alias")
-async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
+async def set_alias(body: SetAliasRequest, background: BackgroundTasks, token=Depends(require_token)):
     try:
         conf = get_ctx().config
         save_subnet_alias(body.alias, subnet_id=conf.subnet_id)
@@ -1535,48 +1579,12 @@ async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
             "subnet_id": conf.subnet_id,
             "webspace_id": body.webspace_id,
         }
-        projection_refreshed = False
-        try:
-            from adaos.services import named_entity_projection
-
-            webspace_ids: list[str] = []
-            requested_webspace_id = str(body.webspace_id or "").strip()
-            if requested_webspace_id:
-                webspace_ids.append(requested_webspace_id)
-            default_webspace_id = named_entity_projection.default_webspace_id()
-            if default_webspace_id not in webspace_ids:
-                webspace_ids.append(default_webspace_id)
-            projection_refreshed = True
-            for webspace_id in webspace_ids:
-                reconcile = await asyncio.wait_for(
-                    named_entity_projection.request_named_entity_projection(
-                        webspace_id=webspace_id,
-                        reason="subnet.alias.changed",
-                        refresh=True,
-                        wait=True,
-                    ),
-                    timeout=2.5,
-                )
-                projection_refreshed = projection_refreshed and not bool(reconcile.get("pending"))
-        except Exception:
-            projection_refreshed = False
-        # broadcast over local event bus
-        try:
-            from adaos.domain import Event as _Ev
-
-            get_ctx().bus.publish(
-                _Ev(
-                    type="subnet.alias.changed",
-                    payload=event_payload,
-                    source="api",
-                )
-            )
-        except Exception:
-            pass
+        background.add_task(_refresh_subnet_alias_dependents, event_payload)
         return {
             "ok": True,
             **_subnet_identity_payload(),
-            "projection_refreshed": projection_refreshed,
+            "projection_refreshed": False,
+            "projection_refresh_scheduled": True,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
