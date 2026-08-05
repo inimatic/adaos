@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED, BUILDER_PREVIEW_OBSERVED
+from adaos.domain.project_events import (
+    BUILDER_CONTEXT_SELECTED,
+    BUILDER_PREVIEW_DESIRED,
+    BUILDER_PREVIEW_OBSERVED,
+    BUILDER_PREVIEW_TRANSITIONED,
+)
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
 from adaos.services.runtime_paths import current_state_dir
@@ -150,6 +155,9 @@ def _preview_runtime_projection(value: Any) -> dict[str, Any]:
             "completed_at",
             "updated_at",
             "error",
+            "drift",
+            "observed_version",
+            "observed_at",
         )
     }
 
@@ -1294,3 +1302,43 @@ async def _on_builder_preview_observed(evt: Any) -> None:
     ):
         return
     _schedule_projection_publish(service, source_webspace_id)
+
+
+@subscribe(BUILDER_PREVIEW_TRANSITIONED)
+async def _on_builder_preview_transitioned(evt: Any) -> None:
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("source_webspace_id") or "").strip()
+    if not source_webspace_id:
+        return
+    service = BuilderWorkbenchService()
+    current = service.reconciler.describe(source_webspace_id)
+    if int(current.get("generation") or 0) != int(payload.get("generation") or 0):
+        return
+    _schedule_projection_publish(service, source_webspace_id)
+
+
+@subscribe("desktop.webspace.reloaded")
+async def _on_builder_preview_webspace_reloaded(evt: Any) -> None:
+    """Project runtime truth back to the owning Builder after reload/reconnect."""
+
+    payload = _payload_from_event(evt)
+    preview_webspace_id = str(payload.get("webspace_id") or "").strip()
+    observed_scenario = str(
+        payload.get("scenario_id")
+        or payload.get("current_scenario")
+        or payload.get("materialized_scenario")
+        or ""
+    ).strip()
+    if not preview_webspace_id or not observed_scenario:
+        return
+    service = BuilderWorkbenchService()
+    incoming = service.relationships.get_incoming(preview_webspace_id)
+    if incoming is None or incoming.purpose != BUILDER_PROJECT_PREVIEW:
+        return
+    service.reconciler.observe(
+        source_webspace_id=incoming.source_webspace_id,
+        preview_webspace_id=preview_webspace_id,
+        observed_scenario=observed_scenario,
+        observed_version=str(payload.get("version") or payload.get("revision") or "").strip() or None,
+        reason=str(payload.get("reason") or payload.get("action") or "webspace_reloaded"),
+    )

@@ -8,6 +8,7 @@ from typing import Any, Literal
 BUILDER_CONTEXT_SELECTED = "builder.context.selected"
 BUILDER_PREVIEW_DESIRED = "builder.preview.desired"
 BUILDER_PREVIEW_OBSERVED = "builder.preview.observed"
+BUILDER_PREVIEW_TRANSITIONED = "builder.preview.transitioned"
 PROJECT_CONTENT_CHANGED = "project.content.changed"
 
 ProjectKind = Literal["scenario", "skill"]
@@ -62,6 +63,7 @@ __all__ = [
     "BUILDER_CONTEXT_SELECTED",
     "BUILDER_PREVIEW_DESIRED",
     "BUILDER_PREVIEW_OBSERVED",
+    "BUILDER_PREVIEW_TRANSITIONED",
     "PROJECT_CONTENT_CHANGED",
     "ProjectEventIdentity",
     "legacy_project_event_topic",

@@ -244,6 +244,44 @@ async def test_rapid_preview_switches_keep_one_materialization_in_flight(monkeyp
     assert calls == ["first", "second"]
     assert max_active == 1
     assert state["observed_scenario"] == "second"
+    assert state["history"][-1]["desired_scenario"] == "first"
+    assert state["history"][-1]["status"] == "superseded"
+    assert state["history"][-1]["superseded_by_generation"] == 2
+
+
+def test_preview_observation_exposes_drift_without_changing_desired_generation(tmp_path: Path) -> None:
+    from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
+
+    reconciler = BuilderPreviewReconciler(state_dir=tmp_path / "state")
+    requested, _ = reconciler.request(
+        source_webspace_id="desktop",
+        preview_webspace_id="preview-a",
+        project_kind="scenario",
+        project_id="shopping",
+        desired_scenario="shopping",
+    )
+
+    drifted = reconciler.observe(
+        source_webspace_id="desktop",
+        preview_webspace_id="preview-a",
+        observed_scenario="builder",
+        observed_version="0.2.1",
+        reason="manual_runtime_change",
+    )
+
+    assert drifted["generation"] == requested["generation"]
+    assert drifted["desired_scenario"] == "shopping"
+    assert drifted["observed_scenario"] == "builder"
+    assert drifted["status"] == "drifted"
+    assert drifted["drift"]["reconcile_required"] is True
+
+    restored = reconciler.observe(
+        source_webspace_id="desktop",
+        preview_webspace_id="preview-a",
+        observed_scenario="shopping",
+    )
+    assert restored["status"] == "ready"
+    assert restored["drift"] is None
 
 
 @pytest.mark.asyncio
