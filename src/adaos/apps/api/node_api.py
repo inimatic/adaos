@@ -38,6 +38,7 @@ from adaos.services.bootstrap import (
     switch_role,
 )
 from adaos.services.node_display import node_display_from_config
+from adaos.services.env_policy import env_bool
 from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService, WebDesktopSnapshot
 from adaos.services.media_library import (
     ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
@@ -62,6 +63,7 @@ from adaos.services.reliability import (
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.operations import submit_install_operation
+from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.scenario.webspace_runtime import (
     WebspaceService,
     describe_webspace_operational_state,
@@ -2128,24 +2130,18 @@ def _compact_runtime_reliability_payload(
 
 
 def _env_flag_enabled(name: str) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool(name)
 
 
 def _supervisor_enabled() -> bool:
-    raw = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return env_bool("ADAOS_SUPERVISOR_ENABLED")
 
 
 def _supervisor_base_url() -> str | None:
     raw = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     if raw:
         return raw.rstrip("/")
-    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-    return f"http://{host}:{port}"
+    return supervisor_base_from_env()
 
 
 async def _proxy_supervisor_json(

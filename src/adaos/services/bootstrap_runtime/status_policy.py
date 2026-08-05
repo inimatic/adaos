@@ -4,6 +4,8 @@ import math
 import os
 from typing import Any
 
+from adaos.services.env_policy import truthy
+
 
 def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> float:
     try:
@@ -109,8 +111,8 @@ def _should_emit_node_status(
 
 def _env_truthy(value: Any, *, default: bool = False) -> bool:
     if value is None:
-        return default
-    return str(value).strip().lower() not in ("", "0", "false", "off", "no")
+        return bool(default)
+    return truthy(value, default=True)
 
 
 def _loop_hang_watchdog_enabled_from_env() -> bool:

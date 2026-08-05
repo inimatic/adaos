@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
 
+from adaos.services.env_policy import env_bool
+
 
 _SCHEMA = "adaos.incident_registry.v1"
 _PERSIST_SCHEMA = "adaos.incident_registry.persisted.v1"
@@ -84,7 +86,7 @@ def _severity_rank(value: Any) -> int:
 
 
 def _env_truthy(name: str) -> bool:
-    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool(name)
 
 
 def incident_domain_from_owner(owner: Any, *, fallback: str = "core.runtime") -> str:

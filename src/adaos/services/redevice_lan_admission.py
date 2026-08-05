@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from adaos.adapters.db import sqlite as sqlite_db
 from adaos.sdk.core.decorators import subscribe
 from adaos.services import access_links
+from adaos.services.runtime_topology import DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT, http_base
 
 _NS = "redevice_lan_admission"
 _KEY = "state"
@@ -121,19 +122,19 @@ def _first_lan_ip() -> str:
         token = _text(item)
         if token and not token.startswith("127.") and not token.startswith("169.254."):
             return token
-    return "127.0.0.1"
+    return DEFAULT_LOOPBACK_HOST
 
 
 def default_hub_base_url() -> str:
     raw = _text(_local_config().get("local_api_url"))
     if raw and not raw.startswith("http://127.") and "localhost" not in raw:
         return raw.rstrip("/")
-    return f"http://{_first_lan_ip()}:8777"
+    return f"http://{_first_lan_ip()}:{DEFAULT_RUNTIME_PORT}"
 
 
 def local_control_base_url() -> str:
     raw = _text(_local_config().get("local_api_url"))
-    return (raw or "http://127.0.0.1:8777").rstrip("/")
+    return (raw or http_base(port=DEFAULT_RUNTIME_PORT)).rstrip("/")
 
 
 def _request_id(endpoint_id: str) -> str:

@@ -6,8 +6,10 @@ from typing import Any, Mapping
 
 import yaml
 
+from adaos.services.env_policy import truthy
 from adaos.services.models.artifacts import hash_file
 from adaos.services.root.client import RootHttpClient, RootHttpError
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 def _norm_url(value: str | None) -> str:
@@ -37,7 +39,7 @@ def _default_root_url(cfg: Any, *, root_url: str | None = None) -> str:
     configured = str(getattr(getattr(cfg, "root_settings", None), "base_url", None) or "").strip()
     if configured:
         return _norm_url(configured)
-    return "https://api.inimatic.com"
+    return DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 def _root_http_client(*, root_url: str | None = None) -> tuple[RootHttpClient, Any]:
@@ -88,16 +90,7 @@ def _safe_artifact_name(value: str | None, fallback_path: Path | None = None) ->
 
 
 def _truthy(value: Any, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    return default
+    return truthy(value, default=default)
 
 
 def _skill_models_private(skill_id: str, artifact_key: str | None = None) -> bool:

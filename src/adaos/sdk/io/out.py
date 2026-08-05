@@ -24,6 +24,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit as _emit
 from adaos.services.node_config import load_config
 from adaos.services.webspace_id import coerce_webspace_id
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 __all__ = ["chat_append", "say", "media_route", "telegram_photo", "stream_publish", "stream_variable_publish"]
 
@@ -164,10 +165,10 @@ def _root_base_candidates(explicit: str | None = None) -> list[str]:
     candidates.extend(
         [
             os.getenv("ROOT_BASE_URL") or "",
-            "https://api.inimatic.com",
+            DEFAULT_PUBLIC_ROOT_BASE_URL,
         ]
     )
-    return _unique_texts(candidates) or ["https://api.inimatic.com"]
+    return _unique_texts(candidates) or [DEFAULT_PUBLIC_ROOT_BASE_URL]
 
 
 def _root_base_url(explicit: str | None = None) -> str:

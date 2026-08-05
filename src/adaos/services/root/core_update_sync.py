@@ -13,6 +13,7 @@ from adaos.services.core_slots import active_slot_manifest, slot_status
 from adaos.services.core_update import read_status
 from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.hub_root_protocol_store import ack_stream_message, prepare_stream_message
+from adaos.services.env_policy import env_bool
 from adaos.services.root.client import RootHttpClient
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_instance_id, runtime_transition_role
 from adaos.services.release_validation_autorun import read_autonomous_release_validation_report
@@ -62,7 +63,7 @@ def _root_client(conf) -> RootHttpClient | None:
 
 
 def _truthy_env(name: str) -> bool:
-    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool(name)
 
 
 def _append_local_update_candidate(

@@ -85,7 +85,15 @@ from adaos.services.root.memory_profile_sync import (
     memory_profile_artifact_source_api_path,
     report_hub_memory_profile,
 )
+from adaos.services.env_policy import env_int, env_text
 from adaos.services.runtime_paths import current_base_dir, current_repo_root
+from adaos.services.runtime_topology import (
+    DEFAULT_LOOPBACK_HOST,
+    DEFAULT_RUNTIME_PORT,
+    DEFAULT_SUPERVISOR_PORT,
+    supervisor_base_from_env,
+)
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 from adaos.services.supervisor_memory import (
     DEFAULT_PROFILER_ADAPTER,
     IMPLEMENTED_PROFILE_CONTROL_ACTIONS,
@@ -126,8 +134,8 @@ _MEMORY_PROFILING = MemoryProfilingService()
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AdaOS supervisor")
-    parser.add_argument("--host", default="127.0.0.1", help="Managed runtime host")
-    parser.add_argument("--port", type=int, default=8777, help="Managed runtime port")
+    parser.add_argument("--host", default=DEFAULT_LOOPBACK_HOST, help="Managed runtime host")
+    parser.add_argument("--port", type=int, default=DEFAULT_RUNTIME_PORT, help="Managed runtime port")
     parser.add_argument("--token", default=None)
     return parser.parse_known_args()[0]
 
@@ -143,18 +151,15 @@ def _resolved_token(raw_token: str | None = None) -> str | None:
 
 
 def _supervisor_host() -> str:
-    return str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    return env_text("ADAOS_SUPERVISOR_HOST", DEFAULT_LOOPBACK_HOST).strip() or DEFAULT_LOOPBACK_HOST
 
 
 def _supervisor_port() -> int:
-    try:
-        return int(str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776")
-    except Exception:
-        return 8776
+    return env_int("ADAOS_SUPERVISOR_PORT", DEFAULT_SUPERVISOR_PORT)
 
 
 def _supervisor_base_url() -> str:
-    return f"http://{_supervisor_host()}:{_supervisor_port()}"
+    return supervisor_base_from_env()
 
 
 def _supervisor_state_dir() -> Path:
@@ -4355,7 +4360,7 @@ class SupervisorManager:
         root_base_url = str(
             os.getenv("ROOT_BASE_URL")
             or getattr(root_settings, "base_url", None)
-            or "https://api.inimatic.com"
+            or DEFAULT_PUBLIC_ROOT_BASE_URL
         ).strip().rstrip("/")
         root_token = str(
             os.getenv("ADAOS_ROOT_OWNER_TOKEN")

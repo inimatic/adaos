@@ -20,7 +20,14 @@ import requests
 from adaos.build_info import BUILD_INFO
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.core_slots import active_slot, activate_slot, read_slot_manifest, slot_dir
+from adaos.services.env_policy import truthy
 from adaos.services.runtime_paths import current_control_python, current_control_repo_root, current_state_dir, is_core_slot_path
+from adaos.services.runtime_topology import (
+    DEFAULT_LOOPBACK_HOST,
+    DEFAULT_RUNTIME_PORT,
+    DEFAULT_SUPERVISOR_PORT,
+    runtime_fallback_http_bases,
+)
 from adaos.services.node_config import load_config
 from adaos.services.settings import Settings, _parse_env_file
 
@@ -68,8 +75,7 @@ _HUB_DEFAULT_SIDECAR_ENV_KEYS = {
 
 
 def _truthy_env(value: str | None) -> bool:
-    text = str(value or "").strip().lower()
-    return text in {"1", "true", "on", "yes"}
+    return truthy(value, default=False)
 
 
 def _runtime_role() -> str | None:
@@ -151,8 +157,8 @@ def _service_settings(ctx: AgentContext) -> Settings:
 def default_spec(
     ctx: AgentContext,
     *,
-    host: str = "127.0.0.1",
-    port: int = 8777,
+    host: str = DEFAULT_LOOPBACK_HOST,
+    port: int = DEFAULT_RUNTIME_PORT,
     token: str | None = None,
 ) -> AutostartSpec:
     service_settings = _service_settings(ctx)
@@ -210,8 +216,8 @@ def default_spec(
                     continue
                 pythonpath_entries.append(candidate)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath_entries))
-    env.setdefault("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
-    env.setdefault("ADAOS_SUPERVISOR_PORT", "8776")
+    env.setdefault("ADAOS_SUPERVISOR_HOST", DEFAULT_LOOPBACK_HOST)
+    env.setdefault("ADAOS_SUPERVISOR_PORT", str(DEFAULT_SUPERVISOR_PORT))
     resolved_token = str(token or _default_control_token() or "").strip()
     if resolved_token:
         env["ADAOS_TOKEN"] = resolved_token
@@ -841,7 +847,7 @@ def _state_dir() -> Path:
 
 
 def _tcp_probe(host: str, port: int, *, timeout: float = 0.6) -> bool:
-    host = str(host or "").strip() or "127.0.0.1"
+    host = str(host or "").strip() or DEFAULT_LOOPBACK_HOST
     try:
         port_i = int(port)
     except Exception:
@@ -859,7 +865,7 @@ def _local_url_to_host_port(url: str | None) -> tuple[str, int] | None:
         return None
     try:
         parsed = urlparse(raw)
-        host = str(parsed.hostname or "").strip() or "127.0.0.1"
+        host = str(parsed.hostname or "").strip() or DEFAULT_LOOPBACK_HOST
         port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
     except Exception:
         return None
@@ -907,7 +913,7 @@ def _core_update_status_from_base_dir(base_dir: Path | str | None) -> dict[str, 
 
 
 def _http_probe_local_control(host: str, port: int, *, timeout: float = 0.5) -> bool:
-    base = f"http://{str(host or '127.0.0.1').strip() or '127.0.0.1'}:{int(port)}"
+    base = f"http://{str(host or DEFAULT_LOOPBACK_HOST).strip() or DEFAULT_LOOPBACK_HOST}:{int(port)}"
     sess = requests.Session()
     try:
         sess.trust_env = False
@@ -946,7 +952,7 @@ def _discover_live_control_bind(configured_host: str, configured_port: int) -> t
 
     def _push(host: str | None, port: int | None) -> None:
         try:
-            host_norm = str(host or "").strip() or "127.0.0.1"
+            host_norm = str(host or "").strip() or DEFAULT_LOOPBACK_HOST
             port_norm = int(port or 0)
         except Exception:
             return
@@ -972,15 +978,9 @@ def _discover_live_control_bind(configured_host: str, configured_port: int) -> t
             _push(*local_bind)
     for _, host, port in _pidfile_control_candidates():
         _push(host, port)
-    for item in (
-        ("127.0.0.1", 8777),
-        ("127.0.0.1", 8778),
-        ("127.0.0.1", 8779),
-        ("localhost", 8777),
-        ("localhost", 8778),
-        ("localhost", 8779),
-    ):
-        _push(*item)
+    for raw in runtime_fallback_http_bases(include_localhost=True, order="host"):
+        parsed = urlparse(raw)
+        _push(parsed.hostname, parsed.port)
 
     for host, port in candidates:
         if _http_probe_local_control(host, port):
@@ -2049,7 +2049,7 @@ def status(ctx: AgentContext) -> dict:
         enabled = proc.returncode == 0 and state_raw not in {"disabled"}
         active = proc.returncode == 0 and state_raw in {"running"}
         host_port = _parse_wrapper_host_port(wrapper) if wrapper.exists() else None
-        configured_host, configured_port = host_port or ("127.0.0.1", 8777)
+        configured_host, configured_port = host_port or (DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT)
         live_host_port = _discover_live_control_bind(configured_host, configured_port) if active else None
         host, port = live_host_port or (configured_host, configured_port)
         listening = bool(live_host_port) if active else False
@@ -2076,7 +2076,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_host = str(wrapper_env.get("ADAOS_SUPERVISOR_HOST") or "").strip()
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
-                payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+                payload["supervisor_url"] = f"http://{supervisor_host or DEFAULT_LOOPBACK_HOST}:{supervisor_port}"
         payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         core_update_status = _core_update_status_from_base_dir(payload.get("base_dir") or ctx.paths.base_dir())
         if core_update_status:
@@ -2167,7 +2167,7 @@ def status(ctx: AgentContext) -> dict:
         wrapper_env = _parse_wrapper_env(wrapper) if wrapper.exists() else {}
 
         host_port = _parse_wrapper_host_port(wrapper) if wrapper.exists() else None
-        configured_host, configured_port = host_port or ("127.0.0.1", 8777)
+        configured_host, configured_port = host_port or (DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT)
         live_host_port = _discover_live_control_bind(configured_host, configured_port) if active else None
         host, port = live_host_port or (configured_host, configured_port)
         listening = bool(live_host_port) if active else False
@@ -2199,7 +2199,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_host = str(wrapper_env.get("ADAOS_SUPERVISOR_HOST") or "").strip()
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
-                payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+                payload["supervisor_url"] = f"http://{supervisor_host or DEFAULT_LOOPBACK_HOST}:{supervisor_port}"
         payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         payload["user_service_exists"] = user_service_path.exists()
         payload["system_service_exists"] = system_service_path.exists()
@@ -2229,7 +2229,7 @@ def status(ctx: AgentContext) -> dict:
         wrapper = (bin_dir / "adaos-autostart.sh").resolve()
         wrapper_env = _parse_wrapper_env(wrapper) if wrapper.exists() else {}
         host_port = _parse_wrapper_host_port(wrapper) if wrapper.exists() else None
-        configured_host, configured_port = host_port or ("127.0.0.1", 8777)
+        configured_host, configured_port = host_port or (DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT)
         live_host_port = _discover_live_control_bind(configured_host, configured_port) if active else None
         host, port = live_host_port or (configured_host, configured_port)
         listening = bool(live_host_port) if active else False
@@ -2255,7 +2255,7 @@ def status(ctx: AgentContext) -> dict:
             supervisor_host = str(wrapper_env.get("ADAOS_SUPERVISOR_HOST") or "").strip()
             supervisor_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
             if supervisor_port:
-                payload["supervisor_url"] = f"http://{supervisor_host or '127.0.0.1'}:{supervisor_port}"
+                payload["supervisor_url"] = f"http://{supervisor_host or DEFAULT_LOOPBACK_HOST}:{supervisor_port}"
         payload.update(_wrapper_control_plane_payload(wrapper, base_dir=payload.get("base_dir") or ctx.paths.base_dir()))
         core_update_status = _core_update_status_from_base_dir(payload.get("base_dir") or ctx.paths.base_dir())
         if core_update_status:

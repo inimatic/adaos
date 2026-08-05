@@ -35,6 +35,7 @@ from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
 from adaos.services import conversation_context, conversation_response, conversation_store, dialog_runtime
 from adaos.services.nlu.text_correction import correct_light_text
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 _log = logging.getLogger("adaos.router.service")
@@ -646,7 +647,7 @@ class RouterService:
                 # Root API base
                 from adaos.services.agent_context import get_ctx as _get_ctx
 
-                api_base = getattr(_get_ctx().settings, "api_base", "https://api.inimatic.com")
+                api_base = getattr(_get_ctx().settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 url = f"{api_base.rstrip('/')}/io/tg/send"
                 # Prefix message with subnet alias (or id) for clarity
                 try:

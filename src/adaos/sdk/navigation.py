@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL
+
 DESTINATION_SCHEMA = "adaos.navigation.destination.v1"
 RESOLUTION_SCHEMA = "adaos.navigation.resolution.v1"
 
@@ -173,9 +175,9 @@ def webspace_destination(
     )
 
 
-def build_url(destination: Mapping[str, Any], *, base_url: str = "https://inimatic.com") -> str:
+def build_url(destination: Mapping[str, Any], *, base_url: str = DEFAULT_PUBLIC_APP_BASE_URL) -> str:
     normalized = validate_destination(destination)
-    base = _text(base_url).rstrip("/") or "https://inimatic.com"
+    base = _text(base_url).rstrip("/") or DEFAULT_PUBLIC_APP_BASE_URL
     parts = urlsplit(base)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError("navigation base_url must be an absolute HTTP(S) URL")

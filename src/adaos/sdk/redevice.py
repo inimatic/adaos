@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from adaos.services.redevice_versions import endpoint_version_info
+from adaos.services.zone_hosts import zone_public_base_url
 
 TRANSPORT_LADDER = (
     "webrtc_p2p",
@@ -154,7 +155,7 @@ def _root_base(value: str | None = None) -> str:
         or os.environ.get("ADAOS_ROOT_API_BASE")
         or os.environ.get("PUBLIC_ROOT_BASE")
         or os.environ.get("ROOT_API_BASE")
-        or "https://ru.api.inimatic.com"
+        or zone_public_base_url("ru")
     )
     return _text(raw).rstrip("/")
 

@@ -8,6 +8,8 @@ import time
 from starlette.staticfiles import StaticFiles
 
 from adaos.services.browser_assets import publish_system_resource_descriptors, static_assets_directory
+from adaos.services.env_policy import truthy
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 class BrowserAssetStaticFiles(StaticFiles):
@@ -113,7 +115,7 @@ _runtime_log = logging.getLogger("adaos.runtime")
 
 
 def _startup_stage_logs_enabled() -> bool:
-    return str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(os.getenv("ADAOS_STARTUP_STAGE_LOGS"))
 
 
 class _StartupTimer:
@@ -169,11 +171,7 @@ def _maybe_set_windows_selector_loop() -> None:
     raw = os.getenv("ADAOS_WIN_SELECTOR_LOOP")
     enabled = False
     if raw is not None:
-        val = str(raw).strip().lower()
-        if val in ("1", "true", "on", "yes"):
-            enabled = True
-        elif val in ("0", "false", "off", "no"):
-            enabled = False
+        enabled = truthy(raw, default=False)
     # Selector loop is retained only as an opt-in diagnostic mode. Normal
     # Windows runtime should stay on the Proactor-capable asyncio default.
     if not enabled:
@@ -220,6 +218,7 @@ from adaos.services.core_update import write_status as write_core_update_status
 from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.core_slots import active_slot, active_slot_manifest, slot_status as core_slot_status
 from adaos.services.node_config import save_config
+from adaos.services.runtime_topology import supervisor_base_candidates_from_env
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_transition_role
 from adaos.services.runtime_lifecycle import (
     is_draining,
@@ -230,7 +229,7 @@ from adaos.services.runtime_lifecycle import (
 
 
 def _truthy_value(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(value, default=False)
 
 
 def _background_boot_enabled() -> bool:
@@ -604,34 +603,8 @@ async def _core_update_countdown_worker(
         raise
 
 
-def _truthy_env(name: str) -> bool:
-    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _runtime_admin_supervisor_bases() -> list[str]:
-    explicit_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip().rstrip("/")
-    explicit_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "").strip()
-    explicit_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip()
-    if not (
-        _truthy_env("ADAOS_SUPERVISOR_ENABLED")
-        or _truthy_env("ADAOS_AUTOSTART_MANAGED")
-        or explicit_url
-        or explicit_host
-        or explicit_port
-    ):
-        return []
-    candidates: list[str] = []
-    if explicit_url:
-        candidates.append(explicit_url)
-    host = explicit_host or "127.0.0.1"
-    port = explicit_port or "8776"
-    candidates.append(f"http://{host}:{port}")
-    candidates.append("http://127.0.0.1:8776")
-    unique: list[str] = []
-    for item in candidates:
-        if item and item not in unique:
-            unique.append(item)
-    return unique
+    return supervisor_base_candidates_from_env(require_signal=True)
 
 
 def _try_forward_update_to_supervisor(
@@ -953,7 +926,7 @@ async def lifespan(app: FastAPI):
         conf = get_ctx().config
         if conf.role == "hub" and conf.subnet_id:
             ctx = _get_ctx()
-            api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
+            api_base = getattr(ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
             import requests as _requests
 
             link_url = f"{api_base.rstrip('/')}/io/tg/pair/link"
@@ -1258,7 +1231,7 @@ async def lifespan(app: FastAPI):
             ):
                 conf = get_ctx().config
                 ctx = _get_ctx()
-                api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
+                api_base = getattr(ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 try:
                     from adaos.sdk.data.i18n import _ as _t
 

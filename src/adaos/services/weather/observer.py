@@ -13,6 +13,7 @@ import y_py as Y
 from adaos.services.agent_context import get_ctx
 from adaos.domain import Event as DomainEvent
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.env_policy import truthy
 
 _log = logging.getLogger("adaos.weather.observer")
 
@@ -31,7 +32,7 @@ _AUTO_REGISTERED = False
 
 
 def _truthy_env(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(value, default=False)
 
 
 def _ydoc_observer_auto_register_enabled() -> bool:

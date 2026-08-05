@@ -7,10 +7,22 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from adaos.services.realtime_sidecar import realtime_sidecar_route_tunnel_ws_bases
 from adaos.services.reliability import observe_hub_root_route_runtime
+from adaos.services.runtime_paths import current_state_dir
+from adaos.services.runtime_topology import (
+    DEFAULT_CANDIDATE_RUNTIME_PORT,
+    DEFAULT_RUNTIME_PORT,
+    http_base,
+    is_loopback_http_url,
+    local_http_bases,
+    runtime_fallback_ws_bases,
+    runtime_port_http_base_from_env,
+    runtime_probe_http_bases,
+    supervisor_base_candidates_from_env,
+    supervisor_base_from_env,
+)
 
 
 def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
@@ -259,12 +271,7 @@ def _hub_route_should_drop_subnet_sync_frame(
 
 
 def _is_local_http_base(url: str) -> bool:
-    try:
-        u = urlparse(url)
-        host = (u.hostname or "").lower()
-        return host in ("127.0.0.1", "localhost")
-    except Exception:
-        return False
+    return is_loopback_http_url(url)
 
 
 def _hub_route_prefers_supervisor_public_status(path_norm: str, method: str) -> bool:
@@ -318,9 +325,7 @@ def _hub_route_node_status_supervisor_runtime(ctx: AgentContext) -> dict[str, An
     runtime_url = str(runtime_state.get("runtime_url") or "").strip()
     supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     if not supervisor_url and supervisor_enabled:
-        host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-        port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-        supervisor_url = f"http://{host}:{port}"
+        supervisor_url = supervisor_base_from_env()
     return {
         "available": bool(supervisor_enabled or runtime_state),
         "enabled": bool(supervisor_enabled),
@@ -353,19 +358,15 @@ def _dev_api_serve_core_update_sync_disabled() -> bool:
 def _supervisor_local_bases() -> list[str]:
     if _dev_without_supervisor():
         return []
-    bases: list[str] = []
-    explicit = (
-        os.getenv("ADAOS_SUPERVISOR_URL")
-        or os.getenv("ADAOS_SUPERVISOR_BASE")
-        or ""
-    ).strip()
-    if explicit and _is_local_http_base(explicit):
-        bases.append(explicit.rstrip("/"))
-    supervisor_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip() or "8776"
-    bases.append(f"http://127.0.0.1:{supervisor_port}")
-    bases.append(f"http://localhost:{supervisor_port}")
-    seen: set[str] = set()
-    return [b for b in bases if (b not in seen and not seen.add(b))]
+    return [
+        base
+        for base in supervisor_base_candidates_from_env(
+            require_signal=False,
+            include_localhost=True,
+            include_default_loopback=False,
+        )
+        if _is_local_http_base(base)
+    ]
 _ROUTE_LOCAL_BASE_LOCK = threading.RLock()
 _ROUTE_LOCAL_BASE_CACHE: dict[str, Any] = {
     "value": None,
@@ -401,27 +402,15 @@ def _route_local_base_cache_ttl_s() -> float:
 
 
 def _runtime_port_local_http_base() -> str | None:
-    runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
-    if runtime_port.isdigit():
-        return f"http://127.0.0.1:{runtime_port}"
-    return None
+    return runtime_port_http_base_from_env()
 
 
 def _runtime_port_probe_candidates() -> list[str]:
-    bases: list[str] = []
-    runtime_port_base = _runtime_port_local_http_base()
-    if runtime_port_base:
-        bases.append(runtime_port_base)
-    bases.extend(
-        [
-            "http://127.0.0.1:8778",
-            "http://localhost:8778",
-            "http://127.0.0.1:8777",
-            "http://localhost:8777",
-        ]
+    return runtime_probe_http_bases(
+        include_runtime_env=True,
+        include_localhost=True,
+        ports=(DEFAULT_CANDIDATE_RUNTIME_PORT, DEFAULT_RUNTIME_PORT),
     )
-    seen: set[str] = set()
-    return [b for b in bases if (b not in seen and not seen.add(b))]
 
 
 def _route_state_dir_from_ctx(ctx: Any | None) -> Path | None:
@@ -438,10 +427,7 @@ def _route_state_dir_from_ctx(ctx: Any | None) -> Path | None:
 
 def _route_state_dir_fallback() -> Path | None:
     try:
-        base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
-        if base_dir:
-            return Path(base_dir).expanduser().resolve() / "state"
-        return Path(os.path.expanduser("~")).expanduser().resolve() / ".adaos" / "state"
+        return current_state_dir()
     except Exception:
         return None
 
@@ -480,9 +466,9 @@ def _active_runtime_state_local_http_bases(ctx: Any | None = None) -> list[str]:
         try:
             port_raw = payload.get("runtime_port")
             port = int(port_raw) if port_raw is not None else 0
-            host = str(payload.get("runtime_host") or "127.0.0.1").strip() or "127.0.0.1"
-            if port > 0 and host in ("127.0.0.1", "localhost"):
-                bases.append(f"http://127.0.0.1:{port}")
+            host = str(payload.get("runtime_host") or "").strip() or "127.0.0.1"
+            if port > 0 and _is_local_http_base(http_base(host=host, port=port)):
+                bases.append(http_base(port=port))
         except Exception:
             pass
 
@@ -797,7 +783,12 @@ def _build_hub_route_http_bases(
             _append_local_http_base(bases, active_runtime_base)
 
     # Keep runtime ports as fallback even for the browser-safe supervisor status path.
-    bases.extend(["http://127.0.0.1:8778", "http://127.0.0.1:8777"])
+    bases.extend(
+        local_http_bases(
+            (DEFAULT_CANDIDATE_RUNTIME_PORT, DEFAULT_RUNTIME_PORT),
+            hosts=("127.0.0.1",),
+        )
+    )
 
     seen_bases: set[str] = set()
     return [b for b in bases if (b not in seen_bases and not seen_bases.add(b))]
@@ -838,7 +829,7 @@ def _build_hub_route_ws_bases(
         if active_runtime_base:
             bases.append(_http_base_to_ws_base(active_runtime_base))
 
-    bases.extend(["ws://127.0.0.1:8778", "ws://127.0.0.1:8777"])
+    bases.extend(runtime_fallback_ws_bases(include_localhost=False, include_dev=False))
 
     seen_bases: set[str] = set()
     return [b for b in bases if (b not in seen_bases and not seen_bases.add(b))]

@@ -18,6 +18,7 @@ from adaos.sdk import navigation as sdk_navigation
 from adaos.services import personalization_runtime
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.personalization_access import PersonalizationAccessError
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 router = APIRouter(prefix="/personalization", tags=["personalization"])
@@ -238,7 +239,7 @@ def _setting_text(ctx: AgentContext, name: str, fallback: str = "") -> str:
 
 
 def _root_hub_base(ctx: AgentContext) -> str:
-    api_base = _setting_text(ctx, "api_base", "https://api.inimatic.com").rstrip("/")
+    api_base = _setting_text(ctx, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL).rstrip("/")
     subnet_id = personalization_runtime.current_subnet_id(ctx)
     if subnet_id:
         return f"{api_base}/hubs/{subnet_id}"

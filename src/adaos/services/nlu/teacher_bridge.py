@@ -9,6 +9,7 @@ from typing import Any, Dict, Mapping
 from adaos.sdk.core.decorators import subscribe
 from adaos.services import conversation_links
 from adaos.services.agent_context import get_ctx
+from adaos.services.env_policy import DISABLE_VALUES, ENABLE_VALUES, coerce_bool
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
@@ -18,19 +19,10 @@ from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 _log = logging.getLogger("adaos.nlu.teacher")
 
 _MAX_ITEMS = int(os.getenv("ADAOS_NLU_TEACHER_MAX", "200") or "200")
-_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
-_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled"}
 
 
 def _env_enabled(value: str | None) -> bool | None:
-    token = str(value or "").strip().lower()
-    if not token:
-        return None
-    if token in _TRUE_VALUES:
-        return True
-    if token in _FALSE_VALUES:
-        return False
-    return None
+    return coerce_bool(value, true_values=ENABLE_VALUES, false_values=DISABLE_VALUES)
 
 
 _ENABLED: bool | None = _env_enabled(os.getenv("ADAOS_NLU_TEACHER"))

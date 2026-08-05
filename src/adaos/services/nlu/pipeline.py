@@ -13,6 +13,7 @@ import yaml
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
+from adaos.services.env_policy import DISABLE_VALUES, ENABLE_VALUES, coerce_bool
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.yjs.doc import async_read_ydoc
@@ -77,8 +78,6 @@ _rules_lock: asyncio.Lock | None = None
 _rules_lock_loop: asyncio.AbstractEventLoop | None = None
 _NEURO_LITE_SKILL_NAME = "neuro_nlu_lite_skill"
 _NEURAL_SKILL_NAME = "neural_nlu_service_skill"
-_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
-_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
 
 
 def _get_rules_lock() -> asyncio.Lock:
@@ -92,9 +91,10 @@ def _get_rules_lock() -> asyncio.Lock:
 
 def _stage_policy(env_name: str) -> str:
     raw = str(os.getenv(env_name, "auto") or "auto").strip().lower()
-    if raw in _TRUE_VALUES:
+    resolved = coerce_bool(raw, true_values=ENABLE_VALUES, false_values=DISABLE_VALUES)
+    if resolved is True:
         return "enabled"
-    if raw in _FALSE_VALUES:
+    if resolved is False:
         return "disabled"
     return "auto"
 

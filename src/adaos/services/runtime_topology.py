@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Final
+from typing import Any, Final, Literal
 from urllib.parse import urlparse
 
 from adaos.services.env_policy import env_bool, env_int, env_text
@@ -82,12 +82,23 @@ def local_http_bases(
     ports: Iterable[Any],
     *,
     hosts: Iterable[str] = (DEFAULT_LOOPBACK_HOST, LOCALHOST_HOST),
+    order: Literal["port", "host"] = "port",
 ) -> list[str]:
-    return unique_texts(
-        http_base(host=host, port=normalize_port(port, default=DEFAULT_RUNTIME_PORT))
-        for port in ports
-        for host in hosts
-    )
+    ports_tuple = tuple(ports)
+    hosts_tuple = tuple(hosts)
+    if order == "host":
+        values = (
+            http_base(host=host, port=normalize_port(port, default=DEFAULT_RUNTIME_PORT))
+            for host in hosts_tuple
+            for port in ports_tuple
+        )
+    else:
+        values = (
+            http_base(host=host, port=normalize_port(port, default=DEFAULT_RUNTIME_PORT))
+            for port in ports_tuple
+            for host in hosts_tuple
+        )
+    return unique_texts(values)
 
 
 def local_ws_bases(
@@ -136,10 +147,11 @@ def runtime_fallback_http_bases(
     *,
     prefer_member: bool = False,
     include_localhost: bool = True,
+    order: Literal["port", "host"] = "port",
 ) -> list[str]:
     ports = LOCAL_MEMBER_PREFERRED_PORTS if prefer_member else LOCAL_RUNTIME_PREFERRED_PORTS
     hosts = (DEFAULT_LOOPBACK_HOST, LOCALHOST_HOST) if include_localhost else (DEFAULT_LOOPBACK_HOST,)
-    return local_http_bases(ports, hosts=hosts)
+    return local_http_bases(ports, hosts=hosts, order=order)
 
 
 def runtime_fallback_ws_bases(
@@ -179,6 +191,7 @@ def supervisor_base_candidates_from_env(
     *,
     require_signal: bool = False,
     include_localhost: bool = False,
+    include_default_loopback: bool = True,
 ) -> list[str]:
     explicit_url = env_text("ADAOS_SUPERVISOR_URL").rstrip("/")
     explicit_base = env_text("ADAOS_SUPERVISOR_BASE").rstrip("/")
@@ -193,7 +206,10 @@ def supervisor_base_candidates_from_env(
     host = explicit_host or DEFAULT_LOOPBACK_HOST
     port = normalize_port(explicit_port, default=DEFAULT_SUPERVISOR_PORT)
     candidates.append(http_base(host=host, port=port))
-    candidates.append(http_base(port=DEFAULT_SUPERVISOR_PORT))
+    if include_default_loopback:
+        candidates.append(http_base(port=DEFAULT_SUPERVISOR_PORT))
+    elif not is_loopback_host(host):
+        candidates.append(http_base(port=port))
     if include_localhost:
         candidates.append(http_base(host=LOCALHOST_HOST, port=port))
     return unique_texts(candidates)

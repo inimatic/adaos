@@ -20,10 +20,11 @@ from urllib.parse import urlparse
 import requests
 
 from adaos.sdk.data.skill_memory import get as memory_get, set as memory_set
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 _log = logging.getLogger("adaos.sdk.net.external_api")
 
-DEFAULT_GLOBAL_PROXY_URL = "https://api.inimatic.com/v1/external-api/proxy"
+DEFAULT_GLOBAL_PROXY_URL = f"{DEFAULT_PUBLIC_ROOT_BASE_URL}/v1/external-api/proxy"
 DEFAULT_RECHECK_INTERVAL_S = 7 * 24 * 60 * 60
 DEFAULT_CONNECT_TIMEOUT_S = 3.0
 DEFAULT_READ_TIMEOUT_S = 10.0

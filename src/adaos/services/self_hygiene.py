@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from adaos.services.env_policy import truthy
 from adaos.services.runtime_paths import current_base_dir, current_logs_dir
 
 
@@ -37,7 +38,6 @@ DEFAULT_POLICY: dict[str, Any] = {
     "managed_backup_keep_latest": 3,
 }
 
-_TRUTHY = {"1", "true", "yes", "on"}
 _GLOBAL_TMP_PATTERNS = (
     "pip-unpack-*",
     "pip-install-*",
@@ -55,7 +55,7 @@ _GLOBAL_TMP_LARGE_FILE_PATTERNS = ("tmp*",)
 
 
 def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in _TRUTHY
+    return truthy(value, default=False)
 
 
 def _policy(overrides: dict[str, Any] | None = None) -> dict[str, Any]:

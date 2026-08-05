@@ -10,11 +10,13 @@ from typing import Any
 
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.bootstrap import is_ready, load_config
+from adaos.services.env_policy import env_bool
 from adaos.services.reliability import reliability_snapshot, sidecar_runtime_snapshot
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.runtime_paths import current_base_dir
 from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
+from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.subnet.link_client import get_member_link_client
 from adaos.services.system_model.catalog import (
     browser_session_objects,
@@ -83,18 +85,11 @@ def _node_status_supervisor_runtime(base_dir: Path) -> dict[str, Any]:
     runtime_state = _read_json_file((base_dir / "state" / "supervisor" / "runtime.json").resolve())
     update_attempt = _read_json_file((base_dir / "state" / "supervisor" / "update_attempt.json").resolve())
     update_status = read_core_update_status() or {}
-    supervisor_enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
     runtime_url = str(runtime_state.get("runtime_url") or "").strip()
     supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     if not supervisor_url and supervisor_enabled:
-        host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-        port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-        supervisor_url = f"http://{host}:{port}"
+        supervisor_url = supervisor_base_from_env()
     return {
         "available": bool(supervisor_enabled or runtime_state),
         "enabled": bool(supervisor_enabled),

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL
 
 
 def _service():
@@ -519,9 +520,9 @@ def public_app_base() -> str:
     try:
         from adaos.services.agent_context import get_ctx
 
-        return str(get_ctx().settings.app_base or "https://inimatic.com").strip().rstrip("/")
+        return str(get_ctx().settings.app_base or DEFAULT_PUBLIC_APP_BASE_URL).strip().rstrip("/")
     except Exception:
-        return "https://inimatic.com"
+        return DEFAULT_PUBLIC_APP_BASE_URL
 
 
 def navigation_link(

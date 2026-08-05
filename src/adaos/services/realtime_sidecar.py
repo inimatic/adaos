@@ -21,6 +21,7 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from adaos.services.bounded_io import env_int, rotate_file_if_needed
+from adaos.services.env_policy import TRUE_VALUES, env_bool, env_int as runtime_env_int
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
     nats_url_uses_websocket,
@@ -36,6 +37,7 @@ from adaos.services.nats_ws_transport import (
 )
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
 from adaos.services.runtime_paths import current_base_dir, current_repo_root
+from adaos.services.runtime_topology import DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT, supervisor_base_from_env
 
 NATS_PING = b"PING\r\n"
 NATS_PONG = b"PONG\r\n"
@@ -79,7 +81,7 @@ def _truthy(value: Any, *, default: bool = False) -> bool:
         return default
     if not text:
         return default
-    return text in {"1", "true", "on", "yes"}
+    return text in TRUE_VALUES
 
 
 def _realtime_remote_quarantine_s() -> float:
@@ -287,7 +289,10 @@ def realtime_sidecar_enabled(*, role: str | None = None, os_name: str | None = N
 
 
 def realtime_sidecar_host() -> str:
-    return str(os.getenv("ADAOS_REALTIME_HOST", "127.0.0.1") or "127.0.0.1").strip() or "127.0.0.1"
+    return (
+        str(os.getenv("ADAOS_REALTIME_HOST", DEFAULT_LOOPBACK_HOST) or DEFAULT_LOOPBACK_HOST).strip()
+        or DEFAULT_LOOPBACK_HOST
+    )
 
 
 def realtime_sidecar_port() -> int:
@@ -318,7 +323,7 @@ def realtime_sidecar_local_url() -> str:
 
 
 def _realtime_sidecar_lifecycle_manager() -> str:
-    return "supervisor" if _truthy(os.getenv("ADAOS_SUPERVISOR_ENABLED"), default=False) else "runtime"
+    return "supervisor" if env_bool("ADAOS_SUPERVISOR_ENABLED") else "runtime"
 
 
 def _route_tunnel_runtime_paths() -> dict[str, str]:
@@ -424,7 +429,7 @@ def _media_proxy_public_bases(*, host: str | None = None, port: int | None = Non
 
 
 def _media_proxy_listener_url(*, host: str, port: int) -> str:
-    return f"http://{str(host or '').strip() or '127.0.0.1'}:{int(port)}"
+    return f"http://{str(host or '').strip() or DEFAULT_LOOPBACK_HOST}:{int(port)}"
 
 
 def _route_tunnel_upstream_host() -> str:
@@ -434,32 +439,23 @@ def _route_tunnel_upstream_host() -> str:
     raw = str(os.getenv("ADAOS_RUNTIME_HOST") or "").strip()
     if raw:
         return raw
-    return "127.0.0.1"
+    return DEFAULT_LOOPBACK_HOST
 
 
 def _route_tunnel_upstream_port() -> int:
     dynamic = _route_tunnel_supervisor_runtime_endpoint()
     if dynamic is not None:
         return dynamic[1]
-    raw = os.getenv("ADAOS_RUNTIME_PORT")
-    try:
-        port = int(str(raw or "8777").strip() or "8777")
-    except Exception:
-        port = 8777
-    if port <= 0:
-        port = 8777
-    return port
+    return runtime_env_int("ADAOS_RUNTIME_PORT", DEFAULT_RUNTIME_PORT, minimum=1)
 
 
 def _route_tunnel_supervisor_base_url() -> str | None:
-    if str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+    if not env_bool("ADAOS_SUPERVISOR_ENABLED"):
         return None
     raw = str(os.getenv("ADAOS_SUPERVISOR_URL") or os.getenv("ADAOS_SUPERVISOR_BASE") or "").strip().rstrip("/")
     if raw:
         return raw
-    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-    return f"http://{host}:{port}"
+    return supervisor_base_from_env()
 
 
 def _route_tunnel_runtime_endpoint_from_payload(payload: dict[str, Any] | None) -> tuple[str, int] | None:

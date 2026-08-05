@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional, Dict
 from adaos.config import const
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL, DEFAULT_PUBLIC_ROOT_BASE_URL
 import yaml
 
 
@@ -46,8 +47,8 @@ class Settings:
     # node / root context
     owner_id: Optional[str] = None
     subnet_id: Optional[str] = None
-    api_base: str = "https://api.inimatic.com"
-    app_base: str = "https://inimatic.com"
+    api_base: str = DEFAULT_PUBLIC_ROOT_BASE_URL
+    app_base: str = DEFAULT_PUBLIC_APP_BASE_URL
     root_token: Optional[str] = None
 
     # имена каталогов для PathProvider (dev/workspace)
@@ -178,8 +179,8 @@ class Settings:
         # читаем поля из node.yaml (могут отсутствовать)
         subnet_id = node_cfg.get("subnet_id")
         root_cfg = node_cfg.get("root") or {}
-        api_base = root_cfg.get("base_url") or root_cfg.get("api_base") or "https://api.inimatic.com"
-        app_base = root_cfg.get("app_base") or "https://inimatic.com"
+        api_base = root_cfg.get("base_url") or root_cfg.get("api_base") or DEFAULT_PUBLIC_ROOT_BASE_URL
+        app_base = root_cfg.get("app_base") or DEFAULT_PUBLIC_APP_BASE_URL
         root_token = str(root_cfg.get("root_token") or root_cfg.get("token") or "").strip() or None
         owner_cfg = root_cfg.get("owner") or {}
         owner_id = owner_cfg.get("owner_id") or None

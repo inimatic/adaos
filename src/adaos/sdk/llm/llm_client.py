@@ -10,6 +10,7 @@ import time
 import requests
 from adaos.services.agent_context import get_ctx
 from adaos.services.root.client import RootHttpClient, RootHttpError
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 _LOG = logging.getLogger("adaos.sdk.llm")
@@ -87,7 +88,7 @@ def _root_base_url_for_ctx(ctx: Any | None, cfg: Any | None = None) -> str:
         or getattr(settings, "api_base", None)
         or ""
     ).strip()
-    return base.rstrip("/") or "https://api.inimatic.com"
+    return base.rstrip("/") or DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 def _root_llm_base_urls(primary: RootHttpClient, *, prefer_global: bool = False) -> list[str]:
@@ -100,7 +101,7 @@ def _root_llm_base_urls(primary: RootHttpClient, *, prefer_global: bool = False)
 
     explicit_primary = os.getenv("ADAOS_ROOT_LLM_BASE_URL") or os.getenv("ADAOS_LLM_ROOT_BASE_URL")
     primary_url = _normalize_root_base_url(getattr(primary, "base_url", None))
-    global_url = "https://api.inimatic.com"
+    global_url = DEFAULT_PUBLIC_ROOT_BASE_URL
     if explicit_primary:
         add(explicit_primary)
         add(primary_url)

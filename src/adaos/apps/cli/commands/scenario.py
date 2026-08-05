@@ -30,6 +30,7 @@ from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sourc
 from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help=_("cli.help_scenario"))
@@ -320,7 +321,7 @@ def status(
             )
         else:
             cfg = load_config()
-            base_url = getattr(getattr(cfg, "root_settings", None), "base_url", None) or "https://api.inimatic.com"
+            base_url = getattr(getattr(cfg, "root_settings", None), "base_url", None) or DEFAULT_PUBLIC_ROOT_BASE_URL
             node_id = getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"
             ca_path = cfg.ca_cert_path()
             cert_path = cfg.hub_cert_path()

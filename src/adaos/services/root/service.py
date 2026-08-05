@@ -39,7 +39,7 @@ from adaos.adapters.db import sqlite as sqlite_db
 from adaos.apps.api.auth import require_owner_token
 from adaos.services.id_gen import new_id
 from adaos.services.root_mcp.targets import upsert_managed_target
-from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.skill.manager import SkillManager
@@ -1900,7 +1900,7 @@ class RootDeveloperService:
     def _client(self, cfg: NodeConfig) -> RootHttpClient:
         if self._client_factory:
             return self._client_factory(cfg)
-        base_url = cfg.root_settings.base_url or "https://api.inimatic.com"
+        base_url = cfg.root_settings.base_url or DEFAULT_PUBLIC_ROOT_BASE_URL
         return RootHttpClient(base_url=base_url)
 
     def _owner_auth_client(self, cfg: NodeConfig) -> RootHttpClient:

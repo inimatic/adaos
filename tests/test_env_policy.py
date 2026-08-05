@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from adaos.services.env_policy import env_bool, env_csv, env_float, env_int, truthy
+from adaos.services.env_policy import ENABLE_VALUES, coerce_bool, env_bool, env_csv, env_float, env_int, policy_bool, truthy
 
 
 def test_truthy_uses_consistent_boolean_tokens() -> None:
@@ -10,6 +10,12 @@ def test_truthy_uses_consistent_boolean_tokens() -> None:
     assert truthy("off") is False
     assert truthy(None, default=True) is True
     assert truthy("unexpected", default=False) is False
+
+
+def test_policy_bool_supports_extended_values_without_changing_truthy() -> None:
+    assert truthy("enabled") is False
+    assert coerce_bool("enabled", true_values=ENABLE_VALUES) is True
+    assert policy_bool("unknown", default=True, true_values=ENABLE_VALUES) is True
 
 
 def test_env_numeric_helpers_clamp_values(monkeypatch) -> None:

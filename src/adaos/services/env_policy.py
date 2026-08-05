@@ -2,21 +2,45 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, Final
 
-TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y", "t"})
-FALSE_VALUES = frozenset({"", "0", "false", "no", "off", "n", "f", "none", "null"})
+TRUE_VALUES: Final[frozenset[str]] = frozenset({"1", "true", "yes", "on", "y", "t"})
+FALSE_VALUES: Final[frozenset[str]] = frozenset({"", "0", "false", "no", "off", "n", "f", "none", "null"})
+ENABLE_VALUES: Final[frozenset[str]] = TRUE_VALUES | frozenset({"enable", "enabled"})
+DISABLE_VALUES: Final[frozenset[str]] = FALSE_VALUES | frozenset({"disable", "disabled"})
 
 
 def truthy(value: Any, *, default: bool = False) -> bool:
+    coerced = coerce_bool(value, true_values=TRUE_VALUES, false_values=FALSE_VALUES)
+    return bool(default) if coerced is None else coerced
+
+
+def coerce_bool(
+    value: Any,
+    *,
+    true_values: Iterable[str] = TRUE_VALUES,
+    false_values: Iterable[str] = FALSE_VALUES,
+) -> bool | None:
     if value is None:
-        return bool(default)
+        return None
     token = str(value).strip().lower()
-    if token in TRUE_VALUES:
+    if token in true_values:
         return True
-    if token in FALSE_VALUES:
+    if token in false_values:
         return False
-    return bool(default)
+    return None
+
+
+def policy_bool(
+    value: Any,
+    *,
+    default: bool,
+    true_values: Iterable[str] = TRUE_VALUES,
+    false_values: Iterable[str] = FALSE_VALUES,
+) -> bool:
+    coerced = coerce_bool(value, true_values=true_values, false_values=false_values)
+    return bool(default) if coerced is None else coerced
 
 
 def env_text(name: str, default: str | None = None) -> str:

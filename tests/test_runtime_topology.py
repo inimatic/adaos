@@ -26,6 +26,12 @@ def test_runtime_topology_builds_runtime_fallbacks_in_existing_order() -> None:
         "http://127.0.0.1:8777",
         "http://localhost:8777",
     ]
+    assert runtime_fallback_http_bases(order="host")[:4] == [
+        "http://127.0.0.1:8777",
+        "http://127.0.0.1:8778",
+        "http://127.0.0.1:8779",
+        "http://localhost:8777",
+    ]
     assert runtime_fallback_ws_bases() == [
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
@@ -52,6 +58,15 @@ def test_supervisor_candidates_require_runtime_signal(monkeypatch) -> None:
 
     monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
     assert supervisor_base_candidates_from_env(require_signal=True)[0] == "http://127.0.0.1:8776"
+
+
+def test_supervisor_candidates_can_preserve_configured_port_only(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8786")
+
+    assert supervisor_base_candidates_from_env(include_localhost=True, include_default_loopback=False) == [
+        "http://127.0.0.1:8786",
+        "http://localhost:8786",
+    ]
 
 
 def test_loopback_detection_accepts_http_and_ws_urls() -> None:

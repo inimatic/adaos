@@ -126,7 +126,7 @@ from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cle
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
-from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
 from adaos.services.subnet_alias import save_subnet_alias
 from adaos.integrations.telegram.sender import TelegramSender
 
@@ -2250,7 +2250,7 @@ class BootstrapService:
                         base_url = (
                             getattr(self.ctx.settings, "api_base", None)
                             or getattr(getattr(cfg, "root_settings", None), "base_url", None)
-                            or "https://api.inimatic.com"
+                            or DEFAULT_PUBLIC_ROOT_BASE_URL
                         )
                     try:
                         ca = _expand_path(getattr(getattr(cfg, "root_settings", None), "ca_cert", None), "keys/ca.cert")

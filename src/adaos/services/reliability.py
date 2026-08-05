@@ -29,6 +29,7 @@ from adaos.services.node_display import node_display_from_config, node_display_p
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
+from adaos.services.runtime_topology import is_loopback_http_url, supervisor_base_candidates_from_env
 from adaos.services.zone_hosts import canonical_zone_id
 
 _log = logging.getLogger("adaos.reliability")
@@ -5398,38 +5399,19 @@ def _event_model_phase0_task(
 
 
 def _is_local_http_base(url: str | None) -> bool:
-    raw = str(url or "").strip()
-    if not raw:
-        return False
-    try:
-        parsed = urlparse(raw)
-    except Exception:
-        return False
-    host = str(parsed.hostname or "").strip().lower()
-    return host in {"127.0.0.1", "localhost", "::1"}
+    return is_loopback_http_url(url)
 
 
 def _supervisor_public_base_candidates() -> list[str]:
-    bases: list[str] = []
-    explicit = (
-        os.getenv("ADAOS_SUPERVISOR_URL")
-        or os.getenv("ADAOS_SUPERVISOR_BASE")
-        or ""
-    ).strip()
-    if explicit and _is_local_http_base(explicit):
-        bases.append(explicit.rstrip("/"))
-    supervisor_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip() or "8776"
-    bases.append(f"http://127.0.0.1:{supervisor_port}")
-    bases.append(f"http://localhost:{supervisor_port}")
-    result: list[str] = []
-    seen: set[str] = set()
-    for base in bases:
-        token = str(base or "").strip().rstrip("/")
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        result.append(token)
-    return result
+    return [
+        base
+        for base in supervisor_base_candidates_from_env(
+            require_signal=False,
+            include_localhost=True,
+            include_default_loopback=False,
+        )
+        if _is_local_http_base(base)
+    ]
 
 
 def _supervisor_browser_safe_surface(*, payload: dict[str, Any] | None) -> dict[str, Any]:
