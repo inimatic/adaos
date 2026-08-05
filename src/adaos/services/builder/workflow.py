@@ -66,6 +66,7 @@ from adaos.services.builder.surface import (
     localize_builder_explanation,
     normalize_builder_locale,
 )
+from adaos.services.builder.specification import specification_projection
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.workflow_artifacts import (
     WorkflowArtifactError,
@@ -1548,6 +1549,9 @@ class BuilderWorkflowService:
         projection["workflow_inspection"] = self._workflow_inspection(kind, project_id)
         projection["process"] = self._process_projection(projection)
         projection["project_summary"] = self._project_summary(projection)
+        projection["specification"] = specification_projection(
+            projection.get("change") or projection.get("change_set")
+        )
         return projection
 
     @staticmethod
