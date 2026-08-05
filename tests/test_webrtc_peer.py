@@ -278,12 +278,23 @@ def test_browser_tabs_with_one_device_keep_independent_peers(monkeypatch) -> Non
                 send_ice_cb=send_ice_cb,
                 generation_id=f"generation-{peer_id}",
                 negotiation_mode="fresh_peer",
+                browser_session_id=f"session-{peer_id}",
+                client_build_id="build-tabs",
+                client_build_version="0.0.267",
             )
         )
 
     assert set(peer_mod._peers) == {"peer-tab-a", "peer-tab-b"}
     assert {peer.device_id for peer in peer_mod._peers.values()} == {"browser-shared"}
     assert all(peer.closed is False for peer in peer_mod._peers.values())
+    assert {
+        peer.browser_session_id for peer in peer_mod._peers.values()
+    } == {"session-peer-tab-a", "session-peer-tab-b"}
+    snapshot = peer_mod.webrtc_peer_snapshot(now_ts=123.0)
+    assert {
+        row["browser_session_id"] for row in snapshot["peers"]
+    } == {"session-peer-tab-a", "session-peer-tab-b"}
+    assert {row["client_build_id"] for row in snapshot["peers"]} == {"build-tabs"}
 
 
 def test_ice_restart_reuses_same_generation_peer(monkeypatch) -> None:

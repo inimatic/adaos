@@ -8,6 +8,7 @@ WebRTC DataChannel instead of a FastAPI WebSocket.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import struct
@@ -40,6 +41,22 @@ _CHUNK_MAGIC = 0xFF
 _CHUNK_FRAME_TYPE = 1
 _CHUNK_HEADER = struct.Struct("!BBIII")
 _MAX_CHUNKS_PER_MESSAGE = (_MAX_MESSAGE_BYTES + max(1, _CHUNK_PAYLOAD_BYTES) - 1) // max(1, _CHUNK_PAYLOAD_BYTES) + 1
+
+
+def _message_kind(payload: bytes) -> str:
+    """Return a bounded protocol label without decoding document content."""
+    if not payload:
+        return "empty"
+    # Yjs/y-websocket message and sync discriminators are varuint values.  All
+    # currently supported values fit in one byte; unknown/multi-byte values
+    # deliberately remain opaque instead of invoking a full decoder here.
+    outer = int(payload[0])
+    if outer == 0 and len(payload) > 1:
+        sync_names = {0: "sync_step1", 1: "sync_step2", 2: "sync_update"}
+        return sync_names.get(int(payload[1]), f"sync_{int(payload[1])}")
+    if outer == 1:
+        return "awareness"
+    return f"message_{outer}"
 
 
 class DataChannelYjsAdapter:
@@ -148,10 +165,12 @@ class DataChannelYjsAdapter:
         chunk_id = self._next_chunk_id
         self._next_chunk_id = 1 if self._next_chunk_id >= 0x7FFFFFFF else self._next_chunk_id + 1
         _log.info(
-            "sending chunked yjs datachannel message webspace=%s device=%s peer=%s bytes=%s chunks=%s chunk_bytes=%s",
+            "sending chunked yjs datachannel message webspace=%s device=%s peer=%s kind=%s digest=%s bytes=%s chunks=%s chunk_bytes=%s",
             self._path,
             self._device_id,
             self._peer_id,
+            _message_kind(payload),
+            hashlib.sha256(payload).hexdigest()[:16],
             len(payload),
             total,
             chunk_size,

@@ -3986,6 +3986,9 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
                             "webspace_id": "ops",
                             "generation_id": "rtc-generation-1",
                             "negotiation_mode": "fresh_peer",
+                            "browser_session_id": "bs-tab-1",
+                            "client_build_id": "build-1",
+                            "client_build_version": "0.0.267",
                         },
                     }
                 ),
@@ -4027,6 +4030,9 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
     assert captured["offer"]["generation_id"] == "rtc-generation-1"  # type: ignore[index]
     assert captured["offer"]["negotiation_mode"] == "fresh_peer"  # type: ignore[index]
+    assert captured["offer"]["browser_session_id"] == "bs-tab-1"  # type: ignore[index]
+    assert captured["offer"]["client_build_id"] == "build-1"  # type: ignore[index]
+    assert captured["offer"]["client_build_version"] == "0.0.267"  # type: ignore[index]
     assert captured["ice"] == {
         "device_id": "dev-signal",
         "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},

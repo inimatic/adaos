@@ -328,6 +328,27 @@ def test_datachannel_yjs_adapter_uses_page_peer_for_attempt_identity(monkeypatch
     assert called["last_attempt_id"] == "webrtc-yjs:page-peer-b"
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (b"", "empty"),
+        (b"\x00\x00", "sync_step1"),
+        (b"\x00\x01payload", "sync_step2"),
+        (b"\x00\x02payload", "sync_update"),
+        (b"\x01payload", "awareness"),
+        (b"\x07payload", "message_7"),
+    ],
+)
+def test_datachannel_yjs_adapter_classifies_diagnostic_message_kind(
+    monkeypatch,
+    payload: bytes,
+    expected: str,
+) -> None:
+    yjs_adapter, _called = _load_yjs_adapter(monkeypatch)
+
+    assert yjs_adapter._message_kind(payload) == expected
+
+
 def test_datachannel_yjs_adapter_removes_cancelled_binding_from_room(monkeypatch) -> None:
     yjs_adapter, called = _load_yjs_adapter(monkeypatch, enabled="1", block_room_serve=True)
 

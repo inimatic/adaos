@@ -9529,6 +9529,18 @@ async def events_ws(websocket: WebSocket):
                     signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
                     signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
                     signal_generation_id = str(payload.get("generation_id") or "").strip() or None
+                    signal_browser_session_id = _clean_browser_metadata_value(
+                        payload.get("browser_session_id"),
+                        max_len=128,
+                    )
+                    signal_client_build_id = _clean_browser_metadata_value(
+                        payload.get("client_build_id"),
+                        max_len=96,
+                    )
+                    signal_client_build_version = _clean_browser_metadata_value(
+                        payload.get("client_build_version"),
+                        max_len=128,
+                    )
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     webspace_id = signal_webspace_id
@@ -9561,6 +9573,9 @@ async def events_ws(websocket: WebSocket):
                         generation_id=signal_generation_id,
                         negotiation_mode=payload.get("negotiation_mode"),
                         peer_id=signal_peer_id,
+                        browser_session_id=signal_browser_session_id,
+                        client_build_id=signal_client_build_id,
+                        client_build_version=signal_client_build_version,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:

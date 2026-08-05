@@ -1435,8 +1435,12 @@ class HubPeer:
         )
         return {
             "device_id": self.device_id,
+            "peer_id": self.peer_id,
             "webspace_id": str(getattr(self, "webspace_id", "") or ""),
             "generation_id": self.generation_id,
+            "browser_session_id": str(getattr(self, "browser_session_id", "") or "") or None,
+            "client_build_id": str(getattr(self, "client_build_id", "") or "") or None,
+            "client_build_version": str(getattr(self, "client_build_version", "") or "") or None,
             "connection_state": connection_state,
             "events_channel_state": events_state,
             "yjs_channel_state": yjs_state,
@@ -1590,6 +1594,9 @@ async def handle_rtc_offer(
     generation_id: str | None = None,
     negotiation_mode: str | None = None,
     peer_id: str | None = None,
+    browser_session_id: str | None = None,
+    client_build_id: str | None = None,
+    client_build_version: str | None = None,
 ) -> dict[str, str]:
     """
     Called from ``gateway_ws.py`` when browser sends ``rtc.offer``.
@@ -1599,6 +1606,9 @@ async def handle_rtc_offer(
     incoming_generation = _clean_generation_id(generation_id)
     mode = _clean_negotiation_mode(negotiation_mode)
     peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
+    browser_session_key = str(browser_session_id or "").strip()[:128] or None
+    build_id = str(client_build_id or "").strip()[:96] or None
+    build_version = str(client_build_version or "").strip()[:128] or None
     existing = _peers.get(peer_key)
     if existing:
         state = existing._connection_state() if hasattr(existing, "_connection_state") else str(getattr(existing.pc, "connectionState", "") or "").strip().lower()
@@ -1624,6 +1634,9 @@ async def handle_rtc_offer(
         if reusable:
             state_emitted = existing._set_webspace_id(webspace_id, reason="offer.renegotiate")
             existing._send_ice = send_ice_cb
+            existing.browser_session_id = browser_session_key
+            existing.client_build_id = build_id
+            existing.client_build_version = build_version
             if incoming_generation:
                 existing.generation_id = incoming_generation
             if not state_emitted:
@@ -1661,7 +1674,19 @@ async def handle_rtc_offer(
     # Assign after construction to preserve compatibility with embedders and
     # tests that provide a legacy HubPeer factory without the new keyword.
     peer.peer_id = peer_key
+    peer.browser_session_id = browser_session_key
+    peer.client_build_id = build_id
+    peer.client_build_version = build_version
     _peers[peer_key] = peer
+    _log.info(
+        "accepted peer device=%s peer=%s browser_session=%s webspace=%s build=%s version=%s",
+        device_id,
+        peer_key,
+        browser_session_key or "-",
+        webspace_id,
+        build_id or "-",
+        build_version or "-",
+    )
     peer._emit_state_event(reason="offer.accepted")
     answer = await peer.handle_offer(offer_sdp, offer_type)
     await _apply_pending_remote_ice(peer)
@@ -1810,6 +1835,9 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
                 "peer_id": peer_id,
                 "webspace_id": str(getattr(peer, "webspace_id", "") or ""),
                 "generation_id": _clean_generation_id(getattr(peer, "generation_id", None)),
+                "browser_session_id": str(getattr(peer, "browser_session_id", "") or "") or None,
+                "client_build_id": str(getattr(peer, "client_build_id", "") or "") or None,
+                "client_build_version": str(getattr(peer, "client_build_version", "") or "") or None,
                 "connection_state": state,
                 "events_channel_state": events_state,
                 "yjs_channel_state": yjs_state,
