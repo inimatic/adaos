@@ -551,6 +551,15 @@ def _guard_context_equals(
     return context.get(str(params.get("field") or "")) == params.get("value")
 
 
+def _guard_input_equals(
+    _instance: Mapping[str, Any],
+    input_value: Mapping[str, Any],
+    _context: Mapping[str, Any],
+    params: Mapping[str, Any],
+) -> bool:
+    return input_value.get(str(params.get("field") or "")) == params.get("value")
+
+
 def _guard_instance_context_equals(
     instance: Mapping[str, Any],
     _input_value: Mapping[str, Any],
@@ -563,6 +572,7 @@ def _guard_instance_context_equals(
 DEFAULT_GUARDS: dict[str, Guard] = {
     "always": _guard_always,
     "context_equals": _guard_context_equals,
+    "input_equals": _guard_input_equals,
     "instance_context_equals": _guard_instance_context_equals,
 }
 

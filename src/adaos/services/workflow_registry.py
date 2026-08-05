@@ -126,6 +126,17 @@ def platform_workflow_adapter_contracts() -> tuple[dict[str, Any], ...]:
             },
         ),
         create_adapter_contract(
+            "input_equals",
+            "guard",
+            implementation="adaos.services.governed_workflow:_guard_input_equals",
+            params_schema={
+                "type": "object",
+                "required": ["field", "value"],
+                "properties": {"field": {"type": "string"}, "value": {}},
+                "additionalProperties": False,
+            },
+        ),
+        create_adapter_contract(
             "instance_context_equals",
             "guard",
             implementation="adaos.services.governed_workflow:_guard_instance_context_equals",

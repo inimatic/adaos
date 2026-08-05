@@ -168,6 +168,43 @@ def test_compiler_builds_deterministic_transition_index() -> None:
     assert workflow_contract_snapshot()["invariants"]["resolver"] == "pure"
 
 
+def test_standard_input_guard_keeps_confirmation_in_definition_data() -> None:
+    definition = _definition()
+    definition["transitions"][0]["guards"] = [
+        {
+            "id": "input_equals",
+            "params": {"field": "confirmed", "value": True},
+            "reason_code": "confirmation_required",
+        }
+    ]
+    compiled = compile_definition(definition)
+    instance = new_instance(compiled, "change:input-guard")
+    resolver = WorkflowResolver()
+
+    blocked = resolver.describe(
+        compiled,
+        instance,
+        actor="user",
+        permissions=("builder.change",),
+        context={},
+    )
+    assert blocked["allowed_commands"] == []
+    assert blocked["blocked_commands"][0]["reason_code"] == "confirmation_required"
+
+    accepted = resolver.apply(
+        compiled,
+        instance,
+        "approve",
+        actor="user",
+        permissions=("builder.change",),
+        input_value={"confirmed": True},
+        expected_generation=0,
+        idempotency_key="confirm-once",
+        context={},
+    )
+    assert accepted["accepted"] is True
+
+
 def test_transition_roles_are_declared_and_enforced() -> None:
     definition = _definition()
     definition["transitions"][0]["authority"]["roles"] = ["registered"]
