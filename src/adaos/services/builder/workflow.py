@@ -1989,7 +1989,6 @@ class BuilderWorkflowService:
         project_ref = f"{projection['object_type']}:{projection['object_id']}"
         interaction = _mapping(projection.get("interaction"))
         change = _normalize_change(projection.get("change") or projection.get("change_set"))
-        capabilities = _mapping(projection.get("capabilities"))
         active_phase = str(projection.get("active_phase") or "prototype")
         delivery_status = str(_mapping(projection.get("delivery")).get("status") or "idle")
         automation_status = str(
@@ -1998,10 +1997,33 @@ class BuilderWorkflowService:
         workflow_explanation = _mapping(projection.get("workflow_description"))
         compact_explanation = self._compact_explanation(projection)
         canonical_generation = int(workflow_explanation.get("generation") or 0)
-        canonical_actions = {
-            str(item.get("command") or ""): dict(item)
+        canonical_action_list = [
+            dict(item)
             for item in workflow_explanation.get("allowed_commands") or []
             if isinstance(item, Mapping) and str(item.get("command") or "").strip()
+        ]
+        canonical_priority = {
+            "extend_with_prototype_issues": 10,
+            "extend_with_automation_issues": 10,
+            "plan_prototype_change": 20,
+            "plan_automation_change": 20,
+            "record_prototype_revision": 30,
+            "revise_prototype": 30,
+            "accept_prototype": 40,
+            "start_automation": 50,
+            "retry_automation": 50,
+            "request_prototype_derivation": 60,
+            "accept_verification": 70,
+            "start_trial": 80,
+            "accept_trial": 90,
+            "reject_trial": 90,
+            "begin_publication": 100,
+        }
+        canonical_action_list.sort(
+            key=lambda item: canonical_priority.get(str(item.get("command") or ""), 500)
+        )
+        canonical_actions = {
+            str(item.get("command") or ""): item for item in canonical_action_list
         }
 
         actions: list[dict[str, Any]] = []
@@ -2040,129 +2062,97 @@ class BuilderWorkflowService:
                     label_ref=builder_action_label_ref(command),
                 )
             )
-        if change is None:
-            add_action("builder.change.plan", "Plan change", "local_reversible", target_ref=project_ref)
-        else:
-            change_ref = f"change:{change['change_id']}"
-            gate = str(change.get("gate") or active_phase)
-            status = str(change.get("status") or "planned")
-            if capabilities.get("can_update_change_set"):
-                add_action("builder.change.extend", "Add to change", "local_reversible", target_ref=change_ref)
-            if capabilities.get("can_plan_change_set"):
-                add_action(
-                    "builder.change.plan",
-                    "Plan new change",
-                    "local_reversible",
-                    target_ref=project_ref,
-                )
-            if capabilities.get("can_edit_prototype") and gate == "prototype":
-                add_action(
-                    "builder.prototype.edit",
-                    "Refine prototype",
-                    "local_reversible",
-                    target_ref=change_ref,
-                    workflow_command="record_prototype_revision",
-                )
-                add_action(
-                    "builder.prototype.approve",
-                    "Approve prototype",
-                    "isolated_write",
-                    target_ref=change_ref,
-                    workflow_command="accept_prototype",
-                )
-            if active_phase == "prototype" and gate == "automation":
-                add_action(
-                    "builder.implementation.start",
-                    "Start implementation",
-                    "isolated_write",
-                    target_ref=change_ref,
-                    workflow_command="start_automation",
-                )
-            if active_phase == "automation" and automation_status in {"completed", "failed"}:
-                add_action(
-                    "builder.implementation.iterate",
-                    "Continue implementation",
-                    "isolated_write",
-                    target_ref=change_ref,
-                    workflow_command="retry_automation",
-                )
-            if capabilities.get("can_return_to_prototype"):
-                add_action(
-                    "builder.prototype.derive",
-                    "Return result to prototype",
-                    "isolated_write",
-                    target_ref=change_ref,
-                    workflow_command="request_prototype_derivation",
-                )
-            if capabilities.get("can_prepare_candidate"):
-                add_action(
-                    "builder.trial.prepare",
-                    "Prepare trial",
-                    "trial_activation",
-                    target_ref=change_ref,
-                    workflow_command="start_trial",
-                )
-            if capabilities.get("can_decide_candidate"):
-                candidate_id = str(_mapping(projection.get("delivery")).get("candidate_id") or "").strip()
-                candidate_digest = str(
-                    _mapping(projection.get("delivery")).get("package_digest")
-                    or _mapping(projection.get("delivery")).get("release_digest")
-                    or ""
-                ).strip()
-                candidate_ref = (
-                    f"candidate:{candidate_id}@{candidate_digest}"
-                    if candidate_id and candidate_digest
-                    else f"candidate:{candidate_id}"
-                    if candidate_id
-                    else change_ref
-                )
-                add_action(
-                    "builder.trial.accept",
-                    "Accept trial",
-                    "workspace_activation",
-                    target_ref=candidate_ref,
-                    workflow_command="accept_trial",
-                )
-                add_action(
-                    "builder.trial.reject",
-                    "Request changes",
-                    "local_reversible",
-                    target_ref=candidate_ref,
-                    workflow_command="reject_trial",
-                )
-            if capabilities.get("can_publish"):
-                candidate = _mapping(projection.get("delivery"))
-                candidate_id = str(candidate.get("candidate_id") or "").strip()
-                candidate_digest = str(
-                    candidate.get("package_digest") or candidate.get("release_digest") or ""
-                ).strip()
-                add_action(
-                    "builder.publication.publish",
-                    "Begin publication",
-                    "publication",
-                    target_ref=(
-                        f"candidate:{candidate_id}@{candidate_digest}"
-                        if candidate_id and candidate_digest
-                        else change_ref
-                    ),
-                    workflow_command="begin_publication",
-                )
+        change_ref = f"change:{change['change_id']}" if change else project_ref
+        candidate = _mapping(projection.get("delivery"))
+        candidate_id = str(candidate.get("candidate_id") or "").strip()
+        candidate_digest = str(
+            candidate.get("package_digest") or candidate.get("release_digest") or ""
+        ).strip()
+        candidate_ref = (
+            f"candidate:{candidate_id}@{candidate_digest}"
+            if candidate_id and candidate_digest
+            else f"candidate:{candidate_id}"
+            if candidate_id
+            else change_ref
+        )
+        # This table is presentation-only. Availability and ordering come
+        # exclusively from WorkflowDescription.allowed_commands, including
+        # role policy, guards, generation, and executor readiness.
+        canonical_surface = {
+            "plan_prototype_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
+            "plan_automation_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
+            "extend_with_prototype_issues": ("builder.change.extend", "Add to change", "local_reversible", change_ref),
+            "extend_with_automation_issues": ("builder.change.extend", "Add to change", "local_reversible", change_ref),
+            "record_prototype_revision": ("builder.prototype.edit", "Refine prototype", "local_reversible", change_ref),
+            "revise_prototype": ("builder.prototype.edit", "Refine prototype", "local_reversible", change_ref),
+            "accept_prototype": ("builder.prototype.approve", "Approve prototype", "isolated_write", change_ref),
+            "start_automation": ("builder.implementation.start", "Start implementation", "isolated_write", change_ref),
+            "retry_automation": ("builder.implementation.iterate", "Continue implementation", "isolated_write", change_ref),
+            "request_prototype_derivation": ("builder.prototype.derive", "Return result to prototype", "isolated_write", change_ref),
+            "accept_verification": ("builder.verification.accept", "Accept verification", "isolated_write", change_ref),
+            "start_trial": ("builder.trial.prepare", "Start trial", "trial_activation", change_ref),
+            "accept_trial": ("builder.trial.accept", "Accept trial", "workspace_activation", candidate_ref),
+            "reject_trial": ("builder.trial.reject", "Request changes", "local_reversible", candidate_ref),
+            "begin_publication": ("builder.publication.publish", "Begin publication", "publication", candidate_ref),
+        }
+        seen_surface_commands: set[str] = set()
+        for canonical in canonical_action_list:
+            workflow_command = str(canonical.get("command") or "")
+            surface = canonical_surface.get(workflow_command)
+            if surface is None:
+                continue
+            surface_command, label, risk, target = surface
+            if surface_command in seen_surface_commands:
+                continue
+            seen_surface_commands.add(surface_command)
+            add_action(
+                surface_command,
+                label,
+                risk,
+                target_ref=target,
+                workflow_command=workflow_command,
+            )
 
-        if capabilities.get("can_preview_prototype"):
+        # Project commands live above an individual Change statechart. They
+        # remain authoritative Project-aggregate commands and are added only
+        # when the aggregate exposes them; they never make a lifecycle
+        # transition appear ready.
+        project_commands = [
+            _mapping(item)
+            for item in _mapping(projection.get("project_summary")).get("commands") or []
+            if isinstance(item, Mapping)
+        ]
+        if (
+            any(str(item.get("command") or "") == "builder.change.plan" for item in project_commands)
+            and "builder.change.plan" not in seen_surface_commands
+        ):
+            add_action(
+                "builder.change.plan",
+                "Plan new change" if change else "Plan change",
+                "local_reversible",
+                target_ref=project_ref,
+            )
+
+        preview_options = {
+            str(item.get("stage") or ""): dict(item)
+            for item in _mapping(projection.get("process")).get("preview_options") or []
+            if isinstance(item, Mapping)
+        }
+        if "prototype" in preview_options:
             add_action(
                 "builder.preview.prototype",
                 "Preview prototype",
                 "read",
                 target_ref=f"prototype:{projection['object_id']}:{_mapping(projection.get('prototype')).get('head_revision') or 'current'}",
             )
-        if capabilities.get("can_preview_automation"):
+        if "automation" in preview_options:
             add_action(
                 "builder.preview.active",
                 "Preview implementation",
                 "read",
                 target_ref=f"implementation:{projection['object_id']}:active",
             )
-        if capabilities.get("can_preview_publication"):
+        if "publication" in preview_options:
             add_action(
                 "builder.preview.publication",
                 "Preview publication",
