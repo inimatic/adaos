@@ -253,6 +253,41 @@ async def _run_bounded_async_cleanup(
         return False
 
 
+async def _close_route_tunnels_bounded(
+    tunnels: dict[str, dict[str, Any]],
+    *,
+    timeout_s: float = 1.0,
+) -> dict[str, int]:
+    """Close all live route tunnels concurrently without blocking reconnect."""
+    records = list(tunnels.items())
+
+    async def _close_one(record: dict[str, Any]) -> bool:
+        ws = record.get("ws") if isinstance(record, dict) else None
+        close = getattr(ws, "close", None)
+        if not callable(close):
+            return True
+        return await _run_bounded_async_cleanup(close, timeout_s=timeout_s)
+
+    results: list[bool] = []
+    try:
+        if records:
+            results = list(
+                await asyncio.gather(
+                    *(_close_one(record) for _, record in records),
+                    return_exceptions=False,
+                )
+            )
+    finally:
+        for key, _ in records:
+            tunnels.pop(key, None)
+    completed = sum(1 for value in results if value is True)
+    return {
+        "attempted": len(records),
+        "completed": completed,
+        "failed_or_timed_out": max(0, len(records) - completed),
+    }
+
+
 def _current_async_task_is_cancelling() -> bool:
     current = asyncio.current_task()
     if current is None:
@@ -10074,14 +10109,15 @@ class BootstrapService:
                         except Exception:
                             pass
                         try:
-                            for k, rec in list(tunnels.items()):
-                                try:
-                                    ws = rec.get("ws") if isinstance(rec, dict) else None
-                                    if ws:
-                                        await ws.close()
-                                except Exception:
-                                    pass
-                                tunnels.pop(k, None)
+                            tunnel_cleanup = await _close_route_tunnels_bounded(tunnels, timeout_s=1.0)
+                            if int(tunnel_cleanup.get("failed_or_timed_out") or 0) > 0:
+                                self._log.warning(
+                                    "nats route tunnel cleanup bounded hub_id=%s attempted=%s completed=%s failed_or_timed_out=%s",
+                                    hub_id,
+                                    tunnel_cleanup.get("attempted"),
+                                    tunnel_cleanup.get("completed"),
+                                    tunnel_cleanup.get("failed_or_timed_out"),
+                                )
                         except Exception:
                             pass
                         try:

@@ -983,6 +983,35 @@ async def test_nats_cleanup_preserves_owner_requested_task_cancellation() -> Non
         await task
 
 
+@pytest.mark.asyncio
+async def test_nats_route_tunnel_cleanup_is_concurrent_and_bounded() -> None:
+    cancelled: set[str] = set()
+
+    class StuckWebSocket:
+        def __init__(self, key: str) -> None:
+            self.key = key
+
+        async def close(self) -> None:
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.add(self.key)
+
+    tunnels = {
+        f"route-{index}": {"ws": StuckWebSocket(f"route-{index}")}
+        for index in range(4)
+    }
+    started = asyncio.get_running_loop().time()
+
+    result = await bootstrap_mod._close_route_tunnels_bounded(tunnels, timeout_s=0.02)
+
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 0.1
+    assert result == {"attempted": 4, "completed": 0, "failed_or_timed_out": 4}
+    assert tunnels == {}
+    assert cancelled == {"route-0", "route-1", "route-2", "route-3"}
+
+
 def test_should_forward_node_status_to_members_skips_member_originated_payloads() -> None:
     assert bootstrap_mod._should_forward_node_status_to_members({}) is True
     assert (
