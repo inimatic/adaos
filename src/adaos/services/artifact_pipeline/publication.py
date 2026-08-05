@@ -1541,7 +1541,33 @@ class ArtifactPublicationService:
         operation = self.load_promotion(candidate_id)
         if operation is not None and operation.get("release_digest") != candidate.release_digest:
             raise PublicationError("promotion operation is bound to another release digest")
-        if operation is not None and operation.get("status") == "completed":
+        terminal_receipts = {
+            "channel_moved",
+            "workspace_activated",
+            "projection_recorded",
+            "subscription_saved",
+        }
+        operation_receipts = (
+            operation.get("receipts")
+            if isinstance(operation, Mapping)
+            and isinstance(operation.get("receipts"), Mapping)
+            else {}
+        )
+        terminal_receipts_complete = terminal_receipts.issubset(operation_receipts)
+        if operation is not None and (
+            operation.get("status") == "completed"
+            or (
+                operation.get("phase") == "completed"
+                and bool(operation.get("completed_at"))
+                and terminal_receipts_complete
+            )
+        ):
+            if operation.get("status") != "completed":
+                operation["status"] = "completed"
+                operation["reconciled_at"] = _now()
+                operation.pop("error", None)
+                operation.pop("paused_at", None)
+                self._write_promotion(operation)
             return self._completed_promotion_result(candidate, plan, operation)
 
         if operation is None:

@@ -1571,3 +1571,23 @@ def test_completed_promotion_replays_only_terminal_receipts(
     assert replayed.activation.operation_id == promoted.activation.operation_id
     assert replayed.activation.idempotent_replay is True
     assert remote.channel_writes == channel_writes
+
+    # A legacy replay could have overwritten only the operation status after
+    # all terminal receipts were already durable.  Receipt reconciliation must
+    # restore the terminal marker without touching the registry or runtime.
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    operation["status"] = "paused"
+    operation["error"] = "legacy post-completion admission replay"
+    operation["paused_at"] = "2026-08-05T00:00:00+00:00"
+    service._write_promotion(operation)
+
+    repaired = _promote(service, prepared.candidate.candidate_id)
+
+    persisted = service.load_promotion(prepared.candidate.candidate_id)
+    assert persisted is not None
+    assert persisted["status"] == "completed"
+    assert "error" not in persisted
+    assert "paused_at" not in persisted
+    assert repaired.activation.idempotent_replay is True
+    assert remote.channel_writes == channel_writes
