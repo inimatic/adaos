@@ -417,14 +417,21 @@ class _UnusedPublicationRemote:
         raise AssertionError(f"publication remote must not be called: {name}")
 
 
-def _checkpoint_service(tmp_path: Path):
+def _checkpoint_service(tmp_path: Path, *, kind: str = "skills"):
     workspace = tmp_path / "dev"
-    skill = workspace / "skills" / "recipe_skill"
-    skill.mkdir(parents=True)
-    (skill / "skill.yaml").write_text(
-        "name: recipe_skill\nversion: 1.0.0\ndependencies: []\n",
-        encoding="utf-8",
-    )
+    artifact_id = "recipe_skill" if kind == "skills" else "recipes"
+    artifact = workspace / kind / artifact_id
+    artifact.mkdir(parents=True)
+    if kind == "skills":
+        (artifact / "skill.yaml").write_text(
+            "name: recipe_skill\nversion: 1.0.0\ndependencies: []\n",
+            encoding="utf-8",
+        )
+    else:
+        (artifact / "scenario.yaml").write_text(
+            "id: recipes\nversion: 1.0.0\ndependencies: []\n",
+            encoding="utf-8",
+        )
     publication = ArtifactPublicationService(
         state_root=tmp_path / "state",
         workspace_root=tmp_path / "installed",
@@ -442,7 +449,7 @@ def _checkpoint_service(tmp_path: Path):
     service._validate_artifact_preflight = lambda *_args: None
     service._artifact_publication_service = lambda _cfg: publication
     service._mtls_material_for_role = lambda *_args: ("cert", "key", True)
-    return service, publication, skill, workspace
+    return service, publication, artifact, workspace
 
 
 def test_checkpoint_reuses_completed_change_without_version_bump_or_remote_write(tmp_path) -> None:
@@ -605,6 +612,56 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
     assert result.commit == "4" * 40
     assert recorded.source_tree == "5" * 40
     assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+
+def test_scenario_checkpoint_reconciles_timeout_without_duplicate_forge_commit(tmp_path) -> None:
+    service, publication, scenario, _workspace = _checkpoint_service(
+        tmp_path,
+        kind="scenarios",
+    )
+    change_id = "builder-scenario-checkpoint-timeout"
+    state: dict[str, object] = {"pushes": 0}
+
+    class _CommitThenTimeoutClient:
+        def get_draft_info(self, **_kwargs):
+            receipt = state.get("receipt")
+            if isinstance(receipt, dict):
+                return receipt
+            raise FileNotFoundError("no previous checkpoint")
+
+        def push_scenario_draft(self, **kwargs):
+            state["pushes"] = int(state["pushes"]) + 1
+            state["receipt"] = {
+                "stored_path": "subnets/dev/nodes/node/scenarios/recipes",
+                "commit": "a" * 40,
+                "tree_sha": "b" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+            raise TimeoutError("response was lost after scenario commit")
+
+    service._client = lambda _cfg: _CommitThenTimeoutClient()
+
+    with pytest.raises(TimeoutError, match="lost after scenario commit"):
+        service._push_artifact(
+            "scenarios",
+            "recipes",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    result = service._push_artifact(
+        "scenarios",
+        "recipes",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    recorded = publication.load_pushed_source("scenario", "recipes")
+    assert state["pushes"] == 1
+    assert result.commit == "a" * 40
+    assert recorded.source_tree == "b" * 40
+    assert "version: 1.0.1" in (scenario / "scenario.yaml").read_text(encoding="utf-8")
 
 
 def test_checkpoint_replays_prepared_archive_when_remote_receipt_is_unchanged(tmp_path) -> None:
