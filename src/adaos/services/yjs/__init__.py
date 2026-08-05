@@ -11,6 +11,11 @@ from .store import (
     ystore_path_for_webspace,
 )
 from .webspace import default_webspace_id, dev_webspace_id
+from .structural_compaction import (
+    StructuralCompactionError,
+    compact_webspace_snapshot,
+    inspect_snapshot,
+)
 from . import load_mark as _load_mark  # ensure load-mark listeners/subscriptions are registered
 
 __all__ = [
@@ -26,4 +31,7 @@ __all__ = [
     "ystore_path_for_webspace",
     "default_webspace_id",
     "dev_webspace_id",
+    "StructuralCompactionError",
+    "compact_webspace_snapshot",
+    "inspect_snapshot",
 ]
