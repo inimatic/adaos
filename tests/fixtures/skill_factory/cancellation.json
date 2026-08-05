@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"cancellation","operation":"cancel","request":{"request_id":"golden.cancellation","target":{"type":"skill","id":"golden_cancel"}},"expected":{"status":"cancelled","late_progress_error":"is terminal"}}

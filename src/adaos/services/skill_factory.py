@@ -970,6 +970,38 @@ class SkillFactoryService:
             state["tasks"][task_id] = task
             self._append_event(state, "skill_factory.task_failed", {"task_id": task_id, "retry": can_retry})
             self._write_state(state)
+            failure_class = _text(failure.get("failure_class")).lower()
+            signal_type = (
+                "test_failure"
+                if failure_class in {"test_failure", "tests_failed", "validation_failed"}
+                else "import_error"
+                if failure_class in {"import_error", "module_import_error"}
+                else ""
+            )
+            if signal_type:
+                try:
+                    from adaos.services.builder.repair import BuilderRepairService
+
+                    BuilderRepairService(state_dir=self.state_dir).report(
+                        project_id=_text(_mapping(task.get("target")).get("id")) or task_id,
+                        signal_type=signal_type,
+                        summary=failure["message"],
+                        source_refs=[
+                            {"kind": "skill_factory_task", "ref": task_id},
+                            {"kind": "forge_branch", "ref": _text(_mapping(task.get("forge")).get("branch"))},
+                        ],
+                        context={
+                            "artifact_id": _text(_mapping(task.get("target")).get("id")) or None,
+                            "test": _text(failure.get("stage")) or None,
+                            "failure_id": failure.get("failure_id"),
+                            "logs_ref": failure.get("logs_ref"),
+                        },
+                        design_time_fixable=True,
+                    )
+                except Exception:
+                    # The authoritative Skill Factory failure remains recorded;
+                    # repair projection can be rebuilt from its evidence.
+                    pass
             return {"ok": True, "retry_queued": can_retry, "task": _json_clone(task), "failure": failure}
 
     def cancel_task(self, task_id: str, *, reason: str | None = None, actor: str | None = None) -> dict[str, Any]:

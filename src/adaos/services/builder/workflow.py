@@ -3170,6 +3170,11 @@ class BuilderWorkflowService:
                             },
                         }
                     )
+            from adaos.services.builder.repair import BuilderRepairService
+
+            repair_context = BuilderRepairService(
+                state_dir=Path(self.state_dir)
+            ).task_context(project_id)
             facets: dict[str, Any] = {
                 "target_structure": target_structure,
                 "abi": {
@@ -3183,6 +3188,7 @@ class BuilderWorkflowService:
                 "data_policy": data_policy,
                 "workflow_definition": workflow_definition,
                 "conversational_definition": conversational_definition,
+                "repair_context": repair_context,
                 "execution_authority": {
                     "status": "present" if selected_paths else "missing",
                     "allowed_paths": selected_paths,
@@ -3265,6 +3271,7 @@ class BuilderWorkflowService:
                     "memory_item_count": len((bounded_conversation or {}).get("memory") or []),
                     "pending_action_ref_count": len(bounded_pending_actions),
                     "active_review_count": len(active_reviews),
+                    "active_repair_count": int(repair_context.get("active_count") or 0),
                     "required_facet_count": len(required),
                     "missing_facet_count": len(coverage["missing"]),
                     "ambiguous_facet_count": len(coverage["ambiguous"]),

@@ -17,6 +17,13 @@ from adaos.services.runtime_paths import current_state_dir
 
 REPAIR_TASK_SCHEMA = "adaos.builder.repair_task.v1"
 ACTIVE_REPAIR_STATES = {"open", "in_progress"}
+TASK_EVIDENCE_SIGNAL_MAP = {
+    "failed_tests": "test_failure",
+    "import_errors": "import_error",
+    "route_pressure": "route_pressure",
+    "memory_growth": "memory_growth",
+    "nlu_misses": "nlu_miss",
+}
 _LOCK = threading.RLock()
 
 
@@ -136,6 +143,63 @@ class BuilderRepairService:
     def start(self, repair_id: str) -> dict[str, Any]:
         return self._set_status(repair_id, "in_progress")
 
+    def ingest_task_evidence(
+        self,
+        *,
+        project_id: str,
+        evidence: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize runtime/evaluation evidence into bounded repair tasks."""
+
+        created: list[dict[str, Any]] = []
+        for source_key, signal_type in TASK_EVIDENCE_SIGNAL_MAP.items():
+            raw_items = evidence.get(source_key)
+            items = raw_items if isinstance(raw_items, Sequence) and not isinstance(raw_items, (str, bytes, Mapping)) else [raw_items]
+            for raw in items:
+                if not raw:
+                    continue
+                item = dict(raw) if isinstance(raw, Mapping) else {"summary": str(raw)}
+                summary = str(
+                    item.get("summary")
+                    or item.get("message")
+                    or item.get("error")
+                    or f"{signal_type} observed"
+                ).strip()
+                refs = item.get("source_refs") if isinstance(item.get("source_refs"), Sequence) else []
+                result = self.report(
+                    project_id=project_id,
+                    signal_type=signal_type,
+                    summary=summary,
+                    source_refs=[dict(ref) for ref in refs if isinstance(ref, Mapping)],
+                    context={
+                        **{key: value for key, value in item.items() if key not in {"summary", "message", "error", "source_refs"}},
+                        "evidence_category": source_key,
+                    },
+                    design_time_fixable=bool(item.get("design_time_fixable", True)),
+                    dedup_key=str(item.get("dedup_key") or "").strip() or None,
+                )
+                created.append(result)
+        return {
+            "ok": True,
+            "project_id": str(project_id),
+            "reported_count": len(created),
+            "reports": created,
+        }
+
+    def task_context(self, project_id: str, *, limit: int = 30) -> dict[str, Any]:
+        active = [
+            item
+            for item in self.list(project_id=project_id)
+            if item.get("status") in ACTIVE_REPAIR_STATES
+        ][-max(1, min(int(limit or 30), 100)):]
+        return {
+            "schema": "adaos.builder.repair_context.v1",
+            "status": "present" if active else "missing",
+            "project_id": str(project_id),
+            "active_count": len(active),
+            "tasks": active,
+        }
+
     def record_acceptance(
         self,
         repair_id: str,
@@ -220,4 +284,9 @@ class BuilderRepairService:
             raise ValueError(f"invalid Builder repair task: {errors[0].message}")
 
 
-__all__ = ["ACTIVE_REPAIR_STATES", "BuilderRepairService", "REPAIR_TASK_SCHEMA"]
+__all__ = [
+    "ACTIVE_REPAIR_STATES",
+    "BuilderRepairService",
+    "REPAIR_TASK_SCHEMA",
+    "TASK_EVIDENCE_SIGNAL_MAP",
+]

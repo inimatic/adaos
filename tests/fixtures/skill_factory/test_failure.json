@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"test_failure","operation":"fail_tests","request":{"request_id":"golden.test_failure","target":{"type":"skill","id":"golden_test_failure"}},"expected":{"status":"failed","failure_class":"tests_failed"}}

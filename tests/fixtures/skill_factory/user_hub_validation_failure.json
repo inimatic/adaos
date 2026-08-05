@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"user_hub_validation_failure","operation":"stage_bad_user_hub_digest","request":{"request_id":"golden.user_hub_validation","target":{"type":"skill","id":"golden_user_hub"}},"expected":{"error":"digest mismatch","status":"assigned"}}

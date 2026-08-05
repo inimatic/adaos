@@ -322,6 +322,14 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
             ],
         },
     )
+    from adaos.services.builder.repair import BuilderRepairService
+
+    BuilderRepairService(state_dir=service.state_dir).report(
+        project_id="recipes",
+        signal_type="test_failure",
+        summary="Recipe card regression failed",
+        context={"test": "test_recipe_card", "artifact_id": "recipes"},
+    )
 
     packet = service.build_context_packet(
         "scenario",
@@ -376,6 +384,9 @@ def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
     assert packet["budget"]["pending_action_ref_count"] == 1
     assert packet["facets"]["workflow_definition"]["status"] == "missing"
     assert packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
+    assert packet["facets"]["repair_context"]["active_count"] == 1
+    assert packet["facets"]["repair_context"]["tasks"][0]["signal_type"] == "test_failure"
+    assert packet["budget"]["active_repair_count"] == 1
     assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
 
 

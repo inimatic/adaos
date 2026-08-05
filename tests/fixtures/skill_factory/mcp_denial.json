@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"mcp_denial","operation":"use_forbidden_mcp_scope","request":{"request_id":"golden.mcp_denial","target":{"type":"skill","id":"golden_mcp"},"mcp":{"requested_scope":["requirements"]}},"input":{"scope":"delete_repository"},"expected":{"error":"does not allow scope"}}

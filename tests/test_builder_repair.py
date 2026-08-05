@@ -79,3 +79,28 @@ def test_non_design_time_signal_is_recorded_without_autonomous_repair(tmp_path: 
     )["task"]
     assert task["status"] == "not_design_time_fixable"
 
+
+def test_runtime_evidence_bundle_becomes_bounded_builder_task_context(tmp_path: Path) -> None:
+    service = BuilderRepairService(state_dir=tmp_path)
+    ingested = service.ingest_task_evidence(
+        project_id="recipes",
+        evidence={
+            "failed_tests": [{"summary": "recipe add failed", "test": "test_add"}],
+            "import_errors": [{"message": "cannot import recipe handler", "component": "handler"}],
+            "route_pressure": [{"summary": "route queue exceeded budget", "route": "recipes.add"}],
+            "memory_growth": [{"summary": "worker heap grew", "component": "recipe_worker"}],
+            "nlu_misses": [{"summary": "add recipe phrase was not matched", "intent": "recipe.add"}],
+        },
+    )
+
+    context = service.task_context("recipes")
+    assert ingested["reported_count"] == 5
+    assert context["status"] == "present"
+    assert context["active_count"] == 5
+    assert {item["signal_type"] for item in context["tasks"]} == {
+        "test_failure",
+        "import_error",
+        "route_pressure",
+        "memory_growth",
+        "nlu_miss",
+    }
