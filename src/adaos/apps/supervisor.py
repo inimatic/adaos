@@ -34,7 +34,13 @@ from fastapi.responses import Response
 
 from adaos.apps.api.auth import require_token
 from adaos.apps.bootstrap import init_ctx
-from adaos.apps.supervisor_runtime import AdoptedProcess, ProcessSupervisor, UpdateStateMachine
+from adaos.apps.supervisor_runtime import (
+    AdoptedProcess,
+    ProcessSupervisor,
+    RuntimeRecoveryFacts,
+    RuntimeRecoveryPolicy,
+    UpdateStateMachine,
+)
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
@@ -115,6 +121,7 @@ _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 _PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
 _UPDATE_STATE_MACHINE = UpdateStateMachine()
+_RUNTIME_RECOVERY_POLICY = RuntimeRecoveryPolicy()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -7481,77 +7488,41 @@ class SupervisorManager:
             managed_executable=managed_executable,
             managed_cwd=managed_cwd,
         )
-        if managed_matches_active_slot is False:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            mismatch_detail = expected_executable or expected_cwd or current_slot or "active slot"
-            return {
-                "reason": "supervisor.runtime.slot_mismatch",
-                "message": (
-                    f"active runtime process does not match the active slot {current_slot or '-'}"
-                    f"; expected {mismatch_detail} and will be restarted"
-                ),
-                "active_slot": current_slot,
-                "managed_executable": managed_executable,
-                "managed_cwd": managed_cwd,
-                "expected_managed_executable": expected_executable,
-                "expected_managed_cwd": expected_cwd,
-            }
-        if update_state == "applying" and update_phase == "apply":
-            # During core_update_apply the runner intentionally has no listener yet.
-            # Let supervisor timeout/recovery handle a stalled apply instead of
-            # repeatedly restarting the process mid-apply every listener timeout.
-            #
-            # Keep slot-mismatch recovery above this guard so a stale applying/apply
-            # status cannot pin the supervisor to an outdated runtime after the
-            # active slot marker has already moved on.
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            return None
         runtime_port = self.slot_runtime_port(current_slot)
         runtime_url = self.slot_runtime_base_url(current_slot)
         listener_running = _listener_running(self.runtime_host, runtime_port)
         api_ready = bool(listener_running and _runtime_api_ready(runtime_url, token=self.token))
-        if listener_running and api_ready:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            return None
-
-        unhealthy_kind = "api_unready" if listener_running else "listener_lost"
         current_time = time.time() if now is None else float(now)
-        if self._runtime_unhealthy_kind != unhealthy_kind:
-            self._runtime_unhealthy_kind = unhealthy_kind
-            self._runtime_unhealthy_since = current_time
-            return None
-
-        unhealthy_since = float(self._runtime_unhealthy_since or current_time)
-        if self._last_start_at is not None:
-            unhealthy_since = max(unhealthy_since, float(self._last_start_at))
-        if unhealthy_kind == "listener_lost" and self._last_start_at is not None:
-            runtime_age = max(0.0, current_time - float(self._last_start_at))
-            if runtime_age < _runtime_listener_startup_grace_sec():
-                return None
-        timeout_sec = (
-            _runtime_api_restart_timeout_sec()
-            if unhealthy_kind == "api_unready"
-            else _runtime_listener_restart_timeout_sec()
+        evaluation = _RUNTIME_RECOVERY_POLICY.evaluate(
+            RuntimeRecoveryFacts(
+                process_running=bool(proc is not None and proc.poll() is None),
+                stopping=self._stopping,
+                desired_running=self._desired_running,
+                update_state=update_state,
+                update_phase=update_phase,
+                current_slot=current_slot,
+                managed_executable=managed_executable,
+                managed_cwd=managed_cwd,
+                expected_executable=expected_executable,
+                expected_cwd=expected_cwd,
+                managed_matches_active_slot=managed_matches_active_slot,
+                runtime_host=self.runtime_host,
+                runtime_port=runtime_port,
+                runtime_url=runtime_url,
+                listener_running=listener_running,
+                runtime_api_ready=api_ready,
+                now=current_time,
+                unhealthy_kind=self._runtime_unhealthy_kind,
+                unhealthy_since=self._runtime_unhealthy_since,
+                last_start_at=self._last_start_at,
+                listener_startup_grace_sec=_runtime_listener_startup_grace_sec(),
+                listener_restart_timeout_sec=_runtime_listener_restart_timeout_sec(),
+                api_restart_timeout_sec=_runtime_api_restart_timeout_sec(),
+            )
         )
-        if (current_time - unhealthy_since) < timeout_sec:
-            return None
-
-        target = runtime_url if unhealthy_kind == "api_unready" else f"http://{self.runtime_host}:{runtime_port}"
-        return {
-            "reason": f"supervisor.runtime.{unhealthy_kind}",
-            "message": (
-                f"active runtime stayed {unhealthy_kind.replace('_', ' ')} for {timeout_sec:.0f}s"
-                f" at {target}; restarting"
-            ),
-            "runtime_port": runtime_port,
-            "runtime_url": runtime_url,
-            "listener_running": listener_running,
-            "runtime_api_ready": api_ready,
-            "timeout_sec": timeout_sec,
-        }
+        self._runtime_unhealthy_kind = evaluation.unhealthy_kind
+        self._runtime_unhealthy_since = evaluation.unhealthy_since
+        return evaluation.decision
 
     def _local_supervisor_update_status_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = _local_update_payload()
