@@ -808,6 +808,12 @@ def _pending_action_id_for_confirmation(confirmation: Mapping[str, Any]) -> str:
     return f"nlu.teacher.{token}"
 
 
+def _pending_action_id_for_clarification(session: Mapping[str, Any]) -> str:
+    session_id = str(session.get("id") or "").strip() or f"clarify.{int(time.time() * 1000)}"
+    token = re.sub(r"[^A-Za-z0-9_.:-]+", ".", session_id).strip(".") or f"clarify.{int(time.time() * 1000)}"
+    return f"nlu.teacher.clarification.{token}"
+
+
 async def _publish_confirmation_pending_action(
     webspace_id: str,
     confirmation: Mapping[str, Any],
@@ -903,6 +909,131 @@ async def _attach_confirmation_pending_action(
         _log.debug("failed to attach pending action id to NLU confirmation webspace=%s", webspace_id, exc_info=True)
 
 
+async def _publish_clarification_pending_action(
+    webspace_id: str,
+    session: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any],
+) -> str:
+    try:
+        from adaos.services.pending_actions import publish_pending_action_async
+
+        session_id = str(session.get("id") or "").strip()
+        request_id = str(session.get("request_id") or "").strip()
+        request_text = str(session.get("request_text") or "").strip()
+        question = str(session.get("question") or "").strip()
+        conversation_ref = conversation_links.ensure_teacher_conversation(
+            webspace_id,
+            request_id=request_id,
+            candidate_id=session_id,
+            title=request_text or question or session_id,
+            meta={"source": "nlu.teacher.clarification", "clarification_id": session_id},
+        )
+        clean_ref = {key: value for key, value in conversation_ref.items() if key != "stored"}
+        choices: list[dict[str, Any]] = []
+        for item in _as_list(session.get("allowed_answers"))[:8]:
+            action_id = str(item.get("id") or "").strip()
+            if not action_id or any(choice["id"] == action_id for choice in choices):
+                continue
+            label = str(item.get("label") or item.get("title") or action_id).strip() or action_id
+            choices.append(
+                {
+                    "id": action_id,
+                    "label": label,
+                    "label_i18n": {
+                        "key": "pending_actions.nlu.clarification_choice",
+                        "params": {"label": label},
+                    },
+                    "terminal": True,
+                }
+            )
+        if not choices:
+            choices = [
+                {
+                    "id": "approve",
+                    "label": "Approve",
+                    "label_i18n": {"key": "pending_actions.action.approve"},
+                    "terminal": True,
+                },
+                {
+                    "id": "refuse",
+                    "label": "Refuse",
+                    "label_i18n": {"key": "pending_actions.action.refuse"},
+                    "terminal": True,
+                },
+            ]
+        choices.append(
+            {
+                "id": "postpone",
+                "label": "Later",
+                "label_i18n": {"key": "pending_actions.action.postpone"},
+                "terminal": False,
+            }
+        )
+        action = await publish_pending_action_async(
+            ctx=get_ctx(),
+            webspace_id=webspace_id,
+            action_id=_pending_action_id_for_clarification(session),
+            kind="nlu.teacher.clarification",
+            title="Clarify command understanding",
+            title_i18n={"key": "pending_actions.nlu.clarification_title"},
+            summary=question,
+            summary_i18n={
+                "key": "pending_actions.nlu.clarification_summary",
+                "params": {"question": question},
+            },
+            request_text=request_text,
+            request_locale=str(meta.get("locale") or meta.get("request_locale") or "").strip(),
+            producer={"type": "skill", "skill_id": "nlu_teacher"},
+            owner_scope={"webspace_id": webspace_id},
+            domain_ref={
+                "webspace_id": webspace_id,
+                "clarification_id": session_id,
+                "request_id": request_id,
+                "conversation": clean_ref,
+            },
+            allowed_actions=choices,
+            ttl_s=_CONFIRMATION_TTL_S,
+            default_text_binding=True,
+            response_route={
+                "type": "event",
+                "topic": _PENDING_ACTION_RESPONSE_TOPIC,
+                "target": {"type": "skill", "skill_id": "nlu_teacher"},
+            },
+            metadata={
+                "source": "nlu.teacher.clarification",
+                "conversation_ref": clean_ref,
+            },
+        )
+        return str(action.get("id") or "").strip()
+    except ValueError as exc:
+        if "already exists" in str(exc):
+            return _pending_action_id_for_clarification(session)
+        _log.warning("failed to publish NLU clarification pending action webspace=%s", webspace_id, exc_info=True)
+        return ""
+    except Exception:
+        _log.warning("failed to publish NLU clarification pending action webspace=%s", webspace_id, exc_info=True)
+        return ""
+
+
+async def _attach_clarification_pending_action(
+    webspace_id: str,
+    session: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    pending_action_id = await _publish_clarification_pending_action(webspace_id, session, meta=meta)
+    session_id = str(session.get("id") or "").strip()
+    if not pending_action_id or not session_id:
+        return dict(session)
+    updated = await _patch_clarification_session(
+        webspace_id,
+        session_id,
+        {"pending_action_id": pending_action_id, "pending_action_status": "pending"},
+    )
+    return dict(updated or session)
+
+
 def _find_confirmation(
     teacher: Mapping[str, Any],
     *,
@@ -957,6 +1088,7 @@ async def request_clarification(
     normalized.setdefault("kind", "llm_clarification")
     normalized.setdefault("uncertainty_kind", "llm_uncertainty")
     requested = await _append_clarification_session(webspace_id, normalized)
+    requested = await _attach_clarification_pending_action(webspace_id, requested, meta=merged_meta)
     request_id = str(requested.get("request_id") or "").strip()
     request_text = str(requested.get("request_text") or "").strip()
     question = str(requested.get("question") or "").strip()
@@ -1669,6 +1801,7 @@ async def _on_pending_action_confirmation_response(evt: Any) -> None:
         or ""
     ).strip() or default_webspace_id()
     confirmation_id = str(domain_ref.get("confirmation_id") or "").strip()
+    clarification_id = str(domain_ref.get("clarification_id") or "").strip()
     candidate_id = str(domain_ref.get("candidate_id") or "").strip()
     route_meta = {
         "webspace_id": webspace_id,
@@ -1678,6 +1811,34 @@ async def _on_pending_action_confirmation_response(evt: Any) -> None:
     }
     try:
         teacher = await _read_teacher(webspace_id)
+        if clarification_id:
+            clarification = next(
+                (
+                    dict(item)
+                    for item in reversed(_as_list(teacher.get("clarification_sessions")))
+                    if str(item.get("id") or "").strip() == clarification_id
+                    and str(item.get("status") or "").strip() == "awaiting_user"
+                ),
+                None,
+            )
+            if not clarification:
+                return
+            if response_action_id == "postpone":
+                await _patch_clarification_session(
+                    webspace_id,
+                    clarification_id,
+                    {"postponed_at": time.time(), "pending_action_status": "postponed"},
+                )
+                return
+            answer = "no" if response_action_id in {"refuse", "reject", "deny", "no"} else response_action_id
+            await _answer_clarification(
+                webspace_id,
+                clarification,
+                answer=answer,
+                answer_text=response_action_id,
+                meta=route_meta,
+            )
+            return
         confirmation = _find_confirmation(teacher, confirmation_id=confirmation_id, candidate_id=candidate_id)
     except Exception:
         _log.debug("failed to read NLU confirmation for pending action response webspace=%s", webspace_id, exc_info=True)
@@ -1761,6 +1922,26 @@ async def _on_voice_chat_user(evt: Any) -> None:
         if clarification:
             _remember_consumed_voice_confirmation_answer(webspace_id, text)
             try:
+                pending_action_id = str(clarification.get("pending_action_id") or "").strip()
+                selected = _select_clarification_answer(clarification, answer, text)
+                response_action_id = str(selected.get("id") or answer).strip()
+                if pending_action_id and response_action_id:
+                    from adaos.services.pending_actions import respond_pending_action_async
+
+                    result = await respond_pending_action_async(
+                        pending_action_id,
+                        response_action_id,
+                        ctx=get_ctx(),
+                        webspace_id=webspace_id,
+                        responder={"type": "voice", "channel": "voice_chat"},
+                        response_payload={
+                            "answer_text": text.strip(),
+                            "source": "voice.chat.user",
+                            "handled_by": "nlu_teacher.voice_chat",
+                        },
+                    )
+                    if bool(result.get("duplicate")):
+                        return
                 await _answer_clarification(
                     webspace_id,
                     clarification,
