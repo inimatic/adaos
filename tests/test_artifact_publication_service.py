@@ -407,6 +407,11 @@ def test_paused_promotion_recovers_failed_activation_with_new_identity(
             },
             health_check=lambda _lock: False,
         )
+    from adaos.services.builder.repair import BuilderRepairService
+
+    repairs = BuilderRepairService(state_dir=tmp_path / "state").list(project_id="recipes")
+    assert repairs[-1]["signal_type"] == "post_activation"
+    assert repairs[-1]["context"]["release_digest"] == prepared.candidate.release_digest
     failed_operation_id = WorkspaceActivationManager.operation_id(
         f"stable:{prepared.candidate.release_digest}"
     )

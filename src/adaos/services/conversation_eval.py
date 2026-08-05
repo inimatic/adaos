@@ -553,6 +553,49 @@ def publish_eval_repair_pending_action(
     return {"ok": True, "published": True, "pending_action": action, "summary": summary}
 
 
+def create_eval_repair_tasks(
+    result: Mapping[str, Any],
+    *,
+    project_id: str,
+    repair_service: Any | None = None,
+) -> dict[str, Any]:
+    """Materialize approved eval triage into durable Builder Repair Tasks."""
+
+    summary = eval_repair_summary(result)
+    if str(summary.get("status") or "").lower() == "passed":
+        return {"ok": True, "created": [], "reason": "eval_passed"}
+    if repair_service is None:
+        from adaos.services.builder.repair import BuilderRepairService
+
+        repair_service = BuilderRepairService()
+    created: list[dict[str, Any]] = []
+    dataset_refs = _mapping_list(summary.get("dataset_refs")) or [{}]
+    common_refs = _mapping_list(summary.get("source_refs"))
+    for item in dataset_refs:
+        dataset_id = str(item.get("dataset_id") or "unknown").strip() or "unknown"
+        failure_names = [str(value) for value in item.get("failure_names") or [] if str(value)]
+        source_refs = [*common_refs, {"type": "conversation_eval_dataset", **dict(item)}]
+        created.append(
+            repair_service.report(
+                project_id=project_id,
+                signal_type="conversation_eval",
+                summary=(
+                    f"Conversation evaluation failed for {dataset_id}"
+                    + (f": {', '.join(failure_names)}" if failure_names else "")
+                ),
+                source_refs=source_refs,
+                context={
+                    "dataset_id": dataset_id,
+                    "conversation_id": summary.get("conversation_id"),
+                    "thread_id": summary.get("thread_id"),
+                    "source_schema": summary.get("source_schema"),
+                    "validation_report": dict(result),
+                },
+            )["task"]
+        )
+    return {"ok": True, "created": created, "summary": summary}
+
+
 def _evaluate_model_grades(
     *,
     conversation_id: str,

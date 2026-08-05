@@ -1219,6 +1219,7 @@ class WorkspaceActivationManager:
         migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
+        repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         self._assert_plan(plan)
@@ -1253,6 +1254,7 @@ class WorkspaceActivationManager:
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
                     phase_hook=phase_hook,
+                    repair_reporter=repair_reporter,
                     expected_lock_digest=expected_lock_digest,
                 )
         except MutationLockTimeout as exc:
@@ -1281,6 +1283,7 @@ class WorkspaceActivationManager:
         migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
+        repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
@@ -1738,6 +1741,34 @@ class WorkspaceActivationManager:
                 delayed_verification_id=delayed_verification_id,
             )
         except Exception as exc:
+            if repair_reporter is not None and str(operation.get("phase") or "") in {
+                "reload",
+                "health-verify",
+                "commit",
+            }:
+                try:
+                    repair_reporter(
+                        {
+                            "project_id": plan.release.project_id,
+                            "signal_type": "post_activation",
+                            "summary": f"Post-activation {operation.get('phase')} failed: {exc}",
+                            "source_refs": [
+                                {
+                                    "type": "activation_operation",
+                                    "operation_id": operation_id,
+                                    "release_digest": release_digest,
+                                    "phase": operation.get("phase"),
+                                }
+                            ],
+                            "context": {
+                                "artifact_id": plan.release.project_id,
+                                "release_digest": release_digest,
+                                "runtime_slot": slot_id,
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
             migration_state = operation.get("migration_execution")
             if isinstance(migration_state, Mapping) and migration_state.get("status") == "completed":
                 rollback_request = {

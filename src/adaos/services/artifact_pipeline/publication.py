@@ -337,6 +337,25 @@ class ArtifactPublicationService:
             remote=self.remote,
         )
 
+    def _record_builder_repair(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from adaos.services.builder.repair import BuilderRepairService
+
+        return BuilderRepairService(state_dir=self.state_root).report(
+            project_id=str(payload.get("project_id") or "unknown"),
+            signal_type=str(payload.get("signal_type") or "post_activation"),
+            summary=str(payload.get("summary") or "Post-activation verification failed"),
+            source_refs=tuple(
+                dict(item)
+                for item in payload.get("source_refs") or []
+                if isinstance(item, Mapping)
+            ),
+            context=(
+                dict(payload.get("context"))
+                if isinstance(payload.get("context"), Mapping)
+                else {}
+            ),
+        )
+
     def _workspace_slot_id(
         self,
         project_id: str,
@@ -749,6 +768,7 @@ class ArtifactPublicationService:
             permission_decision=permission_decision,
             migration_executor=migration_executor,
             migration_rollback=migration_rollback,
+            repair_reporter=self._record_builder_repair,
             expected_lock_digest=prepared.activation_plan.get("observed_lock_digest"),
         )
         self.release_cache.put_release(plan)
@@ -1791,6 +1811,7 @@ class ArtifactPublicationService:
                     permission_decision=permission_decision,
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
+                    repair_reporter=self._record_builder_repair,
                 )
                 activation_operation = json.loads(
                     activation_manager.operation_path(activation.operation_id).read_text(

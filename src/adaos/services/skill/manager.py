@@ -322,6 +322,26 @@ def _append_skill_quarantine_log(skill_memory_path: Path, event: Mapping[str, An
         payload = dict(event)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)[:32768] + "\n")
+        try:
+            from adaos.services.builder.repair import BuilderRepairService
+
+            BuilderRepairService(state_dir=base).report(
+                project_id=str(event.get("scenario_id") or event.get("skill") or "unknown"),
+                signal_type="quarantine",
+                summary=(
+                    f"Skill {event.get('skill')} tool {event.get('blocked_tool')} was quarantined: "
+                    f"{event.get('reason')}"
+                ),
+                source_refs=[{"type": "skill_quarantine", **dict(event)}],
+                context={
+                    "artifact_id": event.get("skill"),
+                    "component": event.get("blocked_tool"),
+                    "route": event.get("channel"),
+                },
+                design_time_fixable=True,
+            )
+        except Exception:
+            _log.debug("failed to route skill quarantine to Builder repair", exc_info=True)
     except Exception:
         _log.debug("failed to append skill quarantine log skill_memory=%s", skill_memory_path, exc_info=True)
 
