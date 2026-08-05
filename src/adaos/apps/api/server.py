@@ -1525,7 +1525,7 @@ async def get_alias(token=Depends(require_token)):
     return {"ok": True, **_subnet_identity_payload()}
 
 
-async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any]) -> None:
+async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any], bus: Any) -> None:
     """Refresh derived views after the durable subnet identity is saved.
 
     Projection materialization and local event handlers are deliberately kept
@@ -1553,8 +1553,8 @@ async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any]) -> Non
                 ),
                 timeout=2.5,
             )
-    except Exception:
-        _runtime_log.warning("subnet alias projection refresh failed", exc_info=True)
+    except Exception as exc:
+        _runtime_log.warning("subnet alias projection refresh failed error=%s", exc, exc_info=True)
 
     try:
         from adaos.domain import Event as _Ev
@@ -1564,22 +1564,23 @@ async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any]) -> Non
             payload=event_payload,
             source="api",
         )
-        await asyncio.to_thread(get_ctx().bus.publish, event)
-    except Exception:
-        _runtime_log.warning("subnet alias event publication failed", exc_info=True)
+        await asyncio.to_thread(bus.publish, event)
+    except Exception as exc:
+        _runtime_log.warning("subnet alias event publication failed error=%s", exc, exc_info=True)
 
 
 @app.post("/api/subnet/alias")
 async def set_alias(body: SetAliasRequest, background: BackgroundTasks, token=Depends(require_token)):
     try:
-        conf = get_ctx().config
+        ctx = get_ctx()
+        conf = ctx.config
         save_subnet_alias(body.alias, subnet_id=conf.subnet_id)
         event_payload = {
             "alias": body.alias,
             "subnet_id": conf.subnet_id,
             "webspace_id": body.webspace_id,
         }
-        background.add_task(_refresh_subnet_alias_dependents, event_payload)
+        background.add_task(_refresh_subnet_alias_dependents, event_payload, ctx.bus)
         return {
             "ok": True,
             **_subnet_identity_payload(),

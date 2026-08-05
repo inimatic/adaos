@@ -262,6 +262,7 @@ def test_set_subnet_alias_acknowledges_durable_identity_before_projection(monkey
     assert payload["projection_refreshed"] is False
     assert payload["projection_refresh_scheduled"] is True
     assert len(background.tasks) == 1
+    assert background.tasks[0].args[1] is bus
 
 
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
