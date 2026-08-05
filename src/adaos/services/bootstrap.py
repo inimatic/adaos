@@ -118,6 +118,11 @@ from adaos.services.bootstrap_runtime import (
     BootstrapStatusWatchdogService,
     RootTransportService,
 )
+from adaos.services.bootstrap_runtime import core_update_convergence as _core_update_convergence
+from adaos.services.bootstrap_runtime import hub_route_proxy as _hub_route_proxy
+from adaos.services.bootstrap_runtime import nats_bridge as _nats_bridge
+from adaos.services.bootstrap_runtime import status_policy as _status_policy
+from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cleanup
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
@@ -126,85 +131,348 @@ from adaos.services.subnet_alias import save_subnet_alias
 from adaos.integrations.telegram.sender import TelegramSender
 
 
-def _read_sidecar_tail_lines(path: Path, *, lines: int) -> list[str]:
-    try:
-        max_read_bytes = int(os.getenv("HUB_SIDECAR_TAIL_READ_BYTES", "262144") or "262144")
-    except Exception:
-        max_read_bytes = 262144
-    try:
-        max_line_chars = int(os.getenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "4096") or "4096")
-    except Exception:
-        max_line_chars = 4096
-    return bounded_text_tail_lines(
-        path,
-        limit=max(0, int(lines or 0)),
-        max_bytes=max_read_bytes,
-        max_line_chars=max_line_chars,
-    )
+_BOOTSTRAP_RUNTIME_ORIGINALS: dict[str, dict[str, Any]] = {
+    "_status_policy": {name: getattr(_status_policy, name) for name in ('_bounded_interval_seconds', '_hub_root_bridge_watchdog_interval_s', '_should_forward_node_status_to_members', '_webio_control_target_node_id', '_should_forward_webio_control_to_members', '_node_status_dedupe_window_s', '_node_status_emit_fingerprint', '_should_emit_node_status', '_env_truthy', '_loop_hang_watchdog_enabled_from_env', '_hub_channel_console_trace_enabled', '_hub_channel_console_allow_rl')},
+    "_transport_cleanup": {name: getattr(_transport_cleanup, name) for name in ('_run_bounded_async_cleanup', '_close_route_tunnels_bounded', '_current_async_task_is_cancelling')},
+    "_hub_route_proxy": {name: getattr(_hub_route_proxy, name) for name in ('_hub_route_max_chunk_raw_bytes', '_hub_route_normalize_resend_chunk_indexes', '_hub_route_path_token', '_hub_route_semantic_flow_for_path', '_hub_route_should_shed_sync_frame', '_hub_route_sync_frame_force_flush_enabled', '_hub_route_should_force_flush_reply', '_hub_route_subnet_sync_payload_type', '_hub_route_should_drop_subnet_sync_frame', '_is_local_http_base', '_hub_route_prefers_supervisor_public_status', '_dev_without_supervisor', '_read_json_file_silent', '_hub_route_node_status_supervisor_runtime', '_dev_api_serve_core_update_sync_disabled', '_supervisor_local_bases', '_route_local_base_cache_ttl_s', '_runtime_port_local_http_base', '_runtime_port_probe_candidates', '_route_state_dir_from_ctx', '_route_state_dir_fallback', '_active_runtime_state_local_http_bases', '_append_local_http_base', '_hub_route_local_http_timeout', '_hub_route_tools_call_has_idempotency', '_hub_route_should_retry_http_upstream_error', '_hub_route_parse_resend_delays', '_hub_route_should_resend_http_resp', '_probe_runtime_http_base', '_observe_route_local_base_diag', '_note_route_local_base_shortcut', '_discover_active_runtime_local_base', '_build_hub_route_http_bases', '_http_base_to_ws_base', '_build_hub_route_ws_bases', '_hub_route_force_close_no_upstream_s')},
+    "_nats_bridge": {name: getattr(_nats_bridge, name) for name in ('_read_sidecar_tail_lines', '_nats_credentials_refresh_evidence', '_should_refresh_nats_credentials', '_hub_root_transport_kind', '_hub_nats_prefer_dedicated', '_normalize_hub_nats_ws_url', '_hub_public_ws_candidates', '_hub_public_tcp_candidates', '_runtime_candidate_mode', '_hub_root_candidate_passive_mode', '_nats_url_needs_public_ws_refresh', '_build_realtime_sidecar_fallback_candidates', '_should_quarantine_nats_candidate', '_hub_nats_sidecar_failover_on_transient', '_hub_nats_sidecar_quarantine_s', '_resolve_nats_log_server', '_hub_id_from_nats_user', '_canonical_hub_nats_identity')},
+    "_core_update_convergence": {name: getattr(_core_update_convergence, name) for name in ('_core_update_status_fingerprint', '_core_update_waits_for_supervisor_convergence', '_watch_supervisor_core_update_convergence')},
+}
+_BOOTSTRAP_RUNTIME_WRAPPERS: dict[str, dict[str, Any]] = {
+    "_status_policy": {},
+    "_transport_cleanup": {},
+    "_hub_route_proxy": {},
+    "_nats_bridge": {},
+    "_core_update_convergence": {},
+}
+
+def _sync_bootstrap_runtime_helpers(module_alias: str) -> None:
+    module = globals()[module_alias]
+    originals = _BOOTSTRAP_RUNTIME_ORIGINALS[module_alias]
+    wrappers = _BOOTSTRAP_RUNTIME_WRAPPERS[module_alias]
+    for helper_name, original in originals.items():
+        current = globals().get(helper_name, original)
+        wrapper = wrappers.get(helper_name)
+        setattr(module, helper_name, original if wrapper is not None and current is wrapper else current)
+
+    if module_alias == "_hub_route_proxy":
+        module.realtime_sidecar_route_tunnel_ws_bases = realtime_sidecar_route_tunnel_ws_bases
+        module.observe_hub_root_route_runtime = observe_hub_root_route_runtime
+    elif module_alias == "_nats_bridge":
+        module.runtime_transition_role = runtime_transition_role
+        module.realtime_sidecar_local_url = realtime_sidecar_local_url
+        module.realtime_sidecar_diag_path = realtime_sidecar_diag_path
+        module.normalize_nats_ws_url = normalize_nats_ws_url
+        module.nats_url_uses_websocket = nats_url_uses_websocket
+        module.public_nats_ws_api = public_nats_ws_api
+        module.public_nats_ws_candidates = public_nats_ws_candidates
+        module.public_nats_tcp_candidates = public_nats_tcp_candidates
+
+def _bounded_interval_seconds(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._bounded_interval_seconds(*args, **kwargs)
+def _hub_root_bridge_watchdog_interval_s(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._hub_root_bridge_watchdog_interval_s(*args, **kwargs)
+def _should_forward_node_status_to_members(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._should_forward_node_status_to_members(*args, **kwargs)
+def _webio_control_target_node_id(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._webio_control_target_node_id(*args, **kwargs)
+def _should_forward_webio_control_to_members(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._should_forward_webio_control_to_members(*args, **kwargs)
+def _node_status_dedupe_window_s(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._node_status_dedupe_window_s(*args, **kwargs)
+def _node_status_emit_fingerprint(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._node_status_emit_fingerprint(*args, **kwargs)
+def _should_emit_node_status(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._should_emit_node_status(*args, **kwargs)
+def _env_truthy(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._env_truthy(*args, **kwargs)
+def _loop_hang_watchdog_enabled_from_env(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._loop_hang_watchdog_enabled_from_env(*args, **kwargs)
+def _hub_channel_console_trace_enabled(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._hub_channel_console_trace_enabled(*args, **kwargs)
+def _hub_channel_console_allow_rl(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_status_policy")
+    return _status_policy._hub_channel_console_allow_rl(*args, **kwargs)
+async def _run_bounded_async_cleanup(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_transport_cleanup")
+    return await _transport_cleanup._run_bounded_async_cleanup(*args, **kwargs)
+async def _close_route_tunnels_bounded(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_transport_cleanup")
+    return await _transport_cleanup._close_route_tunnels_bounded(*args, **kwargs)
+def _current_async_task_is_cancelling(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_transport_cleanup")
+    return _transport_cleanup._current_async_task_is_cancelling(*args, **kwargs)
+def _hub_route_max_chunk_raw_bytes(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_max_chunk_raw_bytes(*args, **kwargs)
+def _hub_route_normalize_resend_chunk_indexes(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_normalize_resend_chunk_indexes(*args, **kwargs)
+def _hub_route_path_token(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_path_token(*args, **kwargs)
+def _hub_route_semantic_flow_for_path(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_semantic_flow_for_path(*args, **kwargs)
+def _hub_route_should_shed_sync_frame(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_should_shed_sync_frame(*args, **kwargs)
+def _hub_route_sync_frame_force_flush_enabled(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_sync_frame_force_flush_enabled(*args, **kwargs)
+def _hub_route_should_force_flush_reply(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_should_force_flush_reply(*args, **kwargs)
+def _hub_route_subnet_sync_payload_type(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_subnet_sync_payload_type(*args, **kwargs)
+def _hub_route_should_drop_subnet_sync_frame(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_should_drop_subnet_sync_frame(*args, **kwargs)
+def _is_local_http_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._is_local_http_base(*args, **kwargs)
+def _hub_route_prefers_supervisor_public_status(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_prefers_supervisor_public_status(*args, **kwargs)
+def _dev_without_supervisor(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._dev_without_supervisor(*args, **kwargs)
+def _read_json_file_silent(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._read_json_file_silent(*args, **kwargs)
+def _hub_route_node_status_supervisor_runtime(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_node_status_supervisor_runtime(*args, **kwargs)
+def _dev_api_serve_core_update_sync_disabled(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._dev_api_serve_core_update_sync_disabled(*args, **kwargs)
+def _supervisor_local_bases(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._supervisor_local_bases(*args, **kwargs)
+def _route_local_base_cache_ttl_s(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._route_local_base_cache_ttl_s(*args, **kwargs)
+def _runtime_port_local_http_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._runtime_port_local_http_base(*args, **kwargs)
+def _runtime_port_probe_candidates(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._runtime_port_probe_candidates(*args, **kwargs)
+def _route_state_dir_from_ctx(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._route_state_dir_from_ctx(*args, **kwargs)
+def _route_state_dir_fallback(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._route_state_dir_fallback(*args, **kwargs)
+def _active_runtime_state_local_http_bases(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._active_runtime_state_local_http_bases(*args, **kwargs)
+def _append_local_http_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._append_local_http_base(*args, **kwargs)
+def _hub_route_local_http_timeout(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_local_http_timeout(*args, **kwargs)
+def _hub_route_tools_call_has_idempotency(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_tools_call_has_idempotency(*args, **kwargs)
+def _hub_route_should_retry_http_upstream_error(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_should_retry_http_upstream_error(*args, **kwargs)
+def _hub_route_parse_resend_delays(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_parse_resend_delays(*args, **kwargs)
+def _hub_route_should_resend_http_resp(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_should_resend_http_resp(*args, **kwargs)
+def _probe_runtime_http_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._probe_runtime_http_base(*args, **kwargs)
+def _observe_route_local_base_diag(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._observe_route_local_base_diag(*args, **kwargs)
+def _note_route_local_base_shortcut(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._note_route_local_base_shortcut(*args, **kwargs)
+def _discover_active_runtime_local_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._discover_active_runtime_local_base(*args, **kwargs)
+def _build_hub_route_http_bases(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._build_hub_route_http_bases(*args, **kwargs)
+def _http_base_to_ws_base(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._http_base_to_ws_base(*args, **kwargs)
+def _build_hub_route_ws_bases(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._build_hub_route_ws_bases(*args, **kwargs)
+def _hub_route_force_close_no_upstream_s(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
+    return _hub_route_proxy._hub_route_force_close_no_upstream_s(*args, **kwargs)
+def _read_sidecar_tail_lines(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._read_sidecar_tail_lines(*args, **kwargs)
+def _nats_credentials_refresh_evidence(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._nats_credentials_refresh_evidence(*args, **kwargs)
+def _should_refresh_nats_credentials(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._should_refresh_nats_credentials(*args, **kwargs)
+def _hub_root_transport_kind(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_root_transport_kind(*args, **kwargs)
+def _hub_nats_prefer_dedicated(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_nats_prefer_dedicated(*args, **kwargs)
+def _normalize_hub_nats_ws_url(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._normalize_hub_nats_ws_url(*args, **kwargs)
+def _hub_public_ws_candidates(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_public_ws_candidates(*args, **kwargs)
+def _hub_public_tcp_candidates(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_public_tcp_candidates(*args, **kwargs)
+def _runtime_candidate_mode(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._runtime_candidate_mode(*args, **kwargs)
+def _hub_root_candidate_passive_mode(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_root_candidate_passive_mode(*args, **kwargs)
+def _nats_url_needs_public_ws_refresh(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._nats_url_needs_public_ws_refresh(*args, **kwargs)
+def _build_realtime_sidecar_fallback_candidates(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._build_realtime_sidecar_fallback_candidates(*args, **kwargs)
+def _should_quarantine_nats_candidate(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._should_quarantine_nats_candidate(*args, **kwargs)
+def _hub_nats_sidecar_failover_on_transient(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_nats_sidecar_failover_on_transient(*args, **kwargs)
+def _hub_nats_sidecar_quarantine_s(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_nats_sidecar_quarantine_s(*args, **kwargs)
+def _resolve_nats_log_server(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._resolve_nats_log_server(*args, **kwargs)
+def _hub_id_from_nats_user(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._hub_id_from_nats_user(*args, **kwargs)
+def _canonical_hub_nats_identity(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_nats_bridge")
+    return _nats_bridge._canonical_hub_nats_identity(*args, **kwargs)
+def _core_update_status_fingerprint(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_core_update_convergence")
+    return _core_update_convergence._core_update_status_fingerprint(*args, **kwargs)
+def _core_update_waits_for_supervisor_convergence(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_core_update_convergence")
+    return _core_update_convergence._core_update_waits_for_supervisor_convergence(*args, **kwargs)
+async def _watch_supervisor_core_update_convergence(*args: Any, **kwargs: Any) -> Any:
+    _sync_bootstrap_runtime_helpers("_core_update_convergence")
+    return await _core_update_convergence._watch_supervisor_core_update_convergence(*args, **kwargs)
+
+_BOOTSTRAP_RUNTIME_WRAPPERS["_status_policy"] = {
+    "_bounded_interval_seconds": _bounded_interval_seconds,
+    "_hub_root_bridge_watchdog_interval_s": _hub_root_bridge_watchdog_interval_s,
+    "_should_forward_node_status_to_members": _should_forward_node_status_to_members,
+    "_webio_control_target_node_id": _webio_control_target_node_id,
+    "_should_forward_webio_control_to_members": _should_forward_webio_control_to_members,
+    "_node_status_dedupe_window_s": _node_status_dedupe_window_s,
+    "_node_status_emit_fingerprint": _node_status_emit_fingerprint,
+    "_should_emit_node_status": _should_emit_node_status,
+    "_env_truthy": _env_truthy,
+    "_loop_hang_watchdog_enabled_from_env": _loop_hang_watchdog_enabled_from_env,
+    "_hub_channel_console_trace_enabled": _hub_channel_console_trace_enabled,
+    "_hub_channel_console_allow_rl": _hub_channel_console_allow_rl,
+}
+_BOOTSTRAP_RUNTIME_WRAPPERS["_transport_cleanup"] = {
+    "_run_bounded_async_cleanup": _run_bounded_async_cleanup,
+    "_close_route_tunnels_bounded": _close_route_tunnels_bounded,
+    "_current_async_task_is_cancelling": _current_async_task_is_cancelling,
+}
+_BOOTSTRAP_RUNTIME_WRAPPERS["_hub_route_proxy"] = {
+    "_hub_route_max_chunk_raw_bytes": _hub_route_max_chunk_raw_bytes,
+    "_hub_route_normalize_resend_chunk_indexes": _hub_route_normalize_resend_chunk_indexes,
+    "_hub_route_path_token": _hub_route_path_token,
+    "_hub_route_semantic_flow_for_path": _hub_route_semantic_flow_for_path,
+    "_hub_route_should_shed_sync_frame": _hub_route_should_shed_sync_frame,
+    "_hub_route_sync_frame_force_flush_enabled": _hub_route_sync_frame_force_flush_enabled,
+    "_hub_route_should_force_flush_reply": _hub_route_should_force_flush_reply,
+    "_hub_route_subnet_sync_payload_type": _hub_route_subnet_sync_payload_type,
+    "_hub_route_should_drop_subnet_sync_frame": _hub_route_should_drop_subnet_sync_frame,
+    "_is_local_http_base": _is_local_http_base,
+    "_hub_route_prefers_supervisor_public_status": _hub_route_prefers_supervisor_public_status,
+    "_dev_without_supervisor": _dev_without_supervisor,
+    "_read_json_file_silent": _read_json_file_silent,
+    "_hub_route_node_status_supervisor_runtime": _hub_route_node_status_supervisor_runtime,
+    "_dev_api_serve_core_update_sync_disabled": _dev_api_serve_core_update_sync_disabled,
+    "_supervisor_local_bases": _supervisor_local_bases,
+    "_route_local_base_cache_ttl_s": _route_local_base_cache_ttl_s,
+    "_runtime_port_local_http_base": _runtime_port_local_http_base,
+    "_runtime_port_probe_candidates": _runtime_port_probe_candidates,
+    "_route_state_dir_from_ctx": _route_state_dir_from_ctx,
+    "_route_state_dir_fallback": _route_state_dir_fallback,
+    "_active_runtime_state_local_http_bases": _active_runtime_state_local_http_bases,
+    "_append_local_http_base": _append_local_http_base,
+    "_hub_route_local_http_timeout": _hub_route_local_http_timeout,
+    "_hub_route_tools_call_has_idempotency": _hub_route_tools_call_has_idempotency,
+    "_hub_route_should_retry_http_upstream_error": _hub_route_should_retry_http_upstream_error,
+    "_hub_route_parse_resend_delays": _hub_route_parse_resend_delays,
+    "_hub_route_should_resend_http_resp": _hub_route_should_resend_http_resp,
+    "_probe_runtime_http_base": _probe_runtime_http_base,
+    "_observe_route_local_base_diag": _observe_route_local_base_diag,
+    "_note_route_local_base_shortcut": _note_route_local_base_shortcut,
+    "_discover_active_runtime_local_base": _discover_active_runtime_local_base,
+    "_build_hub_route_http_bases": _build_hub_route_http_bases,
+    "_http_base_to_ws_base": _http_base_to_ws_base,
+    "_build_hub_route_ws_bases": _build_hub_route_ws_bases,
+    "_hub_route_force_close_no_upstream_s": _hub_route_force_close_no_upstream_s,
+}
+_BOOTSTRAP_RUNTIME_WRAPPERS["_nats_bridge"] = {
+    "_read_sidecar_tail_lines": _read_sidecar_tail_lines,
+    "_nats_credentials_refresh_evidence": _nats_credentials_refresh_evidence,
+    "_should_refresh_nats_credentials": _should_refresh_nats_credentials,
+    "_hub_root_transport_kind": _hub_root_transport_kind,
+    "_hub_nats_prefer_dedicated": _hub_nats_prefer_dedicated,
+    "_normalize_hub_nats_ws_url": _normalize_hub_nats_ws_url,
+    "_hub_public_ws_candidates": _hub_public_ws_candidates,
+    "_hub_public_tcp_candidates": _hub_public_tcp_candidates,
+    "_runtime_candidate_mode": _runtime_candidate_mode,
+    "_hub_root_candidate_passive_mode": _hub_root_candidate_passive_mode,
+    "_nats_url_needs_public_ws_refresh": _nats_url_needs_public_ws_refresh,
+    "_build_realtime_sidecar_fallback_candidates": _build_realtime_sidecar_fallback_candidates,
+    "_should_quarantine_nats_candidate": _should_quarantine_nats_candidate,
+    "_hub_nats_sidecar_failover_on_transient": _hub_nats_sidecar_failover_on_transient,
+    "_hub_nats_sidecar_quarantine_s": _hub_nats_sidecar_quarantine_s,
+    "_resolve_nats_log_server": _resolve_nats_log_server,
+    "_hub_id_from_nats_user": _hub_id_from_nats_user,
+    "_canonical_hub_nats_identity": _canonical_hub_nats_identity,
+}
+_BOOTSTRAP_RUNTIME_WRAPPERS["_core_update_convergence"] = {
+    "_core_update_status_fingerprint": _core_update_status_fingerprint,
+    "_core_update_waits_for_supervisor_convergence": _core_update_waits_for_supervisor_convergence,
+    "_watch_supervisor_core_update_convergence": _watch_supervisor_core_update_convergence,
+}
 
 
-def _nats_credentials_refresh_evidence(
-    err: Exception,
-    *,
-    server: str | None,
-    sidecar_diag_file: Path | None = None,
-) -> str | None:
-    try:
-        message = str(err or "").strip().lower()
-    except Exception:
-        message = ""
-    explicit_auth_markers = (
-        "authentication failure",
-        "authentication timeout",
-        "authorization violation",
-        "invalid credentials",
-        "invalid user credentials",
-    )
-    if any(marker in message for marker in explicit_auth_markers):
-        return "explicit_auth_error"
-    if isinstance(err, TypeError) and "argument of type 'int' is not iterable" in message:
-        return "explicit_auth_error"
-
-    is_eof = type(err).__name__ == "UnexpectedEOF" or "unexpected eof" in message
-    if not is_eof or str(server or "").strip() != realtime_sidecar_local_url():
-        return None
-
-    diag_path = Path(sidecar_diag_file) if sidecar_diag_file is not None else realtime_sidecar_diag_path()
-    try:
-        max_age_s = float(os.getenv("HUB_NATS_AUTH_DIAG_MAX_AGE_S", "60") or "60")
-    except Exception:
-        max_age_s = 60.0
-    max_age_s = max(1.0, min(max_age_s, 300.0))
-    now = time.time()
-    for line in reversed(_read_sidecar_tail_lines(diag_path, lines=8)):
-        try:
-            record = _json.loads(line)
-            recorded_at = float(record.get("ts"))
-            last_error = str(record.get("last_error") or "").strip().lower()
-        except (AttributeError, TypeError, ValueError, _json.JSONDecodeError):
-            continue
-        age_s = now - recorded_at
-        if age_s < -5.0 or age_s > max_age_s:
-            continue
-        if any(marker in last_error for marker in explicit_auth_markers):
-            return "sidecar_auth_failure_after_eof"
-    return None
 
 
-def _should_refresh_nats_credentials(
-    err: Exception,
-    *,
-    server: str | None,
-    sidecar_diag_file: Path | None = None,
-) -> bool:
-    return (
-        _nats_credentials_refresh_evidence(
-            err,
-            server=server,
-            sidecar_diag_file=sidecar_diag_file,
-        )
-        is not None
-    )
+
+
 
 
 def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
@@ -217,1334 +485,144 @@ def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
         log.warning("failed to ensure managed NLU service skills", exc_info=True)
 
 
-def _bounded_interval_seconds(raw: Any, *, default: float, minimum: float) -> float:
-    try:
-        interval_s = float(raw)
-    except Exception:
-        interval_s = float(default)
-    if not math.isfinite(interval_s):
-        interval_s = float(default)
-    if interval_s < float(minimum):
-        interval_s = float(minimum)
-    return float(interval_s)
-
-
-async def _run_bounded_async_cleanup(
-    operation: Callable[[], Awaitable[Any]],
-    *,
-    timeout_s: float = 1.0,
-) -> bool:
-    """Run best-effort transport cleanup without trapping the reconnect supervisor."""
-    try:
-        await asyncio.wait_for(operation(), timeout=max(0.01, float(timeout_s)))
-        return True
-    except asyncio.CancelledError:
-        # A transport close coroutine can surface its *own* cancellation after
-        # an EOF.  That must not be mistaken for cancellation of the bridge
-        # supervisor itself, otherwise one broken session permanently removes
-        # the reconnect loop.  Preserve only cancellation requested for the
-        # current task by its owner (shutdown, cutover, or explicit rearm).
-        current = asyncio.current_task()
-        cancelling = getattr(current, "cancelling", None) if current is not None else None
-        if callable(cancelling) and int(cancelling() or 0) > 0:
-            raise
-        return False
-    except Exception:
-        return False
-
-
-async def _close_route_tunnels_bounded(
-    tunnels: dict[str, dict[str, Any]],
-    *,
-    timeout_s: float = 1.0,
-) -> dict[str, int]:
-    """Close all live route tunnels concurrently without blocking reconnect."""
-    records = list(tunnels.items())
-
-    async def _close_one(record: dict[str, Any]) -> bool:
-        ws = record.get("ws") if isinstance(record, dict) else None
-        close = getattr(ws, "close", None)
-        if not callable(close):
-            return True
-        return await _run_bounded_async_cleanup(close, timeout_s=timeout_s)
-
-    results: list[bool] = []
-    try:
-        if records:
-            results = list(
-                await asyncio.gather(
-                    *(_close_one(record) for _, record in records),
-                    return_exceptions=False,
-                )
-            )
-    finally:
-        for key, _ in records:
-            tunnels.pop(key, None)
-    completed = sum(1 for value in results if value is True)
-    return {
-        "attempted": len(records),
-        "completed": completed,
-        "failed_or_timed_out": max(0, len(records) - completed),
-    }
-
-
-def _current_async_task_is_cancelling() -> bool:
-    current = asyncio.current_task()
-    if current is None:
-        return False
-    cancelling = getattr(current, "cancelling", None)
-    if not callable(cancelling):
-        return bool(current.cancelled())
-    try:
-        return int(cancelling() or 0) > 0
-    except Exception:
-        return bool(current.cancelled())
-
-
-def _hub_root_bridge_watchdog_interval_s() -> float:
-    return _bounded_interval_seconds(
-        os.getenv("HUB_ROOT_BRIDGE_WATCHDOG_INTERVAL_S", "2"),
-        default=2.0,
-        minimum=0.5,
-    )
-
-
-def _hub_route_max_chunk_raw_bytes(pending_warn_bytes: int | None = None) -> int:
-    default = 256 * 1024
-    minimum = 16 * 1024
-    maximum = 512 * 1024
-    try:
-        raw = int(str(os.getenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES") or str(default)).strip())
-    except Exception:
-        raw = default
-    raw = max(minimum, min(maximum, raw))
-    try:
-        warn = int(pending_warn_bytes or 0)
-    except Exception:
-        warn = 0
-    if warn > 0:
-        # Route chunks are JSON+base64 encoded before they hit the NATS writer.
-        # Keep each encoded publish below the pending-data warning budget when
-        # operators tune that budget down, otherwise a single YWS repair chunk
-        # can immediately trip route pressure.
-        overhead_reserve = min(32 * 1024, max(4 * 1024, warn // 16))
-        safe_budget = max(0, warn - overhead_reserve)
-        safe_raw = max(minimum, (safe_budget * 3) // 4)
-        safe_raw = max(minimum, (safe_raw // (4 * 1024)) * (4 * 1024))
-        raw = min(raw, safe_raw)
-    return int(raw)
-
-
-def _hub_route_normalize_resend_chunk_indexes(
-    missing: Any,
-    total: Any,
-    *,
-    max_items: int = 128,
-) -> list[int]:
-    try:
-        total_i = int(total or 0)
-    except Exception:
-        total_i = 0
-    if total_i <= 0:
-        return []
-    try:
-        max_i = max(1, int(max_items or 1))
-    except Exception:
-        max_i = 128
-    if not isinstance(missing, (list, tuple)):
-        return []
-    indexes: list[int] = []
-    seen: set[int] = set()
-    for item in missing:
-        try:
-            idx = int(item)
-        except Exception:
-            continue
-        if idx < 0 or idx >= total_i or idx in seen:
-            continue
-        indexes.append(idx)
-        seen.add(idx)
-        if len(indexes) >= max_i:
-            break
-    return indexes
-
-
-def _hub_route_path_token(path: Any) -> str:
-    token = str(path or "").strip().split("?", 1)[0].rstrip("/")
-    return token or "/"
-
-
-def _hub_route_semantic_flow_for_path(path: Any) -> str:
-    token = _hub_route_path_token(path)
-    if token == "/ws/subnet" or token.startswith("/ws/subnet/"):
-        return "subnet"
-    if token == "/yws" or token.startswith("/yws/"):
-        return "sync"
-    if token == "/ws" or token.startswith("/ws/"):
-        return "control"
-    return "route"
-
-
-def _hub_route_should_shed_sync_frame(
-    path: Any,
-    *,
-    pending_data_size: Any,
-    guardrail_active: Any,
-    frame_flush_pending_bytes: Any,
-    sync_shed_pending_bytes: Any = None,
-    payload_bytes: Any = 0,
-) -> bool:
-    if _hub_route_semantic_flow_for_path(path) != "sync":
-        return False
-    if bool(guardrail_active):
-        return True
-    try:
-        threshold = int(sync_shed_pending_bytes or 0)
-    except Exception:
-        threshold = 0
-    if threshold <= 0:
-        return False
-    try:
-        pending = max(0, int(pending_data_size or 0))
-    except Exception:
-        pending = 0
-    # YWS sync can legitimately emit a large first-state frame.  The route
-    # reader chunks large payloads after this check, so sync shedding uses its
-    # own high-water mark instead of the much smaller force-flush threshold.
-    return pending >= threshold
-
-
-def _hub_route_sync_frame_force_flush_enabled(raw: Any = None) -> bool:
-    if raw is None:
-        raw = os.getenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH")
-    token = str(raw if raw is not None else "0").strip().lower()
-    if not token:
-        return False
-    return token in {"1", "true", "yes", "on"}
-
-
-def _hub_route_should_force_flush_reply(
-    payload: Any,
-    *,
-    route_force_flush: Any,
-    route_sync_frame_force_flush: Any,
-    tunnel_flow: Any,
-    pending_data_size: Any,
-    frame_flush_pending_bytes: Any,
-) -> bool:
-    if not bool(route_force_flush):
-        return False
-    if not isinstance(payload, dict):
-        return False
-    t = payload.get("t")
-    if t in ("open_ack", "http_resp", "close"):
-        return True
-    if t not in ("frame", "chunk"):
-        return False
-
-    payload_flow = str(payload.get("flow") or "").strip().lower()
-    flow = payload_flow or str(tunnel_flow or "").strip().lower()
-    is_sync_frame = flow == "sync"
-    if is_sync_frame and t == "chunk":
-        try:
-            idx = int(payload.get("idx") or 0)
-        except Exception:
-            idx = 0
-        try:
-            total = int(payload.get("total") or 0)
-        except Exception:
-            total = 0
-        if bool(route_sync_frame_force_flush):
-            return total > 0
-        try:
-            threshold = int(frame_flush_pending_bytes or 0)
-        except Exception:
-            threshold = 0
-        if threshold <= 0:
-            return False
-        try:
-            pending = max(0, int(pending_data_size or 0))
-        except Exception:
-            pending = 0
-        if pending >= threshold:
-            return True
-        if total > 1 and 0 <= idx < total - 1:
-            return False
-        return False
-    if is_sync_frame and bool(route_sync_frame_force_flush):
-        return True
-    if is_sync_frame:
-        try:
-            threshold = int(frame_flush_pending_bytes or 0)
-        except Exception:
-            threshold = 0
-        if threshold <= 0:
-            return False
-        try:
-            pending = max(0, int(pending_data_size or 0))
-        except Exception:
-            pending = 0
-        return pending >= threshold
-
-    try:
-        threshold = int(frame_flush_pending_bytes or 0)
-    except Exception:
-        threshold = 0
-    if threshold <= 0:
-        return False
-    try:
-        pending = max(0, int(pending_data_size or 0))
-    except Exception:
-        pending = 0
-    return pending >= threshold
-
-
-def _hub_route_subnet_sync_payload_type(path: Any, message: Any) -> str:
-    if _hub_route_semantic_flow_for_path(path) != "subnet":
-        return ""
-    if not isinstance(message, str):
-        return ""
-    # Keep the hot path cheap: only parse likely member-link sync frames.
-    if "yjs.update" not in message and "yjs.node_state" not in message:
-        return ""
-    try:
-        payload = _json.loads(message)
-    except Exception:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    msg_type = str(payload.get("t") or "").strip()
-    if msg_type in {"yjs.update", "yjs.node_state"}:
-        return msg_type
-    return ""
-
-
-def _hub_route_should_drop_subnet_sync_frame(
-    path: Any,
-    payload_type: Any,
-    *,
-    pending_data_size: Any,
-    guardrail_active: Any,
-    frame_flush_pending_bytes: Any,
-    payload_bytes: Any = 0,
-) -> bool:
-    if _hub_route_semantic_flow_for_path(path) != "subnet":
-        return False
-    # yjs.node_state is the semantic, bounded state path for member-owned data.
-    # Raw yjs.update is best-effort sync and must not block member-link control
-    # messages such as ping/pong, rpc, or core update commands.
-    if str(payload_type or "").strip() != "yjs.update":
-        return False
-    if bool(guardrail_active):
-        return True
-    try:
-        threshold = int(frame_flush_pending_bytes or 0)
-    except Exception:
-        threshold = 0
-    if threshold <= 0:
-        return False
-    try:
-        pending = max(0, int(pending_data_size or 0))
-    except Exception:
-        pending = 0
-    try:
-        payload = max(0, int(payload_bytes or 0))
-    except Exception:
-        payload = 0
-    return pending >= threshold or payload >= threshold or (pending > 0 and pending + payload >= threshold)
-
-
-def _should_forward_node_status_to_members(payload: object) -> bool:
-    if not isinstance(payload, dict):
-        return True
-    meta = payload.get("_meta")
-    if not isinstance(meta, dict):
-        return True
-    return not bool(meta.get("subnet_origin_node_id"))
-
-
-def _webio_control_target_node_id(payload: object) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
-    return str(
-        payload.get("target_node_id")
-        or payload.get("node_target_id")
-        or payload.get("node_id")
-        or meta.get("target_node_id")
-        or meta.get("node_target_id")
-        or meta.get("node_id")
-        or ""
-    ).strip()
-
-
-def _should_forward_webio_control_to_members(payload: object) -> bool:
-    return bool(_webio_control_target_node_id(payload))
-
-
-def _node_status_dedupe_window_s() -> float:
-    raw = os.getenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "30") or "30"
-    return _bounded_interval_seconds(raw, default=30.0, minimum=1.0)
-
-
-def _node_status_emit_fingerprint(payload: object) -> tuple[Any, ...]:
-    if not isinstance(payload, dict):
-        return ("invalid",)
-    node_names = payload.get("node_names")
-    if isinstance(node_names, list):
-        normalized_node_names = tuple(str(item or "").strip() for item in node_names if str(item or "").strip())
-    else:
-        normalized_node_names = ()
-    connected_to_subnet = payload.get("connected_to_subnet")
-    if connected_to_subnet is None:
-        connected_to_subnet = payload.get("connected_to_hub")
-    connected_to_hub = payload.get("connected_to_hub")
-    if connected_to_hub is None:
-        connected_to_hub = connected_to_subnet
-    return (
-        str(payload.get("node_id") or "").strip(),
-        str(payload.get("subnet_id") or "").strip(),
-        str(payload.get("role") or "").strip(),
-        normalized_node_names,
-        str(payload.get("primary_node_name") or "").strip(),
-        bool(payload.get("ready")),
-        str(payload.get("node_state") or "").strip(),
-        bool(payload.get("draining")),
-        str(payload.get("route_mode") or "").strip(),
-        connected_to_subnet,
-        connected_to_hub,
-        str(payload.get("trigger") or "").strip(),
-    )
-
-
-def _should_emit_node_status(
-    *,
-    payload: object,
-    now: float,
-    last_emitted_at: float,
-    last_fingerprint: tuple[Any, ...] | None,
-    dedupe_window_s: float | None = None,
-) -> tuple[bool, tuple[Any, ...]]:
-    fingerprint = _node_status_emit_fingerprint(payload)
-    window_s = _node_status_dedupe_window_s() if dedupe_window_s is None else float(dedupe_window_s)
-    if (
-        last_fingerprint is not None
-        and fingerprint == last_fingerprint
-        and (now - float(last_emitted_at or 0.0)) < window_s
-    ):
-        return False, fingerprint
-    return True, fingerprint
-
-
-def _env_truthy(value: Any, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return str(value).strip().lower() not in ("", "0", "false", "off", "no")
-
-
-def _loop_hang_watchdog_enabled_from_env() -> bool:
-    if not _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG"), default=False):
-        return False
-    # The watchdog samples another thread's frame chain via sys._current_frames().
-    # Frame references can hold y_py YDoc/YMap locals and drop them on the
-    # watchdog thread, which trips PyO3's thread-affinity guard on Windows.
-    return _env_truthy(os.getenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE"), default=False)
-
-
-def _hub_channel_console_trace_enabled() -> bool:
-    return _env_truthy(os.getenv("HUB_CHANNEL_CONSOLE_TRACE"), default=False)
-
-
-def _hub_channel_console_allow_rl(key: str, msg: str) -> bool:
-    if _hub_channel_console_trace_enabled():
-        return True
-    text = str(msg or "")
-    detail_prefixes = (
-        "nats.ws_diag",
-        "nats.ws_eof",
-        "nats.env",
-        "nats.transport",
-        "nats.ws_hb",
-        "nats.ws_tag",
-        "nats.keepalive",
-        "nats.connect_try",
-        "nats.try",
-        "root.snap",
-        "root.snap_fail",
-        "nats.sidecar_route",
-        "nats.sidecar_unready",
-        "hub-route.probe_resend",
-        "hub-route.probe_resend_cfg",
-    )
-    if any(str(key or "").startswith(prefix) for prefix in detail_prefixes):
-        return False
-    if "[hub-io] nats ws diag:" in text:
-        return False
-    return True
-
-
-def _is_local_http_base(url: str) -> bool:
-    try:
-        u = urlparse(url)
-        host = (u.hostname or "").lower()
-        return host in ("127.0.0.1", "localhost")
-    except Exception:
-        return False
-
-
-def _hub_route_prefers_supervisor_public_status(path_norm: str, method: str) -> bool:
-    return method in ("GET", "HEAD") and path_norm in {
-        "/api/supervisor/public/update-status",
-        "/api/supervisor/public/memory-status",
-    }
-
-
-def _dev_without_supervisor() -> bool:
-    env_type = str(os.getenv("ENV_TYPE") or "").strip().lower()
-    if env_type != "dev":
-        return False
-    return str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _read_json_file_silent(path: Path) -> dict[str, Any]:
-    try:
-        if not path.exists():
-            return {}
-        payload = _json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except Exception:
-        return {}
-
-
-def _hub_route_node_status_supervisor_runtime(ctx: AgentContext) -> dict[str, Any]:
-    try:
-        base_dir = ctx.paths.base_dir()
-    except Exception:
-        base_dir = Path(os.getenv("ADAOS_BASE_DIR") or Path.home() / ".adaos").expanduser()
-    runtime_state = _read_json_file_silent((base_dir / "state" / "supervisor" / "runtime.json").resolve())
-    update_attempt = _read_json_file_silent((base_dir / "state" / "supervisor" / "update_attempt.json").resolve())
-    try:
-        from adaos.services.core_update import read_status as _read_core_update_status
-
-        update_status = _read_core_update_status() or {}
-    except Exception:
-        update_status = {}
-    supervisor_enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    runtime_url = str(runtime_state.get("runtime_url") or "").strip()
-    supervisor_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
-    if not supervisor_url and supervisor_enabled:
-        host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-        port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-        supervisor_url = f"http://{host}:{port}"
-    return {
-        "available": bool(supervisor_enabled or runtime_state),
-        "enabled": bool(supervisor_enabled),
-        "status": update_status if isinstance(update_status, dict) else {},
-        "attempt": update_attempt if isinstance(update_attempt, dict) else {},
-        "runtime": runtime_state if isinstance(runtime_state, dict) else {},
-        "runtime_url": runtime_url.rstrip("/") or None,
-        "supervisor_url": supervisor_url.rstrip("/") or None,
-        "_served_by": "hub_route_inline_node_status",
-    }
-
-
-def _dev_api_serve_core_update_sync_disabled() -> bool:
-    try:
-        from adaos.services.core_update_policy import core_update_reactions_disabled_reason
-
-        return core_update_reactions_disabled_reason() is not None
-    except Exception:
-        launch_mode = str(os.getenv("ADAOS_RUNTIME_LAUNCH_MODE") or "").strip().lower()
-        if launch_mode != "api_serve":
-            return False
-        return str(os.getenv("ADAOS_API_SERVE_ALLOW_CORE_UPDATE") or "").strip().lower() not in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-
-
-def _supervisor_local_bases() -> list[str]:
-    if _dev_without_supervisor():
-        return []
-    bases: list[str] = []
-    explicit = (
-        os.getenv("ADAOS_SUPERVISOR_URL")
-        or os.getenv("ADAOS_SUPERVISOR_BASE")
-        or ""
-    ).strip()
-    if explicit and _is_local_http_base(explicit):
-        bases.append(explicit.rstrip("/"))
-    supervisor_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip() or "8776"
-    bases.append(f"http://127.0.0.1:{supervisor_port}")
-    bases.append(f"http://localhost:{supervisor_port}")
-    seen: set[str] = set()
-    return [b for b in bases if (b not in seen and not seen.add(b))]
-
-
-_ROUTE_LOCAL_BASE_LOCK = threading.RLock()
-_ROUTE_LOCAL_BASE_CACHE: dict[str, Any] = {
-    "value": None,
-    "expires_at": 0.0,
-}
-_ROUTE_LOCAL_BASE_DIAG: dict[str, Any] = {
-    "local_base_discovery_total": 0,
-    "local_base_cache_hit_total": 0,
-    "local_base_error_total": 0,
-    "local_base_runtime_port_shortcut_total": 0,
-    "local_base_last_source": "",
-    "local_base_last_value": "",
-    "local_base_last_latency_ms": None,
-    "local_base_last_error": "",
-    "local_base_last_error_at": 0.0,
-    "local_base_last_discovered_at": 0.0,
-}
-
-
-def _route_local_base_cache_ttl_s() -> float:
-    raw = str(os.getenv("HUB_ROUTE_LOCAL_BASE_CACHE_TTL_S") or "").strip()
-    if not raw:
-        return 5.0
-    try:
-        value = float(raw)
-    except Exception:
-        return 5.0
-    if value < 0.0:
-        return 0.0
-    if value > 60.0:
-        return 60.0
-    return value
-
-
-def _runtime_port_local_http_base() -> str | None:
-    runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
-    if runtime_port.isdigit():
-        return f"http://127.0.0.1:{runtime_port}"
-    return None
-
-
-def _runtime_port_probe_candidates() -> list[str]:
-    bases: list[str] = []
-    runtime_port_base = _runtime_port_local_http_base()
-    if runtime_port_base:
-        bases.append(runtime_port_base)
-    bases.extend(
-        [
-            "http://127.0.0.1:8778",
-            "http://localhost:8778",
-            "http://127.0.0.1:8777",
-            "http://localhost:8777",
-        ]
-    )
-    seen: set[str] = set()
-    return [b for b in bases if (b not in seen and not seen.add(b))]
-
-
-def _route_state_dir_from_ctx(ctx: Any | None) -> Path | None:
-    try:
-        paths = getattr(ctx, "paths", None)
-        raw = getattr(paths, "state_dir", None)
-        value = raw() if callable(raw) else raw
-        if value:
-            return Path(value).expanduser().resolve()
-    except Exception:
-        return None
-    return None
-
-
-def _route_state_dir_fallback() -> Path | None:
-    try:
-        base_dir = str(os.getenv("ADAOS_BASE_DIR") or "").strip()
-        if base_dir:
-            return Path(base_dir).expanduser().resolve() / "state"
-        return Path(os.path.expanduser("~")).expanduser().resolve() / ".adaos" / "state"
-    except Exception:
-        return None
-
-
-def _active_runtime_state_local_http_bases(ctx: Any | None = None) -> list[str]:
-    """Return supervisor-advertised local runtime bases without network probing.
-
-    Route handlers run on the runtime event loop and must not synchronously probe
-    localhost on the hot path. Supervisor state and node_runtime.json are useful
-    fallbacks during early bootstrap and slot transitions, but they are persisted
-    files and can briefly lag behind the process that is handling this message.
-    """
-    state_dir = _route_state_dir_from_ctx(ctx) or _route_state_dir_fallback()
-    if state_dir is None:
-        return []
-
-    paths = [
-        state_dir / "supervisor" / "runtime.json",
-        state_dir / "node_runtime.json",
-    ]
-    bases: list[str] = []
-    for path in paths:
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                payload = _json.load(fh)
-        except Exception:
-            continue
-        if not isinstance(payload, dict):
-            continue
-
-        for key in ("runtime_url", "hub_url"):
-            value = str(payload.get(key) or "").strip().rstrip("/")
-            if value and _is_local_http_base(value):
-                bases.append(value)
-
-        try:
-            port_raw = payload.get("runtime_port")
-            port = int(port_raw) if port_raw is not None else 0
-            host = str(payload.get("runtime_host") or "127.0.0.1").strip() or "127.0.0.1"
-            if port > 0 and host in ("127.0.0.1", "localhost"):
-                bases.append(f"http://127.0.0.1:{port}")
-        except Exception:
-            pass
-
-    seen: set[str] = set()
-    return [b for b in bases if (b not in seen and not seen.add(b))]
-
-
-def _append_local_http_base(bases: list[str], value: str | None) -> None:
-    base = str(value or "").strip().rstrip("/")
-    if base and _is_local_http_base(base):
-        bases.append(base)
-
-
-def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
-    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
-    if path_norm in ("/api/node/status", "/api/ping", "/healthz"):
-        return (0.5, 1.2)
-    if re.match(r"^/api/skills/[^/]+/files/", path_norm):
-        return (3.0, 300.0)
-    if path_norm.startswith("/api/media/files/"):
-        return (3.0, 300.0)
-    if path_norm == "/api/tools/call":
-        # Root allows tools/call to take up to 60s. Keep the local hop below
-        # that ceiling, but do not make member-link tools fail under normal
-        # cross-node latency.
-        return (1.5, 55.0)
-    return (1.5, 2.5)
-
-
-def _hub_route_tools_call_has_idempotency(body: bytes | None = None) -> bool:
-    if not body:
-        return False
-    try:
-        payload = _json.loads(bytes(body).decode("utf-8", errors="replace"))
-    except Exception:
-        return False
-    if not isinstance(payload, dict):
-        return False
-    for key in ("idempotency_key", "request_id"):
-        if str(payload.get(key) or "").strip():
-            return True
-    arguments = payload.get("arguments")
-    if isinstance(arguments, dict):
-        meta = arguments.get("_meta") if isinstance(arguments.get("_meta"), dict) else {}
-        for key in ("idempotency_key", "request_id"):
-            if str(arguments.get(key) or meta.get(key) or "").strip():
-                return True
-    return False
-
-
-def _hub_route_should_retry_http_upstream_error(
-    *, method: str, path: str, error_kind: str, body: bytes | None = None
-) -> bool:
-    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
-    method_norm = str(method or "").strip().upper()
-    kind = str(error_kind or "").strip()
-    if path_norm == "/api/tools/call":
-        if kind in {"ConnectionError", "ConnectTimeout", "NewConnectionError"}:
-            return True
-        if kind == "ReadTimeout" and _hub_route_tools_call_has_idempotency(body):
-            return True
-        # Other failures may happen after the tool committed a side effect.
-        # Execution stays at-most-once unless the caller supplied idempotency.
-        return False
-    if kind == "ReadTimeout" and (
-        method_norm not in {"GET", "HEAD"}
-    ):
-        return False
-    return True
-
-
-def _hub_route_parse_resend_delays(raw: Any, *, max_delay_s: float = 10.0, max_count: int = 8) -> list[float]:
-    text = str(raw or "").strip()
-    if not text:
-        return []
-    delays: list[float] = []
-    seen: set[float] = set()
-    for item in text.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            delay = float(item)
-        except Exception:
-            continue
-        if delay <= 0:
-            continue
-        try:
-            delay = min(float(delay), max(0.001, float(max_delay_s)))
-        except Exception:
-            delay = min(float(delay), 10.0)
-        if delay in seen:
-            continue
-        seen.add(delay)
-        delays.append(delay)
-        if len(delays) >= max(1, int(max_count)):
-            break
-    return delays
-
-
-def _hub_route_should_resend_http_resp(path: Any) -> bool:
-    path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
-    if path_norm in (
-        "/api/node/status",
-        "/api/ping",
-        "/healthz",
-        "/api/supervisor/public/update-status",
-        "/api/node/ui/diagnostics",
-        "/api/node/yjs/runtime",
-    ):
-        return True
-    return bool(re.match(r"^/api/node/yjs/webspaces/[^/]+/materialization$", path_norm))
-
-
-def _probe_runtime_http_base(sess: Any, *, base: str, timeout_s: float) -> bool:
-    try:
-        response = sess.get(
-            str(base).rstrip("/") + "/api/ping",
-            headers={"Accept": "application/json"},
-            timeout=max(0.1, float(timeout_s)),
-        )
-        if int(response.status_code) != 200:
-            return False
-        payload = response.json()
-        if not isinstance(payload, dict):
-            return False
-        if not bool(payload.get("ok")):
-            return False
-        return str(payload.get("service") or "").strip() == "adaos-runtime"
-    except Exception:
-        return False
-
-
-def _observe_route_local_base_diag(**details: Any) -> None:
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG.update(details)
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
-    try:
-        observe_hub_root_route_runtime(**snapshot)
-    except Exception:
-        pass
-
-
-def _note_route_local_base_shortcut(*, source: str, value: str | None) -> None:
-    now = time.time()
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG["local_base_runtime_port_shortcut_total"] = int(
-            _ROUTE_LOCAL_BASE_DIAG.get("local_base_runtime_port_shortcut_total") or 0
-        ) + 1
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = str(source or "").strip() or "runtime_port_env"
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = str(value or "").strip()
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_discovered_at"] = now
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
-    try:
-        observe_hub_root_route_runtime(**snapshot)
-    except Exception:
-        pass
-
-
-def _discover_active_runtime_local_base(
-    *, timeout_s: float = 0.6, allow_network_probe: bool = False
-) -> str | None:
-    try:
-        import requests  # type: ignore
-    except Exception:
-        return None
-
-    now = time.time()
-    ttl_s = _route_local_base_cache_ttl_s()
-    with _ROUTE_LOCAL_BASE_LOCK:
-        cached_value = str(_ROUTE_LOCAL_BASE_CACHE.get("value") or "").strip() or None
-        cached_expires_at = float(_ROUTE_LOCAL_BASE_CACHE.get("expires_at") or 0.0)
-        if cached_value and cached_expires_at > now:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_cache_hit_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_cache_hit_total") or 0
-            ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = "cache"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = cached_value
-            snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
-            try:
-                observe_hub_root_route_runtime(**snapshot)
-            except Exception:
-                pass
-            return cached_value
-
-        # Route handling runs on the event loop. When we have no cached local base,
-        # skip synchronous network probing in the hot path and fall back to static
-        # localhost candidates instead of blocking the loop on connect timeouts.
-        if not allow_network_probe:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_cache_miss_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_cache_miss_total") or 0
-            ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = "cache_miss_no_probe"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = ""
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = "network_probe_skipped"
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error_at"] = now
-            snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
-            try:
-                observe_hub_root_route_runtime(**snapshot)
-            except Exception:
-                pass
-            return None
-
-    started = time.monotonic()
-    result: str | None = None
-    result_source = ""
-    last_error = ""
-    sess = requests.Session()
-    try:
-        try:
-            sess.trust_env = False
-        except Exception:
-            pass
-
-        for supervisor_base in _supervisor_local_bases():
-            try:
-                response = sess.get(
-                    supervisor_base + "/api/supervisor/public/update-status",
-                    headers={"Accept": "application/json"},
-                    timeout=max(0.1, float(timeout_s)),
-                )
-                if int(response.status_code) != 200:
-                    last_error = f"status:{response.status_code}"
-                    continue
-                payload = response.json()
-                runtime = payload.get("runtime") if isinstance(payload, dict) else {}
-                runtime_url = str((runtime or {}).get("runtime_url") or "").strip().rstrip("/")
-                if runtime_url and _is_local_http_base(runtime_url):
-                    result = runtime_url
-                    result_source = "supervisor_public_status"
-                    break
-            except Exception as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                continue
-        if not result:
-            probe_timeout_s = max(0.1, min(float(timeout_s), 0.35))
-            for runtime_base in _runtime_port_probe_candidates():
-                if _probe_runtime_http_base(sess, base=runtime_base, timeout_s=probe_timeout_s):
-                    result = runtime_base.rstrip("/")
-                    result_source = "runtime_port_probe"
-                    last_error = ""
-                    break
-    finally:
-        try:
-            sess.close()
-        except Exception:
-            pass
-
-    latency_ms = round((time.monotonic() - started) * 1000.0, 3)
-    with _ROUTE_LOCAL_BASE_LOCK:
-        _ROUTE_LOCAL_BASE_DIAG["local_base_discovery_total"] = int(
-            _ROUTE_LOCAL_BASE_DIAG.get("local_base_discovery_total") or 0
-        ) + 1
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_latency_ms"] = latency_ms
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_source"] = (
-            str(result_source or "").strip()
-            if result
-            else "supervisor_public_status_failed"
-        )
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_value"] = str(result or "").strip()
-        _ROUTE_LOCAL_BASE_DIAG["local_base_last_discovered_at"] = time.time()
-        if result:
-            _ROUTE_LOCAL_BASE_CACHE["value"] = result
-            _ROUTE_LOCAL_BASE_CACHE["expires_at"] = time.time() + max(0.0, ttl_s)
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = ""
-        else:
-            _ROUTE_LOCAL_BASE_DIAG["local_base_error_total"] = int(
-                _ROUTE_LOCAL_BASE_DIAG.get("local_base_error_total") or 0
-            ) + 1
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error"] = last_error
-            _ROUTE_LOCAL_BASE_DIAG["local_base_last_error_at"] = time.time()
-            _ROUTE_LOCAL_BASE_CACHE["value"] = None
-            _ROUTE_LOCAL_BASE_CACHE["expires_at"] = 0.0
-        snapshot = dict(_ROUTE_LOCAL_BASE_DIAG)
-    try:
-        observe_hub_root_route_runtime(**snapshot)
-    except Exception:
-        pass
-    return result
-
-
-def _build_hub_route_http_bases(
-    *, path_norm: str, method: str, cfg: Any | None, ctx: Any | None = None
-) -> list[str]:
-    bases: list[str] = []
-    env_base = (
-        os.getenv("ADAOS_SELF_BASE_URL")
-        or os.getenv("ADAOS_BASE")
-        or os.getenv("ADAOS_API_BASE")
-        or ""
-    ).strip()
-    cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
-    runtime_port = str(os.getenv("ADAOS_RUNTIME_PORT") or "").strip()
-    runtime_port_base = _runtime_port_local_http_base()
-    state_bases = _active_runtime_state_local_http_bases(ctx)
-
-    if _hub_route_prefers_supervisor_public_status(path_norm, method):
-        bases.extend(_supervisor_local_bases())
-
-    if runtime_port_base:
-        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
-        bases.append(runtime_port_base)
-    if runtime_port.isdigit():
-        bases.append(f"http://127.0.0.1:{runtime_port}")
-    _append_local_http_base(bases, env_base)
-    _append_local_http_base(bases, cfg_base)
-    bases.extend(state_bases)
-
-    if not runtime_port_base and not state_bases:
-        active_runtime_base = _discover_active_runtime_local_base()
-        if active_runtime_base:
-            _append_local_http_base(bases, active_runtime_base)
-
-    # Keep runtime ports as fallback even for the browser-safe supervisor status path.
-    bases.extend(["http://127.0.0.1:8778", "http://127.0.0.1:8777"])
-
-    seen_bases: set[str] = set()
-    return [b for b in bases if (b not in seen_bases and not seen_bases.add(b))]
-
-
-def _http_base_to_ws_base(base: str) -> str:
-    value = str(base or "").strip().rstrip("/")
-    if value.startswith("https://"):
-        return "wss://" + value[len("https://"):]
-    if value.startswith("http://"):
-        return "ws://" + value[len("http://"):]
-    return value
-
-
-def _build_hub_route_ws_bases(
-    *, cfg: Any | None, path: str | None = None, ctx: Any | None = None
-) -> list[str]:
-    bases: list[str] = []
-    role = str(getattr(cfg, "role", None) or "").strip().lower() or None
-    bases.extend(realtime_sidecar_route_tunnel_ws_bases(path=path, role=role))
-    env_base = str(os.getenv("ADAOS_SELF_BASE_URL") or "").strip()
-    cfg_base = str(getattr(cfg, "hub_url", None) or "").strip()
-    runtime_port_base = _runtime_port_local_http_base()
-    state_bases = _active_runtime_state_local_http_bases(ctx)
-
-    if runtime_port_base:
-        _note_route_local_base_shortcut(source="runtime_port_env", value=runtime_port_base)
-        bases.append(_http_base_to_ws_base(runtime_port_base))
-    if env_base and _is_local_http_base(env_base):
-        bases.append(_http_base_to_ws_base(env_base))
-    if cfg_base and _is_local_http_base(cfg_base):
-        bases.append(_http_base_to_ws_base(cfg_base))
-    for state_base in state_bases:
-        bases.append(_http_base_to_ws_base(state_base))
-
-    if not runtime_port_base and not state_bases:
-        active_runtime_base = _discover_active_runtime_local_base()
-        if active_runtime_base:
-            bases.append(_http_base_to_ws_base(active_runtime_base))
-
-    bases.extend(["ws://127.0.0.1:8778", "ws://127.0.0.1:8777"])
-
-    seen_bases: set[str] = set()
-    return [b for b in bases if (b not in seen_bases and not seen_bases.add(b))]
-
-
-def _hub_root_transport_kind(server: str | None) -> str | None:
-    text = str(server or "").strip().lower()
-    if not text:
-        return None
-    if text.startswith(("ws://", "wss://")):
-        return "ws"
-    if text.startswith(("nats://", "tls://")):
-        return "tcp"
-    if text.startswith(("http://", "https://")):
-        return "sidecar"
-    return None
-
-
-def _hub_nats_prefer_dedicated() -> str:
-    raw = os.getenv("HUB_NATS_PREFER_DEDICATED")
-    text = str(raw or "").strip()
-    if text:
-        return text
-    return "0"
-
-
-def _normalize_hub_nats_ws_url(value: str | None) -> str | None:
-    normalized = normalize_nats_ws_url(value, fallback=None)
-    if _hub_nats_prefer_dedicated() == "1":
-        return normalized
-    if normalized == PUBLIC_NATS_WS_DEDICATED:
-        return public_nats_ws_api()
-    return normalized
-
-
-def _hub_public_ws_candidates(base_url: str | None) -> list[str]:
-    prefer_dedicated = _hub_nats_prefer_dedicated()
-    normalized_base = _normalize_hub_nats_ws_url(base_url)
-
-    candidates: list[str] = []
-    if normalized_base and nats_url_uses_websocket(normalized_base):
-        candidates.append(normalized_base)
-    for item in public_nats_ws_candidates(
-        prefer_dedicated=prefer_dedicated,
-        allow_dedicated_fallback=prefer_dedicated == "1",
-    ):
-        if item not in candidates:
-            candidates.append(item)
-    return candidates
-
-
-def _hub_public_tcp_candidates(base_url: str | None) -> list[str]:
-    prefer_dedicated = _hub_nats_prefer_dedicated()
-    candidates: list[str] = []
-    base = str(base_url or "").strip()
-    if base:
-        candidates.append(base)
-    for item in public_nats_tcp_candidates(
-        prefer_dedicated=prefer_dedicated,
-        allow_dedicated_fallback=prefer_dedicated == "1",
-    ):
-        if item not in candidates:
-            candidates.append(item)
-    return candidates
-
-
-def _hub_route_force_close_no_upstream_s() -> float:
-    raw = os.getenv("HUB_ROUTE_FORCE_CLOSE_NO_UPSTREAM_S")
-    if raw is None:
-        return 1.5
-    try:
-        value = float(str(raw).strip() or "0")
-    except Exception:
-        value = 0.0
-    if value <= 0.0:
-        return 0.0
-    if value < 0.25:
-        value = 0.25
-    if value > 30.0:
-        value = 30.0
-    return value
-
-
-def _runtime_candidate_mode() -> bool:
-    return runtime_transition_role() == "candidate"
-
-
-def _hub_root_candidate_passive_mode() -> bool:
-    return _runtime_candidate_mode()
-
-
-def _nats_url_needs_public_ws_refresh(value: str | None) -> bool:
-    raw = str(value or "").strip()
-    if not raw or nats_url_uses_websocket(raw):
-        return False
-    try:
-        parsed = urlparse(raw)
-    except Exception:
-        return False
-    if (parsed.scheme or "").lower() != "nats":
-        return False
-    host = str(parsed.hostname or "").strip().lower()
-    if not host:
-        return False
-    return host == "api.inimatic.com" or host.endswith(".inimatic.com")
-
-
-def _build_realtime_sidecar_fallback_candidates(
-    candidates: Sequence[str | None],
-    *,
-    local_candidate: str,
-) -> list[str]:
-    allow_tcp_fallback = _env_truthy(os.getenv("ADAOS_REALTIME_ALLOW_TCP_FALLBACK"), default=False)
-    fallback_candidates: list[str] = []
-    for item in candidates:
-        try:
-            candidate_text = str(item or "").strip()
-        except Exception:
-            continue
-        if not candidate_text or candidate_text == local_candidate:
-            continue
-        if candidate_text.startswith("ws"):
-            if candidate_text not in fallback_candidates:
-                fallback_candidates.append(candidate_text)
-            continue
-        if not allow_tcp_fallback:
-            continue
-        if candidate_text not in fallback_candidates:
-            fallback_candidates.append(candidate_text)
-    return fallback_candidates
-
-
-def _should_quarantine_nats_candidate(candidate: str | None, *, local_sidecar_url: str | None = None) -> bool:
-    candidate_text = str(candidate or "").strip()
-    if not candidate_text:
-        return False
-    sidecar_text = str(local_sidecar_url or "").strip()
-    if sidecar_text and candidate_text == sidecar_text:
-        return False
-    return True
-
-
-def _hub_nats_sidecar_failover_on_transient() -> bool:
-    # A healthy sidecar listener owns the hub-root transport boundary.  Moving
-    # an established runtime back and forth between the local byte relay and a
-    # direct WSS client creates two competing reconnect loops and repeatedly
-    # rebuilds all NATS subscriptions.  Direct fallback remains available when
-    # the sidecar listener itself is unavailable; quarantining a live listener
-    # after a remote EOF is an explicit emergency opt-in only.
-    return _env_truthy(os.getenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT"), default=False)
-
-
-def _hub_nats_sidecar_quarantine_s() -> float:
-    try:
-        value = float(os.getenv("HUB_NATS_SIDECAR_QUARANTINE_S", "300") or "300")
-    except Exception:
-        value = 300.0
-    if value < 5.0:
-        return 5.0
-    if value > 3600.0:
-        return 3600.0
-    return value
-
-
-def _resolve_nats_log_server(
-    *,
-    server: str | None = None,
-    current_attempt: str | None = None,
-    connected_server: str | None = None,
-) -> str | None:
-    for value in (server, current_attempt, connected_server):
-        text = str(value or "").strip()
-        if text:
-            return text
-    return None
-
-
-def _hub_id_from_nats_user(value: str | None) -> str | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    if raw.lower().startswith("hub_") and len(raw) > 4:
-        return raw[4:]
-    return None
-
-
-def _canonical_hub_nats_identity(
-    *,
-    local_hub_id: str | None,
-    nats_user: str | None,
-    response_hub_id: str | None = None,
-) -> tuple[str | None, str | None]:
-    resolved_hub_id = (
-        str(response_hub_id or "").strip()
-        or _hub_id_from_nats_user(nats_user)
-        or str(local_hub_id or "").strip()
-        or None
-    )
-    if resolved_hub_id:
-        return resolved_hub_id, f"hub_{resolved_hub_id}"
-    resolved_user = str(nats_user or "").strip() or None
-    return None, resolved_user
-
-
-def _core_update_status_fingerprint(status: Any) -> str:
-    payload = status if isinstance(status, dict) else {}
-    try:
-        encoded = _json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str)
-    except Exception:
-        encoded = repr(payload)
-    return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
-
-
-def _core_update_waits_for_supervisor_convergence(status: Any) -> bool:
-    payload = status if isinstance(status, dict) else {}
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    # A warm candidate boots while the shared transition can still be in
-    # prepare/countdown.  The same process is promoted without another
-    # bootstrap pass, so arming this bridge only at ``root_promoted`` races
-    # with fast cutover and can lose the terminal validate event.  Follow the
-    # whole bounded transition from candidate boot until a terminal state; the
-    # supervisor remains the sole writer/authority for the status file.
-    if state in {
-        "preparing",
-        "countdown",
-        "draining",
-        "stopping",
-        "restarting",
-        "applying",
-        "validated",
-    }:
-        return True
-    return state == "succeeded" and phase in {
-        "apply",
-        "launch",
-        "shutdown",
-        "root_promoted",
-        "root_promotion_pending",
-    }
-
-
-async def _watch_supervisor_core_update_convergence(
-    bus: Any,
-    *,
-    read_status: Callable[[], dict[str, Any]],
-    initial_status: dict[str, Any],
-    poll_interval_s: float = 0.5,
-    timeout_s: float = 300.0,
-) -> dict[str, Any]:
-    last_status = dict(initial_status or {})
-    last_fingerprint = _core_update_status_fingerprint(last_status)
-    deadline = time.monotonic() + max(0.0, float(timeout_s))
-    emitted_total = 0
-    while _core_update_waits_for_supervisor_convergence(last_status) and time.monotonic() < deadline:
-        await asyncio.sleep(max(0.05, float(poll_interval_s)))
-        try:
-            current = read_status()
-        except Exception:
-            continue
-        current = dict(current) if isinstance(current, dict) else {}
-        fingerprint = _core_update_status_fingerprint(current)
-        if fingerprint == last_fingerprint:
-            continue
-        last_status = current
-        last_fingerprint = fingerprint
-        await bus.emit(
-            "core.update.status",
-            current,
-            source="supervisor.convergence",
-            actor="system",
-        )
-        emitted_total += 1
-    return {
-        "ok": not _core_update_waits_for_supervisor_convergence(last_status),
-        "emitted_total": emitted_total,
-        "timed_out": _core_update_waits_for_supervisor_convergence(last_status),
-        "status": last_status,
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class BootstrapService:
