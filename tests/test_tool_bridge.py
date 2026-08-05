@@ -1035,6 +1035,68 @@ def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkey
     assert payloads[0]["_meta"]["tool"] == "prompt_engineer_skill:prompt_select_project"
 
 
+def test_call_tool_projects_bounded_conversation_context_into_meta(monkeypatch) -> None:
+    payloads: list[dict[str, object]] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_dev_tool(
+            self,
+            _skill_name: str,
+            _tool_name: str,
+            payload: dict[str, object],
+            timeout: float | None = None,
+        ) -> dict[str, object]:
+            payloads.append(payload)
+            return {"ok": True}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-context")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="builder_skill:chat",
+                arguments={"text": "Show the process", "webspace_id": "dev1"},
+                context={
+                    "webspace_id": "dev1",
+                    "conversation_id": "conv.builder.project",
+                    "thread_id": "prompt-project:scenario:workflow_lab_dashboard",
+                    "conversation_topic_id": "prompt-project:scenario:workflow_lab_dashboard",
+                    "message_id": "message-1",
+                    "widgetId": "builder-conversation",
+                    "permissions": ["workflow.admin"],
+                    "principal": {"id": "forged"},
+                    "unbounded": {"secret": "must-not-cross"},
+                },
+                dev=True,
+            ),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    meta = payloads[0]["_meta"]
+    assert meta["conversation_id"] == "conv.builder.project"
+    assert meta["thread_id"] == "prompt-project:scenario:workflow_lab_dashboard"
+    assert meta["conversation_topic_id"] == "prompt-project:scenario:workflow_lab_dashboard"
+    assert meta["message_id"] == "message-1"
+    assert meta["action_context"] == {"widgetId": "builder-conversation"}
+    assert "permissions" not in meta
+    assert "principal" not in meta
+    assert "unbounded" not in meta
+
+
 def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch) -> None:
     calls: list[str] = []
 

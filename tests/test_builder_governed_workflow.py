@@ -278,13 +278,13 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     target_built, target_root = _build_builder_package(tmp_path, target_definition)
     migration = {
         "schema": "adaos.workflow.definition_migration.v1",
-        "migration_id": "builder_change_1_0_to_1_1",
+        "migration_id": "builder_change_1_0_to_current",
         "workflow_type": "builder.change",
         "from_definition_version": "1.0.0",
-        "to_definition_version": "1.1.0",
+        "to_definition_version": target_definition["definition_version"],
         "allowed_source_states": ["prototype_editing"],
         "state_map": {"prototype_editing": "prototype_editing"},
-        "context_set": {"builder_package_cutover": "1.1.0"},
+        "context_set": {"builder_package_cutover": target_definition["definition_version"]},
         "context_remove": [],
         "authority": {
             "actors": ["user:local"],
@@ -300,7 +300,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
         target_definition=target_definition,
         migration=migration,
         expected_generation=before["generation"],
-        idempotency_key="builder-cutover-1.1.0",
+        idempotency_key="builder-cutover-current",
         target_package_digest=target_built.ref.digest,
         target_binding_digest=target_built.ref.workflow_binding_digest,
         now="2026-08-04T01:00:00+00:00",
@@ -312,7 +312,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
         target_definition=target_definition,
         migration=migration,
         expected_generation=before["generation"],
-        idempotency_key="builder-cutover-1.1.0",
+        idempotency_key="builder-cutover-current",
         target_package_digest=target_built.ref.digest,
         target_binding_digest=target_built.ref.workflow_binding_digest,
         now="2026-08-04T01:00:00+00:00",
@@ -330,7 +330,7 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     )
     after_restart = restarted.describe("scenario", "recipes")["governed"]
     assert after_restart == migrated["instance"]
-    assert after_restart["definition_version"] == "1.1.0"
+    assert after_restart["definition_version"] == target_definition["definition_version"]
     assert after_restart["package_digest"] == target_built.ref.digest
 
     rolled_back = restarted.rollback_in_flight_migration(

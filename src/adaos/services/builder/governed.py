@@ -19,7 +19,7 @@ from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
 BUILDER_CHANGE_WORKFLOW_TYPE = "builder.change"
-BUILDER_CHANGE_DEFINITION_VERSION = "1.1.0"
+BUILDER_CHANGE_DEFINITION_VERSION = "1.2.0"
 _BUILDER_CHANGE_RESOURCE = Path(__file__).with_name("builder_change.workflow.json")
 
 

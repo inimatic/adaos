@@ -1,0 +1,53 @@
+{
+  "schema": "adaos.workflow.definition_migration.v1",
+  "migration_id": "builder_change_phase11_1_1_to_1_2",
+  "workflow_type": "builder.change",
+  "from_definition_version": "1.1.0",
+  "to_definition_version": "1.2.0",
+  "allowed_source_states": [
+    "ready",
+    "prototype_editing",
+    "prototype_review",
+    "automation_ready",
+    "automation_waiting",
+    "verification",
+    "prototype_derivation_waiting",
+    "trial_ready",
+    "trial_waiting",
+    "trial_review",
+    "publication_ready",
+    "publication_waiting",
+    "reconciliation_required",
+    "published",
+    "cancelled",
+    "superseded"
+  ],
+  "state_map": {
+    "ready": "ready",
+    "prototype_editing": "prototype_editing",
+    "prototype_review": "prototype_review",
+    "automation_ready": "automation_ready",
+    "automation_waiting": "automation_waiting",
+    "verification": "verification",
+    "prototype_derivation_waiting": "prototype_derivation_waiting",
+    "trial_ready": "trial_ready",
+    "trial_waiting": "trial_waiting",
+    "trial_review": "trial_review",
+    "publication_ready": "publication_ready",
+    "publication_waiting": "publication_waiting",
+    "reconciliation_required": "reconciliation_required",
+    "published": "published",
+    "cancelled": "cancelled",
+    "superseded": "superseded"
+  },
+  "context_set": {
+    "review_confirmation_contract": "explicit_rich_review",
+    "definition_change_reason": "confirmation_policy_alignment"
+  },
+  "context_remove": [],
+  "authority": {
+    "actors": ["user:local", "builder.migration"],
+    "permissions": ["workflow.definition.migrate"]
+  },
+  "explanation": "Bind reviewed Builder transitions to the explicit rich-review confirmation policy without changing in-flight business state."
+}

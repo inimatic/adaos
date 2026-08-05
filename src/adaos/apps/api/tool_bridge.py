@@ -1344,6 +1344,67 @@ class ToolCall(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+_TOOL_CONTEXT_META_KEYS = frozenset(
+    {
+        "webspace_id",
+        "source_webspace_id",
+        "request_webspace_id",
+        "reply_webspace_id",
+        "builder_source_webspace_id",
+        "conversation_id",
+        "conversation_thread_id",
+        "conversation_topic_id",
+        "thread_id",
+        "topic_id",
+        "channel_id",
+        "dialog_channel_id",
+        "route_id",
+        "transport",
+        "chat_id",
+        "message_id",
+        "request_id",
+        "turn_trace_id",
+        "input_event_kind",
+        "locale",
+        "language",
+        "builder_context",
+        "builder_topic",
+    }
+)
+_TOOL_ACTION_CONTEXT_KEYS = frozenset(
+    {"widgetId", "widgetType", "nodeId", "eventId", "button"}
+)
+
+
+def _project_tool_context_meta(
+    meta: Mapping[str, Any] | None,
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project bounded routing context into the skill-call metadata plane.
+
+    ``ToolCall.context`` used to be retained by the HTTP envelope but discarded
+    before skill execution.  That silently detached conversational calls from
+    their thread/project.  Only routing and presentation identity is projected;
+    authority, permissions, principals, and arbitrary caller data remain out of
+    ``_meta``.  Explicit argument metadata wins for compatibility with trusted
+    internal callers.
+    """
+
+    projected = dict(meta or {})
+    source = dict(context or {})
+    for key in _TOOL_CONTEXT_META_KEYS:
+        if key in source and key not in projected:
+            projected[key] = copy.deepcopy(source[key])
+    action_context = {
+        key: copy.deepcopy(source[key])
+        for key in _TOOL_ACTION_CONTEXT_KEYS
+        if key in source
+    }
+    if action_context and "action_context" not in projected:
+        projected["action_context"] = action_context
+    return projected
+
+
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     mode, key, entry = _tool_call_idempotency_begin(body, request)
@@ -1405,8 +1466,8 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
 
     trace = attach_http_trace_headers(request.headers, response.headers)
     setup_done_at = time.perf_counter()
-    meta = _mapping(payload.get("_meta"))
     context = _mapping(body.context)
+    meta = _project_tool_context_meta(_mapping(payload.get("_meta")), context)
     action_source = _first_text(meta.get("action_source"), context.get("action_source"))
     if not action_source:
         meta["action_source"] = "api_tool_call"

@@ -1,7 +1,7 @@
 {
   "schema": "adaos.workflow.definition.v1",
   "workflow_type": "builder.change",
-  "definition_version": "1.1.0",
+  "definition_version": "1.2.0",
   "aggregate_type": "builder.change",
   "initial_state": "ready",
   "states": [

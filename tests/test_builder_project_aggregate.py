@@ -84,7 +84,7 @@ def test_project_aggregate_is_schema_valid_and_reference_oriented(service: Build
             "relation": "contains_issue",
         }
     ]
-    assert project["workflow_definition_version"] == "1.1.0"
+    assert project["workflow_definition_version"] == "1.2.0"
     assert project["policy"]["risk_policy"]["fail_closed"] is True
     assert project["explanation"]["status"] == "active"
     assert "request" not in project["changes"][0]
