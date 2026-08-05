@@ -264,6 +264,11 @@ Other pages and devices in `dev1-dev` remain attached throughout, and the
 replacement page joins their one shared Yjs room. Focused regression suites
 pass 126/126 for YDoc and 29/29 for the early AdaOS route.
 
+Client commits `f03d1bc` and `2a6d09f` were pushed to `main`; CI advanced the
+package to `0.0.269`. Firebase Hosting run `30988292760` completed successfully,
+and public `https://inimatic.com/version.json` reports
+`0.0.269+2a6d09f`.
+
 Client commit `734023b` was first pushed to `main`; CI advanced the package to
 `0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
 pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra

@@ -1554,7 +1554,8 @@ Autonomy, evidence, and acceptance:
   and replaces YWS only after an isolated make-before-break sync/stability
   probe. This changes transport selection, not state ownership: every page and
   device for one `webspace_id` still converges through the same Yjs document.
-  Focused YDoc and AdaOS client suites pass 126/126 and 29/29.
+  Focused YDoc and AdaOS client suites pass 126/126 and 29/29. Client
+  `0.0.269+2a6d09f` was deployed by successful Firebase run `30988292760`.
 - [x] `[must]` Correlate direct peers with the originating browser page and
   client build. RTC signaling and peer snapshots carry
   `peer_id + browser_session_id + client_build_id + client_build_version`, so
