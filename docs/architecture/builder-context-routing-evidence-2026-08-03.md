@@ -280,6 +280,37 @@ render snapshot; otherwise it preserves the former one-command transition.
 Focused exact/mismatch/unavailable cases and the complete App/YDoc navigation
 matrix pass 249/249, and the production bundle succeeds.
 
+The routed repeat showed that the first proof was still started only from
+`YDocService.doInitFromHub`, about four seconds after Angular had already
+presented `Checking destination`. It also created a fresh YWS/RTC session in
+parallel, so transport recovery was visually conflated with navigation even
+though no `desktop.scenario.set` occurred. Client commit `665f29f` moves the
+same authoritative read to the beginning of `AppComponent.ngOnInit`; later
+YDoc startup joins that in-flight promise. The overlay resolver runs as soon as
+the proof completes and does not wait for YWS or direct promotion. A failed
+early read is not cached and the normal single-command transition remains
+available. The combined focused suite passes 250/250 and the production build
+succeeds.
+
+Firebase Hosting run `30993467779` deployed this follow-up as public client
+`0.0.271+665f29f`. In the first post-deploy sample, service-worker activation
+reloaded older diagnostic tabs and therefore mixed multiple page startups into
+one trace. A subsequent steady-state run started at
+`2026-08-05T09:36:23.095Z`: the first authoritative `dev1-dev` snapshot was
+served at `09:36:27.093Z`, no `desktop.scenario.set` was emitted, YWS opened at
+`09:36:37.582Z`, and the new page's direct DataChannels opened at
+`09:36:43.663Z`. Destination resolution therefore no longer waits for either
+transport. The approximately four seconds before the first proof belong to
+web bundle/bootstrap startup; the later relay-to-direct interval is transport
+readiness and remains independently observable.
+
+The same trace recorded four legitimate page-scoped peers for one browser
+device and a changing approximately 298 KiB full projection sent to each peer
+roughly once per second. This is not an identical-payload retry and not part of
+destination resolution. It remains the separate delta-projection roadmap item;
+the navigation fast path must neither close other tabs nor use transport
+suppression to conceal that amplification.
+
 Client commit `734023b` was first pushed to `main`; CI advanced the package to
 `0.0.264` at `081be46`. The follow-up DataChannel fix and version bump were
 pushed through `b8b4c68`. Firebase Hosting run `30940038325` and infra

@@ -1558,13 +1558,18 @@ Autonomy, evidence, and acceptance:
   `0.0.269+2a6d09f` was deployed by successful Firebase run `30988292760`.
 - [x] `[must]` Remove the control-channel wait and state-changing no-op from an
   already satisfied Preview link. Startup now checks the authoritative
-  materialization endpoint in parallel with control setup and accepts it only
+  materialization endpoint before channel/transport startup and accepts it only
   for an exact, ready, non-degraded Webspace/scenario snapshot. Mismatch,
   timeout, unavailable evidence, or an unusable render snapshot fail closed to
   the existing single `desktop.scenario.set`; an unsuccessful read does not
-  suppress the one-shot control-open continuation. Client commit `f9e9b96`
-  passes the combined 249/249 YDoc and navigation resolver tests and a
-  production build.
+  suppress the one-shot control-open continuation. App and YDoc initialization
+  coalesce on one in-flight proof, and destination resolution runs immediately
+  when it finishes instead of waiting for a new YWS/WebRTC session. Client
+  commits `f9e9b96` and `665f29f` pass the combined 250/250 YDoc and navigation
+  resolver tests and a production build. Firebase run `30993467779` deployed
+  `0.0.271+665f29f`; a steady-state routed trace emitted no scenario command,
+  resolved from the authoritative snapshot before YWS, and let direct
+  DataChannels promote independently.
 - [x] `[must]` Correlate direct peers with the originating browser page and
   client build. RTC signaling and peer snapshots carry
   `peer_id + browser_session_id + client_build_id + client_build_version`, so

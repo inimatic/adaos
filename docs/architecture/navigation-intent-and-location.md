@@ -106,8 +106,11 @@ is not yet confirmed, the client resumes its current location only for the
 zone/subnet handoff and enters the destination after that decision.
 
 When `expected_scenario_id` is present on an already confirmed subnet, startup
-first performs a bounded read-only materialization preflight in parallel with
-control setup. The preflight is sufficient only when the server reports the
+starts a bounded read-only materialization preflight from `AppComponent`
+before channel and transport startup. `YDocService` joins the same in-flight
+proof during its later initialization, so the client performs one snapshot
+read rather than one read per startup layer. The preflight is sufficient only
+when the server reports the
 exact Webspace and scenario, `ready` and non-degraded materialization, and a
 complete renderable snapshot. That proof closes destination resolution without
 issuing `desktop.scenario.set`; direct transport promotion remains independent.
