@@ -788,11 +788,14 @@ later development capsule, and are re-evaluated after each Prototype revision.
 A violation returns the Change to `changes_requested`; an evaluator never
 silently repairs the interface or grants approval.
 
-Client memory or local storage may cache an unsent text draft only. Added
-Review records, decisions, and dispositions are backend-owned durable state.
-The compatibility browser overlay may still hold unstructured annotations
-locally until its store migration; only annotations explicitly compiled through
-the typed Review command have durable acceptance semantics in this slice.
+Client memory or local storage may cache an unsent text draft only. On Review
+Apply, `builder_skill` promotes each structured browser comment into a stable
+`adaos.builder.review_anchor.v1` before constructing the next development
+capsule. The anchor retains Change, revision, semantic target, author, and the
+original element snapshot. Added Review records, decisions, and dispositions
+are backend-owned durable state; the public Review SDK supports withdraw,
+dismiss, accept-as-constraint, convert-to-Issue, supersede, and resolve. A
+renderer may clear only comments acknowledged in the accepted packet.
 
 ## Risk-Aware Deterministic Actions
 
@@ -820,6 +823,19 @@ generation/precondition; isolated writes and Trial require confirmation; and
 Workspace activation, Publication, and destructive operations require the rich
 review path. Web and Telegram therefore consume one decision contract instead
 of maintaining separate button allowlists.
+
+Rollback uses the same channel-neutral rule. An applied release projects
+`adaos.builder.rollback_plan.v1` for `skill`, `scenario`, `nlu_overlay`, or
+`entity_alias`. Every plan has exactly three semantic steps:
+
+1. inspect the recorded rollback target without mutation;
+2. execute the recorded compensation through a Pending Action;
+3. run the surface-specific health/materialization/NLU/entity probe.
+
+The restore step carries one stable idempotency key derived from the immutable
+operation ref and one project activation conflict key. A delivery retry returns
+the recorded outcome and cannot execute the compensation twice. An unknown
+outcome requires reconciliation before another attempt.
 
 Risk admission does not by itself make a control executable. A mutating
 command is projected only when its declared effect/activity has a registered

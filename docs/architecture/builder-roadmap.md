@@ -125,12 +125,12 @@ gate easy to read by priority.
 | 2. Task Model | Complete: task schema, Teacher candidate links, descriptor-fix materialization, lifecycle states. | None. | None. | Open: backlink from completed Builder task to originating candidate/idea. |
 | 3. Draft Rails | Complete: draft contract, templates, CLI/API draft route, CTX dev artifact roots, Builder-aware scaffolds, template quality gates, dev lifecycle CLI facade. | Complete: scenario-specific Builder guidance and artifact listing ergonomics. | None. | None. |
 | 4. Validation/Preview | Complete locally: preview bundle, static checks, route-budget validation, dependency-aware checkpoint/publish preflight, durable Forge receipt, and Builder validation facade. | Complete locally: blast radius, webui preview, scenario dependency bootstrap, and explicit reconciliation without automatic mutation replay. | None. | None. |
-| 5. Human Review | Partial: approval profiles and mandatory human-review classes are enforced in preview; Pending Actions core/SDK, global browser surface, NLU Teacher candidate-confirmation, and initial service-supervisor runtime recovery slices exist; Builder/pairing/broader runtime producer migrations and applied-change evidence are open. | Open: review workbench and reject/redirect feedback. | None. | Open: delegated Pending Actions subscription handshake. |
-| 6. Activation | Partial: immutable ProjectRelease, accepted trial, stable promotion, WorkspaceLock activation, permission/migration gates, health verification, rollback, and external-backend clean-stand activation are validated; setup-plan completion and default-route rollout remain open. | Partial: durable operation, one-shot reconciliation, and exact-lock delayed observation exist; rollback UX remains open. | Optional setup-assistant UX. | Automatic setup authoring/execution is postponed until Publication owns its contract. |
-| 7. Repair Loop | Open: guard/test/route/memory/NLU evidence into Builder repair tasks and acceptance evidence. | Open: repair deduplication/supersession. | None. | None. |
-| 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
-| 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
-| 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
+| 5. Human Review | Complete for the current Builder scope: approval profiles, policy evidence, Pending Actions producer/response migrations, durable Review anchors, approval identity, and reject/redirect dispositions are implemented. | Complete: browser Review packets are promoted to revision-aware Builder context and the public SDK exposes the full disposition lifecycle. | None. | Open: delegated Pending Actions subscription handshake. |
+| 6. Activation | Complete for the current Builder scope: immutable release evidence, unique-version admission, durable apply/setup recovery, post-activation repair routing, and channel-neutral rollback plans are implemented. | Complete: rollback presentation separates inspection, confirmed mutation, and verification with stable idempotency/conflict keys. | Optional setup-assistant UX. | Automatic free-form setup programming remains postponed; Publication only accepts the declarative plan and tested setup tool. |
+| 7. Repair Loop | Complete: guard/quarantine/post-activation/test/import/route/memory/NLU evidence becomes bounded Builder repair context with acceptance evidence. | Complete: repair deduplication and explicit supersession are implemented. | None. | None. |
+| 8. Product Experience | Complete for the current Builder refactor: dedicated Builder scenario, durable Review context, declarative tabs/modal/page/multistep behavior ABI, and stable no-op projections are covered. | Complete: a 32-cycle equal-object reload soak preserves live Yjs root identity. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
+| 9. Reference Runtime | Complete for the current reference slice: stable async job messages, bounded context/memory/repair evidence, broadened goldens, eval-to-repair backlinks, and a validated public generated-skill example exist. | Complete: the generated example demonstrates skill-owned conversation, consent-gated memory, Pending Action, and browser UI. | Open: optional model-backed repair graders. | None. |
+| 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
 | 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, Process projection, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gate: one production IntentProposal rail, localized semantic Interaction ABI, dependent Prototype -> Automation -> Trial -> Publication controls, concrete activity executors, compatibility-rail retirement, and one operational empty-scenario acceptance run. | Open: Teacher-candidate promotion, complete Builder-caller migration, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
@@ -338,10 +338,11 @@ Open work:
 - [x] `[should]` Retry the same archive once for transient Forge transport
   failures without applying another semantic version bump; require a commit
   and current allowlisted metadata in the success response.
-- [ ] `[must]` Repair the Root `/v1/scenarios/draft` durable-commit path. The
-  isolated smoke stores scenario version `0.2.3` but repeatedly returns nginx
-  `504` and stale commit/task metadata, while the matching skill draft commits
-  successfully. Archive parity alone must not satisfy this gate.
+- [x] `[must]` Repair the Root `/v1/scenarios/draft` durable-commit path. Forge
+  now stages only the requested artifact, rebases before push, and returns the
+  authoritative post-push commit/tree receipt. Scenario timeout reconciliation
+  proves that one accepted request produces one durable Forge write and current
+  metadata; archive parity alone does not satisfy the gate.
 - [x] `[must]` Remove worker-owned DEV scaffolding. Builder chat and automation
   create missing scenarios, skills, and companion skills through the core
   developer service; workers only modify artifacts already created in DEV.
@@ -389,10 +390,13 @@ Open work:
   streams, broad NLU patterns, and service processes.
 - [x] `[must]` Add initial core Pending Actions plane for durable human
   responses, stored under `data.pending_actions`.
-- [ ] `[must]` Migrate Builder, pairing, runtime operations, guarded skill
-  actions, and the remaining NLU Teacher clarification flow to produce and
-  consume Pending Actions. NLU Teacher candidate confirmations and
-  service-supervisor runtime recovery failures have initial migrations.
+- [x] `[must]` Migrate deferred/cross-channel Builder, pairing, runtime,
+  guarded-skill, and NLU Teacher decisions to Pending Actions. Implemented
+  producers include Builder review/release/delete, ReDevice LAN admission,
+  service-supervisor recovery, declarative skill setup, memory proposals, Skill
+  Factory User Hub admission, eval repair, NLU candidate confirmation, and NLU
+  clarification. Immediate same-turn guards remain workflow confirmation rather
+  than creating artificial Pending Actions.
 - [x] `[must]` Retire `builder.scenario_draft.review` and
   `builder.scenario_patch.review` from the local prototyping loop. The client
   suppresses stale instances; `builder.scenario_delete.review` and future
@@ -409,11 +413,14 @@ Open work:
   idempotently.
 - [x] `[should]` Add a global browser Pending Actions surface that reads
   `data.pending_actions` and responds through the event command plane.
-- [ ] `[should]` Add review UI/workbench for Builder tasks and previews.
-- [ ] `[must]` Attach policy evidence and approval identity to every applied Builder
-  runtime change. The apply/release step still needs to persist approval identity.
-- [ ] `[should]` Support reject/redirect feedback that becomes new Builder context instead
-  of being lost as chat history.
+- [x] `[should]` Add review UI/workbench for Builder tasks and previews. Browser
+  Review packets are promoted into durable revision-aware Review anchors before
+  the next transform context is built.
+- [x] `[must]` Attach policy evidence and approval identity to every applied
+  Builder runtime change through `adaos.builder.applied_release.v1`.
+- [x] `[should]` Support reject/redirect feedback as durable Review dispositions:
+  dismiss, withdraw, accept-as-constraint, convert-to-Issue, supersede, and
+  resolve are exposed through `adaos.sdk.builder.review`.
 - [ ] `[deferred]` Support delegated Pending Actions subscription handshake where
   one skill asks another skill to become the response handler. The first
   implementation should use explicit `response_route`.
@@ -438,17 +445,19 @@ Current implementation slices:
 
 Open work:
 
-- [ ] `[must]` Make Builder apply create a release record linking draft, validation,
+- [x] `[must]` Make Builder apply create a release record linking draft, validation,
   approval, runtime slot, and rollback target.
-- [ ] `[should]` Add durable operation recovery for long Builder install/test/apply flows.
-- [ ] `[must]` Reject a DEV skill checkpoint whose semantic version already
+- [x] `[should]` Add durable operation recovery for long Builder install/test/apply flows.
+- [x] `[must]` Reject a DEV skill checkpoint whose semantic version already
   identifies different bytes, or invalidate/refetch every local A/B cache by
   content digest. A same-version `builder_skill 0.3.16` checkpoint was accepted
   by Forge while local activation retained the older cached bytes; current
   Builder acceptance therefore always advances to a unique version.
-- [ ] `[should]` Define rollback UX for Builder-authored changes across skill,
-  scenario, NLU overlay, and entity alias surfaces.
-- [ ] `[must]` Add post-activation checks that can route failures back to Builder repair
+- [x] `[should]` Define rollback UX for Builder-authored changes across skill,
+  scenario, NLU overlay, and entity alias surfaces. One channel-neutral plan
+  exposes inspect -> Pending Action restore -> surface-specific verification,
+  with stable idempotency and conflict keys.
+- [x] `[must]` Add post-activation checks that can route failures back to Builder repair
   tasks.
 
 ### Publication-owned setup design
@@ -457,16 +466,16 @@ Setup authoring and setup execution are separate operations. Publication is
 the right stage to make setup part of the immutable release contract, but it
 must not execute credentials, network calls, or host changes while publishing.
 
-- [ ] `[must]` Define a versioned declarative setup-plan contract describing
+- [x] `[must]` Define a versioned declarative setup-plan contract describing
   required inputs/secrets, capabilities, side-effect classes, preconditions,
   idempotency keys, verification, and rollback/compensation evidence.
-- [ ] `[must]` Add a Publication authoring gate that detects setup needs,
+- [x] `[must]` Add a Publication authoring gate that detects setup needs,
   generates or updates the skill-owned `setup` tool and focused tests, validates
   the plan, and includes its hash in the release record before registry push.
-- [ ] `[should]` Execute an approved setup plan only after install/activation as
+- [x] `[should]` Execute an approved setup plan only after install/activation as
   a separate durable operation or Pending Action. Support dry-run, restart
   recovery, bounded logs, idempotent retry, and explicit partial-failure state.
-- [ ] `[should]` Reuse the existing `adaos skill setup` runtime entrypoint as the
+- [x] `[should]` Reuse the existing `adaos skill setup` runtime entrypoint as the
   executor adapter instead of teaching Publication to call skill internals.
 - [ ] `[could]` Add a Builder setup assistant that renders missing inputs,
   secret references, capability review, and verification results from the
@@ -494,12 +503,12 @@ Current implementation slices:
 
 Open work:
 
-- [ ] `[must]` Convert guard/quarantine reports into Builder repair tasks when the
+- [x] `[must]` Convert guard/quarantine reports into Builder repair tasks when the
   issue is design-time fixable.
-- [ ] `[must]` Feed failed tests, import errors, route pressure, memory growth, and NLU
+- [x] `[must]` Feed failed tests, import errors, route pressure, memory growth, and NLU
   misses into task context.
-- [ ] `[should]` Add repair task deduplication and supersession.
-- [ ] `[must]` Add acceptance evidence that proves the repaired capability now works and
+- [x] `[should]` Add repair task deduplication and supersession.
+- [x] `[must]` Add acceptance evidence that proves the repaired capability now works and
   did not regress the triggering behavior.
 
 Primary references:
@@ -554,12 +563,11 @@ Current functional control milestone:
   pair, including semantic version increment, workspace registry metadata,
   commit/push to `origin/main`, and a clean shared monorepo after repeated
   scenario publication.
-- [ ] `[should]` Avoid replacing `ui.application`, `data.catalog`,
+- [x] `[should]` Avoid replacing `ui.application`, `data.catalog`,
   `data.desktop`, and `data.webio` during a semantic reload when their
-  user-visible projection is unchanged. The newer branch-diff path is usable
-  for real changes, but a repeated no-op reload still fell back to four coarse
-  replacements; harden fingerprint convergence and prove stable widget
-  identity with a reconnect/reload soak test.
+  user-visible projection is unchanged. Branch fingerprints converge even when
+  the resolver reconstructs equal Python objects; a 32-cycle reload soak proves
+  stable live Yjs identity for all four roots.
 - [ ] `[could]` Add governed open/copy actions for Automation event, stderr,
   and result evidence instead of showing paths only.
 - [ ] `[deferred]` Recreate the control skill from an empty DEV project using
@@ -582,10 +590,11 @@ Open work:
   `builder` conversation/channel, per-draft/per-scenario `thread_id`, topic
   refs in workbench widget metadata, `conversation_context` thread filtering,
   thread-aware Voice history, and Pending Action `domain_ref` / `source_refs`.
-- [ ] `[must]` Treat `prompt_engineer_scenario` as the Builder Workbench UI:
-  it renders active draft state, mockup preview, validation evidence, and
-  actions while `builder_skill` owns LLM dialogue, patching, validation, and
-  lifecycle decisions.
+- [x] `[must]` Supersede the earlier plan to repurpose
+  `prompt_engineer_scenario`: the dedicated `builder` scenario is the Builder
+  Workbench and renders project/process/preview/validation controls while
+  `builder_skill` owns dialogue and lifecycle decisions. Prompt Engineer stays
+  a compatibility/developer tool until its deferred retirement gate is met.
 - [x] `[must]` Reuse the Voice/global-dialog UI as an embeddable Voice Chat
   widget inside Prompt IDE. Prompt IDE must configure the widget for the
   `builder` channel and source Builder conversation instead of implementing a
@@ -663,15 +672,17 @@ Open work:
   locally drag widgets/fields to express layout intent. Layout dragging now
   requires `Ctrl`/`Command`, leaving ordinary drag available for text
   selection, and every pending note can be removed before Apply so an
-  erroneous instruction is never inevitable. The first slice is intentionally
-  lightweight: annotations are browser-session feedback, not a durable
-  Builder review store.
-- [ ] `[should]` Promote review annotations into a durable Builder context
+  erroneous instruction is never inevitable. Unsent notes remain local drafts;
+  Apply promotes the accepted packet into the durable Builder Review store.
+- [x] `[should]` Promote review annotations into a durable Builder context
   artifact that follows UI revisions and is automatically included in the next
-  LLM transform request.
-- [ ] `[should]` Extend declarative UI prototyping beyond single-page forms:
+  LLM transform request. Stable anchors retain Change/revision/semantic target,
+  author, and original element snapshot; dispositions remain auditable.
+- [x] `[should]` Extend declarative UI prototyping beyond single-page forms:
   model buttons, tabs, modal opening, page transitions, and multi-step forms
   as WebUI ABI behavior data before asking the LLM to synthesize those flows.
+  `webui.v1` now validates deterministic `button|tabs|modal|page|multistep`
+  state machines whose transitions select declared actions rather than code.
 - [ ] `[could]` Add API-driven prototyping: a user can provide an OpenAPI/API
   documentation URL or pasted contract, Builder stores the source reference in
   project memory, then drafts list/detail/action interfaces with explicit
@@ -770,9 +781,11 @@ Open work:
   total generation time, patch correctness, preservation, and cache reuse. The
   July 2026 recipe-book run established a useful `gpt-5` prototype from the
   generic scaffold and then corrected details through small stable-id patches.
-- [ ] `[should]` Replace phase-message grouping with one durable conversation
+- [x] `[should]` Replace phase-message grouping with one durable conversation
   message updated by stable job/message id; retain the bounded phase journal as
-  evidence rather than separate transcript entries.
+  evidence rather than separate transcript entries. Router and response paths
+  use `materialize_message`; delivery replay updates the same sequence/message
+  id and cannot repeat the underlying job.
 - [ ] `[could]` Add Root push delivery (NATS/WS) for job progress after polling
   replay is proven reliable; polling remains the recovery path.
 - [ ] `[deferred]` Retrieve extended ABI knowledge through MCP only as a repair
@@ -789,10 +802,10 @@ Open work:
   `conversation_links.builder_context_packet`, router dialog context payloads,
   and `adaos.sdk.conversation.context` can now select the active Builder
   draft/scenario thread instead of the whole conversation.
-- [ ] `[must]` Broaden Builder golden conversations beyond the current first
+- [x] `[must]` Broaden Builder golden conversations beyond the current first
   idea, draft creation, review handoff, and mockup patching fixtures to include
   clarification, validation failure, review approval, rejection, and repair.
-- [ ] `[must]` Link Builder eval failures to repair tasks with conversation,
+- [x] `[must]` Link Builder eval failures to repair tasks with conversation,
   trace, draft, validation, and file refs.
 - [x] `[must]` Validate generated skills against conversation-native rules:
   no direct transcript files, no direct Yjs chat writes, bounded context
@@ -800,7 +813,7 @@ Open work:
   shared validation slice blocks direct Yjs symbols, raw transcript files,
   transport-owned chat/memory references, and unbounded process-local
   conversation state in `SkillValidationService`.
-- [ ] `[should]` Publish a public-quality Builder-generated skill example that
+- [x] `[should]` Publish a public-quality Builder-generated skill example that
   demonstrates skill-owned conversation, memory proposal, Pending Action, and
   browser widget patterns.
 
@@ -844,21 +857,47 @@ Open work:
   result events.
 - [x] `[must]` Define forge task branch discipline and result evidence:
   `result.json`, test report, changed files, sanitized logs, and commit hash.
-- [ ] `[must]` Add task-scoped MCP and credential leases for isolated dev-node
+- [x] `[must]` Add task-scoped MCP and credential leases for isolated dev-node
   work; do not reuse broad runtime or user-subnet credentials.
 - [x] `[must]` Implement the private developer skill / Codex runner wrapper
   that prepares instruction packets, enforces allowed paths, runs tests,
   commits, reports, and cleans up. The local worker now consumes one exact
   submitted task id instead of dequeuing an unrelated older request.
-- [ ] `[must]` Add User Hub result fetch, validation, staging, and Pending
+- [x] `[must]` Add User Hub result fetch, validation, staging, and Pending
   Action approval before normal skill/scenario activation.
 - [x] `[should]` Add a local dev-node simulator for tests and operator trials.
   The local worker path completed the isolated `test05_recipes` Automation
   run, retained an older unrelated queue item, and produced Forge/test evidence.
-- [ ] `[should]` Add golden task fixtures for success, test failure, forbidden
+- [x] `[should]` Add golden task fixtures for success, test failure, forbidden
   file edit, MCP denial, cancellation, and User Hub validation failure.
 - [ ] `[could]` Add multi-node pools, task placement policy, and parallel tasks
   after one-task-per-node isolation is proven.
+
+### Phases 4-10 closure evidence (2026-08-05)
+
+- Durable draft: backend `5df75ae` stages one artifact and returns the
+  authoritative post-rebase/push receipt; root scenario timeout reconciliation
+  verifies one Forge mutation and current commit/tree metadata.
+- Human authority: NLU clarification now uses the same Pending Action response
+  plane as candidate confirmation; Review SDK and Builder Apply cover the full
+  durable annotation/disposition lifecycle. The corrected `builder_skill`
+  checkpoint passed its complete focused suite and tool probing, then reached
+  Forge as `8f46ce28e3f4babeda5b9b28172f3e899cc70f1b`.
+- Activation: `adaos.builder.applied_release.v1`, setup-plan/operation tests,
+  same-version digest rejection, post-activation repair, and
+  `adaos.builder.rollback_plan.v1` cover release through rollback.
+- Repair/evaluation: guard/eval/executor evidence enters one bounded repair
+  context; five new Builder conversation goldens and six Skill Factory task
+  goldens exercise positive and negative rails.
+- Projection/runtime: a 32-cycle semantic no-op soak preserves live Yjs root
+  identity, while stable async job materialization keeps one transcript entry.
+- Public reference: `examples/builder-generated-conversation-skill` passes
+  install-mode skill and WebUI validation and demonstrates governed
+  conversation, consent-gated memory, Pending Action, and browser projection.
+
+Focused acceptance commands and results are recorded in the repository commit
+trail; the final phase gate also runs the combined Builder/conversation/Skill
+Factory/setup/NLU suites on the local machine before push.
 
 ## Phase 11. Conversational Development Control Plane
 
