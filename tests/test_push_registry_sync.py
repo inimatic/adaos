@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
@@ -153,6 +154,65 @@ def test_skill_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Path)
     assert git.pull_calls == []
     assert git.commit_calls[0]["subpath"] == ["skills/demo_skill", "registry.json"]
     assert git.push_calls == [str(workspace)]
+
+
+def test_skill_push_bumps_bound_conversational_version_atomically(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    skill_dir = workspace / "skills" / "conversation_skill"
+    (skill_dir / "conversational").mkdir(parents=True)
+    (skill_dir / "skill.yaml").write_text(
+        "name: conversation_skill\nversion: 1.2.3\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "conversational" / "manifest.yaml").write_text(
+        "schema: adaos.conversational.package_manifest.v1\npackage_id: conversation_skill\npackage_kind: skill\nversion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    git = _FakeGit()
+    monkeypatch.setattr("adaos.services.skill.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+    manager = object.__new__(SkillManager)
+    manager.caps = _FakeCaps()
+    manager.settings = SimpleNamespace(git_author_name="Ada Tester", git_author_email="tester@adaos.local")
+    manager.ctx = _workspace_ctx(workspace, git)
+
+    manager.push("conversation_skill", "publish conversation skill")
+
+    component = yaml.safe_load((skill_dir / "skill.yaml").read_text(encoding="utf-8"))
+    package = yaml.safe_load((skill_dir / "conversational" / "manifest.yaml").read_text(encoding="utf-8"))
+    assert component["version"] == package["version"] == "1.2.4"
+
+
+def test_skill_push_refuses_preexisting_conversational_version_drift(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    skill_dir = workspace / "skills" / "drifted_skill"
+    (skill_dir / "conversational").mkdir(parents=True)
+    component_path = skill_dir / "skill.yaml"
+    package_path = skill_dir / "conversational" / "manifest.yaml"
+    component_path.write_text(
+        "name: drifted_skill\nversion: 1.2.3\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    package_path.write_text(
+        "schema: adaos.conversational.package_manifest.v1\npackage_id: drifted_skill\npackage_kind: skill\nversion: 1.2.2\n",
+        encoding="utf-8",
+    )
+    original_component = component_path.read_bytes()
+    original_package = package_path.read_bytes()
+    git = _FakeGit()
+    monkeypatch.setattr("adaos.services.skill.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+    manager = object.__new__(SkillManager)
+    manager.caps = _FakeCaps()
+    manager.settings = SimpleNamespace(git_author_name="Ada Tester", git_author_email="tester@adaos.local")
+    manager.ctx = _workspace_ctx(workspace, git)
+
+    with pytest.raises(ValueError, match="version drift"):
+        manager.push("drifted_skill", "must fail")
+
+    assert component_path.read_bytes() == original_component
+    assert package_path.read_bytes() == original_package
+    assert git.commit_calls == []
 
 
 def test_skill_push_without_bump_catches_registry_up_to_manifest(monkeypatch, tmp_path: Path) -> None:
@@ -367,6 +427,35 @@ def test_scenario_push_updates_registry_and_commits_it(monkeypatch, tmp_path: Pa
     assert git.pull_calls == []
     assert git.commit_calls[0]["subpath"] == ["scenarios/welcome_scene", "registry.json"]
     assert git.push_calls == [str(workspace)]
+
+
+def test_scenario_push_bumps_bound_conversational_version_atomically(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    scenario_dir = workspace / "scenarios" / "conversation_scene"
+    (scenario_dir / "conversational").mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: conversation_scene\nversion: 2.0.0\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    (scenario_dir / "conversational" / "manifest.yaml").write_text(
+        "schema: adaos.conversational.package_manifest.v1\npackage_id: conversation_scene\npackage_kind: scenario\nversion: 2.0.0\n",
+        encoding="utf-8",
+    )
+    git = _FakeGit()
+    ctx = _workspace_ctx(workspace, git)
+    monkeypatch.setattr("adaos.services.scenario.manager.get_git_availability", lambda base_dir=None: SimpleNamespace(enabled=True), raising=False)
+    monkeypatch.setattr("adaos.services.scenario.manager.get_ctx", lambda: ctx)
+    manager = object.__new__(ScenarioManager)
+    manager.caps = _FakeCaps()
+    manager.git = git
+    manager.ctx = ctx
+
+    manager.push("conversation_scene", "publish conversation scenario")
+
+    component = yaml.safe_load((scenario_dir / "scenario.yaml").read_text(encoding="utf-8"))
+    package = yaml.safe_load((scenario_dir / "conversational" / "manifest.yaml").read_text(encoding="utf-8"))
+    assert component["version"] == package["version"] == "2.0.1"
 
 
 def test_scenario_push_rejects_missing_scenario_yaml_declaration(monkeypatch, tmp_path: Path) -> None:

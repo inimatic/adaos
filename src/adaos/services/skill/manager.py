@@ -56,6 +56,7 @@ from adaos.services.skill.resolver import SkillPathResolver
 from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
 from adaos.services.semver import bump_version
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.services.component_manifest_versioning import write_component_version_atomically
 import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -1712,9 +1713,11 @@ class SkillManager:
         payload["version"] = bump_version(existing_version, bump_index(effective_bump))
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         self._stamp_core_compatibility_for_push(payload)
-        skill_yaml.write_text(
-            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n",
-            encoding="utf-8",
+        write_component_version_atomically(
+            skill_yaml,
+            payload,
+            previous_version=existing_version,
+            next_version=str(payload["version"]),
         )
         return str(payload.get("version") or "")
 
