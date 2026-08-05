@@ -190,6 +190,9 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
         "publish": "record_publication_success",
         "publication_failed": "record_publication_failure",
         "publication_unknown": "record_publication_unknown",
+        "reconcile_automation": "reconcile_automation",
+        "reconcile_verification": "reconcile_verification",
+        "reconcile_publication": "reconcile_publication",
     }
     return mapping.get(action)
 
@@ -222,6 +225,9 @@ def legacy_action_for_command(command: str) -> str | None:
         "record_publication_success": "publish",
         "record_publication_failure": "publication_failed",
         "record_publication_unknown": "publication_unknown",
+        "reconcile_automation": "reconcile_automation",
+        "reconcile_verification": "reconcile_verification",
+        "reconcile_publication": "reconcile_publication",
     }
     return mapping.get(str(command or "").strip())
 

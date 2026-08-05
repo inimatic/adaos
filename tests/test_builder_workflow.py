@@ -1343,6 +1343,102 @@ def test_invalid_cross_phase_transition_is_rejected(
         service.transition("scenario", "recipes", "publish", metadata={"version": "0.1.1"})
 
 
+def test_unknown_publication_requires_explicit_evidenced_reconciliation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-publication-recovery",
+            "request": "Publish the verified recipe change.",
+            "issues": [
+                {
+                    "issue_id": "I-publication-recovery",
+                    "title": "Publish the verified recipe change",
+                    "lane": "automation",
+                    "status": "resolved",
+                    "acceptance_criteria": ["The accepted candidate is published once."],
+                }
+            ],
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.recovery"}),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.recovery", "version": "0.1.1"},
+    )
+    _prepare_candidate(
+        service,
+        {
+            "candidate_id": "recipes-0-1-1-recovery",
+            "release": "recipes@0.1.1",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_accepted",
+        metadata={
+            "candidate_id": "recipes-0-1-1-recovery",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed(),
+    )
+    unknown = service.transition(
+        "scenario",
+        "recipes",
+        "publication_unknown",
+        metadata={"error": "activation result needs reconciliation"},
+    )["workflow"]
+
+    assert unknown["governed"]["state"] == "reconciliation_required"
+    assert unknown["delivery"]["status"] == "unknown"
+    recovered = service.transition(
+        "scenario",
+        "recipes",
+        "reconcile_publication",
+        metadata={
+            "evidence_refs": [
+                "activation:failed-and-rolled-back",
+                "activation-recovery:admitted",
+            ],
+            "idempotency_key": "reconcile-publication:1",
+        },
+    )["workflow"]
+
+    assert recovered["governed"]["state"] == "publication_ready"
+    assert recovered["delivery"]["status"] == "accepted"
+    assert recovered["publication"]["status"] == "ready"
+    assert recovered["reconciliation_history"][-1]["previous_error"] == (
+        "activation result needs reconciliation"
+    )
+    resumed = service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"idempotency_key": "publish-after-recovery:1"}),
+    )["workflow"]
+    assert resumed["governed"]["state"] == "publication_waiting"
+    assert resumed["delivery"]["status"] == "publication_waiting"
+
+
 def test_new_automation_iteration_reopens_a_terminal_result(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

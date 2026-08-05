@@ -4338,6 +4338,78 @@ class BuilderWorkflowService:
                 gate="publication",
             )
             return
+        if action in {
+            "reconcile_automation",
+            "reconcile_verification",
+            "reconcile_publication",
+        }:
+            current = workflow.get("change_set")
+            if not isinstance(current, dict) or str(current.get("status") or "") != "reconciliation_required":
+                raise BuilderWorkflowError(
+                    "workflow reconciliation requires an unknown external outcome"
+                )
+            evidence_refs = [
+                str(item).strip()
+                for item in metadata.get("evidence_refs") or []
+                if str(item).strip()
+            ][:100]
+            history = [
+                dict(item)
+                for item in workflow.get("reconciliation_history") or []
+                if isinstance(item, Mapping)
+            ]
+            history.append(
+                {
+                    "action": action,
+                    "at": changed_at,
+                    "actor": str(metadata.get("actor") or "builder"),
+                    "evidence_refs": evidence_refs,
+                    "previous_delivery_status": str(delivery.get("status") or ""),
+                    "previous_publication_status": str(publication.get("status") or ""),
+                    "previous_error": (
+                        publication.get("error")
+                        if action == "reconcile_publication"
+                        else delivery.get("activation_error")
+                    ),
+                }
+            )
+            workflow["reconciliation_history"] = history[-50:]
+            if action == "reconcile_publication":
+                if (
+                    str(delivery.get("status") or "") != "unknown"
+                    or str(publication.get("status") or "") != "unknown"
+                ):
+                    raise BuilderWorkflowError(
+                        "Publication reconciliation requires an unknown Publication result"
+                    )
+                delivery["status"] = "accepted"
+                publication.update(
+                    {
+                        "status": "ready",
+                        "error": None,
+                        "reconciled_at": changed_at,
+                    }
+                )
+                update_change_set(status="accepted", gate="publication")
+                return
+            if action == "reconcile_verification":
+                if str(delivery.get("status") or "") != "unknown":
+                    raise BuilderWorkflowError(
+                        "Verification reconciliation requires an unknown Trial result"
+                    )
+                delivery["status"] = "checkpoint"
+                delivery["activation_error"] = None
+                delivery["reconciled_at"] = changed_at
+                update_change_set(status="checkpointed", gate="trial")
+                return
+            if str(automation.get("status") or "") not in {"failed", "working"}:
+                raise BuilderWorkflowError(
+                    "Automation reconciliation requires an incomplete Automation result"
+                )
+            automation["status"] = "failed"
+            automation["reconciled_at"] = changed_at
+            update_change_set(status="in_progress", gate="automation")
+            return
         raise BuilderWorkflowError(f"unsupported Builder workflow transition: {action}")
 
     def automation_snapshot_root(self, object_type: str, object_id: str) -> Path:
