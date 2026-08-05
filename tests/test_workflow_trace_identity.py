@@ -352,6 +352,7 @@ def test_trace_spine_propagates_through_interaction_activity_and_delivery() -> N
         actor_id="user:local",
         expected_generation=0,
         idempotency_key="trace-spine:start-automation",
+        values={"confirmed": True},
         original_text="start automation",
         proposed_action_id=action["action_id"],
         intent_proposal=proposal,

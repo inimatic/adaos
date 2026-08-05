@@ -155,6 +155,7 @@ def _write_package(root: Path) -> None:
                 "locales": ["locale.en.yaml"],
             },
             "locales": ["en"],
+            "default_locale": "en",
             "privacy_defaults": {
                 "source_scope": "skill",
                 "runtime_overlay_scope": "user",
