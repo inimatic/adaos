@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import threading
 import time
 from typing import Any, Awaitable, Callable
+
+from .lifecycle import BootstrapLifecycleCoordinator
+from .status_policy import _bounded_interval_seconds, _env_truthy
 
 
 class BootstrapStatusWatchdogService:
@@ -38,6 +42,60 @@ class BootstrapStatusWatchdogService:
         self._last_node_status_emit_at = 0.0
         self._last_node_status_fingerprint: tuple[Any, ...] | None = None
         self._suppressed_duplicate_node_status_total = 0
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        config: Any,
+        logger: logging.Logger,
+        report_control: Callable[[Any], Any],
+        node_status_payload: Callable[[], dict[str, Any]] | None,
+        node_status_heartbeat_s: float | None,
+        should_emit_node_status: Callable[..., tuple[bool, tuple[Any, ...]]],
+        emit_event: Callable[..., Awaitable[Any]],
+    ) -> BootstrapStatusWatchdogService:
+        """Build the status owner from its environment-backed policy once."""
+        control_report_enabled = _env_truthy(
+            os.getenv("ADAOS_HUB_CONTROL_REPORT_ENABLED"),
+            default=True,
+        )
+        control_await_watch_enabled = _env_truthy(
+            os.getenv("ADAOS_CONTROL_LIFECYCLE_AWAIT_WATCH"),
+            default=_env_truthy(os.getenv("HUB_TRACE"), default=False),
+        )
+        return cls(
+            config=config,
+            logger=logger,
+            control_report_enabled=control_report_enabled,
+            control_await_watch_enabled=control_await_watch_enabled,
+            control_heartbeat_s=_bounded_interval_seconds(
+                os.getenv("HUB_CONTROL_LIFECYCLE_HEARTBEAT_S", "15") or "15",
+                default=15.0,
+                minimum=5.0,
+            ),
+            node_status_heartbeat_s=_bounded_interval_seconds(
+                node_status_heartbeat_s if node_status_heartbeat_s is not None else 5.0,
+                default=5.0,
+                minimum=2.0,
+            ),
+            report_control=report_control,
+            node_status_payload=node_status_payload,
+            should_emit_node_status=should_emit_node_status,
+            emit_event=emit_event,
+        )
+
+    def start_heartbeats(self, lifecycle: BootstrapLifecycleCoordinator) -> None:
+        """Register watchdog loops in the active bootstrap task generation."""
+        if self.control_report_enabled:
+            lifecycle.start_task_once(
+                "adaos-control-lifecycle-heartbeat",
+                self.control_lifecycle_heartbeat,
+            )
+        lifecycle.start_task_once(
+            "adaos-node-status-push-heartbeat",
+            self.node_status_heartbeat,
+        )
 
     async def report_control_lifecycle(self, trigger: str) -> None:
         try:

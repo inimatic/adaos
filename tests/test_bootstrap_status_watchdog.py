@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.bootstrap_runtime import BootstrapStatusWatchdogService
+from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator, BootstrapStatusWatchdogService
 
 
 pytestmark = pytest.mark.anyio
@@ -53,3 +53,23 @@ async def test_status_watchdog_deduplicates_node_status() -> None:
 
     assert emitted == [("node.status", {"state": "ready", "trigger": "boot"})]
     assert service._suppressed_duplicate_node_status_total == 1
+
+
+async def test_status_watchdog_builds_policy_and_registers_heartbeats(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_HUB_CONTROL_REPORT_ENABLED", "1")
+    lifecycle = BootstrapLifecycleCoordinator()
+    service = BootstrapStatusWatchdogService.from_environment(
+        config=SimpleNamespace(role="member"),
+        logger=logging.getLogger("test.bootstrap.status_watchdog"),
+        report_control=lambda config: None,
+        node_status_payload=lambda: {},
+        node_status_heartbeat_s=2.0,
+        should_emit_node_status=lambda **kwargs: (True, ()),
+        emit_event=lambda *args, **kwargs: None,
+    )
+
+    service.start_heartbeats(lifecycle)
+
+    assert lifecycle.find_live_task("adaos-control-lifecycle-heartbeat") is not None
+    assert lifecycle.find_live_task("adaos-node-status-push-heartbeat") is not None
+    await lifecycle.stop()

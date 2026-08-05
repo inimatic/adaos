@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Awaitable, Callable
 
@@ -42,6 +43,52 @@ class RootTransportService:
         self.authority_ready_at = time.time()
         for waiter in tuple(self.authority_waiters):
             waiter.set()
+
+    async def reset_route_runtime(
+        self,
+        *,
+        reason: str,
+        notify_browser: bool,
+    ) -> dict[str, Any]:
+        normalized_reason = str(reason or "").strip() or "route_reset"
+        callback = self.route_reset
+        if not callable(callback):
+            return {
+                "ok": False,
+                "reason": normalized_reason,
+                "notify_browser": bool(notify_browser),
+                "skipped": "route_reset_unavailable",
+            }
+        try:
+            timeout_s = max(0.2, float(os.getenv("HUB_ROUTE_RESET_TIMEOUT_S", "2.5") or "2.5"))
+        except Exception:
+            timeout_s = 2.5
+        try:
+            result = callback(reason=normalized_reason, notify_browser=bool(notify_browser))
+            if asyncio.iscoroutine(result):
+                result = await asyncio.wait_for(result, timeout=timeout_s)
+            if isinstance(result, dict):
+                return result
+            return {
+                "ok": True,
+                "reason": normalized_reason,
+                "notify_browser": bool(notify_browser),
+                "result": result,
+            }
+        except asyncio.TimeoutError:
+            return {
+                "ok": False,
+                "reason": normalized_reason,
+                "notify_browser": bool(notify_browser),
+                "error": "TimeoutError: hub route reset timed out",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reason": normalized_reason,
+                "notify_browser": bool(notify_browser),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     def start_bridge_task(
         self,
@@ -137,20 +184,14 @@ class RootTransportService:
                     "state": "already_running",
                 }
             try:
-                existing.cancel()
-            except Exception:
-                pass
-            self.lifecycle.boot_tasks = [task for task in self.lifecycle.boot_tasks if task is not existing]
-            try:
-                task = asyncio.create_task(factory(), name=task_name)
-                self.lifecycle.boot_tasks.append(task)
+                _task, cancelled_previous = self.lifecycle.replace_task(task_name, factory)
                 return {
                     "attempted": True,
                     "started": True,
                     "task_name": task_name,
                     "state": "rearmed",
                     "reason": str(reason or "forced_rearm"),
-                    "cancelled_previous": True,
+                    "cancelled_previous": cancelled_previous,
                 }
             except Exception as exc:
                 return {
@@ -163,8 +204,7 @@ class RootTransportService:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
         try:
-            task = asyncio.create_task(factory(), name=task_name)
-            self.lifecycle.boot_tasks.append(task)
+            self.lifecycle.start_task_once(task_name, factory)
             return {
                 "attempted": True,
                 "started": True,

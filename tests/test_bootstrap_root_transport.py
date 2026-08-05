@@ -68,3 +68,28 @@ async def test_root_transport_skips_bridge_for_passive_candidate() -> None:
 
     assert result == {"attempted": False, "state": "not_required"}
     assert reconnect_called is False
+
+
+async def test_root_transport_owns_route_reset_timeout_and_result() -> None:
+    lifecycle = BootstrapLifecycleCoordinator()
+    transport = RootTransportService(
+        lifecycle=lifecycle,
+        role=lambda: "hub",
+        candidate_passive=lambda: False,
+        reconnect=lambda **kwargs: asyncio.sleep(0, result={}),
+        watchdog_interval=lambda: 1.0,
+        record_event=lambda *args, **kwargs: None,
+        logger=logging.getLogger("test.bootstrap.root_transport"),
+    )
+    calls: list[tuple[str, bool]] = []
+
+    async def _reset(*, reason: str, notify_browser: bool) -> dict:
+        calls.append((reason, notify_browser))
+        return {"ok": True, "generation": 2}
+
+    transport.route_reset = _reset
+
+    result = await transport.reset_route_runtime(reason="reconnect", notify_browser=True)
+
+    assert result == {"ok": True, "generation": 2}
+    assert calls == [("reconnect", True)]

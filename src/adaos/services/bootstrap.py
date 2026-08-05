@@ -116,6 +116,7 @@ from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.bootstrap_runtime import (
     BootstrapLifecycleCoordinator,
     BootstrapStatusWatchdogService,
+    NatsBridgePolicy,
     RootTransportService,
 )
 from adaos.services.bootstrap_runtime import core_update_convergence as _core_update_convergence
@@ -639,12 +640,13 @@ class BootstrapService:
         self.skills_loader = skills_loader
         self.subnet_registry = subnet_registry
         self._lifecycle = BootstrapLifecycleCoordinator()
+        self._nats_policy = NatsBridgePolicy()
         self._io_bus: Any = None
         self._log = logging.getLogger("adaos.hub-io")
         self._root_transport = RootTransportService(
             lifecycle=self._lifecycle,
             role=lambda: str(getattr(self.ctx.config, "role", "") or ""),
-            candidate_passive=lambda: _hub_root_candidate_passive_mode(),
+            candidate_passive=self._nats_policy.candidate_passive_mode,
             reconnect=lambda **kwargs: self.request_hub_root_reconnect(**kwargs),
             watchdog_interval=lambda: _hub_root_bridge_watchdog_interval_s(),
             record_event=lambda *args, **kwargs: record_hub_root_transport_event(*args, **kwargs),
@@ -807,49 +809,10 @@ class BootstrapService:
         reason: str,
         notify_browser: bool,
     ) -> dict[str, Any]:
-        cb = getattr(self, "_hub_root_route_reset", None)
-        if not callable(cb):
-            return {
-                "ok": False,
-                "reason": str(reason or "").strip() or "route_reset",
-                "notify_browser": bool(notify_browser),
-                "skipped": "route_reset_unavailable",
-            }
-        try:
-            timeout_s = float(os.getenv("HUB_ROUTE_RESET_TIMEOUT_S", "2.5") or "2.5")
-        except Exception:
-            timeout_s = 2.5
-        if timeout_s < 0.2:
-            timeout_s = 0.2
-        try:
-            result = cb(
-                reason=str(reason or "").strip() or "route_reset",
-                notify_browser=bool(notify_browser),
-            )
-            if asyncio.iscoroutine(result):
-                result = await asyncio.wait_for(result, timeout=timeout_s)
-            if isinstance(result, dict):
-                return result
-            return {
-                "ok": True,
-                "reason": str(reason or "").strip() or "route_reset",
-                "notify_browser": bool(notify_browser),
-                "result": result,
-            }
-        except asyncio.TimeoutError:
-            return {
-                "ok": False,
-                "reason": str(reason or "").strip() or "route_reset",
-                "notify_browser": bool(notify_browser),
-                "error": "TimeoutError: hub route reset timed out",
-            }
-        except Exception as exc:
-            return {
-                "ok": False,
-                "reason": str(reason or "").strip() or "route_reset",
-                "notify_browser": bool(notify_browser),
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+        return await self._root_transport.reset_route_runtime(
+            reason=reason,
+            notify_browser=notify_browser,
+        )
 
     async def request_hub_root_reconnect(
         self,
@@ -1171,7 +1134,7 @@ class BootstrapService:
         ready_callback = self._member_ready_callback if callable(self._member_ready_callback) else None
         heartbeat_task = await self._member_register_and_heartbeat(conf, on_registered=ready_callback)
         if heartbeat_task is not None:
-            self._boot_tasks.append(heartbeat_task)
+            self._lifecycle.track_task(heartbeat_task)
         try:
             await get_member_link_client().start()
         except Exception as exc:
@@ -1387,7 +1350,18 @@ class BootstrapService:
     async def _run_boot_sequence_impl(self, app: Any) -> None:
         if self._booted:
             return
-        self._app = app
+        self._lifecycle.bind_app(app)
+        # Keep legacy helper names local to the large compatibility body while
+        # routing every NATS policy decision through the composed owner.
+        _read_sidecar_tail_lines = self._nats_policy.read_sidecar_tail_lines
+        _nats_credentials_refresh_evidence = self._nats_policy.credentials_refresh_evidence
+        _hub_root_transport_kind = self._nats_policy.transport_kind
+        _hub_root_candidate_passive_mode = self._nats_policy.candidate_passive_mode
+        _should_quarantine_nats_candidate = self._nats_policy.should_quarantine_candidate
+        _hub_nats_sidecar_failover_on_transient = self._nats_policy.sidecar_failover_on_transient
+        _hub_nats_sidecar_quarantine_s = self._nats_policy.sidecar_quarantine_s
+        _resolve_nats_log_server = self._nats_policy.resolve_log_server
+        _canonical_hub_nats_identity = self._nats_policy.canonical_identity
         # Unified deep-trace switch for WS/NATS/route debugging.
         try:
             if os.getenv("HUB_TRACE", "0") == "1":
@@ -1416,15 +1390,6 @@ class BootstrapService:
         except Exception:
             pass
         conf = getattr(self.ctx, "config", None) or load_config(ctx=self.ctx)
-        _control_lifecycle_report_enabled = _env_truthy(
-            os.getenv("ADAOS_HUB_CONTROL_REPORT_ENABLED"),
-            default=True,
-        )
-        _control_lifecycle_await_watch_enabled = _env_truthy(
-            os.getenv("ADAOS_CONTROL_LIFECYCLE_AWAIT_WATCH"),
-            default=_env_truthy(os.getenv("HUB_TRACE"), default=False),
-        )
-
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
                 from adaos.services.release_validation_autorun import (
@@ -1492,30 +1457,19 @@ class BootstrapService:
             _current_node_status_push_payload = None
             _node_status_push_heartbeat_s = None
 
-        self._status_watchdog = BootstrapStatusWatchdogService(
+        self._status_watchdog = BootstrapStatusWatchdogService.from_environment(
             config=conf,
             logger=self._log,
-            control_report_enabled=_control_lifecycle_report_enabled,
-            control_await_watch_enabled=_control_lifecycle_await_watch_enabled,
-            control_heartbeat_s=_bounded_interval_seconds(
-                os.getenv("HUB_CONTROL_LIFECYCLE_HEARTBEAT_S", "15") or "15",
-                default=15.0,
-                minimum=5.0,
-            ),
-            node_status_heartbeat_s=_bounded_interval_seconds(
-                _node_status_push_heartbeat_s() if callable(_node_status_push_heartbeat_s) else 5.0,
-                default=5.0,
-                minimum=2.0,
-            ),
             report_control=lambda config: report_hub_control_lifecycle_state(config),
             node_status_payload=_current_node_status_push_payload,
+            node_status_heartbeat_s=(
+                _node_status_push_heartbeat_s() if callable(_node_status_push_heartbeat_s) else None
+            ),
             should_emit_node_status=lambda **kwargs: _should_emit_node_status(**kwargs),
             emit_event=lambda *args, **kwargs: bus.emit(*args, **kwargs),
         )
         _report_control_lifecycle = self._status_watchdog.report_control_lifecycle
-        _control_lifecycle_heartbeat = self._status_watchdog.control_lifecycle_heartbeat
         _emit_node_status = self._status_watchdog.emit_node_status
-        _node_status_push_heartbeat = self._status_watchdog.node_status_heartbeat
 
         self._prepare_environment()
         # local adapter over LocalEventBus
@@ -1535,11 +1489,11 @@ class BootstrapService:
         except Exception:
             pass
         await bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
-        if not _runtime_candidate_mode():
+        if not self._nats_policy.runtime_candidate_mode():
             await asyncio.to_thread(_ensure_managed_nlu_service_skills, self._log)
         await self.skills_loader.import_all_handlers(self.ctx.paths.skills_dir())
         # Start service-type skills (external processes).
-        if _runtime_candidate_mode():
+        if self._nats_policy.runtime_candidate_mode():
             self._log.info("skipping service skill startup for candidate runtime prewarm")
         else:
             try:
@@ -2047,8 +2001,7 @@ class BootstrapService:
                     await asyncio.sleep(5)
 
             self._start_boot_task_once("adaos-lease-monitor", lease_monitor)
-            self._ready.set()
-            self._booted = True
+            self._lifecycle.mark_ready()
             _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
             await bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
             _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
@@ -2064,9 +2017,7 @@ class BootstrapService:
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
             await _report_control_lifecycle("sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
-            if _control_lifecycle_report_enabled:
-                self._start_boot_task_once("adaos-control-lifecycle-heartbeat", _control_lifecycle_heartbeat)
-            self._start_boot_task_once("adaos-node-status-push-heartbeat", _node_status_push_heartbeat)
+            self._status_watchdog.start_heartbeats(self._lifecycle)
         else:
             member_ready_announced = False
 
@@ -2081,7 +2032,7 @@ class BootstrapService:
                     await get_member_link_client().start()
                 except Exception:
                     self._log.warning("failed to start member hub websocket link after registration", exc_info=True)
-                self._ready.set()
+                self._lifecycle.signal_ready()
                 _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
                 await bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
                 _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
@@ -2101,11 +2052,11 @@ class BootstrapService:
             # successful rejoin must complete the same readiness/sys.ready
             # transition instead of leaving the otherwise connected node
             # permanently at ready=false.
-            self._member_ready_callback = _announce_member_ready
+            self._lifecycle.set_member_ready_callback(_announce_member_ready)
             task = await self._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
             if task:
-                self._boot_tasks.append(task)
-                self._booted = True
+                self._lifecycle.track_task(task)
+                self._lifecycle.mark_booted()
 
         # After IO bus is ready, wire outbound subscriber for Telegram if NATS/local
         _post_ready_started = _startup_stage_mark("bootstrap_post_ready_tail")
@@ -2191,12 +2142,12 @@ class BootstrapService:
                             raw_nurl = override
                         requested_transport = str(os.getenv("HUB_NATS_TRANSPORT", "") or "").strip().lower()
                         if requested_transport in {"ws", "websocket", "websockets"} and raw_nurl and not nats_url_uses_websocket(raw_nurl):
-                            ws_candidates = _hub_public_ws_candidates(raw_nurl)
+                            ws_candidates = self._nats_policy.public_ws_candidates(raw_nurl)
                             raw_nurl = next(
                                 (str(item).strip() for item in ws_candidates if nats_url_uses_websocket(item)),
                                 public_nats_ws_api(),
                             )
-                        nurl = _normalize_hub_nats_ws_url(raw_nurl)
+                        nurl = self._nats_policy.normalize_ws_url(raw_nurl)
                         nuser = str(node_nats.get("user") or "") or None
                         npass = str(node_nats.get("pass") or "") or None
                         if nurl and raw_nurl and nurl != raw_nurl:
@@ -2344,7 +2295,7 @@ class BootstrapService:
                     token = data.get("hub_nats_token")
                     nats_user = data.get("nats_user")
                     response_hub_id = data.get("hub_id")
-                    nats_ws_url = _normalize_hub_nats_ws_url(data.get("nats_ws_url"))
+                    nats_ws_url = self._nats_policy.normalize_ws_url(data.get("nats_ws_url"))
                     if not token or not nats_user or not nats_ws_url:
                         if debug:
                             try:
@@ -2359,7 +2310,7 @@ class BootstrapService:
                         return False
 
                     try:
-                        resolved_hub_id, resolved_nats_user = _canonical_hub_nats_identity(
+                        resolved_hub_id, resolved_nats_user = self._nats_policy.canonical_identity(
                             local_hub_id=getattr(cfg, "subnet_id", None),
                             nats_user=str(nats_user),
                             response_hub_id=str(response_hub_id or "").strip() or None,
@@ -2369,7 +2320,7 @@ class BootstrapService:
                         # unless you have TLS-enabled NATS endpoints.
                         transport = str(os.getenv("HUB_NATS_TRANSPORT", "") or "").strip().lower()
                         if transport in {"tcp", "nats"}:
-                            selected_url = str(_hub_public_tcp_candidates(None)[0])
+                            selected_url = str(self._nats_policy.public_tcp_candidates(None)[0])
                         else:
                             selected_url = str(nats_ws_url)
                         save_nats_runtime_config(
@@ -2401,7 +2352,7 @@ class BootstrapService:
                     runtime_identity = runtime_identity_snapshot()
                     runtime_role = str(runtime_identity.get("transition_role") or "active")
                     runtime_instance = str(runtime_identity.get("runtime_instance_id") or "")
-                    candidate_passive_mode = _hub_root_candidate_passive_mode()
+                    candidate_passive_mode = self._nats_policy.candidate_passive_mode()
                     if trace or os.getenv("HUB_NATS_VERBOSE", "0") == "1":
                         try:
                             import asyncio as _asyncio
@@ -2499,7 +2450,7 @@ class BootstrapService:
                         runtime_identity = runtime_identity_snapshot()
                         runtime_role = str(runtime_identity.get("transition_role") or "active")
                         runtime_instance = str(runtime_identity.get("runtime_instance_id") or "")
-                        candidate_passive_mode = _hub_root_candidate_passive_mode()
+                        candidate_passive_mode = self._nats_policy.candidate_passive_mode()
                         try:
                             nats_attempt_server = None
                             nurl, nuser, npass = _read_node_nats()
@@ -2521,7 +2472,7 @@ class BootstrapService:
                                     await asyncio.sleep(0.1)
                                     continue
                             if nats_url_uses_websocket(nurl) or (
-                                realtime_enabled and _nats_url_needs_public_ws_refresh(nurl)
+                                realtime_enabled and self._nats_policy.url_needs_public_ws_refresh(nurl)
                             ):
                                 fetched = await _fetch_nats_credentials()
                                 if fetched:
@@ -2587,7 +2538,7 @@ class BootstrapService:
                                     # "Authentication Timeout" hangs when we accidentally hit non-NATS WS endpoints.
                                     # The dedicated public hostname is opt-in only. In this environment it has
                                     # been closing long-lived hub WS sessions shortly after the first client ping.
-                                    for item in _hub_public_ws_candidates(base):
+                                    for item in self._nats_policy.public_ws_candidates(base):
                                         _dedup_push(item)
                                     # Allow explicit WS alternates via env (comma-separated)
                                     extra = os.getenv("NATS_WS_URL_ALT")
@@ -2600,7 +2551,7 @@ class BootstrapService:
                                     if base:
                                         _dedup_push(base)
                                     else:
-                                        for item in _hub_public_tcp_candidates(base):
+                                        for item in self._nats_policy.public_tcp_candidates(base):
                                             _dedup_push(item)
                                     # Optional TCP alternates via env (comma-separated)
                                     extra = os.getenv("NATS_TCP_URL_ALT")
@@ -2625,7 +2576,7 @@ class BootstrapService:
                             # Prefer the api-domain ingress by default. The dedicated hostname remains opt-in via
                             # `HUB_NATS_PREFER_DEDICATED=1` for environments where it is known to be healthier.
                             try:
-                                pref_ded = _hub_nats_prefer_dedicated()
+                                pref_ded = self._nats_policy.prefer_dedicated()
                                 if candidates and str(candidates[0]).startswith(("ws://", "wss://")):
                                     candidates = order_nats_ws_candidates(
                                         candidates,
@@ -2646,7 +2597,7 @@ class BootstrapService:
                                             port=realtime_sidecar_port(),
                                             timeout_s=1.5,
                                         )
-                                        fallback_candidates = _build_realtime_sidecar_fallback_candidates(
+                                        fallback_candidates = self._nats_policy.sidecar_fallback_candidates(
                                             original_candidates,
                                             local_candidate=local_candidate,
                                         )

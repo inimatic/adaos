@@ -283,3 +283,31 @@ def _canonical_hub_nats_identity(
         return resolved_hub_id, f"hub_{resolved_hub_id}"
     resolved_user = str(nats_user or "").strip() or None
     return None, resolved_user
+
+
+class NatsBridgePolicy:
+    """Typed owner for NATS candidate, identity, and recovery policy.
+
+    The module functions remain as compatibility exports for focused callers;
+    bootstrap composition depends on this object instead of importing an
+    unstructured set of helpers into its operational scope.
+    """
+
+    read_sidecar_tail_lines = staticmethod(_read_sidecar_tail_lines)
+    credentials_refresh_evidence = staticmethod(_nats_credentials_refresh_evidence)
+    should_refresh_credentials = staticmethod(_should_refresh_nats_credentials)
+    transport_kind = staticmethod(_hub_root_transport_kind)
+    prefer_dedicated = staticmethod(_hub_nats_prefer_dedicated)
+    normalize_ws_url = staticmethod(_normalize_hub_nats_ws_url)
+    public_ws_candidates = staticmethod(_hub_public_ws_candidates)
+    public_tcp_candidates = staticmethod(_hub_public_tcp_candidates)
+    runtime_candidate_mode = staticmethod(_runtime_candidate_mode)
+    candidate_passive_mode = staticmethod(_hub_root_candidate_passive_mode)
+    url_needs_public_ws_refresh = staticmethod(_nats_url_needs_public_ws_refresh)
+    sidecar_fallback_candidates = staticmethod(_build_realtime_sidecar_fallback_candidates)
+    should_quarantine_candidate = staticmethod(_should_quarantine_nats_candidate)
+    sidecar_failover_on_transient = staticmethod(_hub_nats_sidecar_failover_on_transient)
+    sidecar_quarantine_s = staticmethod(_hub_nats_sidecar_quarantine_s)
+    resolve_log_server = staticmethod(_resolve_nats_log_server)
+    hub_id_from_user = staticmethod(_hub_id_from_nats_user)
+    canonical_identity = staticmethod(_canonical_hub_nats_identity)
