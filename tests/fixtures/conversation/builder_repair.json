@@ -1,0 +1,14 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_repair",
+  "conversation_id": "conv.golden.builder.repair",
+  "description": "A runtime failure is deduplicated into repair work and closes only with regression evidence.",
+  "messages": [
+    {"id": "golden.builder.repair.1", "conversation_id": "conv.golden.builder.repair", "seq": 1, "from": "hub", "text": "The activated route failed its health check. Builder created one repair task.", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"},
+    {"id": "golden.builder.repair.2", "conversation_id": "conv.golden.builder.repair", "seq": 2, "from": "hub", "text": "Repair accepted: the route now works and the triggering regression check passes.", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"}
+  ],
+  "turn_traces": [
+    {"turn_trace_id": "trace.golden.builder.repair.1", "conversation_id": "conv.golden.builder.repair", "channel_id": "builder", "agent_id": "agent:builder_skill:builder", "selected_tool": "builder.repair.accept", "policy_decision": {"reason": "acceptance_evidence_complete", "repair_state": "completed", "deduplicated": true}, "renderer": {"projection": "builder.repair_evidence"}, "status": "completed", "created_at": 1340.0, "completed_at": 1340.8}
+  ],
+  "expectations": {"required_text": ["created one repair task", "triggering regression check passes"], "forbidden_text": ["duplicate repair task"], "required_agents": ["agent:builder_skill:builder"], "required_channels": ["builder"], "min_success_rate": 1.0, "max_fallback_rate": 1.0, "max_latency_ms_p95": 1200}
+}

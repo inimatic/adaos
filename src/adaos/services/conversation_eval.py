@@ -20,6 +20,11 @@ DEFAULT_REQUIRED_GOLDEN_DATASET_IDS = (
     "conversation_companions_agent_handoff",
     "builder_review_handoff",
     "builder_first_idea_preview_correction",
+    "builder_clarification",
+    "builder_validation_failure",
+    "builder_review_approval",
+    "builder_review_rejection",
+    "builder_repair",
     "teacher_candidate_repair",
 )
 

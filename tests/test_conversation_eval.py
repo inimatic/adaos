@@ -240,6 +240,11 @@ def test_conversation_eval_replays_initial_golden_datasets() -> None:
         "conversation_companions_agent_handoff.json",
         "builder_review_handoff.json",
         "builder_first_idea_preview_correction.json",
+        "builder_clarification.json",
+        "builder_validation_failure.json",
+        "builder_review_approval.json",
+        "builder_review_rejection.json",
+        "builder_repair.json",
         "teacher_candidate_repair.json",
     ]
     for name in fixture_names:
@@ -270,6 +275,11 @@ def test_conversation_eval_golden_migration_gate_passes_initial_suite() -> None:
         "conversation_companions_agent_handoff",
         "builder_review_handoff",
         "builder_first_idea_preview_correction",
+        "builder_clarification",
+        "builder_validation_failure",
+        "builder_review_approval",
+        "builder_review_rejection",
+        "builder_repair",
         "teacher_candidate_repair",
     }.issubset({item["dataset_id"] for item in result["datasets"]})
 

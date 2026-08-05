@@ -1,0 +1,14 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_review_rejection",
+  "conversation_id": "conv.golden.builder.review_rejection",
+  "description": "Rejected review feedback becomes bounded Builder context rather than disappearing in transcript history.",
+  "messages": [
+    {"id": "golden.builder.rejection.1", "conversation_id": "conv.golden.builder.review_rejection", "seq": 1, "from": "user", "text": "Reject it: keep the checkboxes on the left.", "dialog_channel_id": "builder"},
+    {"id": "golden.builder.rejection.2", "conversation_id": "conv.golden.builder.review_rejection", "seq": 2, "from": "hub", "text": "Candidate rejected. Your feedback was retained as a Review constraint for the next revision.", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"}
+  ],
+  "turn_traces": [
+    {"turn_trace_id": "trace.golden.builder.rejection.1", "conversation_id": "conv.golden.builder.review_rejection", "channel_id": "builder", "agent_id": "agent:builder_skill:builder", "selected_tool": "builder.review.register_constraint", "policy_decision": {"reason": "review_rejected_with_redirect", "constraint_ref": "review:checkbox-left"}, "renderer": {"projection": "builder.review_context"}, "status": "completed", "created_at": 1330.0, "completed_at": 1330.3}
+  ],
+  "expectations": {"required_text": ["Candidate rejected", "retained as a Review constraint"], "forbidden_text": ["feedback discarded"], "required_agents": ["agent:builder_skill:builder"], "required_channels": ["builder"], "min_success_rate": 1.0, "max_fallback_rate": 0.0, "max_latency_ms_p95": 1000}
+}

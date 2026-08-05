@@ -1,0 +1,14 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_review_approval",
+  "conversation_id": "conv.golden.builder.review_approval",
+  "description": "A reviewed Builder candidate records approval identity and advances without replaying generation.",
+  "messages": [
+    {"id": "golden.builder.approval.1", "conversation_id": "conv.golden.builder.review_approval", "seq": 1, "from": "user", "text": "Approve this candidate.", "dialog_channel_id": "builder"},
+    {"id": "golden.builder.approval.2", "conversation_id": "conv.golden.builder.review_approval", "seq": 2, "from": "hub", "text": "Candidate approved. The recorded approval is linked to validation and the next apply operation.", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"}
+  ],
+  "turn_traces": [
+    {"turn_trace_id": "trace.golden.builder.approval.1", "conversation_id": "conv.golden.builder.review_approval", "channel_id": "builder", "agent_id": "agent:builder_skill:builder", "selected_tool": "pending_actions.respond", "policy_decision": {"reason": "review_approved", "approval_identity": "actor:user:fixture"}, "renderer": {"projection": "builder.approval_receipt"}, "status": "completed", "created_at": 1320.0, "completed_at": 1320.25}
+  ],
+  "expectations": {"required_text": ["Candidate approved", "recorded approval"], "forbidden_text": ["generating again"], "required_agents": ["agent:builder_skill:builder"], "required_channels": ["builder"], "min_success_rate": 1.0, "max_fallback_rate": 0.0, "max_latency_ms_p95": 1000}
+}
