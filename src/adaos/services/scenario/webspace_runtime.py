@@ -64,6 +64,7 @@ from .webspace_components import (
     MaterializationExecutorOwner,
     WebspaceCacheState,
     WebspaceProjectionService,
+    WebspaceScenarioSwitchingService,
     WebspaceTaskState,
 )
 from .workflow_runtime import ScenarioWorkflowRuntime
@@ -74,6 +75,7 @@ _TASK_STATE = WebspaceTaskState()
 _CACHE_STATE = WebspaceCacheState()
 _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
 _PROJECTION_SERVICE = WebspaceProjectionService()
+_SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
 _SCENARIO_SWITCH_REBUILD_TASKS = _TASK_STATE.scenario_switch_rebuild_tasks
 _WEBSPACE_REBUILD_STATUS = _TASK_STATE.webspace_rebuild_status
 _WEBSPACE_RECOVERY_COMMAND_CACHE = _TASK_STATE.webspace_recovery_command_cache
@@ -4166,7 +4168,7 @@ async def _run_materialization_worker(
 
 
 def _scenario_switch_mode() -> str:
-    return "pointer_only"
+    return _SCENARIO_SWITCHING.mode()
 
 
 def _extract_scenario_sections_from_content(content: Mapping[str, Any] | None) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -11160,12 +11162,21 @@ async def switch_webspace_scenario(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> dict[str, Any]:
-    webspace_id = str(webspace_id or "").strip()
-    scenario_id = str(scenario_id or "").strip()
-    if not webspace_id:
-        raise ValueError("webspace_id is required")
-    if not scenario_id:
-        raise ValueError("scenario_id is required")
+    request = _SCENARIO_SWITCHING.normalize_request(
+        webspace_id,
+        scenario_id,
+        set_home=set_home,
+        wait_for_rebuild=wait_for_rebuild,
+        request_id=request_id,
+        request_source=request_source,
+        request_client=request_client,
+    )
+    webspace_id = request.webspace_id
+    scenario_id = request.scenario_id
+    wait_for_rebuild = request.wait_for_rebuild
+    request_id = request.request_id
+    request_source = request.request_source
+    request_client = request.request_client
 
     switch_started = time.perf_counter()
     timings_ms: Dict[str, float] = {}
@@ -11175,7 +11186,7 @@ async def switch_webspace_scenario(
 
     stage_started = time.perf_counter()
     row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-    resolved_set_home = bool(set_home) if set_home is not None else False
+    resolved_set_home = request.set_home
     _record_timing(timings_ms, "resolve_manifest_policy", stage_started)
     stage_started = time.perf_counter()
     rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
@@ -11214,12 +11225,7 @@ async def switch_webspace_scenario(
     switch_mode = _scenario_switch_mode()
     atomic_selector_commit = True
     selector_commit_mode = "materialization_transaction"
-    loader_space = "workspace"
-    try:
-        if row:
-            loader_space = row.effective_source_mode
-    except Exception:
-        loader_space = "workspace"
+    loader_space = _SCENARIO_SWITCHING.loader_space(row)
     switch_content: Dict[str, Any] | None = None
 
     def _build_switch_skip_result(*, skip_reason: str, rebuild_state: Mapping[str, Any], background_rebuild: bool) -> dict[str, Any]:
@@ -11259,13 +11265,13 @@ async def switch_webspace_scenario(
             "phase_timings_ms": phase_timings,
         }
 
-    if (
-        str(state_before.current_scenario or "").strip() == scenario_id
-        and not bool(rebuild_state_before.get("pending"))
-        and str(rebuild_state_before.get("status") or "").strip().lower() == "ready"
-        and str(rebuild_state_before.get("scenario_id") or "").strip() == scenario_id
-        and materialization_matches_target
-    ):
+    switch_decision = _SCENARIO_SWITCHING.decide(
+        current_scenario=state_before.current_scenario,
+        target_scenario=scenario_id,
+        rebuild_state=rebuild_state_before,
+        materialization_matches_target=materialization_matches_target,
+    )
+    if switch_decision.action == "skip":
         if resolved_set_home and row.effective_home_scenario != scenario_id:
             stage_started = time.perf_counter()
             row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
@@ -11284,16 +11290,12 @@ async def switch_webspace_scenario(
             finalized_timings,
         )
         return _build_switch_skip_result(
-            skip_reason="already_current_ready",
+            skip_reason=str(switch_decision.reason or "already_current_ready"),
             rebuild_state=rebuild_state_before,
             background_rebuild=False,
         )
 
-    if (
-        str(state_before.current_scenario or "").strip() == scenario_id
-        and bool(rebuild_state_before.get("pending"))
-        and str(rebuild_state_before.get("scenario_id") or "").strip() == scenario_id
-    ):
+    if switch_decision.action == "join":
         if resolved_set_home and row.effective_home_scenario != scenario_id:
             stage_started = time.perf_counter()
             row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
@@ -11324,7 +11326,7 @@ async def switch_webspace_scenario(
             finalized_timings,
         )
         return _build_switch_skip_result(
-            skip_reason="already_pending_rebuild",
+            skip_reason=str(switch_decision.reason or "already_pending_rebuild"),
             rebuild_state=rebuild_state_before,
             background_rebuild=bool(rebuild_state_before.get("pending") or (not wait_for_rebuild and rebuild_state_before.get("background"))),
         )
