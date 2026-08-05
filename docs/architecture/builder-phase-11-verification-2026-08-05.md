@@ -132,12 +132,12 @@ the independently managed projects.
 | Client production build | passed, version 0.0.275 |
 
 Key commits in this slice are `69d4fb13`, `d0aeb3c9`, `ae6ae315`,
-`cd281033`, `dce940a5`, `5a7835ee`, `b4696beb`, `7cae1ce5`, `9f04fca7`,
-`340bbeb4`, `59e68448`, `f241762a`, `0a23efa2`, `4c2a1847`, `301e885a`,
-`41c96a9b`, `8ea22c0e`, `d425a0fc`, `91a6b6a1`, core receipt commit
-`e2d4201e`, backend receipt commit `2726686`, and client commits `2f99450` and
+`cd281033`, `85db66bb`, `36f24913`, `3d43e220`, `e6ce0790`, `cd4b2dea`,
+`fddccee8`, `b2deacf3`, `e16b7890`, `c610c800`, `ce4197d3`, `a7bf86fd`,
+`c08dc9ac`, `0bcdf524`, `2ab76eb9`, `9ee5c334`, core receipt commit
+`6186ca4b`, backend receipt commit `2726686`, and client commits `2f99450` and
 `9b2fccc`. Publication recovery and dependency-boundary corrections are
-`91747d45`, `5bab3547`, `75b20c97`, `188acf40`, and `994c3457`; the final
+`65c039c2`, `a289b654`, `88e650ba`, `2bad76a1`, and `1e03c76d`; the final
 Builder control-skill Forge checkpoint is
 `2bfe0957f827e96de30f5db0e9f0b21cacfd2e1e`.
 

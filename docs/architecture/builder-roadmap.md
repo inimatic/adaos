@@ -1187,7 +1187,7 @@ Commands, projections, and Workbench:
   generation checks, idempotent response persistence, callback acknowledgement,
   and consumed-message replacement are implemented. The bot-authored prompt is
   retained, its keyboard is removed, and the exact selection is appended.
-  Core `e2d4201e` and backend `2726686` add durable per-operation transport
+  Core `6186ca4b` and backend `2726686` add durable per-operation transport
   attempts, hub-scoped final receipts, external Telegram message ids, and
   optional linkage to ResponseEnvelope DeliveryAttempts.
 - [x] `[must]` Project a mutating control only when its declared effect/activity
