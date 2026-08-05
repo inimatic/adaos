@@ -39,6 +39,25 @@ from adaos.services.workspaces import (
 )
 
 
+def _clear_member_snapshot_task_state() -> None:
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state.clear_tasks(state.MEMBER_SNAPSHOT, cancel=True)
+    state.clear_tasks(state.MEMBER_SNAPSHOT_DELAYED, cancel=True)
+    for group in (
+        state.MEMBER_SNAPSHOT_LAST_AT,
+        state.MEMBER_SNAPSHOT_DIRTY,
+        state.MEMBER_SNAPSHOT_STATS,
+        state.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+    ):
+        state.clear_records(group)
+
+
+def _clear_scenario_switch_task_state() -> None:
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state.clear_tasks(state.SCENARIO_SWITCH, cancel=True)
+    state.clear_records(state.WEBSPACE_REBUILD_STATUS)
+
+
 def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypatch) -> None:
     captured_modes: list[str] = []
 
@@ -623,17 +642,13 @@ def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monk
         ],
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+    _clear_member_snapshot_task_state()
 
     async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
         calls.append((webspace_id, action, source_of_truth))
         return {"accepted": True}
 
     monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
-
     async def _exercise() -> None:
         await webspace_runtime_module._on_subnet_member_snapshot_changed({"node_id": "member-1"})
         await asyncio.sleep(0)
@@ -656,14 +671,10 @@ def test_member_access_reactivated_forces_rebuild_even_when_material_fingerprint
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_desktop_material_fingerprint", lambda _node_id: "same")
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT[key] = time.monotonic()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT[key] = "same"
+    _clear_member_snapshot_task_state()
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state.put_record(state.MEMBER_SNAPSHOT_LAST_AT, key, time.monotonic())
+    state.put_record(state.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT, key, "same")
 
     async def _fake_seed(**_kwargs):
         return None
@@ -693,10 +704,7 @@ def test_member_snapshot_refreshed_rebuilds_when_remote_catalog_projection_is_mi
         lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 0.0)
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+    _clear_member_snapshot_task_state()
 
     async def _missing(**_kwargs):
         return True
@@ -725,10 +733,7 @@ def test_member_snapshot_refreshed_skips_rebuild_when_remote_catalog_projection_
         "list_workspaces",
         lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
     )
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
+    _clear_member_snapshot_task_state()
 
     async def _missing(**_kwargs):
         return False
@@ -1148,8 +1153,7 @@ def test_member_snapshot_change_seeds_ydoc_defaults_without_waiting_for_rebuild(
         lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
+    _clear_member_snapshot_task_state()
 
     async def _fake_rebuild(webspace_id: str, *, action: str, source_of_truth: str, **_kwargs):
         seeded["rebuild"] = (webspace_id, action, source_of_truth)
@@ -1202,12 +1206,7 @@ def test_member_snapshot_changed_skips_unchanged_desktop_material(monkeypatch) -
         lambda: [SimpleNamespace(workspace_id="desktop", is_dev=False)],
     )
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 0.0)
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_AT.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_DIRTY.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS.clear()
-    webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.clear()
+    _clear_member_snapshot_task_state()
 
     async def _fake_seed(**_kwargs) -> None:
         return None
@@ -1234,7 +1233,8 @@ def test_member_snapshot_changed_skips_unchanged_desktop_material(monkeypatch) -
             sys.modules.pop("adaos.services.registry.subnet_directory", None)
 
     assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
-    stats = webspace_runtime_module._MEMBER_SNAPSHOT_REBUILD_STATS["member-1\0desktop"]
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    stats = state.get_record(state.MEMBER_SNAPSHOT_STATS, "member-1\0desktop")
     assert stats["skipped_unchanged_total"] == 1
 
 
@@ -3269,8 +3269,7 @@ def test_background_scenario_switch_rebuild_superseded_request_keeps_newer_statu
         }
 
     monkeypatch.setattr(webspace_runtime_module, "_complete_scenario_switch_rebuild", _fake_complete)
-    webspace_runtime_module._SCENARIO_SWITCH_REBUILD_TASKS.clear()
-    webspace_runtime_module._WEBSPACE_REBUILD_STATUS.clear()
+    _clear_scenario_switch_task_state()
 
     async def _run() -> dict[str, object]:
         webspace_runtime_module._schedule_scenario_switch_rebuild(
@@ -3298,7 +3297,9 @@ def test_background_scenario_switch_rebuild_superseded_request_keeps_newer_statu
         assert second["request_id"] != first_request_id
 
         events["scenario_b"].set()
-        task = webspace_runtime_module._SCENARIO_SWITCH_REBUILD_TASKS[webspace_id]
+        state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+        task = state.get_task(state.SCENARIO_SWITCH, webspace_id)
+        assert task is not None
         await task
         return webspace_runtime_module.describe_webspace_rebuild_state(webspace_id)
 
@@ -3398,12 +3399,13 @@ def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
         await asyncio.sleep(0)
 
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
-    webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK = None
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state.clear_tasks(state.WEBSPACE_LISTING, cancel=True)
 
     async def _run() -> tuple[dict[str, object], dict[str, object]]:
         first = webspace_runtime_module._schedule_webspace_listing_sync(reason="test")
         second = webspace_runtime_module._schedule_webspace_listing_sync(reason="test")
-        task = webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK
+        task = state.get_task(state.WEBSPACE_LISTING, "listing")
         assert task is not None
         await task
         return first, second
@@ -3411,7 +3413,7 @@ def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
     try:
         first, second = asyncio.run(_run())
     finally:
-        webspace_runtime_module._WEBSPACE_LISTING_SYNC_TASK = None
+        state.clear_tasks(state.WEBSPACE_LISTING, cancel=True)
 
     assert sync_calls == ["sync"]
     assert first["coalesced"] is False
@@ -3420,7 +3422,8 @@ def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
 
 def test_phase3_stale_rebuild_request_does_not_apply_effective_branches() -> None:
     webspace_id = "phase3-stale-apply-guard"
-    webspace_runtime_module._WEBSPACE_REBUILD_STATUS.clear()
+    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state.clear_records(state.WEBSPACE_REBUILD_STATUS)
     webspace_runtime_module._set_webspace_rebuild_status(
         webspace_id,
         status="running",

@@ -81,7 +81,10 @@ def test_payload_only_materialize_updates_ready_materialization_from_resolved(mo
         )
         state = webspace_runtime_module.describe_webspace_rebuild_state(webspace_id)
     finally:
-        webspace_runtime_module._WEBSPACE_REBUILD_STATUS.pop(webspace_id, None)
+        webspace_runtime_module._TASK_STATE.pop_record(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WEBSPACE_REBUILD_STATUS,
+            webspace_id,
+        )
 
     assert entry.scenario_id == "prompt_engineer_scenario"
     assert state["materialization"]["ready"] is True
@@ -145,8 +148,13 @@ def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> 
             )
         ),
     )
-    webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
-    webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
+    webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC,
+        cancel=True,
+    )
+    webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC_PENDING,
+    )
 
     try:
         result = asyncio.run(
@@ -160,8 +168,13 @@ def test_scenario_switch_rebuild_skips_workflow_sync_by_default(monkeypatch) -> 
             )
         )
     finally:
-        webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
-        webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
+        webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC,
+            cancel=True,
+        )
+        webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC_PENDING,
+        )
 
     assert result["accepted"] is True
     assert result["workflow_sync"]["skipped"] is True
@@ -436,8 +449,13 @@ def test_scenario_switch_rebuild_can_defer_workflow_sync(monkeypatch) -> None:
         "adaos.services.yjs.store",
         types.SimpleNamespace(reset_ystore_for_webspace=lambda _webspace_id: None),
     )
-    webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
-    webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
+    webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC,
+        cancel=True,
+    )
+    webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC_PENDING,
+    )
 
     async def _run() -> dict[str, object]:
         result = await webspace_runtime_module.rebuild_webspace_from_sources(
@@ -448,7 +466,10 @@ def test_scenario_switch_rebuild_can_defer_workflow_sync(monkeypatch) -> None:
             source_of_truth="scenario_switch",
             reseed_from_scenario=False,
         )
-        task = webspace_runtime_module._WORKFLOW_SYNC_TASKS.get("phase2-deferred-workflow")
+        task = webspace_runtime_module._TASK_STATE.get_task(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC,
+            "phase2-deferred-workflow",
+        )
         assert task is not None
         await task
         return result
@@ -456,8 +477,13 @@ def test_scenario_switch_rebuild_can_defer_workflow_sync(monkeypatch) -> None:
     try:
         result = asyncio.run(_run())
     finally:
-        webspace_runtime_module._WORKFLOW_SYNC_TASKS.clear()
-        webspace_runtime_module._WORKFLOW_SYNC_PENDING.clear()
+        webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC,
+            cancel=True,
+        )
+        webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.WORKFLOW_SYNC_PENDING,
+        )
 
     assert result["accepted"] is True
     assert result["workflow_sync"]["deferred"] is True
@@ -526,8 +552,13 @@ def test_scenario_switch_rebuild_ignores_deprecated_live_room_defer_env(monkeypa
         "adaos.services.yjs.store",
         types.SimpleNamespace(reset_ystore_for_webspace=lambda _webspace_id: None),
     )
-    webspace_runtime_module._LIVE_ROOM_REFRESH_TASKS.clear()
-    webspace_runtime_module._LIVE_ROOM_REFRESH_PENDING.clear()
+    webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.LIVE_ROOM_REFRESH,
+        cancel=True,
+    )
+    webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+        webspace_runtime_module._TASK_STATE.LIVE_ROOM_REFRESH_PENDING,
+    )
 
     async def _run() -> dict[str, object]:
         result = await webspace_runtime_module.rebuild_webspace_from_sources(
@@ -543,8 +574,13 @@ def test_scenario_switch_rebuild_ignores_deprecated_live_room_defer_env(monkeypa
     try:
         result = asyncio.run(_run())
     finally:
-        webspace_runtime_module._LIVE_ROOM_REFRESH_TASKS.clear()
-        webspace_runtime_module._LIVE_ROOM_REFRESH_PENDING.clear()
+        webspace_runtime_module._TASK_STATE.clear_tasks(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.LIVE_ROOM_REFRESH,
+            cancel=True,
+        )
+        webspace_runtime_module._TASK_STATE.clear_records(  # noqa: SLF001
+            webspace_runtime_module._TASK_STATE.LIVE_ROOM_REFRESH_PENDING,
+        )
 
     assert result["accepted"] is True
     assert result["live_room_refresh"]["ok"] is True

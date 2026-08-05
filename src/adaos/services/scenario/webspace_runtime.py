@@ -76,35 +76,13 @@ _CACHE_STATE = WebspaceCacheState()
 _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
 _PROJECTION_SERVICE = WebspaceProjectionService()
 _SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
-_SCENARIO_SWITCH_REBUILD_TASKS = _TASK_STATE.scenario_switch_rebuild_tasks
-_WEBSPACE_REBUILD_STATUS = _TASK_STATE.webspace_rebuild_status
-_WEBSPACE_RECOVERY_COMMAND_CACHE = _TASK_STATE.webspace_recovery_command_cache
 _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
-_SKILL_RUNTIME_REBUILD_TASKS = _TASK_STATE.skill_runtime_rebuild_tasks
-_SKILL_RUNTIME_REBUILD_PENDING = _TASK_STATE.skill_runtime_rebuild_pending
-_SKILL_RUNTIME_REBUILD_STATS = _TASK_STATE.skill_runtime_rebuild_stats
-# Compatibility scalar for callers that still inspect or reset the historical
-# module-level task directly. Scheduling keeps it synchronized with TaskState.
-_WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
-_WORKFLOW_SYNC_TASKS = _TASK_STATE.workflow_sync_tasks
-_WORKFLOW_SYNC_PENDING = _TASK_STATE.workflow_sync_pending
-_WORKFLOW_SYNC_STATS = _TASK_STATE.workflow_sync_stats
-_LIVE_ROOM_REFRESH_TASKS = _TASK_STATE.live_room_refresh_tasks
-_LIVE_ROOM_REFRESH_PENDING = _TASK_STATE.live_room_refresh_pending
-_LIVE_ROOM_REFRESH_STATS = _TASK_STATE.live_room_refresh_stats
-_BUILDER_YSTORE_BACKUP_TASKS = _TASK_STATE.builder_ystore_backup_tasks
 _SKILL_DECLS_CACHE_TTL_S = 300.0
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
-_MEMBER_SNAPSHOT_REBUILD_AT = _TASK_STATE.member_snapshot_rebuild_at
-_MEMBER_SNAPSHOT_REBUILD_TASKS = _TASK_STATE.member_snapshot_rebuild_tasks
-_MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS = _TASK_STATE.member_snapshot_rebuild_delayed_tasks
-_MEMBER_SNAPSHOT_REBUILD_DIRTY = _TASK_STATE.member_snapshot_rebuild_dirty
 
 
 def _is_control_flow_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
-_MEMBER_SNAPSHOT_REBUILD_STATS = _TASK_STATE.member_snapshot_rebuild_stats
-_MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT = _TASK_STATE.member_snapshot_rebuild_material_fingerprint
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
@@ -295,7 +273,7 @@ def _skill_runtime_rebuild_debounce_s() -> float:
 
 def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    stats = _SKILL_RUNTIME_REBUILD_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -304,7 +282,7 @@ def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
             "completed_total": 0,
             "failed_total": 0,
         }
-        _SKILL_RUNTIME_REBUILD_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_STATS, key, stats)
     return stats
 
 
@@ -316,7 +294,7 @@ def _merge_skill_runtime_rebuild_request(
     reason: str,
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    pending = _SKILL_RUNTIME_REBUILD_PENDING.get(key)
+    pending = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
     if pending is None:
         pending = {
             "webspace_id": key,
@@ -327,7 +305,7 @@ def _merge_skill_runtime_rebuild_request(
             "updated_at": time.time(),
             "request_count": 0,
         }
-        _SKILL_RUNTIME_REBUILD_PENDING[key] = pending
+        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key, pending)
     action_token = str(action or "").strip() or "skill_runtime_sync"
     reason_token = str(reason or "").strip() or action_token
     pending["request_count"] = int(pending.get("request_count") or 0) + 1
@@ -375,8 +353,8 @@ def schedule_skill_runtime_rebuild(
         source_of_truth=source_of_truth,
         reason=reason or action,
     )
-    existing = _SKILL_RUNTIME_REBUILD_TASKS.get(key)
-    if existing is not None and not existing.done():
+    existing = _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key)
+    if existing is not None:
         stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
         return {
             "scheduled": True,
@@ -398,13 +376,13 @@ def _start_skill_runtime_rebuild_task(
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     stats = stats or _skill_runtime_rebuild_stats(key)
-    pending = pending or _SKILL_RUNTIME_REBUILD_PENDING.get(key) or {}
+    pending = pending or _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key) or {}
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     task = asyncio.create_task(
         _run_skill_runtime_rebuild_coalesced(key),
         name=f"skill-runtime-rebuild:{key}",
     )
-    _SKILL_RUNTIME_REBUILD_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.SKILL_RUNTIME, key, task)
     return {
         "scheduled": True,
         "mode": "coalesced",
@@ -424,7 +402,7 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
             delay_s = _skill_runtime_rebuild_debounce_s()
             if delay_s > 0:
                 await asyncio.sleep(delay_s)
-            pending = _SKILL_RUNTIME_REBUILD_PENDING.pop(key, None)
+            pending = _TASK_STATE.pop_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
             if not pending:
                 return
             actions = list(pending.get("actions") or [])
@@ -455,13 +433,15 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
                     action,
                     exc_info=True,
                 )
-            if key not in _SKILL_RUNTIME_REBUILD_PENDING:
+            if not _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key):
                 return
     finally:
         current = asyncio.current_task()
-        if _SKILL_RUNTIME_REBUILD_TASKS.get(key) is current:
-            _SKILL_RUNTIME_REBUILD_TASKS.pop(key, None)
-        if key in _SKILL_RUNTIME_REBUILD_PENDING and key not in _SKILL_RUNTIME_REBUILD_TASKS:
+        _TASK_STATE.pop_task(_TASK_STATE.SKILL_RUNTIME, key, expected=current)
+        if (
+            _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
+            and _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key) is None
+        ):
             _start_skill_runtime_rebuild_task(key)
 
 
@@ -499,7 +479,7 @@ def _member_snapshot_desktop_material_fingerprint(node_id: str) -> str:
 
 
 def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
-    stats = _MEMBER_SNAPSHOT_REBUILD_STATS.get(task_key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -518,20 +498,20 @@ def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
             "last_completed_request_id": "",
             "last_delayed_request_id": "",
         }
-        _MEMBER_SNAPSHOT_REBUILD_STATS[task_key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key, stats)
     return stats
 
 
 def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, Any]:
     items: list[Dict[str, Any]] = []
     now_ts = time.time()
-    for task_key, raw_stats in list(_MEMBER_SNAPSHOT_REBUILD_STATS.items()):
+    for task_key, raw_stats in _TASK_STATE.record_items(_TASK_STATE.MEMBER_SNAPSHOT_STATS):
         if not isinstance(raw_stats, dict):
             continue
         node_id, _, webspace_id = str(task_key or "").partition("\0")
-        dirty = dict(_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {})
-        task = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-        delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
+        dirty = dict(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {})
+        task = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+        delayed = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
         last_requested_at = float(raw_stats.get("last_requested_at") or 0.0)
         last_completed_at = float(raw_stats.get("last_completed_at") or 0.0)
         items.append(
@@ -607,7 +587,7 @@ def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
 
 
 def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str, request_id: str | None = None) -> None:
-    dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key)
+    dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key)
     if dirty is None:
         dirty = {
             "count": 0,
@@ -621,7 +601,7 @@ def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str
     dirty["last_mode"] = str(mode or "").strip() or "coalesced"
     dirty["last_requested_at"] = time.time()
     dirty["last_request_id"] = str(request_id or "").strip() or str(dirty.get("last_request_id") or "").strip()
-    _MEMBER_SNAPSHOT_REBUILD_DIRTY[task_key] = dirty
+    _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key, dirty)
     stats = _member_snapshot_rebuild_stats(task_key)
     if mode == "task_running":
         stats["coalesced_running_total"] = int(stats.get("coalesced_running_total") or 0) + 1
@@ -641,8 +621,8 @@ def _schedule_member_snapshot_rebuild_delayed(
     request_id: str | None = None,
 ) -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
-    existing = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
-    if existing is not None and not existing.done():
+    existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
+    if existing is not None:
         return
     delayed_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
         webspace_id=webspace_id,
@@ -654,31 +634,34 @@ def _schedule_member_snapshot_rebuild_delayed(
     async def _runner() -> None:
         try:
             await asyncio.sleep(max(0.0, float(delay_s)))
-            if task_key not in _MEMBER_SNAPSHOT_REBUILD_DIRTY:
+            if not _TASK_STATE.has_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key):
                 return
-            current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-            if current is not None and not current.done():
+            current = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+            if current is not None:
                 return
-            _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
+            _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, task_key, time.monotonic())
             stats = _member_snapshot_rebuild_stats(task_key)
             stats["delayed_total"] = int(stats.get("delayed_total") or 0) + 1
-            delayed_reason = str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
+            dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {}
+            delayed_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
             _schedule_member_snapshot_rebuild(
                 webspace_id=webspace_id,
                 node_id=node_id,
                 reason=f"{delayed_reason}:delayed",
-                request_id=str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_request_id") or delayed_request_id),
+                request_id=str(dirty.get("last_request_id") or delayed_request_id),
             )
         finally:
-            current_delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
-            if current_delayed is task:
-                _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
+            _TASK_STATE.pop_task(
+                _TASK_STATE.MEMBER_SNAPSHOT_DELAYED,
+                task_key,
+                expected=task,
+            )
 
     task = asyncio.create_task(
         _runner(),
         name=f"member-snapshot-rebuild-delayed:{webspace_id}:{node_id}",
     )
-    _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS[task_key] = task
+    _TASK_STATE.put_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key, task)
 
 
 def _webspace_runtime_async_write_meta(*, root_names: list[str], source: str):
@@ -789,17 +772,20 @@ def _claim_recovery_command_once(
     now = time.time()
     expired = [
         key
-        for key, entry in _WEBSPACE_RECOVERY_COMMAND_CACHE.items()
+        for key, entry in _TASK_STATE.record_items(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
         if now - float(entry.get("ts") or 0.0) > ttl_s
     ]
-    for key in expired:
-        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(key, None)
-    while len(_WEBSPACE_RECOVERY_COMMAND_CACHE) >= _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT:
-        oldest_key = min(
-            _WEBSPACE_RECOVERY_COMMAND_CACHE,
-            key=lambda item: float(_WEBSPACE_RECOVERY_COMMAND_CACHE[item].get("ts") or 0.0),
+    _TASK_STATE.discard_records(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, expired)
+    while (
+        _TASK_STATE.record_count(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
+        >= _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT
+    ):
+        records = _TASK_STATE.record_items(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
+        oldest_key, _oldest = min(
+            records,
+            key=lambda item: float(item[1].get("ts") or 0.0),
         )
-        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(oldest_key, None)
+        _TASK_STATE.pop_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, oldest_key)
 
     key = _recovery_command_cache_key(
         webspace_id=webspace_id,
@@ -807,7 +793,7 @@ def _claim_recovery_command_once(
         scenario_id=scenario_id,
         cmd_id=cmd_id,
     )
-    existing = _WEBSPACE_RECOVERY_COMMAND_CACHE.get(key)
+    existing = _TASK_STATE.get_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, key)
     if existing:
         duplicate = dict(existing)
         duplicate["age_s"] = round(max(0.0, now - float(existing.get("ts") or now)), 3)
@@ -816,7 +802,7 @@ def _claim_recovery_command_once(
         duplicate["cache_key"] = key
         return False, duplicate
 
-    _WEBSPACE_RECOVERY_COMMAND_CACHE[key] = {
+    _TASK_STATE.put_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, key, {
         "ts": now,
         "webspace_id": str(webspace_id or "").strip() or "default",
         "action": str(action or "").strip() or "reload",
@@ -824,7 +810,7 @@ def _claim_recovery_command_once(
         "fingerprint": str(fingerprint or "").strip(),
         "cmd_id": cmd_id,
         "cache_key": key,
-    }
+    })
     return True, None
 
 
@@ -4628,7 +4614,7 @@ def _pending_materialization_snapshot(
 
 def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     current.update(fields)
     if str(current.get("status") or "").strip() == "ready" and "invalidation_reason" not in fields:
         current.pop("invalidation_reason", None)
@@ -4636,7 +4622,7 @@ def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, A
         current.pop("materialized_payload", None)
     current["webspace_id"] = target
     current["updated_at"] = time.time()
-    _WEBSPACE_REBUILD_STATUS[target] = current
+    _TASK_STATE.put_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target, current)
     return dict(current)
 
 
@@ -4649,7 +4635,7 @@ def invalidate_webspace_materialization_cache(
     scenario_id: str | None = None,
 ) -> dict[str, Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     current_materialization = (
         current.get("materialization") if isinstance(current.get("materialization"), Mapping) else {}
     )
@@ -4923,7 +4909,7 @@ def _set_webspace_rebuild_status_if_current(webspace_id: str, request_id: str | 
     target = str(webspace_id or "").strip()
     request_token = str(request_id or "").strip()
     if request_token:
-        current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+        current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
         current_request = str(current.get("request_id") or "").strip()
         if current_request and current_request != request_token:
             return current
@@ -4954,7 +4940,7 @@ def _raise_if_rebuild_request_superseded(webspace_id: str, request_id: str | Non
 
 def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     if not current:
         return {
             "webspace_id": target,
@@ -5022,7 +5008,7 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
 
 def get_webspace_rebuild_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
     target = str(webspace_id or "").strip()
-    current = _WEBSPACE_REBUILD_STATUS.get(target)
+    current = _TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target)
     if not isinstance(current, Mapping):
         return None
     if str(current.get("status") or "").strip() != "ready" or bool(current.get("pending")):
@@ -8204,11 +8190,9 @@ def _schedule_webspace_listing_sync(
     reason: str,
     webspace_id: str | None = None,
 ) -> dict[str, Any]:
-    global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
-
-    current = _WEBSPACE_LISTING_SYNC_TASK
-    _TASK_STATE.webspace_listing_sync_task = current
-    if current is not None and not current.done():
+    task_key = "listing"
+    current = _TASK_STATE.active_task(_TASK_STATE.WEBSPACE_LISTING, task_key)
+    if current is not None:
         return {
             "scheduled": True,
             "coalesced": True,
@@ -8231,18 +8215,17 @@ def _schedule_webspace_listing_sync(
         except Exception:
             _log.warning("post-ready webspace listing sync failed reason=%s", reason, exc_info=True)
         finally:
-            global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
-            if _TASK_STATE.webspace_listing_sync_task is task:
-                _TASK_STATE.webspace_listing_sync_task = None
-            if _WEBSPACE_LISTING_SYNC_TASK is task:
-                _WEBSPACE_LISTING_SYNC_TASK = None
+            _TASK_STATE.pop_task(
+                _TASK_STATE.WEBSPACE_LISTING,
+                task_key,
+                expected=task,
+            )
 
     task = asyncio.create_task(
         _runner(),
         name=f"webspace-listing-sync:{str(reason or 'background')[:40]}",
     )
-    _TASK_STATE.webspace_listing_sync_task = task
-    _WEBSPACE_LISTING_SYNC_TASK = task
+    _TASK_STATE.put_task(_TASK_STATE.WEBSPACE_LISTING, task_key, task)
     return {
         "scheduled": True,
         "coalesced": False,
@@ -8253,7 +8236,7 @@ def _schedule_webspace_listing_sync(
 
 def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _LIVE_ROOM_REFRESH_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -8265,7 +8248,7 @@ def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _LIVE_ROOM_REFRESH_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key, stats)
     return stats
 
 
@@ -8299,9 +8282,9 @@ def _schedule_live_room_refresh(
         request["materialized_payload"] = _clone_json_like(materialized_payload)
     if isinstance(materialization_identity, Mapping) and materialization_identity:
         request["materialization_identity"] = _clone_json_like(materialization_identity)
-    current = _LIVE_ROOM_REFRESH_TASKS.get(key)
-    if current is not None and not current.done():
-        _LIVE_ROOM_REFRESH_PENDING[key] = request
+    current = _TASK_STATE.active_task(_TASK_STATE.LIVE_ROOM_REFRESH, key)
+    if current is not None:
+        _TASK_STATE.put_record(_TASK_STATE.LIVE_ROOM_REFRESH_PENDING, key, request)
         stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
         return {
             "scheduled": True,
@@ -8317,7 +8300,10 @@ def _schedule_live_room_refresh(
                 delay = _live_room_refresh_debounce_s()
                 if delay > 0:
                     await asyncio.sleep(delay)
-                pending_before_start = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+                pending_before_start = _TASK_STATE.pop_record(
+                    _TASK_STATE.LIVE_ROOM_REFRESH_PENDING,
+                    key,
+                )
                 if pending_before_start:
                     current_request = dict(pending_before_start)
                 active_reason = str(current_request.get("reason") or "").strip() or "live_room_refresh"
@@ -8368,19 +8354,21 @@ def _schedule_live_room_refresh(
                         active_reason,
                         exc_info=True,
                     )
-                next_request = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
+                next_request = _TASK_STATE.pop_record(
+                    _TASK_STATE.LIVE_ROOM_REFRESH_PENDING,
+                    key,
+                )
                 if not next_request:
                     break
                 current_request = dict(next_request)
         finally:
-            if _LIVE_ROOM_REFRESH_TASKS.get(key) is task:
-                _LIVE_ROOM_REFRESH_TASKS.pop(key, None)
+            _TASK_STATE.pop_task(_TASK_STATE.LIVE_ROOM_REFRESH, key, expected=task)
 
     task = asyncio.create_task(
         _runner(request),
         name=f"live-room-refresh:{key}"[:120],
     )
-    _LIVE_ROOM_REFRESH_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.LIVE_ROOM_REFRESH, key, task)
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     return {
         "scheduled": True,
@@ -8397,8 +8385,8 @@ def _schedule_builder_ystore_snapshot_backup(
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     reason_token = str(reason or "").strip() or "builder_revision_snapshot_backup"
-    current = _BUILDER_YSTORE_BACKUP_TASKS.get(key)
-    if current is not None and not current.done():
+    current = _TASK_STATE.active_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key)
+    if current is not None:
         return {
             "scheduled": True,
             "coalesced": True,
@@ -8432,11 +8420,14 @@ def _schedule_builder_ystore_snapshot_backup(
             )
 
     task = loop.create_task(_runner(), name=f"builder-ystore-backup:{key}"[:120])
-    _BUILDER_YSTORE_BACKUP_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key, task)
 
     def _done(done: asyncio.Task[Any]) -> None:
-        if _BUILDER_YSTORE_BACKUP_TASKS.get(key) is done:
-            _BUILDER_YSTORE_BACKUP_TASKS.pop(key, None)
+        _TASK_STATE.pop_task(
+            _TASK_STATE.BUILDER_YSTORE_BACKUP,
+            key,
+            expected=done,
+        )
         try:
             done.result()
         except asyncio.CancelledError:
@@ -8460,7 +8451,7 @@ def _schedule_builder_ystore_snapshot_backup(
 
 def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _WORKFLOW_SYNC_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -8473,7 +8464,7 @@ def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _WORKFLOW_SYNC_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key, stats)
     return stats
 
 
@@ -8500,9 +8491,9 @@ def _schedule_workflow_sync(
         "scenario_id": scenario_token,
         "reason": str(reason or "").strip() or "workflow_sync",
     }
-    current = _WORKFLOW_SYNC_TASKS.get(key)
-    if current is not None and not current.done():
-        _WORKFLOW_SYNC_PENDING[key] = request
+    current = _TASK_STATE.active_task(_TASK_STATE.WORKFLOW_SYNC, key)
+    if current is not None:
+        _TASK_STATE.put_record(_TASK_STATE.WORKFLOW_SYNC_PENDING, key, request)
         stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
         return {
             "scheduled": True,
@@ -8519,7 +8510,10 @@ def _schedule_workflow_sync(
                 delay = _workflow_sync_debounce_s()
                 if delay > 0:
                     await asyncio.sleep(delay)
-                pending_before_start = _WORKFLOW_SYNC_PENDING.pop(key, None)
+                pending_before_start = _TASK_STATE.pop_record(
+                    _TASK_STATE.WORKFLOW_SYNC_PENDING,
+                    key,
+                )
                 if pending_before_start:
                     current_request = dict(pending_before_start)
                 started = time.perf_counter()
@@ -8550,19 +8544,21 @@ def _schedule_workflow_sync(
                         active_reason,
                         exc_info=True,
                     )
-                next_request = _WORKFLOW_SYNC_PENDING.pop(key, None)
+                next_request = _TASK_STATE.pop_record(
+                    _TASK_STATE.WORKFLOW_SYNC_PENDING,
+                    key,
+                )
                 if not next_request:
                     break
                 current_request = dict(next_request)
         finally:
-            if _WORKFLOW_SYNC_TASKS.get(key) is task:
-                _WORKFLOW_SYNC_TASKS.pop(key, None)
+            _TASK_STATE.pop_task(_TASK_STATE.WORKFLOW_SYNC, key, expected=task)
 
     task = asyncio.create_task(
         _runner(request),
         name=f"workflow-sync:{key}:{scenario_token}"[:120],
     )
-    _WORKFLOW_SYNC_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.WORKFLOW_SYNC, key, task)
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     return {
         "scheduled": True,
@@ -9163,10 +9159,16 @@ async def _schedule_member_snapshot_rebuild_from_event(
         stats["last_requested_at"] = time.time()
         stats["last_request_id"] = request_id
         if force_rebuild:
-            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.pop(key, None)
+            _TASK_STATE.pop_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+            )
         material_fingerprint = _member_snapshot_desktop_material_fingerprint(node_id)
         if material_fingerprint:
-            previous_fingerprint = _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.get(key)
+            previous_fingerprint = _TASK_STATE.get_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+            )
             if previous_fingerprint == material_fingerprint and not force_rebuild:
                 stats["skipped_unchanged_total"] = int(stats.get("skipped_unchanged_total") or 0) + 1
                 stats["last_skipped_unchanged_at"] = time.time()
@@ -9179,13 +9181,17 @@ async def _schedule_member_snapshot_rebuild_from_event(
                     material_fingerprint[:12],
                 )
                 continue
-            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT[key] = material_fingerprint
+            _TASK_STATE.put_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+                material_fingerprint,
+            )
             stats["last_material_fingerprint"] = material_fingerprint
-        existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(key)
-        if existing is not None and not existing.done():
+        existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, key)
+        if existing is not None:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
             continue
-        last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
+        last_at = float(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key) or 0.0)
         if not force_rebuild and interval_s > 0 and last_at > 0 and now - last_at < interval_s:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window", request_id=request_id)
             _schedule_member_snapshot_rebuild_delayed(
@@ -9196,7 +9202,7 @@ async def _schedule_member_snapshot_rebuild_from_event(
                 request_id=request_id,
             )
             continue
-        _MEMBER_SNAPSHOT_REBUILD_AT[key] = now
+        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key, now)
         _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason, request_id=request_id)
 
 
@@ -9249,11 +9255,11 @@ def _schedule_member_snapshot_rebuild(
         current_task = asyncio.current_task()
     except RuntimeError:
         current_task = None
-    delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
+    delayed = _TASK_STATE.pop_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
     if delayed is not None and delayed is not current_task and not delayed.done():
         delayed.cancel()
-    existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-    if existing and not existing.done():
+    existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+    if existing:
         _mark_member_snapshot_rebuild_dirty(task_key=task_key, reason=reason, mode="task_running", request_id=request_id)
         return
     stats = _member_snapshot_rebuild_stats(task_key)
@@ -9296,7 +9302,7 @@ def _schedule_member_snapshot_rebuild(
             stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
             stats["last_completed_at"] = time.time()
             stats["last_completed_request_id"] = effective_request_id
-            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}
+            dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {}
             _log.info(
                 "completed member snapshot rebuild webspace=%s node_id=%s request_id=%s accepted=%s error=%s requested_total=%s scheduled_total=%s rerun_total=%s coalesced_running_total=%s coalesced_interval_total=%s delayed_total=%s dirty_pending=%s",
                 webspace_id,
@@ -9322,15 +9328,17 @@ def _schedule_member_snapshot_rebuild(
                 exc_info=True,
             )
         finally:
-            current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-            if current is task:
-                _MEMBER_SNAPSHOT_REBUILD_TASKS.pop(task_key, None)
+            _TASK_STATE.pop_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key, expected=task)
             if str(stats.get("current_request_id") or "").strip() == effective_request_id:
                 stats["current_request_id"] = ""
-            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.pop(task_key, None)
+            dirty = _TASK_STATE.pop_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key)
             if dirty:
                 stats["rerun_total"] = int(stats.get("rerun_total") or 0) + 1
-                _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
+                _TASK_STATE.put_record(
+                    _TASK_STATE.MEMBER_SNAPSHOT_LAST_AT,
+                    task_key,
+                    time.monotonic(),
+                )
                 rerun_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
                 _schedule_member_snapshot_rebuild(
                     webspace_id=webspace_id,
@@ -9343,7 +9351,7 @@ def _schedule_member_snapshot_rebuild(
         _runner(),
         name=f"member-snapshot-rebuild:{webspace_id}:{node_id}",
     )
-    _MEMBER_SNAPSHOT_REBUILD_TASKS[task_key] = task
+    _TASK_STATE.put_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key, task)
 
 
 async def _seed_member_snapshot_ydoc_defaults(*, webspace_id: str, node_id: str) -> None:
@@ -10339,10 +10347,6 @@ def _schedule_scenario_switch_rebuild(
         phase_timings_ms=initial_phase_timings,
         materialization=initial_materialization,
     )
-    existing = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
-    if existing and not existing.done():
-        existing.cancel()
-
     async def _runner() -> None:
         try:
             route_yield_s = _scenario_switch_background_route_yield_s()
@@ -10434,15 +10438,22 @@ def _schedule_scenario_switch_rebuild(
                 exc_info=True,
             )
         finally:
-            current = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
-            if current is task:
-                _SCENARIO_SWITCH_REBUILD_TASKS.pop(webspace_id, None)
+            _TASK_STATE.pop_task(
+                _TASK_STATE.SCENARIO_SWITCH,
+                webspace_id,
+                expected=task,
+            )
 
     task = asyncio.create_task(
         _runner(),
         name=f"webspace-scenario-switch:{webspace_id}:{scenario_id}",
     )
-    _SCENARIO_SWITCH_REBUILD_TASKS[webspace_id] = task
+    _TASK_STATE.put_task(
+        _TASK_STATE.SCENARIO_SWITCH,
+        webspace_id,
+        task,
+        cancel_existing=True,
+    )
 
 
 async def reload_webspace_from_scenario(
@@ -11299,7 +11310,7 @@ async def switch_webspace_scenario(
             _record_timing(timings_ms, "sync_listing", stage_started)
 
         if wait_for_rebuild:
-            existing_task = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
+            existing_task = _TASK_STATE.get_task(_TASK_STATE.SCENARIO_SWITCH, webspace_id)
             if existing_task and not existing_task.done():
                 stage_started = time.perf_counter()
                 try:

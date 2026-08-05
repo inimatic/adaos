@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from adaos.services.scenario.webspace_components import (
     MaterializationExecutorOwner,
     WebspaceCacheState,
@@ -11,7 +15,11 @@ def test_webspace_state_owners_are_isolated() -> None:
     tasks = WebspaceTaskState()
     caches = WebspaceCacheState()
 
-    tasks.webspace_rebuild_status["alpha"] = {"state": "running"}
+    tasks.put_record(
+        tasks.WEBSPACE_REBUILD_STATUS,
+        "alpha",
+        {"state": "running"},
+    )
     caches.put_resolved_webspace(
         "fingerprint",
         {"scenario_id": "home", "_cache_size_bytes": 10},
@@ -19,13 +27,40 @@ def test_webspace_state_owners_are_isolated() -> None:
         max_bytes=100,
     )
 
-    assert tasks.webspace_rebuild_status == {"alpha": {"state": "running"}}
+    assert tasks.get_record(tasks.WEBSPACE_REBUILD_STATUS, "alpha") == {"state": "running"}
     assert caches.get_resolved_webspace("fingerprint") == {
         "scenario_id": "home",
         "_cache_size_bytes": 10,
     }
-    assert tasks.workflow_sync_tasks == {}
+    assert tasks.task_count(tasks.WORKFLOW_SYNC) == 0
     assert caches.clear_materialized_webspaces() == 0
+
+
+@pytest.mark.asyncio
+async def test_webspace_task_owner_replaces_and_finishes_by_identity() -> None:
+    tasks = WebspaceTaskState()
+    blocker = asyncio.Event()
+    first = asyncio.create_task(blocker.wait(), name="first")
+    second = asyncio.create_task(blocker.wait(), name="second")
+
+    tasks.put_task(tasks.SCENARIO_SWITCH, "desktop", first)
+    replaced = tasks.put_task(
+        tasks.SCENARIO_SWITCH,
+        "desktop",
+        second,
+        cancel_existing=True,
+    )
+    await asyncio.sleep(0)
+
+    assert replaced is first
+    assert first.cancelled()
+    assert tasks.pop_task(tasks.SCENARIO_SWITCH, "desktop", expected=first) is None
+    assert tasks.active_task(tasks.SCENARIO_SWITCH, "desktop") is second
+    assert tasks.pop_task(tasks.SCENARIO_SWITCH, "desktop", expected=second) is second
+
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
 
 
 def test_webspace_cache_owner_applies_lru_and_byte_limits() -> None:
