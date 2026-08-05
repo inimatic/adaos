@@ -4,7 +4,7 @@ Status: domain roadmap for the AdaOS workflow metamodel, validation,
 explanation, interaction projection, NLU mediation, and optional durable
 execution adapters.
 
-Last reviewed: 2026-08-04.
+Last reviewed: 2026-08-05.
 
 This roadmap implements the
 [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md).
@@ -67,6 +67,25 @@ record. A successful happy-path UI demonstration does not prove durability.
    External engine adoption is an optional decision produced by later
    reliability evidence.
 
+## Execution Protocol
+
+Further implementation is driven by this roadmap rather than by chat history:
+
+1. Every implementation slice names its GWR task ids and the owning domain
+   roadmap items before source changes begin.
+2. A newly discovered architecture gap is first added as a scoped checklist
+   item with priority, owner, dependencies, and acceptance evidence. An urgent
+   defect may be fixed immediately, but its roadmap/evidence update is part of
+   the same commit series.
+3. Commits update the exact checkbox text, inventory disposition, and evidence
+   record they satisfy. A test of a pure contract cannot close a production or
+   operational acceptance item.
+4. Compatibility paths receive a caller inventory, telemetry, replacement, and
+   removal gate. They are not extended as a convenient second target model.
+5. At the end of each slice, run the linked focused tests, documentation checks,
+   and one proportional machine trial; record failures and residual risks even
+   when the result is not accepted.
+
 ## Current Baseline
 
 The current repository has useful but fragmented foundations:
@@ -75,14 +94,14 @@ The current repository has useful but fragmented foundations:
 | --- | --- | --- |
 | Local events | `LocalEventBus` and `adaos.operational-event-envelope.v1` | implemented compatibility foundation; not durable orchestration |
 | Persistent node data | SQLite stores, conversation ledger, idempotent ingress records | implemented fragments; no shared workflow journal |
-| Human decisions | Pending Actions and several domain-specific confirmations | implemented compatibility path; no canonical interaction registry |
+| Human decisions | canonical ConversationInteraction/InteractionResponse registry plus Pending Actions and domain confirmations | semantic registry is validated locally; production callers and compatibility retirement remain incomplete |
 | Web actions | structured chat actions and page action runtime | partial projection; transport and authorization contracts differ |
 | Telegram actions | callback normalization, canonical keyboard projection, opaque token ingress, and idempotent response persistence | live read-only Builder turn with five inline actions validated 2026-07-31; mutating callbacks and provider receipts remain open |
-| Capability negotiation | renderer hints and channel-specific limits | no versioned effective profile or auditable presentation plan |
+| Capability negotiation | versioned capability profiles, deterministic negotiation, auditable presentation records, and compatibility renderer hints | semantic core is validated locally; live provider profiles, localization, and remaining caller migration are incomplete |
 | Asynchronous replies | ResponseEnvelope materialization, task records, and route fragments | completion, conversation materialization, and per-transport delivery are not one recovered protocol |
 | Builder workflow | active package-bound definition, persisted Change projection/Runs, restart-safe migration checkpoints, trial/publication evidence | strict active-WorkspaceLock path validated locally behind a feature flag; global default rollout and final compatibility-store retirement remain open |
-| Builder project coordination | manifests, selected project, Changes, releases, and component locks | no canonical Project portfolio/conflict aggregate |
-| Conversation stories | shared package/story schemas, deterministic no-LLM runner, workflow/statechart and Markdown/Mermaid export, Builder context admission, and executable reference package | validated-local; provider-backed NLU parsing, candidate-to-story promotion, and interactive replay remain open |
+| Builder project coordination | `adaos.builder.project.v1`, manifests, selected context, Changes, releases, component locks, and conflict/dependency index | canonical aggregate is validated locally; live caller migration and multi-user policy remain incomplete |
+| Conversation stories | shared package/story schemas, deterministic no-LLM runner, workflow/statechart and Markdown/Mermaid export, Builder context admission, and executable reference package | validated-local; production IntentProposal ingress, provider-backed parsing, candidate-to-story promotion, and interactive replay remain open |
 | Long-running tasks | local asyncio tasks, worker records, polling, domain retries | several implementations; no common pause/resume authority |
 | NATS | Core NATS transport and sidecar routing, bounded reconnect cleanup | at-most-once transport path; target-zone publish is not durable hub acceptance or a workflow journal |
 | Shared workflow metamodel | `src/adaos/abi/workflow.*`, compiler/resolver, strict manifest-bound loader, definition review, migration/composition fixtures, package workflow/validation/adapter/role locks | validated-local semantic, publication-admission, and activation foundation; live distributed ingress acceptance remains open |
@@ -326,8 +345,10 @@ blocked.
   containing state, target, progress, blockers, evidence, and allowed commands.
   `WorkflowResolver.describe()` now returns those facets from the canonical
   instance and the same guard evaluation used by command admission.
-- [x] `[must]` `GWR2-02` Derive `allowed_actions` from the same transitions and
-  guards used by `invoke()`; forbid separately maintained UI action tables.
+- [x] `[must]` `GWR2-02` Make the shared resolver derive `allowed_actions` from
+  the same transitions and guards used by `invoke()`. Separately maintained UI
+  action tables are prohibited by the target contract; remaining Builder
+  compatibility tables are an open cutover defect under GWR2-19.
 - [x] `[must]` `GWR2-03` Define `adaos.conversation.interaction.v1` as a semantic
   projection of commands, typed input, risk, and channel fallback. The shared
   projection adapter binds workflow commands into a durable Interaction.
@@ -407,6 +428,16 @@ blocked.
   ready executor are moved to `executor_unavailable` blockers, and any raw
   workflow description that tries to present such a command fails closed before
   Interaction/Presentation creation.
+- [ ] `[must]` `GWR2-19` Remove Builder handler-owned executable-command
+  allowlists, supplemental action tables, and hard-coded label maps. Render one
+  prioritized InteractionPresentation from canonical command legality,
+  authorization, executor readiness, and negotiated channel capabilities; no
+  navigation shortcut may evict the primary continuation command.
+- [ ] `[must]` `GWR2-20` Publish semantic i18n refs for workflow explanations,
+  affordance labels/descriptions, interactions, and outputs. Validate
+  `default_locale`, complete per-key English/Russian coverage, deterministic
+  fallback, catalog digests, locale-coherent presentations, and channel limits
+  after localization.
 
 ## GWR3. NLU Mediation and Informal Responses
 
@@ -426,10 +457,11 @@ resolver.
   semantic acts, alternatives, allowed-command snapshot, model identity, and
   disposition. The ABI and durable conversation-store record now preserve the
   complete proposal rather than only a selected intent label.
-- [x] `[must]` `GWR3-02` Resolve a deterministic action token without NLU and
-  route free text against its explicit pending interaction first. Opaque Web
-  and Telegram tokens retain the direct InteractionResponse path; only free
-  text enters `intent_mediation`.
+- [x] `[must]` `GWR3-02` Implement the deterministic mediation core that resolves
+  a valid action token without NLU and evaluates free text against its explicit
+  pending interaction first. Opaque Web and Telegram tokens retain the direct
+  InteractionResponse path. This checkbox proves the pure mediator and tests;
+  it does not claim that every production ingress already calls it.
 - [x] `[must]` `GWR3-03` Require clarification when more than one pending target
   or command context fits a free-text answer. Ambiguous candidates are stored
   and no Interaction generation changes.
@@ -460,6 +492,19 @@ resolver.
   numeric choices, and bounded yes/no forms use the deterministic mediator.
 - [x] `[deferred]` `GWR3-12` Defer autonomous workflow induction from arbitrary
   conversations.
+- [ ] `[must]` `GWR3-13` Route production Web, Telegram, voice, and skill-owned
+  `dialog.user_message` through one admitted conversational package and
+  `IntentProposal -> interaction/query/Issue/workflow.invoke` rail. The Router
+  resolves trusted owner/context/package scope but never classifies domain
+  intent itself.
+- [ ] `[must]` `GWR3-14` Retire direct mutation from Builder's private keyword/
+  regex parser and the legacy `nlp.intent.detected -> callSkill` dispatcher.
+  Domain matchers may remain only as proposal providers; compatibility traffic
+  is measured until replay and live-channel evidence reach zero bypasses.
+- [ ] `[must]` `GWR3-15` Add multilingual production conformance for informal
+  Prototype acceptance, Automation handoff, Trial decision, Publication
+  request, correction, negation, and ambiguity. NLU must produce locale-neutral
+  acts and must not depend on translated button prose.
 
 ## GWR4. Builder Domain Workflow Model
 
@@ -505,12 +550,15 @@ tests cover all legal and representative illegal paths.
   Publication, and notification as registered effects/activities rather than
   implicit phase code. The definition declares activity, retry,
   reconciliation, compensation, outbox, and asynchronous-reply policy; the
-  legacy executor is currently its bounded activity adapter.
+  legacy executor is currently its bounded activity adapter. This closes the
+  definition and adapter contract, not registration of every live Builder
+  executor.
 - [x] `[must]` `GWR4-07` Generate Lifecycle hierarchy, process summary,
   available controls, conversation focus, and Preview target from the same
   snapshot and lineage refs. Compatibility `builder.*` actions now carry the
   exact admitted workflow command and canonical generation, while the shared
   ConversationInteraction projection consumes the same `explain()` result.
+  Remaining handler filtering is a compatibility defect tracked by GWR4-28.
 - [x] `[must]` `GWR4-08` Keep Lifecycle selection and Preview selection as view
   context; neither changes the workflow without an explicit command. Tests
   prove an inspection/Preview update leaves canonical Change state and
@@ -522,7 +570,8 @@ tests cover all legal and representative illegal paths.
 - [x] `[should]` `GWR4-10` Add a compact workflow explanation to the chat so a
   user can ask what is happening, why, and what can happen next. Builder now
   derives one channel-neutral state/reason/next-command explanation from the
-  canonical snapshot and uses it as the Interaction Frame prompt.
+  canonical snapshot and uses it as the Interaction Frame prompt. Localized,
+  prioritized next-action rendering remains open under GWR4-29.
 - [ ] `[could]` `GWR4-11` Add a generated graph/timeline inspector as a rich
   detail view, not the primary control surface.
 - [x] `[deferred]` `GWR4-12` Defer simultaneous multi-user approval and artifact
@@ -632,6 +681,25 @@ tests cover all legal and representative illegal paths.
   projection persistence away from implicit `prompt_state.json` authority.
   Keep an explicit rollback to the prior complete WorkspaceLock, not a silent
   fallback to DEV source or a reconstructed transition catalogue.
+- [ ] `[must]` `GWR4-28` Cut the live Builder presenter over to the dependent
+  bridge `accept Prototype -> start Automation -> accept verification -> start
+  Trial -> accept Trial -> begin Publication`, using only canonical state,
+  guards, policy, executor readiness, and lineage. Remove `active_phase`, `gate`,
+  capability booleans, and handler allowlists as competing action authorities.
+- [ ] `[must]` `GWR4-29` Replace raw command-id lists and Russian handler prose
+  with a localized compact explanation that identifies the primary continuation,
+  secondary safe actions, blockers, and executor/input requirements from one
+  snapshot.
+- [ ] `[must]` `GWR4-30` Register concrete bounded Builder activities for
+  Prototype derivation/LLM, Codex Automation, validation, Trial activation and
+  observation, and Publication. Persist accepted/started/progress/
+  input-required/terminal/replied/delivered outcomes without re-executing an
+  activity on response redelivery.
+- [ ] `[must]` `GWR4-31` Migrate callers from
+  `prepare_trial_compatibility`/`publish_compatibility` to the normative waiting
+  and result transitions, reconcile the `trial_waiting` state with the declared
+  activity contract, then remove the shortcuts after shadow evidence proves no
+  remaining caller.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -649,7 +717,9 @@ lineage, evidence, and final Publication agree without direct state repair.
 - [x] `[must]` `GWR5-01` Run request -> Issues/Change -> Prototype or direct
   Automation -> verification -> Trial -> Publication through the canonical
   resolver. `test_builder_governed_e2e.py` takes a fresh empty scenario through
-  all dependent gates and ends in the canonical `published` state.
+  all dependent gates and ends in the canonical `published` state. This is a
+  deterministic semantic E2E with mocked/compatibility activities; it is not the
+  operational executor-backed acceptance proof required by GWR5-37.
 - [x] `[must]` `GWR5-02` Prove Web buttons, Telegram options, informal replies,
   and SDK commands invoke identical command identities and guards.
   `cross_channel_ingress_conformance` requires exactly `web`, `telegram`,
@@ -837,6 +907,17 @@ coverage.
 - [x] `[deferred]` `GWR5-36` Defer an interactive workflow/conversation studio
   until static graph/story exports, runner evidence, and package admission are
   stable.
+- [ ] `[must]` `GWR5-37` Complete one operational empty-scenario run on this
+  development machine through request -> Issues/Change -> Prototype ->
+  Automation -> verification -> Trial -> Publication using the built-in LLM and
+  isolated Codex executors, real persisted callbacks, restart-safe ReplyRoute,
+  and no manual state repair. Record exact package, workflow, activity, lineage,
+  release, and delivery evidence.
+- [ ] `[must]` `GWR5-38` Prove Web and Telegram semantic parity for the live
+  Builder bridge in English and Russian: free text and controls converge on the
+  same IntentProposal/InteractionResponse and command identities, used controls
+  are retired or replaced idempotently, and presentation remains locale-coherent
+  under pagination, fallback, reconnect, and resume.
 
 The 2026-08-04 local increment is recorded in the linked verification ledger.
 Commits `5e0ed333`, `6dfd3442`, `b0dd4fae`, and `b72f2a7d` respectively close
@@ -1118,6 +1199,15 @@ admitted, the GWR7 adapter:
 42. **Second-domain proof:** one non-Builder component is authored, packaged,
     activated, exercised as guest/registered, updated, and rolled back through
     the same shared contracts.
+43. **Localized semantic parity:** English and Russian free text and controls
+    resolve to the same locale-neutral command identities; fallback cannot mix
+    languages or silently remove a required action.
+44. **Single production interpretation rail:** Web, Telegram, and voice enter
+    the same package-bound IntentProposal mediation; direct legacy dispatch and
+    private Builder parsing cannot mutate governed state.
+45. **Operational Builder bridge:** a real built-in LLM/Codex/Trial/Publication
+    run reaches `published` through registered activities and recovered async
+    replies without compatibility transition shortcuts or manual repair.
 
 ## Definition of Done for This Roadmap
 
@@ -1146,7 +1236,15 @@ This roadmap is complete only when:
   rejected or activated by the same deterministic validation gates as
   hand-authored definitions;
 - Web and Telegram pass the same semantic interaction cases;
-- NLU cannot bypass allowed transitions or policy;
+- Web, Telegram, and voice free text use one package-bound IntentProposal rail;
+  private parsers and legacy dispatchers cannot bypass allowed transitions or
+  policy;
+- localized explanations, affordances, interactions, and outputs preserve one
+  command identity, have complete admitted catalog coverage, and pass channel
+  limits after localization without mixed-language presentation;
+- the operational Builder bridge has concrete ready executors and one recorded
+  LLM -> Codex -> Trial -> Publication acceptance run; semantic/mock E2E alone
+  is not completion evidence;
 - restart, duplicate, stale authority, cancellation, unknown outcome,
   upgrade, and backup/restore cases have repeatable evidence;
 - external provider selection is not required for semantic completion and, if

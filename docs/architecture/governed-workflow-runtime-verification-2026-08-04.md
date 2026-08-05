@@ -28,6 +28,15 @@ constructor. Enabling it by default in accepted environments, observing the
 rollback window, and then removing the compatibility constructor and legacy
 projection store are rollout work, not missing strict-path behavior.
 
+A 2026-08-05 architecture audit tightened this evidence boundary. The accepted
+tests prove the workflow/interaction/IntentProposal contracts and a deterministic
+semantic Builder path. They do **not** prove that live Web, Telegram, voice, and
+Builder private parsing already converge on one production intent-mediation
+rail; that all English/Russian presentation keys are ABI-bound and complete;
+that concrete LLM/Codex/Trial/Publication executors are registered; or that the
+full path ran without compatibility promotion transitions. Those are explicit
+open GWR2/GWR3/GWR4/GWR5 gates in the current roadmap.
+
 Publication and activation share
 `WorkspaceActivationManager.admit_release_candidate`. A role-policy mismatch,
 code/workflow mixture, stale validation lock, or adapter-binding mismatch fails
@@ -90,15 +99,22 @@ DBOS/Temporal/Restate decision remains postponed rather than silently selected.
 
 ## Remaining Gates
 
-1. Enable strict Builder package mode by default in an accepted deployment,
+1. Complete the localized semantic Interaction/Affordance ABI and migrate live
+   Web/Telegram/voice/Builder text to one package-bound IntentProposal rail;
+   retire private/direct mutation paths after measured compatibility coverage.
+2. Register concrete Builder activities, replace compatibility Trial/
+   Publication transitions with normative waiting/results, and record one real
+   built-in LLM -> isolated Codex -> Trial -> Publication run on an empty
+   scenario without manual repair.
+3. Enable strict Builder package mode by default in an accepted deployment,
    observe restart/rollback, then retire the compatibility constructor and
    migrate the remaining `prompt_state.json` projection authority.
-2. Implement and accept the GWR6-16 per-hub Telegram inbox and target-zone
+4. Implement and accept the GWR6-16 per-hub Telegram inbox and target-zone
    durable receipt; repeat live mutating callback coverage without weakening
    the local semantic gate.
-3. Keep direct-agent comparison metrics and runtime-failure-to-story promotion
+5. Keep direct-agent comparison metrics and runtime-failure-to-story promotion
    in their owning Builder/conversational roadmaps; they do not block the
    current data-driven workflow semantic model.
-4. Re-evaluate an external durable provider only when the persistence ADR's
+6. Re-evaluate an external durable provider only when the persistence ADR's
    distributed, availability, scale, timer, or operator-cost criterion is
    measured.

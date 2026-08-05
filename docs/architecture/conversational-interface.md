@@ -121,6 +121,33 @@ commands only after mediation:
 The same contract covers Builder chat, voice, Telegram, browser controls,
 skill-owned dialogs, and future agent handoffs.
 
+### One Runtime Interpretation Rail
+
+All channels and domain packages must converge on one runtime rail. They may
+contribute deterministic matchers or providers, but they must not create a
+second command authority:
+
+1. `dialog.user_message` enters with a trusted Conversation, ReplyRoute,
+   locale, actor, channel profile, and resolved package scope.
+2. A valid action token resolves directly to the pending
+   `InteractionResponse`; it does not pass through NLU again.
+3. Exact/ordinal/yes-no answers may resolve against the pending Interaction.
+4. Remaining text is evaluated by admitted package matchers and then by the
+   configured NLU/neural/LLM providers within that bounded package scope.
+5. Every interpretation is materialized as an `IntentProposal`, including
+   confidence, alternatives, evidence, target/context refs, and abstain or
+   clarification reason.
+6. The proposal is admitted as an Interaction response, read-only query, Issue
+   or feedback act, Builder Change candidate, or canonical `workflow.invoke`.
+
+The Router resolves conversation ownership, Builder/Webspace context, and the
+admitted package. It does not infer domain intent. Package-owned parsers are
+allowed only as proposal providers. A private parser that mutates state or a
+legacy `nlp.intent.detected -> callSkill` dispatcher is a compatibility rail,
+must be measured, and must have an explicit retirement gate. A protected
+operation inferred from free text requires the same authorization, generation,
+guards, and confirmation token as its rich-control equivalent.
+
 ## Core And Skill Integration
 
 The shared SDK contract must let a skill or scenario participate in conversation
@@ -132,7 +159,7 @@ A conversational package publishes:
 | --- | --- | --- |
 | `conversational/manifest.yaml` | package version, owner refs, workflow refs, source file list, locales, compiled-output refs, privacy defaults, and compatibility aliases | Builder, package admission, runtime compiler |
 | `input.yaml` | intent/capability descriptions, slot schemas, hard-negative classes, confidence/abstain policy, and links to workflow commands or read-only query handlers | NLU runtime, Teacher, story runner |
-| `affordances.yaml` | stable user-facing controls, nested targets, side-effect class, required capabilities, permission refs, preconditions, and presentation hints | NLU context, interaction projection, Builder |
+| `affordances.yaml` | stable user-facing controls, nested targets, side-effect class, required capabilities, permission refs, preconditions, presentation hints, localized label/description refs with fallback, and semantic priority | NLU context, interaction projection, Builder |
 | `entities.yaml` | exposed entity types, alias scope, canonical refs, privacy, ambiguity policy, and allowed actions | entity resolver, NLU providers, Teacher |
 | `repair.yaml` | no-match, no-input, correction, interruption, disambiguation, cancel, resume, slot-change, and retry policy | dialog runtime, story runner |
 | `output.yaml` | semantic response kinds, result modes, action groups, field templates, explanation slots, sensitivity, and channel fallback hints | response planner, channel adapters |
@@ -159,6 +186,30 @@ Generated skills may own domain parsers or specialized agents, but those
 components return proposals, outputs, or task evidence through these ports. They
 do not dispatch protected effects, mutate package source, or write transport
 messages directly as the target path.
+
+### Conversational Localization Contract
+
+Workflow and conversational identities are locale-neutral. Authored visible
+text is represented by a semantic text specification such as
+`{key, params, fallback}` rather than by a handler-local label map.
+
+- `workflow.json` owns stable reason and explanation keys;
+- `affordances.yaml` owns label/description keys, semantic priority, and a
+  source-language fallback;
+- `output.yaml` owns semantic response templates and explanation slots;
+- locale catalogs provide complete declared translations;
+- `conversational/manifest.yaml` declares `default_locale` and
+  `supported_locales` and binds every catalog into package digests.
+
+`ConversationInteraction` and `ConversationOutput` persist semantic text refs.
+`InteractionPresentation` and the response materialization record additionally
+persist requested/effective locale, catalog digest, resolved strings, and any
+fallback reason. Locale resolution is deterministic: explicit interaction
+locale, conversation preference, actor preference, package default, then the
+authored fallback. One presentation must not silently mix languages. Channel
+length, button-count, pagination, and truncation constraints are checked after
+localization. Action tokens and workflow command identities are invariant across
+locales.
 
 ## Conversational Output Contract
 
@@ -620,7 +671,8 @@ for their detailed gates and evidence.
   skill/scenario-owned input, output, affordance, repair, example, optional
   deterministic matcher, locale, and story sources.
 - [x] `[must]` Implement a Builder/SDK validation command that checks
-  conversational source schemas, cross-file refs, locale coverage, side-effect
+  conversational source schemas, cross-file refs, declared locale-file
+  cardinality, side-effect
   policy, and package cardinality. Workspace admission, package build, archive
   verification, Builder context assembly, and the developer SDK all use the
   same `conversational_pipeline` service.
@@ -634,6 +686,20 @@ for their detailed gates and evidence.
   operation catalog, and call the same canonical package pipeline as path-based
   SDK consumers. Builder exposes these ports as non-destructive scaffold and
   validation tools.
+- [ ] `[must]` Extend the conversational and interaction ABIs with semantic
+  i18n refs, `default_locale`, deterministic locale negotiation, catalog
+  digests, per-key coverage validation, coherent fallback, and channel-limit
+  tests after localization. English and Russian must be complete for the
+  Builder pilot; mixed or accidental Ukrainian presentation is a release
+  failure.
+- [ ] `[must]` Connect production `dialog.user_message` ingress for Web,
+  Telegram, and voice to the admitted package and canonical
+  `IntentProposal -> interaction/query/Issue/workflow.invoke` mediation rail.
+  Transport parity must be proven with the same semantic stories.
+- [ ] `[must]` Prevent governed mutation through private domain parsers or the
+  legacy `nlp.intent.detected -> callSkill` dispatcher. Keep compatibility
+  telemetry during migration and delete each rail only after production callers
+  and replay tests prove canonical coverage.
 - [ ] `[must]` Define the skill/scenario SDK ports for validation,
   compilation, proposal emission, semantic output, interactions, Teacher
   candidate capture, and Builder promotion. Path- and project-bound scaffold,
@@ -725,19 +791,23 @@ for their detailed gates and evidence.
 
 The remaining work should proceed in dependency order:
 
-1. Migrate the live NLU/dispatcher path from direct `nlp.intent.detected`
-   authority to `IntentProposal -> workflow/skill invocation admission`, while
-   retaining the event as a measured compatibility projection.
-2. Complete Teacher-to-Builder execution: carry candidate/privacy refs into the
+1. Publish and validate the localized semantic Interaction/Affordance ABI so
+   every subsequent Web and Telegram projection uses stable commands and one
+   catalog-backed presentation contract.
+2. Migrate live Web, Telegram, voice, Builder private parsing, and the legacy
+   NLU dispatcher to the package-bound `IntentProposal -> interaction/query/
+   Issue/workflow.invoke` rail while retaining measured compatibility
+   projections until their retirement gates pass.
+3. Complete Teacher-to-Builder execution: carry candidate/privacy refs into the
    context packet, create a durable Change, apply only bounded package patches,
    run the canonical validator/stories, and link release or rejection back to
    the source overlay.
-3. Add provider compilation contracts and implementations with source digest,
+4. Add provider compilation contracts and implementations with source digest,
    compatibility, rollout, active/previous version, and rollback evidence.
-4. Promote repeated failures into reviewable regression-story candidates and
+5. Promote repeated failures into reviewable regression-story candidates and
    connect failed stories to quarantine/rollback without deleting unrelated
    runtime learning.
-5. Use the bounded DEV Builder pilot to harden package authoring, diagnostics,
+6. Use the bounded DEV Builder pilot to harden package authoring, diagnostics,
    and story-first scenario development; then finish output-derived
    presentation identity, structured package editing UX, OpenTelemetry export,
    and direct-agent comparison metrics. A2A/MCP remain optional adapters over

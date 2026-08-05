@@ -312,7 +312,7 @@ The minimum transition catalogue is:
 | `start_prototype` | `ready` | `prototype_editing` | Route requires interface/design work; bounded mock/data policy exists |
 | `request_prototype_review` | `prototype_editing` | `prototype_review` | Immutable Prototype revision and active Review set exist |
 | `revise_prototype` | `prototype_review`, `verification`, `trial_review` | `prototype_editing` | Creates a new revision line; prior artifacts remain immutable |
-| `accept_prototype` | `prototype_review` | `automation_ready` | Approval binds the exact Prototype digest |
+| `accept_prototype` | `prototype_editing`, `prototype_review` | `automation_ready` | Approval binds the exact Prototype digest; policy may require an explicit review first |
 | `choose_direct_automation` | `ready` | `automation_ready` | No unresolved interface Issue requires Prototype review |
 | `start_automation` | `automation_ready` | `automation_waiting` | Exact base, source Prototype when present, context packet, and Run are bound |
 | `record_automation_result` | `automation_waiting` | `verification`, `automation_ready`, or `reconciliation_required` | Typed success, known failure, or uncertain outcome |
@@ -335,6 +335,44 @@ The `*_waiting` states are business waits pointing to a Run. Run attempt state
 (`queued`, `working`, `input_required`, `completed`, `failed`,
 `outcome_unknown`) remains separate and cannot be copied into the Change state
 enum.
+
+### Dependent Conversational Bridge
+
+The primary conversational action follows the focused Change state. Prototype,
+Automation, Trial, and Publication are not independent menus and a channel does
+not display every stage command at once:
+
+| Focused state | Primary action | Secondary actions |
+| --- | --- | --- |
+| `prototype_editing` / `prototype_review` | Accept the exact Prototype | Refine, request review, inspect Preview |
+| `automation_ready` | Start Automation | Inspect accepted Prototype, amend the Change, return for revision |
+| `automation_waiting` | Show Run progress | Cancel/query when admitted; never start the same Run again |
+| `verification` | Accept verification | Inspect Implementation, request fixes, derive a safe Prototype revision |
+| `trial_ready` | Start Trial | Inspect candidate and evidence |
+| `trial_waiting` / `trial_review` | Show status / accept Trial | Reject to Automation or Prototype according to the declared transition |
+| `publication_ready` | Begin Publication | Inspect exact candidate and approvals |
+| `publication_waiting` | Show Publication status | Cancel/reconcile only when declared; never repeat an uncertain publish |
+| `published` | Inspect Publication | Start a new Change |
+
+`Accept Prototype` and `Start Automation` remain separate commands. Acceptance
+freezes one immutable requirement revision and records its lineage; starting
+Automation creates a durable activity/Run. The same separation applies to
+verification, Trial activation, Trial acceptance, and Publication. A completed
+message has its controls consumed or removed and a fresh Interaction presents
+the next legal actions.
+
+Process actions have semantic priority over navigation helpers such as project
+list, Help, or Preview link. Capability limits may paginate or move secondary
+actions, but must not silently evict the only safe workflow continuation.
+Internal bookkeeping commands such as experiment recording remain available
+to tools and inspectors without occupying the user's primary `Next` summary.
+
+Availability is the intersection of the canonical transition, guards,
+principal policy, target/generation freshness, executor readiness, and channel
+capabilities. A valid pure gate such as `accept_prototype` must not be hidden by
+a Builder-specific allowlist. An external command with no ready executor is
+withheld with a localized `executor_unavailable` explanation, not replaced by
+a state-only compatibility mutation.
 
 ### Workflow Definition Correction Boundary
 
@@ -477,6 +515,59 @@ ResponseEnvelope, attention plan, and DeliveryAttempts follow
 the [shared workflow interaction protocol](governed-workflow-runtime.md#conversationinteraction).
 Builder must not invent a second action-token, fallback, acknowledgement, or
 delivery lifecycle inside the frame.
+
+### Unified Conversational Interpretation
+
+Selecting or addressing Builder resolves the conversation owner and the
+Builder/project command context; it does not authorize Builder code to classify
+raw text privately. The admitted `builder_skill/conversational/` package is the
+runtime interpretation source for workflow commands, read-only queries,
+context selection, Issue/feedback intake, repair, and localized output.
+
+The shared order is:
+
+```text
+opaque action token
+  -> exact pending-Interaction answer
+  -> package deterministic matcher
+  -> configured NLU provider
+  -> optional bounded LLM semantic parser
+  -> IntentProposal
+  -> InteractionResponse | query | Issue/feedback | workflow.invoke | clarification
+```
+
+Only the opaque-token branch may bypass NLU/IntentProposal, because it already
+identifies a verified semantic action. An exact localized action label typed as
+text may be resolved against the current Interaction, but fuzzy prose always
+produces proposal evidence. A message such as "мне нравится, передавай дальше"
+can propose `accept_prototype` only when that action is currently available;
+"добавь чекбоксы слева и сократи заголовок" becomes one or more Issue acts,
+not an implicit approval or direct Prototype mutation.
+
+The Router owns transport normalization and trusted conversation/package
+selection. Conversational Runtime owns parsing/ranking/abstention. Builder owns
+Issue/Change semantics and typed query handlers. Governed Workflow Runtime owns
+transition admission. The legacy global `nlp.intent.detected -> callSkill`
+dispatcher and `_parse_builder_command`-style domain regexes are compatibility
+rails to be translated into IntentProposal and retired, not extended as a
+second NLU system.
+
+### Builder Interaction Localization
+
+Builder internal ids (`prototype_editing`, `accept_prototype`, Change/Run refs)
+remain stable and locale-neutral. User-visible prompts, status explanations,
+action labels, blocked reasons, outcomes, and repair messages use reviewed
+semantic i18n keys plus typed parameters and fallback text. Affordance labels
+come from the admitted conversational package; a handler may not carry a
+private Russian or English label map.
+
+`ConversationInteraction` retains the semantic text specs. Negotiated
+`InteractionPresentation` records requested/effective locale, catalogue digest,
+resolved strings, and fallback reason. The package compiler rejects incomplete
+coverage for `en` or `ru`; runtime must not silently substitute Ukrainian or
+mix English command ids into a Russian `Next` message. Telegram limits are
+validated after localization, and callback identity never depends on the
+translated label.
 
 ### Channel Capability Boundary
 
@@ -870,6 +961,11 @@ currently visible:
 | UI selection and Preview target | Retain as disposable view context | Scoped command-context/view refs |
 | Browser-local Review drafts | Retain only while unsent | Durable submitted Review and acceptance constraints |
 | Direct handler transition rules | Retire after adapter coverage | Pure governed resolver and registered activities |
+| Builder raw-text regex/keyword parser | Translate matched results to package-bound IntentProposal, then retire | Conversational Runtime plus admitted `conversational/` package |
+| `nlp.intent.detected -> callSkill` mutation route | Retain only for non-governed legacy callers; prohibit for Builder workflow commands, then retire | IntentProposal mediation plus canonical invocation ingress |
+| Handler-local action allowlist and RU/EN labels | Remove after shared projection/i18n cutover | Workflow explanation + affordance package + InteractionPresentation |
+| `active_phase`, `gate`, and capability booleans used as action authority | Retain as read-only compatibility projection only | Canonical workflow state, guards, policy, and executor readiness |
+| `prepare_trial_compatibility` / `publish_compatibility` | Hide, shadow-compare, then remove after caller migration | Explicit verification, Trial, Publication waiting/result transitions |
 
 Compatibility code may translate names and payloads, but it may not decide
 legality, infer a different target, weaken risk, or manufacture a second
@@ -905,7 +1001,13 @@ The first refactoring slice is accepted only when:
     returns its terminal result without repeated mutation;
 12. a Project exposes multiple independent Changes and an indirect
     shared-component conflict without inventing one global project stage;
-13. the recovered Builder retains the complete functional-parity contract.
+13. Russian and English text, exact controls, and fuzzy informal requests
+    converge on the same IntentProposal/InteractionResponse/workflow command or
+    an explainable clarification, without handler-private interpretation;
+14. Prototype acceptance exposes Start Automation only after the pure gate,
+    real Codex/Trial/Publication activities are executor-ready, and a complete
+    operational run reaches Publication without compatibility shortcuts;
+15. the recovered Builder retains the complete functional-parity contract.
 
 ## Bounded Conversational Pilot
 

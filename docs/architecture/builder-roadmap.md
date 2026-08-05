@@ -2,6 +2,8 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
+Last reviewed: 2026-08-05.
+
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
 -> validation -> activation -> observation -> repair.
@@ -129,7 +131,7 @@ gate easy to read by priority.
 | 8. Product Experience | Partial: revision 032 preserves the prototype 029 geometry, includes revision 031's immutable project-type requirement, and provides the complete SDK-backed Prompt IDE surface with corrected live bindings; autonomous from-zero reproduction is still required before Prompt IDE retirement. | Open: eliminate coarse no-op projection replacement and complete a browser reconnect/soak pass. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Partial: `builder_skill` owns the first conversation-native flow with eval fixtures, topic refs, Pending Actions, Prompt IDE widget binding, and async Root LLM job execution for UI transformations; full context-packet/memory/repair coverage remains open. | Open: public-quality generated-skill examples. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Partial: target architecture, RealizeRequest schema, Root dev queue, dev-node registry, Root MCP task tools, sparse path validation, forge task-branch policy, local Codex worker, exact task assignment, and the first Builder Automation runtime skill exist; task-scoped credentials/MCP bridge and User Hub validation loop remain open. | Partial: queue diagnostics, render-safe Automation projection, and a local dev-node trial path exist; failure fixtures remain open. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic slice: canonical Change/Run/Project model, shared statechart/resolver, capability-negotiated interactions, context capsules, risk-aware controls, on-demand Process, chat-first Workbench, neutral Web/Telegram routing, human-visible Telegram controls, canonical cross-topology navigation, conversational package contract, output IR alignment, story-runner proof, static workflow/story reports, and one non-Builder request-to-Workspace proof. Open extension: Teacher-candidate promotion through Builder. | Open: complete Builder-caller migration, executor-readiness guards/adapters for mutating chat controls, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, Process projection, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gate: one production IntentProposal rail, localized semantic Interaction ABI, dependent Prototype -> Automation -> Trial -> Publication controls, concrete activity executors, compatibility-rail retirement, and one operational empty-scenario acceptance run. | Open: Teacher-candidate promotion, complete Builder-caller migration, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -865,6 +867,24 @@ of truth, while simplifying the product model to `Issue -> Change -> Run ->
 Revision -> Trial/Release` and preserving the recovered functional control
 plane.
 
+Current must-order for the next refactoring slices:
+
+1. `GWR2-20`: publish localized semantic workflow/affordance/interaction/output
+   ABI and complete English/Russian package validation.
+2. `GWR3-13..15`: connect every live conversational channel to the admitted
+   package and IntentProposal mediation, then measure and retire private/direct
+   mutation rails.
+3. `GWR2-19`, `GWR4-28..29`: replace Builder handler filtering with one
+   prioritized dependent Interaction projection.
+4. `GWR4-30..31`: register bounded LLM/Codex/Trial/Publication activities and
+   remove compatibility promotion shortcuts.
+5. `GWR5-37..38`: run and record the operational empty-scenario Web/Telegram,
+   English/Russian acceptance proof.
+
+The numbered tasks and evidence in the governed workflow roadmap are the
+execution authority. Chat discussion may reveal a requirement but does not
+silently change this order or mark a gate complete.
+
 Architecture:
 
 - [x] `[must]` Define the chat-first, state-backed target architecture,
@@ -919,7 +939,8 @@ Conversational artifacts and learning:
   example candidates through a Builder Change before any git-versioned package
   source or public catalog candidate is updated.
 - [x] `[must]` Add a conversational artifact validation command that checks
-  source schemas, cross-file refs, workflow command refs, locale coverage,
+  source schemas, cross-file refs, workflow command refs, declared locale-file
+  coverage,
   protected-action policy, and package cardinality. The developer SDK exposes
   non-destructive scaffold, compile, story execution, and static export over
   this same pipeline.
@@ -965,6 +986,17 @@ Conversational artifacts and learning:
   canonical NLU ingress or unattended runtime activation complete. Story
   runner v2 adds interaction/fallback, stale/concurrent, retry,
   executor-unavailable, repair, and expected-negative cases.
+- [ ] `[must]` Extend workflow/conversational/interaction/output ABIs with
+  semantic i18n refs, `default_locale`, catalog digests, complete key-level
+  English/Russian validation, deterministic fallback, and locale-coherent
+  presentation after Web/Telegram limits are applied. Stable action tokens and
+  command identities must not depend on translated labels.
+- [ ] `[must]` Route live Web, Telegram, voice, and Builder free text through the
+  admitted conversational package and one
+  `IntentProposal -> interaction/query/Issue/workflow.invoke` rail. Builder's
+  private regex/keyword parser and `nlp.intent.detected -> callSkill` remain
+  measured compatibility inputs only until replay and live evidence permit
+  removal.
 - [ ] `[could]` Export accepted conversation stories as user-facing learning or
   education-on-the-go material after they pass privacy and localization checks.
 - [ ] `[deferred]` Build an interactive workflow/conversation studio with trace
@@ -1042,7 +1074,15 @@ Commands, projections, and Workbench:
   registry and binds compatibility Web actions to exact workflow commands and
   generations. The current-project answer now negotiates one bounded action
   set for Web/Telegram and returns callbacks through one response event;
-  migrating every Builder-skill caller remains open.
+  migrating every Builder-skill caller remains open. The cutover must also
+  remove the handler's executable-command allowlist, supplemental navigation
+  action table, and hard-coded Russian label map so the canonical primary
+  continuation cannot be filtered out.
+- [ ] `[must]` Project the dependent conversational bridge from one governed
+  snapshot: accept Prototype, start Automation, accept verification, start
+  Trial, accept Trial, and begin Publication. Show the primary continuation
+  before optional inspect/navigation actions, preserve lineage and generation,
+  and explain missing approval, input, or executor readiness.
 - [ ] `[must]` Return accepted/progress/input-required/terminal
   ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
   terminal result once and retry ReplyRoute DeliveryAttempts independently;
@@ -1084,7 +1124,9 @@ Commands, projections, and Workbench:
 - [x] `[must]` Route Telegram text through the same neutral
   `dialog.user_message` and Builder dialog contract as Web instead of invoking
   NLU directly. Preserve transport reply metadata and project topic context,
-  then project Builder assistant text back to `tg.output.*`.
+  then project Builder assistant text back to `tg.output.*`. This proves the
+  common transport envelope, not yet the production package-bound
+  IntentProposal rail; that migration is tracked above.
 - [x] `[must]` Claim Telegram updates durably before dispatch, suppress exact
   duplicates, reject idempotency conflicts, and prohibit automatic replay of
   an uncertain state-changing turn. NATS envelope and HTTP fallback inputs use
@@ -1110,9 +1152,11 @@ Commands, projections, and Workbench:
 - [ ] `[must]` Project a mutating control only when its declared effect/activity
   executor is registered and ready. The current-project migration exposes only
   inspect, intake, and Preview commands and withholds unadapted
-  Codex/Trial/Publication transitions; move this rule into the shared resolver
-  as `executor_unavailable`, then add exact executor adapters and negative
-  conformance cases.
+  Codex/Trial/Publication transitions. The shared
+  `description_with_executor_readiness` guard now produces
+  `executor_unavailable`; register exact bounded LLM/Codex/Trial/Publication
+  adapters and prove accepted/progress/input-required/terminal recovery before
+  enabling their controls.
 - [ ] `[should]` Add an operator-visible transport ingress/recovery inspector
   for claimed-but-not-dispatched turns. Recovery must issue a new explicit
   operation instead of replaying the original mutation.
@@ -1197,6 +1241,16 @@ Autonomy, evidence, and acceptance:
   reference fault matrix covers all four modifying activity types at both
   effect boundaries; ResponseEnvelope redelivery is independent of business
   execution and an offline terminal result remains queryable.
+- [ ] `[must]` Repeat the complete request -> Issues/Change -> Prototype ->
+  Automation -> verification -> Trial -> Publication flow on a fresh scenario
+  with the built-in LLM, isolated Codex, concrete registered activities, real
+  persisted callbacks, and Web/Telegram responses. The current deterministic
+  semantic E2E uses mocked/compatibility activities and is not operational
+  acceptance by itself.
+- [ ] `[must]` Remove `prepare_trial_compatibility` and
+  `publish_compatibility` after every caller traverses the normative waiting and
+  result transitions and shadow telemetry records zero shortcut use. Align the
+  declared `trial_waiting` state with the Trial activity callback contract.
 - [x] `[must]` Add Project portfolio evidence for concurrent non-overlapping
   Changes and an indirect shared-skill conflict, including explicit
   rebase/split/supersede resolution and no partial candidate promotion. The

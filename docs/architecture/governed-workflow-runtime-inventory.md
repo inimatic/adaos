@@ -2,7 +2,7 @@
 
 Status: source inventory for GWR0-06.
 
-Inventory date: 2026-08-04.
+Inventory date: 2026-08-05.
 
 Owners: Governed Data-Driven Workflow Model Roadmap, Builder Roadmap,
 Conversational Interface, Artifact Source Package Activation Roadmap, and
@@ -48,6 +48,10 @@ source of truth.
 | Builder workflow migration checkpoints | `state/builder/workflow_migrations/*.json` | Builder Roadmap / GWR4 | Exact before/after instance, definition/package/binding pins, idempotent restart completion, and exact rollback witness | `projection/evidence`; migration mutates only the governed instance in `prompt_state.json` |
 | Builder context packet | `BuilderWorkflowService.build_context_packet` | Builder Roadmap / Conversational Interface | Bounded executor context containing workflow authoring context, static review, graph diff, conversational package validation, conversation snippets, pending-action refs, and coverage | `projection/evidence`; executor input only |
 | Builder Automation sessions | `src/adaos/services/builder/automation.py` session files under Builder state | Builder Roadmap / Skill Factory | Queued/assigned/running/test/commit state for one exact Automation task and Change/Run correlation | `separate canonical model`; executor lifecycle linked to workflow activity/Run, never transition authority |
+| Builder handler action allowlist and labels | admitted `builder_skill/handlers/main.py` (`executable_commands` and localized action map) | Builder Roadmap / GWR2 | Filters the canonical Interaction Frame and adds handler-owned Russian labels before Web/Telegram projection | `compatibility`; remove after the presenter consumes only canonical command/policy/executor/capability projection with semantic i18n refs |
+| Builder private command parser | admitted `builder_skill/handlers/main.py::_parse_builder_command` | Conversational Interface / GWR3 | Regex/keyword interpretation used by the live Builder chat route | `compatibility`; package matchers may survive only as IntentProposal providers, with no direct mutation authority |
+| Builder compatibility promotion commands | `src/adaos/services/builder/builder_change.workflow.json`, admitted `builder_skill/workflow.json`: `prepare_trial_compatibility`, `publish_compatibility` | Builder Roadmap / GWR4 | Shortcuts from verified/candidate state to Trial/Publication outcomes for old callers | `compatibility`; migrate through waiting/result transitions and remove after shadow evidence shows zero callers |
+| Builder workflow activity registrations | `src/adaos/services/workflow_execution.py`, `BuilderWorkflowService.interaction_frame` | Governed workflow runtime / Builder Roadmap | Shared executor-readiness contract exists, while live Builder LLM/Codex/Trial/Publication registrations are incomplete | `open reliability gap`; mutating controls remain unavailable until a bounded registered executor can start or durably queue them |
 | Builder Preview reconciliation | `state/builder/workbench/runtime/*.json`, process-local `_TASKS` in `builder/preview_reconciler.py` | Builder Product Experience | Desired/observed Preview materialization generation and best-effort async reconcile task | durable record is `projection/evidence`; process-local task is recoverable from desired state and is not business workflow truth |
 | Automation snapshots | `state/builder/workflow_snapshots/<kind>/<project>/automation` | Builder Roadmap | Artifact rollback/evidence snapshot for Automation handoff | `projection/evidence`; not workflow state |
 | Prototype revisions | `<artifact>/ui_revisions/*.json`, `<artifact>/ui_revisions/current.txt` | Builder Product Experience | Immutable UI artifact lineage and current prototype pointer | `separate canonical model`; view/artifact lineage only |
@@ -66,6 +70,10 @@ source of truth.
 | Development changes and runs | `conversation_store.py` tables `conversation_development_changes`, `conversation_development_runs` | Conversational Interface / Builder | Candidate/change/run evidence for conversational development flows | `projection/evidence`; promotion must go through Builder Change |
 | Conversation story execution | `conversational_artifacts.run_conversation_story` and validation report timelines | Conversational Interface | Deterministic design-time execution with repair, interaction, fallback, stale/concurrent, retry, executor-unavailable, and negative assertions | `projection/evidence`; no durable provider/model/effect calls and no runtime transition authority |
 | NLU Teacher runtime overlays | `state/interpreter/nlu_teacher_overlays.json`, `nlu.teacher_overlay_store.v1`, `nlu.teacher_promotion_candidate.v1` | NLU Teacher / Conversational Interface | Scoped runtime examples plus Builder promotion candidates for git-versioned conversational package source | `separate canonical model`; runtime benefit is allowed, public/source promotion requires Builder review |
+| Canonical intent mediator | `src/adaos/services/intent_mediation.py`, `adaos.intent.proposal.v1` | Conversational Interface / GWR3 | Pure proposal, clarification, correction, and commit semantics with deterministic tests | `canonical workflow ingress` contract; production Web/Telegram/voice routing is not yet fully wired to it |
+| Legacy NLU dispatcher | `src/adaos/services/nlu/dispatcher.py` subscription to `nlp.intent.detected` | NLU compatibility / GWR3 | Maps detected intent directly toward skill action dispatch | `compatibility`; retain telemetry only while callers migrate to IntentProposal and canonical admission, then remove direct mutation |
+| Conversational package runtime activation | `<artifact>/conversational/{manifest,input,affordances,matchers,output,repair,locale.*,tests}` plus `conversational_artifacts.py` | Conversational Interface | Design-time validation, compilation, static report, and deterministic stories are active; live context-bound provider selection is partial | `open reliability gap`; one production package-bound interpretation rail remains required |
+| Conversational localization projection | conversational/interaction/output ABIs and locale catalogs | Conversational Interface / GWR2 | Locale files are counted and reported, but semantic text refs, key coverage, catalog binding, and locale-coherent materialization are incomplete | `open reliability gap`; handler-local prose must not become durable semantic authority |
 
 ## Pending Actions And UI Projections
 
@@ -143,3 +151,16 @@ measurable ADR admission criteria is observed.
 6. Any new durable table, state file, background queue, or retry loop that can
    affect workflow behavior must be added to this inventory with an owner and
    disposition before it ships.
+7. Every free-text ingress must end in an `IntentProposal` before a governed
+   command is admitted. Domain parsers and `nlp.intent.detected` may be observed
+   compatibility providers, never a second mutation rail.
+8. Every user-visible workflow control or explanation must originate as a
+   locale-neutral semantic ref and be materialized through the negotiated
+   presentation. Handler allowlists, raw command-id lists, and local label maps
+   cannot decide command availability.
+9. A definition-declared external activity is not operationally available until
+   a concrete executor is registered and can start or durably queue it. Mocked
+   story/E2E evidence must be labelled separately from operational acceptance.
+10. Compatibility transitions require caller inventory, traffic evidence, and a
+    dated removal gate; they must not be offered as the preferred conversational
+    continuation.

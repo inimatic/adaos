@@ -935,6 +935,42 @@ way to continue. Reconnect, client change, or channel handoff creates a new
 presentation plan over the same Interaction; it does not create a second
 business request.
 
+### Localized Semantic Interaction
+
+Workflow legality is locale-neutral, but every user-visible projection is
+localizable. Stable command, transition, state, reason, and action ids never
+change with language. Presentation prose is referenced by semantic i18n keys
+and typed parameters, with bounded fallback text for compatibility and
+diagnostics.
+
+The source ownership is:
+
+- `workflow.json` owns reason codes and the i18n keys/parameters for available,
+  blocked, running, completed, failed, and input-required explanations;
+- `conversational/affordances.yaml` owns action `label_i18n` and
+  `description_i18n`, fallback text, semantic priority, and presentation hints
+  while referencing one canonical workflow command or typed query;
+- `conversational/locale.<locale>.yaml` owns the reviewed translations;
+- `ConversationInteraction` retains locale-neutral semantic text specs and
+  fallback values; it does not make a rendered label into command identity;
+- `InteractionPresentation` records requested and effective locale, locale
+  catalogue digest, resolved bounded strings, and any fallback reason used for
+  that delivery surface.
+
+Package admission rejects a declared supported locale when any required
+prompt, action, repair, outcome, or workflow-explanation key is missing. A
+runtime fallback exists for older packages and operational errors only; it is
+auditable and must not mix languages inside one presentation. Button-count and
+text-length capability checks run after localization. Opaque action tokens and
+workflow commands remain identical across locales.
+
+Locale resolution is deterministic: explicit interaction locale, authenticated
+user/conversation preference, channel locale, Webspace default, then the
+package-declared default locale. The effective locale and fallback chain are
+evidence on the presentation and IntentProposal. A renderer must not maintain
+private translated action tables or reconstruct a command from localized
+prose.
+
 ### IntentProposal
 
 `adaos.intent.proposal.v1` records a provisional interpretation of natural
@@ -1058,14 +1094,36 @@ generation.
 
 NLU is an adapter into the workflow protocol, not its owner.
 
+There is one conversational interpretation rail. Router resolves the trusted
+conversation owner, command context, and admitted conversational package; it
+does not classify the business intent. A skill may contribute reviewed
+matchers, examples, a bounded parser, or provider configuration through that
+package, but it cannot accept raw text and privately choose a modifying
+workflow command. Every non-token interpretation becomes an `IntentProposal`
+before it can become an InteractionResponse, query, Issue/feedback act, or
+workflow invocation.
+
 Input resolution order is:
 
 1. validate an opaque deterministic action token when one is present;
 2. bind a reply to its explicit interaction/task reference;
 3. when exactly one compatible pending interaction exists, interpret the text
    against only that interaction's response schema and available commands;
-4. otherwise interpret the message as one or more open semantic acts;
-5. ask for clarification when target or consequence is materially ambiguous.
+4. run admitted deterministic matchers from the selected conversational
+   package;
+5. when still unresolved, invoke the configured NLU or LLM semantic parser with
+   the same package digest, allowed-command snapshot, locale, and authority
+   ceiling;
+6. interpret the result as one or more open semantic acts;
+7. abstain or ask for clarification when target or consequence is materially
+   ambiguous.
+
+The first matching layer may avoid a model call, but it does not create a
+second authority. Exact labels, ordinal/yes-no answers, authored regexes,
+statistical NLU, and an LLM parser converge on the same proposal and commit
+boundary. A protected command proposed from text creates or refreshes an
+explicit confirmation/review Interaction; it is never executed from model
+confidence alone.
 
 Typical semantic acts include:
 
@@ -1093,6 +1151,13 @@ The original utterance, proposed interpretation, correction, and committed
 event are retained according to conversation privacy and retention policy.
 This supports audit and future offline evaluation without treating raw chat as
 the workflow database.
+
+The legacy `nlp.intent.detected -> callSkill` dispatcher and domain-private
+raw-text command parsers are bounded migration inputs. They may emit a
+proposal through a compatibility adapter, but they may not remain a parallel
+mutation path. Their retirement gate is production routing of Web, Telegram,
+and SDK text through one package-bound IntentProposal ingress with equivalent
+Russian/English, ambiguity, stale-generation, and protected-action evidence.
 
 ## Validation Model
 
@@ -1438,6 +1503,22 @@ request
   -> accept/revise
   -> Publication
 ```
+
+The user-visible bridge is deliberately explicit. Accepting a Prototype binds
+and freezes its exact revision but does not claim that Automation started.
+Starting Automation durably creates/queues the declared Codex activity and
+enters its waiting state. Verification acceptance makes a candidate eligible
+for Trial; Trial activation and Publication are separate external activities
+with their own waiting/result transitions. A channel may offer a compound
+shortcut only when it expands into the same journalled commands and preserves
+every approval, target digest, and recovery boundary.
+
+Compatibility transitions that skip verification, waiting, or terminal
+activity-result recording are not part of the target model. In particular, a
+direct `prepare_trial_compatibility` or `publish_compatibility` edge remains
+hidden migration machinery until callers move to `accept_verification ->
+start_trial` and `begin_publication -> record_publication_result`, after which
+the compatibility edge is removed.
 
 The normative Builder states, transition catalogue, concurrency/focus rules,
 Run purposes, data modes, and Review lifecycle are owned by
