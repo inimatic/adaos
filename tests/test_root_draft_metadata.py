@@ -244,10 +244,27 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     )
     promoted = SimpleNamespace(
         plan=SimpleNamespace(release=SimpleNamespace(components=[component])),
-        candidate=SimpleNamespace(project_id="builder"),
+        candidate=SimpleNamespace(
+            candidate_id="candidate-1",
+            project_id="builder",
+            source_ref=SimpleNamespace(revision="revision-1"),
+            validation_evidence=({"status": "passed", "validator": "test"},),
+            trials=(
+                SimpleNamespace(
+                    status="accepted",
+                    observations=({"actor": "user:test", "decision": "accepted"},),
+                ),
+            ),
+            updated_at="2026-08-05T12:00:00+00:00",
+        ),
         pointer=SimpleNamespace(release="builder@1.2.3", release_digest="sha256:" + "b" * 64),
         activation=SimpleNamespace(
-            workspace_lock=SimpleNamespace(to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64})
+            operation_id="activation-1",
+            workspace_lock=SimpleNamespace(
+                lock_revision=7,
+                slots=(SimpleNamespace(slot_id="builder", project_id="builder"),),
+                to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64},
+            ),
         ),
         subscription=SimpleNamespace(to_dict=lambda: {"project_id": "builder"}),
     )
@@ -257,6 +274,17 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
             captured["candidate_id"] = candidate_id
             captured.update(kwargs)
             return promoted
+
+        def load_promotion(self, candidate_id: str):
+            assert candidate_id == "candidate-1"
+            return {
+                "receipts": {
+                    "workspace_activated": {
+                        "health_receipt": {"status": "healthy"},
+                        "reload_receipt": {"status": "completed"},
+                    }
+                }
+            }
 
     service = object.__new__(RootDeveloperService)
     service._load_config = lambda: SimpleNamespace()
@@ -272,6 +300,8 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     assert captured["health_check"] is service._health_published_workspace_runtime
     assert "reload_policy" not in captured
     assert "health_policy" not in captured
+    assert result["apply_evidence"]["activation"]["operation_id"] == "activation-1"
+    assert result["apply_evidence"]["approval"]["actor_id"] == "user:test"
 
 
 def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(

@@ -2409,6 +2409,93 @@ class RootDeveloperService:
             raise RootServiceError(
                 "Promoted release does not contain its project component; workspace was not reconciled"
             )
+        promotion_operation = publication.load_promotion(candidate_id) or {}
+        promotion_receipts = (
+            promotion_operation.get("receipts")
+            if isinstance(promotion_operation.get("receipts"), Mapping)
+            else {}
+        )
+        activation_receipt = (
+            promotion_receipts.get("workspace_activated")
+            if isinstance(promotion_receipts.get("workspace_activated"), Mapping)
+            else {}
+        )
+        permission = (
+            dict(permission_decision)
+            if isinstance(permission_decision, Mapping)
+            else {"approved": bool(permission_decision)}
+        )
+        accepted_trial = next(
+            (
+                item
+                for item in reversed(promoted.candidate.trials)
+                if item.status == "accepted"
+            ),
+            None,
+        )
+        trial_observations = (
+            [dict(item) for item in accepted_trial.observations]
+            if accepted_trial is not None
+            else []
+        )
+        actor_id = str(permission.get("actor") or "").strip()
+        if not actor_id:
+            actor_id = next(
+                (
+                    str(item.get("actor") or item.get("actor_id") or "").strip()
+                    for item in trial_observations
+                    if str(item.get("actor") or item.get("actor_id") or "").strip()
+                ),
+                "builder.user",
+            )
+        runtime_slot = next(
+            (
+                item.slot_id
+                for item in promoted.activation.workspace_lock.slots
+                if item.project_id == promoted.candidate.project_id
+            ),
+            f"workspace-lock:{promoted.activation.workspace_lock.lock_revision}",
+        )
+        policy_evidence = [
+            {
+                "kind": "publication_permission",
+                "approved": permission.get("approved") is True,
+                "actor": actor_id,
+            },
+            *trial_observations,
+        ]
+        apply_evidence = {
+            "draft_ref": {
+                "draft_id": f"candidate:{promoted.candidate.candidate_id}",
+                "revision": promoted.candidate.source_ref.revision,
+            },
+            "validation_evidence": [
+                dict(item) for item in promoted.candidate.validation_evidence
+            ],
+            "approval": {
+                "approval_id": str(
+                    permission.get("approval_id")
+                    or f"candidate:{promoted.candidate.candidate_id}:approval"
+                ),
+                "actor_id": actor_id,
+                "actor_type": str(permission.get("actor_type") or "user"),
+                "approved_at": promoted.candidate.updated_at,
+                "policy_evidence": policy_evidence,
+            },
+            "activation": {
+                "operation_id": promoted.activation.operation_id,
+                "runtime_slot": runtime_slot,
+                "health_receipt": dict(activation_receipt.get("health_receipt") or {}),
+                "reload_receipt": dict(activation_receipt.get("reload_receipt") or {}),
+                "workspace_lock_digest": promoted.activation.workspace_lock.to_dict()[
+                    "lock_digest"
+                ],
+            },
+            "rollback": {
+                "mode": "workspace_lock_restore",
+                "operation_ref": promoted.activation.operation_id,
+            },
+        }
         return {
             "ok": True,
             "candidate_id": candidate_id,
@@ -2423,6 +2510,7 @@ class RootDeveloperService:
             "subscription": promoted.subscription.to_dict(),
             "commit": None,
             "activation_mode": "package_lock",
+            "apply_evidence": apply_evidence,
         }
 
     def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
