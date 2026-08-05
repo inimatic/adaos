@@ -12,6 +12,7 @@ from typing import Any, Literal, Mapping, Sequence
 import yaml
 
 from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.governed_workflow import validate_workflow_record
 
 ArtifactKind = Literal["skill", "scenario"]
 
@@ -383,10 +384,136 @@ def export_package(
     return {**result, "artifacts": artifacts}
 
 
+def export_learning_stories(
+    path: Path | str,
+    *,
+    kind: ArtifactKind,
+    output_dir: Path | str,
+    privacy_review_ref: str,
+    locales: Sequence[str] | None = None,
+    operation_catalog: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, Any]:
+    """Export reviewed story semantics without runtime/user transcript text.
+
+    Learning export is intentionally distinct from validation evidence.  It is
+    admitted only after the canonical package and every selected story pass,
+    and requires an explicit privacy-review reference.  User utterances,
+    actor ids, arguments, skill results, and runtime trace payloads are never
+    copied into the export.
+    """
+
+    review_ref = str(privacy_review_ref or "").strip()
+    if not review_ref:
+        raise ValueError("learning story export requires privacy_review_ref")
+    if kind not in {"skill", "scenario"}:
+        raise ValueError("kind must be 'skill' or 'scenario'")
+    pipeline = compile_conversational_package(
+        path,
+        manifest_name="skill.yaml" if kind == "skill" else "scenario.yaml",
+        operation_catalog=operation_catalog,
+        run_stories=True,
+        build_static_report=True,
+    )
+    if not pipeline.valid or pipeline.package is None:
+        raise ValueError("learning story export requires a valid conversational package")
+    package = pipeline.package
+    supported = tuple(str(item) for item in package.manifest.get("locales") or [])
+    selected = tuple(dict.fromkeys(str(item).strip() for item in (locales or supported) if str(item).strip()))
+    if not selected:
+        raise ValueError("learning story export requires at least one locale")
+    unknown = sorted(set(selected) - set(supported))
+    if unknown:
+        raise ValueError(f"learning story export locale is not admitted: {', '.join(unknown)}")
+    reports = {
+        str(item.get("story_id") or ""): item
+        for item in pipeline.validation.report.get("story_reports") or []
+        if isinstance(item, Mapping)
+    }
+    stories: list[dict[str, Any]] = []
+    for source in package.stories:
+        story_id = str(source.get("id") or "").strip()
+        if str(source.get("locale") or "") not in selected:
+            continue
+        report = reports.get(story_id)
+        if not report or report.get("valid") is not True:
+            raise ValueError(f"learning story has not passed deterministic validation: {story_id}")
+        projected_steps: list[dict[str, Any]] = []
+        for index, step in enumerate(source.get("steps") or []):
+            given = dict(step.get("given") or {}) if isinstance(step, Mapping) else {}
+            expect = dict(step.get("expect") or {}) if isinstance(step, Mapping) else {}
+            proposal = dict(given.get("proposal") or {}) if isinstance(given.get("proposal"), Mapping) else {}
+            output = dict(expect.get("output") or {}) if isinstance(expect.get("output"), Mapping) else {}
+            projected_steps.append(
+                {
+                    "sequence": index + 1,
+                    "intent_id": str(proposal.get("intent_id") or "").strip() or None,
+                    "command": str(expect.get("command") or proposal.get("command") or "").strip() or None,
+                    "output_ref": str(output.get("output_ref") or given.get("output_ref") or "").strip() or None,
+                    "expected_state": str(expect.get("state") or "").strip() or None,
+                }
+            )
+        stories.append(
+            {
+                "story_id": story_id,
+                "title": str(source.get("title") or story_id).strip(),
+                "locale": str(source.get("locale") or ""),
+                "channel": str(source.get("channel") or ""),
+                "story_kind": str(source.get("story_kind") or ""),
+                "steps": projected_steps,
+            }
+        )
+    export = validate_workflow_record(
+        "adaos.conversational.learning_export.v1",
+        {
+            "schema": "adaos.conversational.learning_export.v1",
+            "package_id": str(package.manifest.get("package_id") or ""),
+            "package_digest": package.package_digest,
+            "privacy_review_ref": review_ref,
+            "locales": list(selected),
+            "content_policy": "authored_semantics_without_runtime_transcripts",
+            "stories": stories,
+        },
+    )
+    target = Path(output_dir).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    json_path = target / "conversational-learning.json"
+    markdown_path = target / "conversational-learning.md"
+    json_tmp = json_path.with_suffix(".json.tmp")
+    markdown_tmp = markdown_path.with_suffix(".md.tmp")
+    json_tmp.write_text(json.dumps(export, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    lines = [f"# {export['package_id']} conversational learning", "", f"Privacy review: `{review_ref}`", ""]
+    for story in stories:
+        lines.extend([f"## {story['title']}", "", f"Locale: `{story['locale']}` · Channel: `{story['channel']}`", ""])
+        for step in story["steps"]:
+            semantics = [
+                value
+                for value in (
+                    f"intent `{step['intent_id']}`" if step["intent_id"] else None,
+                    f"command `{step['command']}`" if step["command"] else None,
+                    f"output `{step['output_ref']}`" if step["output_ref"] else None,
+                    f"state `{step['expected_state']}`" if step["expected_state"] else None,
+                )
+                if value
+            ]
+            lines.append(f"{step['sequence']}. " + (" → ".join(semantics) or "semantic response"))
+        lines.append("")
+    markdown_tmp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    json_tmp.replace(json_path)
+    markdown_tmp.replace(markdown_path)
+    return {
+        "export": export,
+        "artifacts": {
+            "conversational-learning.json": str(json_path),
+            "conversational-learning.md": str(markdown_path),
+        },
+    }
+
+
 __all__ = [
     "ArtifactKind",
     "compile_package",
     "compile_project",
+    "export_learning_stories",
     "export_package",
     "scaffold_package",
     "scaffold_project",

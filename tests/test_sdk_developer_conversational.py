@@ -217,3 +217,41 @@ def test_developer_sdk_exports_human_readable_static_evidence(tmp_path: Path) ->
     assert set(invalid["artifacts"]) == {"conversational-validation.json"}
     assert not (output_dir / "workflow-static-report.json").exists()
     assert not (output_dir / "workflow-static-report.md").exists()
+
+
+def test_developer_sdk_exports_reviewed_learning_without_runtime_utterances(tmp_path: Path) -> None:
+    package_root = Path(__file__).resolve().parents[1] / "examples" / "conversational-workflow-skill"
+    output_dir = tmp_path / "learning"
+
+    result = conversational.export_learning_stories(
+        package_root,
+        kind="skill",
+        output_dir=output_dir,
+        privacy_review_ref="review:privacy:release-stories",
+        locales=("en",),
+    )
+
+    exported = result["export"]
+    assert exported["content_policy"] == "authored_semantics_without_runtime_transcripts"
+    assert {item["story_id"] for item in exported["stories"]} == {
+        "release.no_match.en.repair",
+        "release.submit.en.happy_path",
+    }
+    raw = (output_dir / "conversational-learning.json").read_text(encoding="utf-8")
+    assert "Submit this release for review" not in raw
+    assert "user:local" not in raw
+    assert "release_submitted" in raw
+    markdown = (output_dir / "conversational-learning.md").read_text(encoding="utf-8")
+    assert "Privacy review: `review:privacy:release-stories`" in markdown
+
+    try:
+        conversational.export_learning_stories(
+            package_root,
+            kind="skill",
+            output_dir=output_dir,
+            privacy_review_ref="",
+        )
+    except ValueError as exc:
+        assert "privacy_review_ref" in str(exc)
+    else:
+        raise AssertionError("learning export must require an explicit privacy review")
