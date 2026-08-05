@@ -37,9 +37,9 @@ from adaos.apps.supervisor_runtime import (
     ProcessSupervisor,
     RuntimeRecoveryFacts,
     RuntimeRecoveryPolicy,
-    SupervisorRoute,
     UpdateStateMachine,
     create_supervisor_app,
+    create_supervisor_routes,
 )
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
@@ -115,7 +115,6 @@ from adaos.services.supervisor_memory import (
 
 
 _SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
-_DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
 _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
@@ -206,197 +205,87 @@ def _write_prepare_lease(path: Path, *, token: str, state: str, reason: str, **e
 
 
 def _memory_profiler_adapter() -> str:
-    token = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILER") or "").strip().lower()
-    return token or DEFAULT_PROFILER_ADAPTER
+    return _MEMORY_PROFILING.profiler_adapter(DEFAULT_PROFILER_ADAPTER)
 
 
 def _memory_telemetry_interval_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC") or "15").strip()))
-    except Exception:
-        return 15.0
+    return _MEMORY_PROFILING.telemetry_interval_sec()
 
 
 def _memory_telemetry_window_sec() -> float:
-    try:
-        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC") or "180").strip()))
-    except Exception:
-        return 180.0
+    return _MEMORY_PROFILING.telemetry_window_sec()
 
 
 def _memory_baseline_warmup_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC") or "300").strip()))
-    except Exception:
-        return 300.0
+    return _MEMORY_PROFILING.baseline_warmup_sec()
 
 
 def _memory_baseline_maturity_slope_bytes_per_min() -> float:
-    try:
-        return max(
-            0.0,
-            float(
-                str(
-                    os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN")
-                    or str(32 * 1024 * 1024)
-                ).strip()
-            ),
-        )
-    except Exception:
-        return float(32 * 1024 * 1024)
+    return _MEMORY_PROFILING.baseline_maturity_slope_bytes_per_min()
 
 
 def _memory_suspicion_growth_threshold_bytes() -> int:
-    default_value = 1024 * 1024 * 1024
-    total_memory = _total_memory_bytes()
-    if total_memory and total_memory > 0:
-        default_value = min(
-            1024 * 1024 * 1024,
-            max(256 * 1024 * 1024, int(float(total_memory) * 0.20)),
-        )
-    try:
-        return max(
-            32 * 1024 * 1024,
-            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES") or str(default_value)).strip()),
-        )
-    except Exception:
-        return default_value
+    return _MEMORY_PROFILING.suspicion_growth_threshold_bytes(psutil_module=psutil)
 
 
 def _memory_suspicion_family_rss_threshold_bytes() -> int | None:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES")
-    if raw is None or not str(raw).strip():
-        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
-    if str(raw).strip().lower() in {"0", "false", "no", "off", "disabled", "none"}:
-        return None
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
-    return max(32 * 1024 * 1024, value)
+    return _MEMORY_PROFILING.suspicion_family_rss_threshold_bytes()
 
 
 def _memory_suspicion_slope_threshold_bytes_per_min() -> float:
-    try:
-        return max(
-            float(8 * 1024 * 1024),
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN") or str(128 * 1024 * 1024)).strip()),
-        )
-    except Exception:
-        return float(128 * 1024 * 1024)
+    return _MEMORY_PROFILING.suspicion_slope_threshold_bytes_per_min()
 
 
 def _memory_auto_profile_cooldown_sec() -> float:
-    try:
-        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC") or "86400").strip()))
-    except Exception:
-        return 86400.0
+    return _MEMORY_PROFILING.auto_profile_cooldown_sec()
 
 
 def _memory_policy_profile_restarts_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _MEMORY_PROFILING.policy_profile_restarts_enabled()
 
 
 def _memory_auto_profile_min_uptime_sec() -> float:
-    try:
-        return max(
-            0.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC") or "300").strip()),
-        )
-    except Exception:
-        return 300.0
+    return _MEMORY_PROFILING.auto_profile_min_uptime_sec()
 
 
 def _memory_auto_profile_browser_live_ttl_sec() -> float:
-    try:
-        return max(
-            5.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BROWSER_LIVE_TTL_SEC") or "45").strip()),
-        )
-    except Exception:
-        return 45.0
+    return _MEMORY_PROFILING.auto_profile_browser_live_ttl_sec()
 
 
 def _memory_auto_profile_allow_browser_sessions() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_ALLOW_BROWSER_SESSIONS")
-    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+    return _MEMORY_PROFILING.auto_profile_allow_browser_sessions()
 
 
 def _memory_auto_profile_circuit_window_sec() -> float:
-    try:
-        return max(300.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_WINDOW_SEC") or "1800").strip()))
-    except Exception:
-        return 1800.0
+    return _MEMORY_PROFILING.auto_profile_circuit_window_sec()
 
 
 def _memory_auto_profile_circuit_limit() -> int:
-    try:
-        return max(1, int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_LIMIT") or "3").strip()))
-    except Exception:
-        return 3
+    return _MEMORY_PROFILING.auto_profile_circuit_limit()
 
 
 def _available_memory_bytes() -> int | None:
-    if psutil is None:
-        return None
-    try:
-        vm = psutil.virtual_memory()
-    except Exception:
-        return None
-    try:
-        return int(vm.available)
-    except Exception:
-        return None
+    return _MEMORY_PROFILING.available_memory_bytes(psutil_module=psutil)
 
 
 def _total_memory_bytes() -> int | None:
-    if psutil is None:
-        return None
-    try:
-        vm = psutil.virtual_memory()
-    except Exception:
-        return None
-    try:
-        return int(vm.total)
-    except Exception:
-        return None
+    return _MEMORY_PROFILING.total_memory_bytes(psutil_module=psutil)
 
 
 def _memory_critical_available_percent_threshold() -> float:
-    try:
-        return max(
-            1.0,
-            min(25.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT") or "5").strip())),
-        )
-    except Exception:
-        return 5.0
+    return _MEMORY_PROFILING.critical_available_percent_threshold()
 
 
 def _memory_critical_available_bytes_threshold() -> int:
-    try:
-        return max(
-            64 * 1024 * 1024,
-            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES") or str(256 * 1024 * 1024)).strip()),
-        )
-    except Exception:
-        return 256 * 1024 * 1024
+    return _MEMORY_PROFILING.critical_available_bytes_threshold()
 
 
 def _memory_critical_duration_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC") or "20").strip()))
-    except Exception:
-        return 20.0
+    return _MEMORY_PROFILING.critical_duration_sec()
 
 
 def _memory_critical_restart_cooldown_sec() -> float:
-    try:
-        return max(30.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_RESTART_COOLDOWN_SEC") or "120").strip()))
-    except Exception:
-        return 120.0
+    return _MEMORY_PROFILING.critical_restart_cooldown_sec()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -10681,68 +10570,35 @@ async def supervisor_update_complete(payload: dict[str, Any]) -> dict[str, Any]:
 app = create_supervisor_app(
     startup=_startup,
     shutdown=_shutdown,
-    routes=(
-        SupervisorRoute("/api/ping", ping, protected=False),
-        SupervisorRoute("/api/supervisor/status", supervisor_status),
-        SupervisorRoute("/api/supervisor/memory/status", supervisor_memory_status),
-        SupervisorRoute("/api/supervisor/memory/telemetry", supervisor_memory_telemetry),
-        SupervisorRoute(
-            "/api/supervisor/public/memory-status",
-            supervisor_public_memory_status,
-            protected=False,
-        ),
-        SupervisorRoute("/api/supervisor/memory/sessions", supervisor_memory_sessions),
-        SupervisorRoute("/api/supervisor/memory/incidents", supervisor_memory_incidents),
-        SupervisorRoute("/api/supervisor/memory/sessions/{session_id}", supervisor_memory_session),
-        SupervisorRoute(
-            "/api/supervisor/memory/sessions/{session_id}/artifacts/{artifact_id}",
-            supervisor_memory_session_artifact,
-        ),
-        SupervisorRoute(
-            "/api/supervisor/memory/profile/start",
-            supervisor_memory_profile_start,
-            method="POST",
-        ),
-        SupervisorRoute(
-            "/api/supervisor/memory/profile/{session_id}/stop",
-            supervisor_memory_profile_stop,
-            method="POST",
-        ),
-        SupervisorRoute(
-            "/api/supervisor/memory/profile/{session_id}/retry",
-            supervisor_memory_profile_retry,
-            method="POST",
-        ),
-        SupervisorRoute("/api/supervisor/memory/publish", supervisor_memory_publish, method="POST"),
-        SupervisorRoute("/api/supervisor/sidecar/status", supervisor_sidecar_status),
-        SupervisorRoute("/api/supervisor/runtime/restart", supervisor_runtime_restart, method="POST"),
-        SupervisorRoute(
-            "/api/supervisor/runtime/candidate/start",
-            supervisor_runtime_candidate_start,
-            method="POST",
-        ),
-        SupervisorRoute(
-            "/api/supervisor/runtime/candidate/stop",
-            supervisor_runtime_candidate_stop,
-            method="POST",
-        ),
-        SupervisorRoute("/api/supervisor/sidecar/restart", supervisor_sidecar_restart, method="POST"),
-        SupervisorRoute("/api/supervisor/update/status", supervisor_update_status),
-        SupervisorRoute(
-            "/api/supervisor/public/update-status",
-            supervisor_public_update_status,
-            protected=False,
-        ),
-        SupervisorRoute("/api/supervisor/update/start", supervisor_update_start, method="POST"),
-        SupervisorRoute("/api/supervisor/update/cancel", supervisor_update_cancel, method="POST"),
-        SupervisorRoute("/api/supervisor/update/defer", supervisor_update_defer, method="POST"),
-        SupervisorRoute("/api/supervisor/update/rollback", supervisor_update_rollback, method="POST"),
-        SupervisorRoute(
-            "/api/supervisor/update/promote-root",
-            supervisor_update_promote_root,
-            method="POST",
-        ),
-        SupervisorRoute("/api/supervisor/update/complete", supervisor_update_complete, method="POST"),
+    routes=create_supervisor_routes(
+        {
+            "ping": ping,
+            "supervisor_status": supervisor_status,
+            "supervisor_memory_status": supervisor_memory_status,
+            "supervisor_memory_telemetry": supervisor_memory_telemetry,
+            "supervisor_public_memory_status": supervisor_public_memory_status,
+            "supervisor_memory_sessions": supervisor_memory_sessions,
+            "supervisor_memory_incidents": supervisor_memory_incidents,
+            "supervisor_memory_session": supervisor_memory_session,
+            "supervisor_memory_session_artifact": supervisor_memory_session_artifact,
+            "supervisor_memory_profile_start": supervisor_memory_profile_start,
+            "supervisor_memory_profile_stop": supervisor_memory_profile_stop,
+            "supervisor_memory_profile_retry": supervisor_memory_profile_retry,
+            "supervisor_memory_publish": supervisor_memory_publish,
+            "supervisor_sidecar_status": supervisor_sidecar_status,
+            "supervisor_runtime_restart": supervisor_runtime_restart,
+            "supervisor_runtime_candidate_start": supervisor_runtime_candidate_start,
+            "supervisor_runtime_candidate_stop": supervisor_runtime_candidate_stop,
+            "supervisor_sidecar_restart": supervisor_sidecar_restart,
+            "supervisor_update_status": supervisor_update_status,
+            "supervisor_public_update_status": supervisor_public_update_status,
+            "supervisor_update_start": supervisor_update_start,
+            "supervisor_update_cancel": supervisor_update_cancel,
+            "supervisor_update_defer": supervisor_update_defer,
+            "supervisor_update_rollback": supervisor_update_rollback,
+            "supervisor_update_promote_root": supervisor_update_promote_root,
+            "supervisor_update_complete": supervisor_update_complete,
+        }
     ),
 )
 

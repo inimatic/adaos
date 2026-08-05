@@ -49,3 +49,19 @@ def test_memory_profiling_service_identifies_skill_runtime() -> None:
 
 def test_memory_profiling_service_uses_normal_shutdown_defaults() -> None:
     assert MemoryProfilingService.graceful_shutdown_timeouts("normal") == (5.0, 0.25, 8.0, 5.0)
+
+
+def test_memory_profiling_service_preserves_policy_env_contract(monkeypatch) -> None:
+    service = MemoryProfilingService()
+
+    monkeypatch.delenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS", raising=False)
+    assert service.policy_profile_restarts_enabled() is True
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS", "0")
+    assert service.policy_profile_restarts_enabled() is False
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES", "none")
+    assert service.suspicion_family_rss_threshold_bytes() is None
+
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC", "30")
+    assert service.auto_profile_cooldown_sec() == 60.0

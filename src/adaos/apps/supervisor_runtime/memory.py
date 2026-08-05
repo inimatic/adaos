@@ -5,8 +5,197 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
+
+
 class MemoryProfilingService:
     """Own memory profiling timing policy and process-family snapshots."""
+
+    @staticmethod
+    def profiler_adapter(default_adapter: str) -> str:
+        token = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILER") or "").strip().lower()
+        return token or str(default_adapter or "").strip() or "none"
+
+    @staticmethod
+    def telemetry_interval_sec() -> float:
+        try:
+            return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC") or "15").strip()))
+        except Exception:
+            return 15.0
+
+    @staticmethod
+    def telemetry_window_sec() -> float:
+        try:
+            return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC") or "180").strip()))
+        except Exception:
+            return 180.0
+
+    @staticmethod
+    def baseline_warmup_sec() -> float:
+        try:
+            return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC") or "300").strip()))
+        except Exception:
+            return 300.0
+
+    @staticmethod
+    def baseline_maturity_slope_bytes_per_min() -> float:
+        try:
+            return max(
+                0.0,
+                float(
+                    str(
+                        os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN")
+                        or str(32 * 1024 * 1024)
+                    ).strip()
+                ),
+            )
+        except Exception:
+            return float(32 * 1024 * 1024)
+
+    def suspicion_growth_threshold_bytes(self, *, psutil_module: Any | None) -> int:
+        default_value = 1024 * 1024 * 1024
+        total_memory = self.total_memory_bytes(psutil_module=psutil_module)
+        if total_memory and total_memory > 0:
+            default_value = min(
+                1024 * 1024 * 1024,
+                max(256 * 1024 * 1024, int(float(total_memory) * 0.20)),
+            )
+        try:
+            return max(
+                32 * 1024 * 1024,
+                int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES") or str(default_value)).strip()),
+            )
+        except Exception:
+            return default_value
+
+    @staticmethod
+    def suspicion_family_rss_threshold_bytes() -> int | None:
+        raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES")
+        if raw is None or not str(raw).strip():
+            return DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
+        text = str(raw).strip()
+        if text.lower() in {"0", "false", "no", "off", "disabled", "none"}:
+            return None
+        try:
+            value = int(text)
+        except Exception:
+            return DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
+        return max(32 * 1024 * 1024, value)
+
+    @staticmethod
+    def suspicion_slope_threshold_bytes_per_min() -> float:
+        try:
+            return max(
+                float(8 * 1024 * 1024),
+                float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN") or str(128 * 1024 * 1024)).strip()),
+            )
+        except Exception:
+            return float(128 * 1024 * 1024)
+
+    @staticmethod
+    def auto_profile_cooldown_sec() -> float:
+        try:
+            return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC") or "86400").strip()))
+        except Exception:
+            return 86400.0
+
+    @staticmethod
+    def policy_profile_restarts_enabled() -> bool:
+        raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS")
+        if raw is None:
+            return True
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def auto_profile_min_uptime_sec() -> float:
+        try:
+            return max(
+                0.0,
+                float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC") or "300").strip()),
+            )
+        except Exception:
+            return 300.0
+
+    @staticmethod
+    def auto_profile_browser_live_ttl_sec() -> float:
+        try:
+            return max(
+                5.0,
+                float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BROWSER_LIVE_TTL_SEC") or "45").strip()),
+            )
+        except Exception:
+            return 45.0
+
+    @staticmethod
+    def auto_profile_allow_browser_sessions() -> bool:
+        raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_ALLOW_BROWSER_SESSIONS")
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def auto_profile_circuit_window_sec() -> float:
+        try:
+            return max(300.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_WINDOW_SEC") or "1800").strip()))
+        except Exception:
+            return 1800.0
+
+    @staticmethod
+    def auto_profile_circuit_limit() -> int:
+        try:
+            return max(1, int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_LIMIT") or "3").strip()))
+        except Exception:
+            return 3
+
+    @staticmethod
+    def available_memory_bytes(*, psutil_module: Any | None) -> int | None:
+        if psutil_module is None:
+            return None
+        try:
+            return int(psutil_module.virtual_memory().available)
+        except Exception:
+            return None
+
+    @staticmethod
+    def total_memory_bytes(*, psutil_module: Any | None) -> int | None:
+        if psutil_module is None:
+            return None
+        try:
+            return int(psutil_module.virtual_memory().total)
+        except Exception:
+            return None
+
+    @staticmethod
+    def critical_available_percent_threshold() -> float:
+        try:
+            return max(
+                1.0,
+                min(25.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT") or "5").strip())),
+            )
+        except Exception:
+            return 5.0
+
+    @staticmethod
+    def critical_available_bytes_threshold() -> int:
+        try:
+            return max(
+                64 * 1024 * 1024,
+                int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES") or str(256 * 1024 * 1024)).strip()),
+            )
+        except Exception:
+            return 256 * 1024 * 1024
+
+    @staticmethod
+    def critical_duration_sec() -> float:
+        try:
+            return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC") or "20").strip()))
+        except Exception:
+            return 20.0
+
+    @staticmethod
+    def critical_restart_cooldown_sec() -> float:
+        try:
+            return max(30.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_RESTART_COOLDOWN_SEC") or "120").strip()))
+        except Exception:
+            return 120.0
 
     @staticmethod
     def graceful_shutdown_timeouts(profile_mode: str) -> tuple[float, float, float, float]:
