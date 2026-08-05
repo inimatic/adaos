@@ -15,6 +15,7 @@ __all__ = [
     "memory",
     "status",
     "web",
+    "workflow",
     "validate_self",
 ]
 
@@ -31,6 +32,7 @@ def __getattr__(name: str):
         "memory",
         "status",
         "web",
+        "workflow",
     ):
         return import_module(f"{__name__}.{name}")
     if name == "validate_self":
