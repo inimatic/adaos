@@ -18,6 +18,21 @@ ownership model, see:
 - [UI Addressing](ui-addressing.md)
 - [Web UI Architecture](web-ui-architecture.md)
 
+## Roadmap Ownership
+
+This roadmap owns:
+
+- pointer-first scenario switching and materialization identity
+- semantic rebuild/reconcile ownership
+- compatibility-cache migration and removal criteria
+- YStore/browser generation-aware CRDT checkpoint sequencing
+
+[Webspace Evolution](webspace-evolution-roadmap.md) owns source and manifest
+evolution, client readiness, structure-first rendering, focused/deferred
+hydration, and overlay scopes. Runtime module decomposition is shared enabling
+work; it must not redesign completed pointer-switch semantics unless new
+evidence explicitly reopens that contract.
+
 ## Status
 
 - Current implementation: `pointer_only` switch by default; semantic rebuild
@@ -995,6 +1010,23 @@ Use this checklist as the authoritative progress tracker for the migration.
   ordinary scenario switching now has one atomic live-commit contract.
 - [x] Update architecture and operator docs to describe the new ownership
   model.
+
+### 7. Runtime Ownership Decomposition
+
+This is implementation cleanup, not a new scenario-switch design.
+
+- [ ] Replace module-level task and cache aliases with owner APIs that control
+  mutation, TTL/LRU policy, coalescing, cancellation, and invalidation.
+- [ ] Add a semantic recovery coordinator for reload, reset, restore, switch,
+  and post-restore reconcile; keep transport resync separate.
+- [ ] Make projection refresh an explicit lifecycle dependency rather than a
+  hidden side effect of rebuild.
+- [ ] Put materialization execution and pointer switching behind typed services
+  while preserving the atomic pointer contract.
+- [ ] Reduce `webspace_runtime.py` to composition and compatibility exports;
+  new components must not call back into its private globals.
+- [ ] Preserve public commands and events, no-op branch identity, partial
+  readiness, and bounded fanout in component tests and `.30` stand evidence.
 
 ## Builder Materialization PoC: First Iteration
 

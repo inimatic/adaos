@@ -84,6 +84,19 @@ the acceptance records required by the owning roadmap.
 | Product terminology and human-facing control plane | [AdaOS Product Terminology](product-terminology.md), [Infrascope](infrascope.md) | [Infrascope Roadmap](infrascope-roadmap.md) | Contract and UI tests; terminology review; Issue Tracker |
 | Devices, endpoints, and audio | [Endpoint Infrastructure](endpoint-infrastructure.md), [Endpoint Audio Service](endpoint-audio-service.md), [Device Access and Browsers](device-access-and-browsers.md) | [Device Access Roadmap](device-access-roadmap.md) plus endpoint-local checklists | Endpoint contract tests; routing diagnostics; device acceptance evidence |
 
+The two webspace sequencing documents have distinct ownership:
+
+- [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md)
+  owns pointer switching, semantic reconcile, compatibility-cache demotion,
+  materialization identity, and the generation-aware CRDT checkpoint direction.
+- [Webspace Evolution Roadmap](webspace-evolution-roadmap.md) owns the broader
+  source taxonomy, manifest and overlay evolution, client readiness semantics,
+  structure-first rendering, and focused/deferred hydration.
+
+Runtime module decomposition may touch both tracks, but it must preserve these
+contract owners instead of cloning their checklists or redefining behavior in a
+code-movement task.
+
 ## Supporting References
 
 These pages are useful inputs but do not independently own cross-domain
@@ -157,8 +170,6 @@ accept it without creating conflicting authority.
   cross-domain input/output and NLU-data boundary; the next material NLU
   revision should either promote the NLU roadmap into architecture or make the
   concept documents explicitly subordinate to this contract.
-- The two webspace roadmaps overlap. Their next revisions should state which
-  owns semantic pointer migration and which owns broader client evolution.
 
 ## Historical and Archived Planning
 

@@ -584,6 +584,26 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 - `tools/diag_nats_ws.py`
 - `tools/diag_route_probe.py`
 
+### Bootstrap decomposition constraint
+
+Extracted helpers are ownership seams, not a second bootstrap implementation:
+
+- `BootstrapService` composes lifecycle, subscriptions, and service
+  start/stop only
+- the NATS bridge owns credentials, connect/reconnect, subscriptions, delivery
+  budgets, outboxes, and transport diagnostics
+- the hub route proxy owns HTTP/WS tunnels, resend/backpressure, and route
+  caches
+- root transport owns the required upstream link plus bridge/watchdog state,
+  without duplicating route policy
+- the realtime sidecar remains transport-only while protocol and Yjs authority
+  migration is deferred
+
+Migration removes synchronized helper globals and wrapper callbacks while
+preserving delivery and idempotency contracts. `run_boot_sequence()` remains
+composition-only. Stand evidence must cover transport policy, rooted A/B
+cutover, and reconnect soak acceptance.
+
 ### Exit criteria
 
 - [x] `[must]` Route pressure cannot starve control readiness.

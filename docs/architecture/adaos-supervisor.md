@@ -302,6 +302,30 @@ The realtime sidecar remains the authority only for:
 
 It must not absorb supervisor responsibilities.
 
+## Implementation decomposition boundary
+
+The standalone supervisor exists, but its implementation boundary is complete
+only when state ownership has moved into explicit components:
+
+- the process supervisor owns active/candidate handles, adoption, signals,
+  termination, and listener lifecycle
+- the update state machine owns validation, persisted attempts,
+  countdown/cutover, and terminal commits
+- recovery owns boot reconciliation, interrupted attempts, timeout handling,
+  and watchdog decisions
+- the memory controller owns policy, mutable session/baseline state,
+  telemetry, and launch-mode convergence
+- the FastAPI adapter only validates requests, delegates operations, and maps
+  responses
+- `SupervisorManager` remains a composition coordinator and status assembler,
+  not a second state owner
+
+Compatibility functions may remain temporarily. New components must not add
+synchronized globals or callbacks into private manager state. This tranche is
+complete when dependencies are one-way, component tests cover each owner, and
+the public API and persisted attempt contract remain unchanged through restart,
+A/B cutover, recovery, and profiling flows.
+
 ## Local control surfaces
 
 The target local APIs are:
