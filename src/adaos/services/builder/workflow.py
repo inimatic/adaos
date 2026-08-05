@@ -525,6 +525,12 @@ def _normalize_change(value: Any) -> dict[str, Any] | None:
         "runs": runs[-_MAX_CHANGE_RUNS:],
         "acceptance_constraints": constraints,
         "context_packet_digest": str(value.get("context_packet_digest") or "").strip() or None,
+        "teacher_candidate_refs": [
+            copy.deepcopy(dict(item))
+            for item in value.get("teacher_candidate_refs") or []
+            if isinstance(item, Mapping)
+        ][-100:],
+        "promotion_privacy_scope": str(value.get("promotion_privacy_scope") or "").strip() or None,
         "supersedes_change_id": str(
             value.get("supersedes_change_id") or value.get("supersedes_change_set_id") or ""
         ).strip()
@@ -542,6 +548,8 @@ def _change_set_compatibility(change: Mapping[str, Any] | None) -> dict[str, Any
     value.pop("runs", None)
     value.pop("acceptance_constraints", None)
     value.pop("context_packet_digest", None)
+    value.pop("teacher_candidate_refs", None)
+    value.pop("promotion_privacy_scope", None)
     value.pop("project_ref", None)
     value.pop("base_ref", None)
     value.pop("base_generation", None)
@@ -2752,6 +2760,19 @@ class BuilderWorkflowService:
                     if str(item).strip()
                 )
             )[:500],
+            "teacher_candidate_refs": [
+                copy.deepcopy(dict(item))
+                for item in metadata.get("teacher_candidate_refs")
+                or (previous or {}).get("teacher_candidate_refs")
+                or []
+                if isinstance(item, Mapping)
+            ][-100:],
+            "promotion_privacy_scope": str(
+                metadata.get("promotion_privacy_scope")
+                or (previous or {}).get("promotion_privacy_scope")
+                or ""
+            ).strip()
+            or None,
         }
         runs = [
             _normalize_run(item, change_id=change_id)
@@ -3239,6 +3260,8 @@ class BuilderWorkflowService:
                     "acceptance_constraints": copy.deepcopy(change.get("acceptance_constraints") or []),
                     "reviews": active_reviews,
                     "source_message_ids": copy.deepcopy(change.get("source_message_ids") or []),
+                    "teacher_candidate_refs": copy.deepcopy(change.get("teacher_candidate_refs") or []),
+                    "promotion_privacy_scope": change.get("promotion_privacy_scope"),
                 },
                 "base": {
                     "source": copy.deepcopy(change.get("base_ref")),

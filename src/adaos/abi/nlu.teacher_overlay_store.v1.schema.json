@@ -41,10 +41,12 @@
           "schema": { "const": "adaos.nlu.teacher_promotion_candidate.v1" },
           "candidate_id": { "type": "string", "minLength": 1 },
           "source_overlay_id": { "type": "string", "minLength": 1 },
+          "promotion_privacy": { "type": "object" },
           "state": { "type": "string", "minLength": 1 },
           "target": { "type": "object" },
           "package_patch": { "type": "object" },
           "builder_change": { "type": "object" },
+          "builder_change_ref": { "type": "object" },
           "validation": { "type": "object" },
           "created_at": { "type": "string", "format": "date-time" },
           "updated_at": { "type": "string", "format": "date-time" }

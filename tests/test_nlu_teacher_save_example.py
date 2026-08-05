@@ -7,6 +7,53 @@ import pytest
 import yaml
 
 
+def test_teacher_candidate_requires_builder_change_before_source_mutation() -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu.teacher_overlay_store import (
+        create_promotion_candidate,
+        promote_candidate_to_builder_change,
+        upsert_example_overlay,
+    )
+
+    ctx = get_ctx()
+    overlay = upsert_example_overlay(
+        text="open the governed workflow lab",
+        intent="workflow_lab.open",
+        target={"type": "skill", "id": "workflow_lab_skill"},
+        provenance={"source": "unit-test"},
+        ctx=ctx,
+    )
+    candidate = create_promotion_candidate(overlay, ctx=ctx)
+    calls: list[dict] = []
+
+    class _Workflow:
+        def transition(self, object_type, object_id, action, **kwargs):
+            calls.append(
+                {
+                    "object_type": object_type,
+                    "object_id": object_id,
+                    "action": action,
+                    **kwargs,
+                }
+            )
+            return {"ok": True, "workflow": {"change": {"change_id": kwargs["metadata"]["change_set_id"]}}}
+
+    promoted = promote_candidate_to_builder_change(
+        candidate["candidate_id"],
+        privacy_scope="user",
+        actor="user:test",
+        ctx=ctx,
+        workflow_service=_Workflow(),
+    )
+
+    assert promoted["candidate"]["state"] == "builder_change_created"
+    assert promoted["candidate"]["builder_change_ref"]["id"].startswith("nlu-promotion.")
+    assert calls[0]["action"] == "plan_change_set"
+    assert calls[0]["metadata"]["teacher_candidate_refs"][0]["kind"] == "evidence"
+    assert calls[0]["metadata"]["promotion_privacy_scope"] == "user"
+    assert calls[0]["metadata"]["parallel"] is True
+
+
 @pytest.mark.anyio
 async def test_teacher_save_example_routes_to_scenario_overlay_and_candidate() -> None:
     from adaos.services.agent_context import get_ctx

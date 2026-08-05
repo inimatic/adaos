@@ -18,6 +18,8 @@
     "runs": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
     "acceptance_constraints": { "type": "array", "maxItems": 100, "items": { "$ref": "builder.acceptance_constraint.v1.schema.json" } },
     "source_message_ids": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
+    "teacher_candidate_refs": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
+    "promotion_privacy_scope": { "type": ["string", "null"], "enum": ["session", "user", "webspace", "node", "organization", "public", null] },
     "member_change_ids": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1 } },
     "base_ref": { "type": ["object", "null"] },
     "base_generation": { "type": "integer", "minimum": 0 },

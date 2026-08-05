@@ -166,6 +166,10 @@ def create_promotion_candidate(
         "schema": "adaos.nlu.teacher_promotion_candidate.v1",
         "candidate_id": candidate_id,
         "source_overlay_id": str(overlay.get("overlay_id") or ""),
+        "promotion_privacy": {
+            "scope": "user",
+            "public_export": "requires_review",
+        },
         "state": "promotion_candidate",
         "target": {
             "type": target["type"],
@@ -239,6 +243,10 @@ def create_regex_promotion_candidate(
         "schema": "adaos.nlu.teacher_promotion_candidate.v1",
         "candidate_id": candidate_id,
         "source_overlay_id": source_overlay_id,
+        "promotion_privacy": {
+            "scope": "webspace",
+            "public_export": "requires_review",
+        },
         "state": "promotion_candidate",
         "target": {
             "type": target_type,
@@ -295,11 +303,113 @@ def create_regex_promotion_candidate(
     return copy.deepcopy(candidate)
 
 
+def list_promotion_candidates(ctx: AgentContext | None = None) -> list[dict[str, Any]]:
+    return [
+        copy.deepcopy(dict(item))
+        for item in read_store(ctx).get("promotion_candidates") or []
+        if isinstance(item, Mapping)
+    ]
+
+
+def promote_candidate_to_builder_change(
+    candidate_id: str,
+    *,
+    privacy_scope: str | None = None,
+    actor: str = "nlu.teacher",
+    ctx: AgentContext | None = None,
+    workflow_service: Any | None = None,
+) -> dict[str, Any]:
+    """Create a reviewable Builder Change without applying the package patch."""
+
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise ValueError("candidate_id is required")
+    candidate = next(
+        (item for item in list_promotion_candidates(ctx) if item.get("candidate_id") == token),
+        None,
+    )
+    if candidate is None:
+        raise KeyError(f"Teacher promotion candidate is unavailable: {token}")
+    if str(candidate.get("state") or "") not in {"promotion_candidate", "builder_change_created"}:
+        raise ValueError(f"Teacher promotion candidate cannot create a Change from state {candidate.get('state')}")
+    privacy = dict(candidate.get("promotion_privacy") or {})
+    scope = str(privacy_scope or privacy.get("scope") or "user").strip()
+    if scope not in {"session", "user", "webspace", "node", "organization", "public"}:
+        raise ValueError(f"unsupported Teacher promotion privacy scope: {scope}")
+    if scope == "public" and str(privacy.get("public_export") or "blocked") == "blocked":
+        raise ValueError("Teacher candidate policy blocks public promotion")
+
+    target = dict(candidate.get("target") or {})
+    change = dict(candidate.get("builder_change") or {})
+    source_ref = {
+        "schema": "adaos.workflow.ref.v1",
+        "kind": "evidence",
+        "id": token,
+        "digest": "sha256:"
+        + hashlib.sha256(
+            json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+    }
+    service = workflow_service
+    if service is None:
+        from adaos.services.builder.workflow import BuilderWorkflowService
+
+        service = BuilderWorkflowService.from_context()
+    result = service.transition(
+        str(change.get("object_type") or target.get("type") or ""),
+        str(change.get("object_id") or target.get("id") or ""),
+        "plan_change_set",
+        actor=actor,
+        metadata={
+            "change_set_id": str(change.get("change_id") or f"nlu-{token}"),
+            "request": str(change.get("request") or f"Review Teacher candidate {token}"),
+            "issues": [
+                {
+                    "issue_id": "teacher-candidate",
+                    "title": str(change.get("request") or f"Promote Teacher candidate {token}"),
+                    "lane": "automation",
+                    "acceptance_criteria": list(change.get("acceptance_criteria") or []),
+                    "semantic_refs": [f"teacher_candidate:{token}"],
+                }
+            ],
+            "source_message_ids": list(change.get("evidence_refs") or []),
+            "teacher_candidate_refs": [source_ref],
+            "promotion_privacy_scope": scope,
+            "affected_refs": list(change.get("allowed_paths") or []),
+            "parallel": True,
+            "idempotency_key": f"teacher-candidate:{token}:builder-change",
+        },
+    )
+    with _LOCK:
+        store = read_store(ctx)
+        updated: list[dict[str, Any]] = []
+        for item in store.get("promotion_candidates") or []:
+            if not isinstance(item, Mapping):
+                continue
+            record = dict(item)
+            if record.get("candidate_id") == token:
+                record["state"] = "builder_change_created"
+                record["promotion_privacy"] = {**privacy, "scope": scope}
+                record["builder_change_ref"] = {
+                    "kind": "change",
+                    "id": str(change.get("change_id") or f"nlu-{token}"),
+                    "version": None,
+                }
+                record["updated_at"] = _now()
+                _validate(_PROMOTION_SCHEMA, record)
+            updated.append(record)
+        store["promotion_candidates"] = updated[-5000:]
+        _write(ctx, store)
+    return {"candidate": next(item for item in updated if item.get("candidate_id") == token), "workflow": result}
+
+
 __all__ = [
     "create_promotion_candidate",
     "create_regex_promotion_candidate",
+    "list_promotion_candidates",
     "list_example_overlays",
     "overlay_store_path",
     "read_store",
+    "promote_candidate_to_builder_change",
     "upsert_example_overlay",
 ]
