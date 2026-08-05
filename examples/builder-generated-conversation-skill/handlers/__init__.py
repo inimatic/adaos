@@ -1,0 +1,1 @@
+"""Builder-generated preferences example."""

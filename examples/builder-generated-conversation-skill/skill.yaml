@@ -1,0 +1,93 @@
+name: builder_generated_preferences_skill
+version: 0.1.0
+description: Public Builder output example with governed conversation and memory.
+supported_locales: [en, ru]
+entry: handlers/main.py
+default_tool: chat
+runtime:
+  python: "3.11"
+dependencies: []
+events:
+  subscribe: []
+  publish: [io.out.chat.append, pending_actions.publish.request]
+exports:
+  tools: [chat, remember_preference]
+tools:
+  - name: chat
+    description: Handle one bounded skill-owned conversation turn.
+    entry: handlers.main:chat
+    input_schema:
+      type: object
+      properties:
+        text: {type: string}
+        webspace_id: {type: string}
+        conversation_context: {type: object}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message, conversation_id]
+  - name: remember_preference
+    description: Propose a reusable preference and require consent before storage.
+    entry: handlers.main:remember_preference
+    input_schema:
+      type: object
+      required: [key, text]
+      properties:
+        key: {type: string}
+        text: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, message, pending_action]
+data_routes:
+  - surface: builder generated preferences
+    route: skill-local
+    path: node_conversation_store:memory.skill_user.builder_generated_preferences_skill
+    owner: skill:builder_generated_preferences_skill
+    first_paint: empty preference projection
+    recovery: memory search rebuilds the bounded projection
+    guard_visibility: writes require a Pending Action
+    budget: {max_payload_bytes: 65536}
+conversation:
+  dialog_channel:
+    id: builder_generated_preferences
+    label: Preferences
+    owner: skill:builder_generated_preferences_skill
+    default_tool: builder_generated_preferences_skill.chat
+    route_id: voice_chat
+    history: {store: node, visible_tail_messages: 50}
+    retrieval: {max_messages: 12, max_segments: 2, max_memory_items: 4, max_tokens: 1200}
+    repair: {no_match: chat, correction: pass_to_tool, cancel: close_active_frame}
+    response: {default_targets: [text_tail, speech_text], renderer: dialog.visible_tail}
+  history: {store: node, owner: skill:builder_generated_preferences_skill, retention_class: normal}
+  retrieval: {strategy: recent_plus_segments_plus_memory, cross_owner_memory: deny_by_default}
+  memory: {scopes: [conversation, skill_user], consent: required_for_reusable_memory, default_visibility: owner}
+  response: {default_targets: [text_tail, speech_text], structured_envelope: true}
+  agents:
+    - id: agent:builder_generated_preferences_skill:assistant
+      label: Preference assistant
+      owner: skill:builder_generated_preferences_skill
+      kind: skill_agent
+      channel_id: builder_generated_preferences
+      skill: builder_generated_preferences_skill
+      talk_tool: chat
+      gender: neutral
+      voice: default
+      icon: sparkles-outline
+      aliases: [Preference assistant]
+llm_hints:
+  description: Capture preferences only after explicit consent.
+  aliases: [preferences]
+  primary_actions:
+    - id: builder_generated_preferences_skill.chat
+      intent: builder_generated_preferences_skill.chat
+      tool: chat
+      side_effect_class: local_write
+      examples: [Help me review a preference]
+  owner_hints: [skill:builder_generated_preferences_skill]
+nlu_hints:
+  aliases: [preferences]
+  examples: [Remember this preference]
+  slot_schemas: {}
+  entities: []
