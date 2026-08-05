@@ -626,12 +626,14 @@ listeners ready. The thin reliability contract reported the required
 `hub_root` link as `ready`, served by `supervisor_sidecar`, with no blockers;
 state sync was attached, complete, semantically ready, and fresh.
 
-The checkpoint is not a pressure-soak claim. During build/root-promotion disk
-pressure the runtime logged seven event-loop-lag warnings and one observable
-subnet link-down/reconnect cycle; after 23:27 UTC the bounded observation
-window showed no additional lag, `recovering`, traceback, or error records.
-The remaining fanout/blocking-work investigation stays tracked separately
-under `RT-FANOUT` / `LRLT-001` / `LRLT-002`.
+The checkpoint is not a pressure-soak claim. An extended observation through
+23:49 UTC still showed recurring blocking pressure: 19 event-loop-lag warnings
+and four `subnet.member.link.down` event publications after 23:27. The link
+reconverged to `ready` with no blockers, and the same window contained no
+`recovering`, traceback, or error records, but the lag/drop pattern is not
+closed by this decomposition tranche. The remaining fanout/blocking-work
+investigation stays tracked separately under `RT-FANOUT` / `LRLT-001` /
+`LRLT-002`.
 
 ### Exit criteria
 
