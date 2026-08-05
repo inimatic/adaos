@@ -34,7 +34,7 @@ from fastapi.responses import Response
 
 from adaos.apps.api.auth import require_token
 from adaos.apps.bootstrap import init_ctx
-from adaos.apps.supervisor_runtime import AdoptedProcess, ProcessSupervisor
+from adaos.apps.supervisor_runtime import AdoptedProcess, ProcessSupervisor, UpdateStateMachine
 from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
@@ -114,6 +114,7 @@ _LOG = logging.getLogger("adaos.supervisor")
 _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 _PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
+_UPDATE_STATE_MACHINE = UpdateStateMachine()
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1107,7 +1108,7 @@ def _post_recovery_member_hub_refresh_cooldown_sec() -> float:
 
 
 def _terminal_update_states() -> set[str]:
-    return {"failed", "validated", "succeeded", "rolled_back", "expired", "cancelled", "idle"}
+    return set(_UPDATE_STATE_MACHINE.TERMINAL_STATES)
 
 
 UPDATE_ATTEMPT_CONTRACT_VERSION = "1"
@@ -1228,10 +1229,11 @@ def _attempt_transition_at(payload: dict[str, Any]) -> float:
 
 
 def _update_transition_timed_out(*, status_age: float, transition_age: float, timeout_sec: float) -> bool:
-    ages = [age for age in (status_age, transition_age) if age > 0.0]
-    if not ages:
-        return False
-    return min(ages) >= float(timeout_sec)
+    return _UPDATE_STATE_MACHINE.transition_timed_out(
+        status_age=status_age,
+        transition_age=transition_age,
+        timeout_sec=timeout_sec,
+    )
 
 
 def _prepare_lease_ref_from_payloads(*payloads: dict[str, Any] | None) -> tuple[str, str]:
@@ -1286,107 +1288,46 @@ def _revoke_prepare_lease(
 
 
 def _is_terminal_update_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    if _is_root_promotion_pending_status(payload) or _is_root_restart_pending_status(payload):
-        return False
-    return str(payload.get("state") or "").strip().lower() in _terminal_update_states()
+    return _UPDATE_STATE_MACHINE.is_terminal(payload)
 
 
 def _is_root_restart_pending_attempt(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    return str(payload.get("state") or "").strip().lower() == "awaiting_root_restart"
+    return _UPDATE_STATE_MACHINE.is_root_restart_pending_attempt(payload)
 
 
 def _is_root_restart_completed_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "succeeded" and phase == "validate" and float(payload.get("root_restart_completed_at") or 0.0) > 0.0
+    return _UPDATE_STATE_MACHINE.is_root_restart_completed_status(payload)
 
 
 def _is_root_promotion_pending_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "validated" and phase == "root_promotion_pending"
+    return _UPDATE_STATE_MACHINE.is_root_promotion_pending_status(payload)
 
 
 def _is_root_restart_pending_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "succeeded" and phase == "root_promoted"
+    return _UPDATE_STATE_MACHINE.is_root_restart_pending_status(payload)
 
 
 def _root_promotion_owner_instance(payload: dict[str, Any] | None) -> str:
-    data = payload if isinstance(payload, dict) else {}
-    return str(
-        data.get("root_promotion_supervisor_instance_id")
-        or data.get("restart_requested_by_instance_id")
-        or ""
-    ).strip()
+    return _UPDATE_STATE_MACHINE.root_promotion_owner_instance(payload)
 
 
 def _root_restart_crossed_supervisor_generation(payload: dict[str, Any] | None) -> bool:
-    owner_instance = _root_promotion_owner_instance(payload)
-    # Legacy receipts did not carry a process generation. Preserve their
-    # existing recovery path, while every newly written receipt is gated by
-    # the immutable per-process instance id below.
-    return not owner_instance or owner_instance != _SUPERVISOR_INSTANCE_ID
+    return _UPDATE_STATE_MACHINE.crossed_supervisor_generation(
+        payload,
+        current_instance_id=_SUPERVISOR_INSTANCE_ID,
+    )
 
 
 def _is_transition_in_progress(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> bool:
-    status_map = status if isinstance(status, dict) else {}
-    attempt_map = attempt if isinstance(attempt, dict) else {}
-    state = str(status_map.get("state") or "").strip().lower()
-    phase = str(status_map.get("phase") or "").strip().lower()
-    attempt_state = str(attempt_map.get("state") or "").strip().lower()
-    if attempt_state in {"active", "awaiting_root_restart"}:
-        return True
-    if state in {"preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
-        return True
-    if state == "validated" and phase == "root_promotion_pending":
-        return True
-    if state == "succeeded" and phase == "root_promoted":
-        return True
-    return False
+    return _UPDATE_STATE_MACHINE.transition_in_progress(status, attempt)
 
 
 def _runtime_ready_for_boot_status_finalize(status: dict[str, Any] | None, runtime: dict[str, Any] | None) -> bool:
-    if not isinstance(status, dict) or not isinstance(runtime, dict):
-        return False
-    state = str(status.get("state") or "").strip().lower()
-    phase = str(status.get("phase") or "").strip().lower()
-    if state == "succeeded" and phase == "validate":
-        return False
-    if state == "validated" and phase == "root_promotion_pending":
-        return False
-    if state == "succeeded" and phase == "root_promoted" and not _root_restart_crossed_supervisor_generation(status):
-        return False
-    finalizable = state in {"restarting", "applying", "validated"} or (
-        state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
+    return _UPDATE_STATE_MACHINE.runtime_ready_for_boot_finalize(
+        status,
+        runtime,
+        current_instance_id=_SUPERVISOR_INSTANCE_ID,
     )
-    if not finalizable:
-        return False
-    runtime_state = str(runtime.get("runtime_state") or "").strip().lower()
-    runtime_ready = runtime_state == "ready" or (
-        bool(runtime.get("listener_running")) and bool(runtime.get("runtime_api_ready"))
-    )
-    if not runtime_ready:
-        return False
-    target_slot = str(status.get("target_slot") or "").strip().upper()
-    manifest = status.get("manifest")
-    if not target_slot and isinstance(manifest, dict):
-        target_slot = str(manifest.get("slot") or "").strip().upper()
-    active_runtime_slot = str(runtime.get("active_slot") or "").strip().upper()
-    if target_slot and active_runtime_slot and target_slot != active_runtime_slot:
-        return False
-    return True
 
 
 def _transition_request_payload(
@@ -1474,38 +1415,19 @@ def _clear_orphaned_subsequent_transition_status(
 
 
 def _target_version_matches(left: Any, right: Any) -> bool:
-    a = str(left or "").strip()
-    b = str(right or "").strip()
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
+    return _UPDATE_STATE_MACHINE.target_version_matches(left, right)
 
 
 def _looks_like_git_sha(value: Any) -> bool:
-    text = str(value or "").strip()
-    return 7 <= len(text) <= 40 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+    return _UPDATE_STATE_MACHINE.looks_like_git_sha(value)
 
 
 def _transition_request_has_resolved_target(request: dict[str, Any] | None) -> bool:
-    req = request if isinstance(request, dict) else {}
-    if str(req.get("action") or "update").strip().lower() != "update":
-        return True
-    if str(req.get("target_rev") or "").strip():
-        return True
-    return _looks_like_git_sha(req.get("target_version"))
+    return _UPDATE_STATE_MACHINE.transition_request_has_resolved_target(request)
 
 
 def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: Any) -> bool:
-    expected = str(target_version or "").strip()
-    if not expected:
-        return True
-    data = manifest if isinstance(manifest, dict) else {}
-    for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
-        if _target_version_matches(expected, data.get(key)):
-            return True
-    return False
+    return _UPDATE_STATE_MACHINE.manifest_matches_target_version(manifest, target_version)
 
 
 def _terminal_status_belongs_to_attempt(status: dict[str, Any], attempt: dict[str, Any]) -> bool:
