@@ -128,15 +128,17 @@ the independently managed projects.
 | Current `builder_sdk_control_skill` regression | 50 passed |
 | `workflow_lab_dashboard` scenario validation and companion skill tests | passed (3/3 companion tests) |
 | AdaOS backend TypeScript build and complete suite | passed, 20/20 |
+| Client complete deterministic browser suite | 906 passed |
 | Client NavigationLocation/App/Modal/Auth/YDoc focused suite | 295 passed |
-| Client production build | passed, version 0.0.275 |
+| Client production build | passed, version 0.0.276 |
 
 Key commits in this slice are `69d4fb13`, `d0aeb3c9`, `ae6ae315`,
 `cd281033`, `85db66bb`, `36f24913`, `3d43e220`, `e6ce0790`, `cd4b2dea`,
 `fddccee8`, `b2deacf3`, `e16b7890`, `c610c800`, `ce4197d3`, `a7bf86fd`,
 `c08dc9ac`, `0bcdf524`, `2ab76eb9`, `9ee5c334`, core receipt commit
-`6186ca4b`, backend receipt commit `2726686`, and client commits `2f99450` and
-`9b2fccc`. Publication recovery and dependency-boundary corrections are
+`6186ca4b`, backend receipt commit `2726686`, and client commits `2f99450`,
+`9b2fccc`, `ffc09fc`, and `bcb9367`. Publication recovery and
+dependency-boundary corrections are
 `65c039c2`, `a289b654`, `88e650ba`, `2bad76a1`, and `1e03c76d`; the final
 Builder control-skill Forge checkpoint is
 `2bfe0957f827e96de30f5db0e9f0b21cacfd2e1e`.
