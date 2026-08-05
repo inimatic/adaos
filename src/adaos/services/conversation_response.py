@@ -462,7 +462,7 @@ def _append_ledger_message(
             active_agent_id=actor_id,
             meta={"route_id": route_id, "channel_id": channel_id},
         )
-        return conversation_store.append_message(
+        return conversation_store.materialize_message(
             conversation_id=conversation_id,
             thread_id=thread_id,
             webspace_id=webspace_id,

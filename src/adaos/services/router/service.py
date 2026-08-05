@@ -2820,7 +2820,7 @@ class RouterService:
                     meta={"route_id": route_id, "channel_id": channel_id},
                 )
                 _store_dialog_channel_projection(worker_webspace_id, worker_context_channel)
-                stored = conversation_store.append_message(
+                stored = conversation_store.materialize_message(
                     conversation_id=conversation_id,
                     thread_id=topic_id or None,
                     webspace_id=worker_webspace_id,

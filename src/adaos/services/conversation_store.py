@@ -3321,6 +3321,13 @@ def upsert_job_message(
     text: str,
     payload: Mapping[str, Any] | None = None,
     meta: Mapping[str, Any] | None = None,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    actor_icon: str | None = None,
+    route_id: str | None = None,
+    request_id: str | None = None,
+    turn_trace_id: str | None = None,
+    ts: float | None = None,
 ) -> dict[str, Any]:
     """Materialize accepted/progress/terminal phases into one stable message."""
 
@@ -3344,7 +3351,14 @@ def upsert_job_message(
             "job_terminal": bool(terminal),
         },
         meta={**dict(meta or {}), "message_update_mode": "job_stable"},
+        actor_id=actor_id,
+        actor_label=actor_label,
+        actor_icon=actor_icon,
+        route_id=route_id,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
         idempotency_key=idem,
+        ts=ts,
     )
     if message is None:
         raise RuntimeError("conversation store is unavailable")
@@ -3360,6 +3374,99 @@ def upsert_job_message(
             "job_terminal": bool(terminal),
         },
         meta={**dict(meta or {}), "message_update_mode": "job_stable"},
+    )
+
+
+def materialize_message(
+    *,
+    conversation_id: str,
+    thread_id: str | None = None,
+    webspace_id: str,
+    channel_id: str,
+    owner: str,
+    role: str,
+    text: str,
+    payload: Mapping[str, Any] | None = None,
+    meta: Mapping[str, Any] | None = None,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    actor_icon: str | None = None,
+    route_id: str | None = None,
+    request_id: str | None = None,
+    turn_trace_id: str | None = None,
+    idempotency_key: str | None = None,
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    """Persist an ordinary message or update one stable async-job card.
+
+    ``progress_group_id`` is transport-neutral: browser, Voice, Telegram, and
+    API relays all converge on the same durable message contract.  A delivery
+    replay can update the card but cannot create another transcript entry or
+    repeat the underlying job.
+    """
+
+    body = dict(payload or {})
+    metadata = dict(meta or {})
+    job_id = str(
+        metadata.get("progress_group_id")
+        or body.get("progress_group_id")
+        or body.get("job_id")
+        or ""
+    ).strip()
+    if not job_id:
+        return append_message(
+            conversation_id=conversation_id,
+            thread_id=thread_id,
+            webspace_id=webspace_id,
+            channel_id=channel_id,
+            owner=owner,
+            role=role,
+            text=text,
+            payload=body,
+            meta=metadata,
+            actor_id=actor_id,
+            actor_label=actor_label,
+            actor_icon=actor_icon,
+            route_id=route_id,
+            request_id=request_id,
+            turn_trace_id=turn_trace_id,
+            idempotency_key=idempotency_key,
+            ts=ts,
+        )
+    phase = str(
+        metadata.get("progress_phase")
+        or metadata.get("progress_status")
+        or body.get("job_phase")
+        or "progress"
+    ).strip().lower()
+    terminal = bool(body.get("job_terminal")) or phase in {
+        "completed",
+        "failed",
+        "cancelled",
+        "canceled",
+        "expired",
+        "rejected",
+    }
+    return upsert_job_message(
+        job_id=job_id,
+        phase=phase,
+        terminal=terminal,
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        webspace_id=webspace_id,
+        channel_id=channel_id,
+        owner=owner,
+        role=role,
+        text=text,
+        payload=body,
+        meta=metadata,
+        actor_id=actor_id,
+        actor_label=actor_label,
+        actor_icon=actor_icon,
+        route_id=route_id,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+        ts=ts,
     )
 
 
