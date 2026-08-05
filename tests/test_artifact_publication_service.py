@@ -1524,3 +1524,50 @@ def test_promotion_continues_after_projection_failure_without_reactivation(
     assert completed["status"] == "completed"
     assert completed["receipts"]["workspace_activated"]["operation_id"] == activation_operation
     assert promoted.activation.idempotent_replay is True
+
+
+def test_completed_promotion_replays_only_terminal_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-terminal-replay",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    promoted = _promote(
+        service,
+        prepared.candidate.candidate_id,
+        health_check=lambda _lock: True,
+    )
+    channel_writes = remote.channel_writes
+    monkeypatch.setattr(
+        remote,
+        "get_channel",
+        lambda *_args, **_kwargs: pytest.fail(
+            "terminal promotion replay must not query or rewrite the remote channel"
+        ),
+    )
+
+    replayed = _promote(service, prepared.candidate.candidate_id)
+
+    assert replayed.pointer == promoted.pointer
+    assert replayed.activation.operation_id == promoted.activation.operation_id
+    assert replayed.activation.idempotent_replay is True
+    assert remote.channel_writes == channel_writes

@@ -1541,6 +1541,8 @@ class ArtifactPublicationService:
         operation = self.load_promotion(candidate_id)
         if operation is not None and operation.get("release_digest") != candidate.release_digest:
             raise PublicationError("promotion operation is bound to another release digest")
+        if operation is not None and operation.get("status") == "completed":
+            return self._completed_promotion_result(candidate, plan, operation)
 
         if operation is None:
             stable = self.current_stable(candidate.project_id)
@@ -1893,6 +1895,76 @@ class ArtifactPublicationService:
             operation["paused_at"] = _now()
             self._write_promotion(operation)
             raise
+
+    def _completed_promotion_result(
+        self,
+        candidate: CandidateRecord,
+        plan: ReleasePlan,
+        operation: Mapping[str, Any],
+    ) -> PromotionResult:
+        """Materialize a terminal promotion exclusively from durable receipts.
+
+        A completed promotion is immutable.  Revalidating its pre-activation
+        admission against a later merged WorkspaceLock can manufacture drift
+        (notably after an explicit activation recovery) and must never cause a
+        second registry write or activation.  We instead verify that the
+        currently installed lock still contains the exact promoted dependency
+        closure and return the recorded terminal result.
+        """
+
+        receipts = operation.get("receipts")
+        if not isinstance(receipts, Mapping):
+            raise PublicationError("completed promotion has no durable receipts")
+        channel_receipt = receipts.get("channel_moved")
+        activation_receipt = receipts.get("workspace_activated")
+        subscription_receipt = receipts.get("subscription_saved")
+        if not isinstance(channel_receipt, Mapping):
+            raise PublicationError("completed promotion has no channel receipt")
+        if not isinstance(activation_receipt, Mapping):
+            raise PublicationError("completed promotion has no activation receipt")
+        if not isinstance(subscription_receipt, Mapping):
+            raise PublicationError("completed promotion has no subscription receipt")
+        raw_lock = activation_receipt.get("workspace_lock")
+        raw_subscription = subscription_receipt.get("subscription")
+        if not isinstance(raw_lock, Mapping):
+            raise PublicationError("completed promotion activation receipt has no WorkspaceLock")
+        if not isinstance(raw_subscription, Mapping):
+            raise PublicationError("completed promotion receipt has no stable subscription")
+        recorded_lock = WorkspaceLock.from_mapping(raw_lock)
+        manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        active_lock = manager.load_lock()
+        active_components = {
+            item.key: item for item in (active_lock.components if active_lock else ())
+        }
+        missing_or_changed = [
+            package.key
+            for package in plan.packages
+            if package.key not in active_components
+            or active_components[package.key].digest != package.digest
+        ]
+        if missing_or_changed:
+            raise PublicationError(
+                "completed promotion dependency closure is no longer active: "
+                + ", ".join(sorted(missing_or_changed))
+            )
+        return PromotionResult(
+            candidate,
+            plan,
+            ChannelPointer.from_mapping(channel_receipt["pointer"]),
+            ActivationResult(
+                operation_id=str(activation_receipt.get("operation_id") or ""),
+                status="completed",
+                workspace_lock=recorded_lock,
+                release_digest=candidate.release_digest,
+                idempotent_replay=True,
+            ),
+            StableSubscription.from_mapping(raw_subscription),
+        )
 
     def _record_workspace_projection(self, plan: ReleasePlan) -> None:
         component = next(
