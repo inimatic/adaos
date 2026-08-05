@@ -3,12 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 import atexit
 import asyncio
 import base64
-from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import hashlib
 import json
@@ -19,7 +17,6 @@ import secrets
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import traceback
 
@@ -63,51 +60,54 @@ from adaos.services.webui_contract import (
 )
 from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
+from .webspace_components import MaterializationExecutorOwner, WebspaceCacheState, WebspaceTaskState
 from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
-_SCENARIO_SWITCH_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WEBSPACE_REBUILD_STATUS: dict[str, Dict[str, Any]] = {}
-_WEBSPACE_RECOVERY_COMMAND_CACHE: dict[str, Dict[str, Any]] = {}
+_TASK_STATE = WebspaceTaskState()
+_CACHE_STATE = WebspaceCacheState()
+_MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
+_SCENARIO_SWITCH_REBUILD_TASKS = _TASK_STATE.scenario_switch_rebuild_tasks
+_WEBSPACE_REBUILD_STATUS = _TASK_STATE.webspace_rebuild_status
+_WEBSPACE_RECOVERY_COMMAND_CACHE = _TASK_STATE.webspace_recovery_command_cache
 _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
-_SKILL_RUNTIME_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_SKILL_RUNTIME_REBUILD_PENDING: dict[str, Dict[str, Any]] = {}
-_SKILL_RUNTIME_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
+_SKILL_RUNTIME_REBUILD_TASKS = _TASK_STATE.skill_runtime_rebuild_tasks
+_SKILL_RUNTIME_REBUILD_PENDING = _TASK_STATE.skill_runtime_rebuild_pending
+_SKILL_RUNTIME_REBUILD_STATS = _TASK_STATE.skill_runtime_rebuild_stats
+# Compatibility scalar for callers that still inspect or reset the historical
+# module-level task directly. Scheduling keeps it synchronized with TaskState.
 _WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
-_WORKFLOW_SYNC_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WORKFLOW_SYNC_PENDING: dict[str, Dict[str, Any]] = {}
-_WORKFLOW_SYNC_STATS: dict[str, Dict[str, Any]] = {}
-_LIVE_ROOM_REFRESH_TASKS: dict[str, asyncio.Task[Any]] = {}
-_LIVE_ROOM_REFRESH_PENDING: dict[str, Dict[str, Any]] = {}
-_LIVE_ROOM_REFRESH_STATS: dict[str, Dict[str, Any]] = {}
-_BUILDER_YSTORE_BACKUP_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
+_WORKFLOW_SYNC_TASKS = _TASK_STATE.workflow_sync_tasks
+_WORKFLOW_SYNC_PENDING = _TASK_STATE.workflow_sync_pending
+_WORKFLOW_SYNC_STATS = _TASK_STATE.workflow_sync_stats
+_LIVE_ROOM_REFRESH_TASKS = _TASK_STATE.live_room_refresh_tasks
+_LIVE_ROOM_REFRESH_PENDING = _TASK_STATE.live_room_refresh_pending
+_LIVE_ROOM_REFRESH_STATS = _TASK_STATE.live_room_refresh_stats
+_BUILDER_YSTORE_BACKUP_TASKS = _TASK_STATE.builder_ystore_backup_tasks
+_WEBUI_DECL_CACHE = _CACHE_STATE.webui_declarations
 _SKILL_DECLS_CACHE_TTL_S = 300.0
-_SKILL_DECLS_CACHE: dict[str, tuple[float, str, List[Dict[str, Any]]]] = {}
+_SKILL_DECLS_CACHE = _CACHE_STATE.skill_declarations
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
-_SKILL_SOURCE_FINGERPRINT_CACHE: dict[str, tuple[float, str]] = {}
-_MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
-_MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS: dict[str, asyncio.Task[Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
-_MATERIALIZATION_CPU_EXECUTOR: ThreadPoolExecutor | None = None
-_MATERIALIZATION_CPU_EXECUTOR_LOCK = threading.Lock()
+_SKILL_SOURCE_FINGERPRINT_CACHE = _CACHE_STATE.skill_source_fingerprints
+_MEMBER_SNAPSHOT_REBUILD_AT = _TASK_STATE.member_snapshot_rebuild_at
+_MEMBER_SNAPSHOT_REBUILD_TASKS = _TASK_STATE.member_snapshot_rebuild_tasks
+_MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS = _TASK_STATE.member_snapshot_rebuild_delayed_tasks
+_MEMBER_SNAPSHOT_REBUILD_DIRTY = _TASK_STATE.member_snapshot_rebuild_dirty
 
 
 def _is_control_flow_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
-_MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT: dict[str, str] = {}
-_RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_MEMBER_SNAPSHOT_REBUILD_STATS = _TASK_STATE.member_snapshot_rebuild_stats
+_MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT = _TASK_STATE.member_snapshot_rebuild_material_fingerprint
+_RESOLVED_WEBSPACE_CACHE = _CACHE_STATE.resolved_webspaces
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
-_MATERIALIZED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_MATERIALIZED_WEBSPACE_CACHE = _CACHE_STATE.materialized_webspaces
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
-_DESKTOP_SCENARIOS_CACHE: dict[str, tuple[float, tuple[tuple[str, int, int], ...], list[Tuple[str, str]]]] = {}
+_DESKTOP_SCENARIOS_CACHE = _CACHE_STATE.desktop_scenarios
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
-_LOCAL_NODE_DISPLAY_CACHE: tuple[float, dict[str, Any]] = (0.0, {})
 _EFFECTIVE_BRANCH_PATHS = (
     "ui.application",
     "data.catalog",
@@ -871,7 +871,7 @@ def _local_node_label() -> str:
 
 
 def _local_node_display() -> dict[str, Any]:
-    cached_at, cached = _LOCAL_NODE_DISPLAY_CACHE
+    cached_at, cached = _CACHE_STATE.local_node_display
     now = time.monotonic()
     if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
         return dict(cached)
@@ -884,7 +884,7 @@ def _local_node_display() -> dict[str, Any]:
             "node_index": 0,
             "node_color": "",
         }
-    globals()["_LOCAL_NODE_DISPLAY_CACHE"] = (now, dict(display))
+    _CACHE_STATE.local_node_display = (now, dict(display))
     return dict(display)
 
 
@@ -3908,31 +3908,12 @@ def _materialization_cpu_workers() -> int:
     return max(1, min(value, 4))
 
 
-def _get_materialization_cpu_executor() -> ThreadPoolExecutor:
-    global _MATERIALIZATION_CPU_EXECUTOR
-
-    executor = _MATERIALIZATION_CPU_EXECUTOR
-    if executor is not None:
-        return executor
-    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
-        executor = _MATERIALIZATION_CPU_EXECUTOR
-        if executor is None:
-            executor = ThreadPoolExecutor(
-                max_workers=_materialization_cpu_workers(),
-                thread_name_prefix="adaos-materialize",
-            )
-            _MATERIALIZATION_CPU_EXECUTOR = executor
-    return executor
+def _get_materialization_cpu_executor() -> Any:
+    return _MATERIALIZATION_EXECUTOR.get(max_workers=_materialization_cpu_workers())
 
 
 def _shutdown_materialization_cpu_executor() -> None:
-    global _MATERIALIZATION_CPU_EXECUTOR
-
-    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
-        executor = _MATERIALIZATION_CPU_EXECUTOR
-        _MATERIALIZATION_CPU_EXECUTOR = None
-    if executor is not None:
-        executor.shutdown(wait=False, cancel_futures=True)
+    _MATERIALIZATION_EXECUTOR.shutdown()
 
 
 async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) -> Any:
@@ -8277,6 +8258,7 @@ def _schedule_webspace_listing_sync(
     global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
 
     current = _WEBSPACE_LISTING_SYNC_TASK
+    _TASK_STATE.webspace_listing_sync_task = current
     if current is not None and not current.done():
         return {
             "scheduled": True,
@@ -8301,6 +8283,8 @@ def _schedule_webspace_listing_sync(
             _log.warning("post-ready webspace listing sync failed reason=%s", reason, exc_info=True)
         finally:
             global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
+            if _TASK_STATE.webspace_listing_sync_task is task:
+                _TASK_STATE.webspace_listing_sync_task = None
             if _WEBSPACE_LISTING_SYNC_TASK is task:
                 _WEBSPACE_LISTING_SYNC_TASK = None
 
@@ -8308,6 +8292,7 @@ def _schedule_webspace_listing_sync(
         _runner(),
         name=f"webspace-listing-sync:{str(reason or 'background')[:40]}",
     )
+    _TASK_STATE.webspace_listing_sync_task = task
     _WEBSPACE_LISTING_SYNC_TASK = task
     return {
         "scheduled": True,
