@@ -773,10 +773,21 @@ def _cross_check_package(
                 )
 
     manifest_locales = {str(item) for item in list(manifest.get("locales") or [])}
+    default_locale = str(manifest.get("default_locale") or "").strip()
+    if default_locale not in manifest_locales:
+        diagnostics.append(
+            _diagnostic(
+                "conversational.locale.default_unknown",
+                "manifest.yaml.default_locale",
+                "default_locale must identify one declared locale",
+            )
+        )
     locale_ids: set[str] = set()
+    locale_catalogs: dict[str, dict[str, Any]] = {}
     for index, locale_source in enumerate(locale_sources):
         locale_id = str(locale_source.get("locale") or "")
         locale_ids.add(locale_id)
+        locale_catalogs[locale_id] = dict(locale_source.get("messages") or {})
         source_package_id = str(locale_source.get("package_id") or "")
         if source_package_id and source_package_id != package_id:
             diagnostics.append(
@@ -798,6 +809,60 @@ def _cross_check_package(
                 },
             )
         )
+
+    catalog_keys = {
+        locale: set(catalog)
+        for locale, catalog in locale_catalogs.items()
+    }
+    expected_keys = set().union(*catalog_keys.values()) if catalog_keys else set()
+    for locale, keys in sorted(catalog_keys.items()):
+        if keys != expected_keys:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.locale.key_coverage_mismatch",
+                    f"locale.{locale}.yaml.messages",
+                    "every declared locale must provide the same semantic message keys",
+                    details={"missing": sorted(expected_keys - keys)},
+                )
+            )
+
+    semantic_ref_keys = {
+        "label_ref",
+        "description_ref",
+        "summary_ref",
+        "explanation_ref",
+        "prompt_ref",
+        "message_ref",
+    }
+    semantic_refs: set[str] = set()
+
+    def collect_semantic_refs(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if key in semantic_ref_keys and isinstance(item, str) and item.strip():
+                    semantic_refs.add(item.strip())
+                else:
+                    collect_semantic_refs(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                collect_semantic_refs(item)
+
+    collect_semantic_refs(affordances_source)
+    collect_semantic_refs(output_source)
+    collect_semantic_refs(repair_source)
+    for ref in sorted(semantic_refs):
+        missing_locales = sorted(
+            locale for locale, catalog in locale_catalogs.items() if ref not in catalog
+        )
+        if missing_locales:
+            diagnostics.append(
+                _diagnostic(
+                    "conversational.locale.semantic_ref_missing",
+                    ref,
+                    "semantic message ref must resolve in every declared locale",
+                    details={"missing_locales": missing_locales},
+                )
+            )
 
     for index, example in enumerate(list(examples_source.get("examples") or [])):
         if not isinstance(example, Mapping):

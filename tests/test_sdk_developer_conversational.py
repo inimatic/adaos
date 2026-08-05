@@ -25,6 +25,8 @@ def test_developer_sdk_scaffolds_non_destructive_valid_package(tmp_path: Path) -
     assert (tmp_path / "conversational" / "tests" / "stories").is_dir()
     assert (tmp_path / "conversational" / "matchers.yaml").is_file()
     assert (tmp_path / "conversational" / "locale.de.yaml").is_file()
+    manifest = yaml.safe_load((tmp_path / "conversational" / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["default_locale"] == "en"
     component = (tmp_path / "skill.yaml").read_text(encoding="utf-8")
     assert "manifest: conversational/manifest.yaml" in component
 
@@ -81,6 +83,11 @@ def test_developer_sdk_scaffolds_and_compiles_dev_project_by_identity(
     assert scaffolded["valid"] is True
     assert compiled["valid"] is True
     assert compiled["validation_report"]["metrics"]["locales"] == 2
+    assert compiled["runtime_bundle"]["schema"] == "adaos.conversational.runtime_bundle.v1"
+    assert compiled["runtime_bundle"]["default_locale"] == "en"
+    assert compiled["runtime_bundle"]["supported_locales"] == ["en", "ru"]
+    assert compiled["runtime_bundle"]["source_digest"] == compiled["validation_report"]["package_digest"]
+    assert compiled["runtime_bundle"]["catalog_digest"].startswith("sha256:")
     assert (project_root / "conversational" / "locale.ru.yaml").is_file()
 
 

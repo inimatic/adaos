@@ -31,7 +31,9 @@
           "risk_level": { "enum": ["none", "low", "medium", "high", "destructive"] },
           "reason_code": { "type": ["string", "null"], "maxLength": 240 },
           "explanation": { "type": ["string", "null"], "maxLength": 4000 },
+          "explanation_ref": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
           "summary": { "type": "string", "minLength": 1, "maxLength": 12000 },
+          "summary_ref": { "$ref": "#/$defs/id" },
           "content_parts": {
             "type": "array",
             "maxItems": 100,
@@ -58,6 +60,7 @@
               "required": ["label", "value"],
               "properties": {
                 "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+                "label_ref": { "$ref": "#/$defs/id" },
                 "value": { "type": "string", "minLength": 1, "maxLength": 2000 }
               },
               "additionalProperties": false

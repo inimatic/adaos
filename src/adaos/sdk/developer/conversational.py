@@ -178,6 +178,7 @@ def scaffold_package(
         "workflow_refs": workflow_refs,
         "files": files,
         "locales": list(resolved_locales),
+        "default_locale": resolved_locales[0],
         "privacy_defaults": {
             "source_scope": kind,
             "runtime_overlay_scope": "user",

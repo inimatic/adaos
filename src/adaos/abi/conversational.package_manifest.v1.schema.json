@@ -12,6 +12,7 @@
     "workflow_refs",
     "files",
     "locales",
+    "default_locale",
     "privacy_defaults",
     "compiled_outputs",
     "compatibility_aliases"
@@ -77,6 +78,7 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 2, "maxLength": 40 }
     },
+    "default_locale": { "type": "string", "minLength": 2, "maxLength": 40 },
     "privacy_defaults": {
       "type": "object",
       "required": ["source_scope", "runtime_overlay_scope", "public_promotion"],

@@ -100,6 +100,7 @@ def _write_minimal_conversational_package(root: Path) -> None:
                 "locales": ["locale.en.yaml"],
             },
             "locales": ["en"],
+            "default_locale": "en",
             "privacy_defaults": {
                 "source_scope": "scenario",
                 "runtime_overlay_scope": "user",

@@ -16,6 +16,7 @@
     "supported": { "type": "boolean" },
     "reason_code": { "type": "string", "minLength": 1, "maxLength": 160 },
     "prompt": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "locale_context": { "type": ["object", "null"] },
     "actions": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
     "action_tokens": { "type": "object", "additionalProperties": { "type": "string" } },
     "deep_link": { "type": ["string", "null"], "maxLength": 2000 },

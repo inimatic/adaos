@@ -71,6 +71,9 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   `conversational.story.v1.schema.json` - design-time conversational package
   sources for IntentProposal inputs, deterministic matchers, workflow-facing
   affordances, repair behavior, semantic output templates, and executable
+  stories; `conversational.runtime_bundle.v1.schema.json` is the immutable
+  source-digested runtime/catalog projection with atomic rollout and rollback
+  identity
   conversation stories. Optional runtime controls support expected generation,
   executor readiness, retry-of-step, and an interleaved concurrent command;
   runner v2 uses them for stale/concurrency/retry/executor-unavailable and
