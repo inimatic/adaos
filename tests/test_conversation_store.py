@@ -9,7 +9,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from adaos.services.agent_context import get_ctx
-from adaos.services import conversation_context, conversation_store
+from adaos.services import conversation_context, conversation_store, conversation_transport
 
 
 def test_conversation_store_claims_transport_ingress_without_automatic_replay() -> None:
@@ -42,6 +42,42 @@ def test_conversation_store_claims_transport_ingress_without_automatic_replay() 
     assert conflict["claimed"] is False
     assert conflict["conflict"] is True
     assert dispatched and dispatched["status"] == "dispatched"
+
+
+def test_transport_inspector_requires_a_new_explicit_recovery_operation() -> None:
+    suffix = uuid4().hex
+    original_key = f"transport:interrupted:{suffix}"
+    conversation_store.claim_transport_ingress(
+        idempotency_key=original_key,
+        transport="telegram",
+        event_id=f"event:{suffix}",
+        payload={"text": "Publish the candidate"},
+        meta={"channel": "builder"},
+    )
+
+    inspection = conversation_transport.inspect_ingress(status="claimed", limit=1000)
+    original = next(item for item in inspection["items"] if item["idempotency_key"] == original_key)
+    assert original["payload_available"] is False
+    assert original["automatic_replay_allowed"] is False
+
+    recovery = conversation_transport.request_recovery(
+        original_key,
+        actor_id="operator:test",
+        reason="Inspect current candidate before a new publication command",
+        operation_id=f"transport:recovery:{suffix}",
+    )
+
+    assert recovery["replayed"] is False
+    assert recovery["status"] == "inspection_required"
+    assert recovery["original"]["status"] == "claimed"
+    assert recovery["claim"]["transport"] == "operator"
+    with pytest.raises(conversation_transport.ConversationTransportRecoveryError):
+        conversation_transport.request_recovery(
+            original_key,
+            actor_id="operator:test",
+            reason="Duplicate recovery identity",
+            operation_id=f"transport:recovery:{suffix}",
+        )
 
 
 def test_conversation_store_appends_messages_with_monotonic_seq() -> None:

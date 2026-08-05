@@ -713,6 +713,64 @@ def mark_transport_ingress_dispatched(idempotency_key: str) -> dict[str, Any] | 
     return dict(row) if row else None
 
 
+def list_transport_ingress(
+    *,
+    status: str | None = None,
+    limit: int = 100,
+    older_than: float | None = None,
+) -> list[dict[str, Any]]:
+    """Return a bounded, payload-free operator projection of ingress claims.
+
+    Transport payloads are deliberately not stored by this ledger.  The
+    inspector exposes the immutable digest and bounded metadata needed to
+    diagnose an interrupted dispatch without creating a replay surface.
+    """
+
+    if not ensure_schema():
+        return []
+    selected_status = str(status or "").strip().lower()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if selected_status:
+        clauses.append("status=?")
+        params.append(selected_status)
+    if older_than is not None:
+        clauses.append("claimed_at<=?")
+        params.append(float(older_than))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(1000, int(limit))))
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            f"""
+            SELECT idempotency_key, transport, event_id, payload_digest,
+                   status, claimed_at, dispatched_at, meta_json
+            FROM conversation_transport_ingress
+            {where}
+            ORDER BY claimed_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            **{key: row[key] for key in row.keys() if key != "meta_json"},
+            "meta": _json_load(row["meta_json"], {}),
+            "payload_available": False,
+            "automatic_replay_allowed": False,
+        }
+        for row in rows
+    ]
+
+
+def get_transport_ingress(idempotency_key: str) -> dict[str, Any] | None:
+    key = str(idempotency_key or "").strip()
+    if not key:
+        return None
+    records = list_transport_ingress(limit=1000)
+    return next((item for item in records if item["idempotency_key"] == key), None)
+
+
 def _fts_query(query: str) -> str:
     tokens = re.findall(r"[A-Za-z0-9_\u0410-\u042f\u0430-\u044f\u0401\u0451]+", str(query or "").lower())
     if not tokens:
