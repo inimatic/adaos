@@ -289,7 +289,7 @@ def test_sparse_checkout_scope(monkeypatch, monorepo, paths):
     assert _git_status_clean(paths.workspace_dir())
 
 
-def test_sparse_set_auto_stashes_dirty_worktree(monkeypatch, monorepo, paths):
+def test_sparse_set_restores_auto_stashed_dirty_worktree(monkeypatch, monorepo, paths):
     monkeypatch.setenv("ADAOS_TESTING", "0")
     monkeypatch.setenv("ENV_TYPE", "prod")
     repo = _make_skill_repo(paths, monorepo)
@@ -301,10 +301,10 @@ def test_sparse_set_auto_stashes_dirty_worktree(monkeypatch, monorepo, paths):
     meta = repo.install("news_skill")
     assert meta.id.value == "news_skill"
     assert (paths.skills_dir() / "news_skill" / "skill.yaml").exists()
-    assert _git_status_clean(paths.workspace_dir())
+    assert not _git_status_clean(paths.workspace_dir())
 
     stashes = _run_git(["stash", "list"], cwd=paths.workspace_dir())
-    assert "adaos:auto-stash sparse-checkout" in stashes
+    assert "adaos:auto-stash sparse-checkout" not in stashes
 
 
 def test_sparse_set_preserves_dirty_files_inside_requested_scope(monkeypatch, monorepo, paths):
