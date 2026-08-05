@@ -23,7 +23,6 @@ class WebspaceTaskState:
     MEMBER_SNAPSHOT_DELAYED = "member_snapshot_delayed"
 
     WEBSPACE_REBUILD_STATUS = "webspace_rebuild_status"
-    WEBSPACE_RECOVERY_COMMAND = "webspace_recovery_command"
     SKILL_RUNTIME_PENDING = "skill_runtime_pending"
     SKILL_RUNTIME_STATS = "skill_runtime_stats"
     WORKFLOW_SYNC_PENDING = "workflow_sync_pending"
@@ -53,7 +52,6 @@ class WebspaceTaskState:
             name: {}
             for name in (
                 self.WEBSPACE_REBUILD_STATUS,
-                self.WEBSPACE_RECOVERY_COMMAND,
                 self.SKILL_RUNTIME_PENDING,
                 self.SKILL_RUNTIME_STATS,
                 self.WORKFLOW_SYNC_PENDING,

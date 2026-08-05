@@ -64,6 +64,7 @@ from .webspace_components import (
     MaterializationExecutorOwner,
     WebspaceCacheState,
     WebspaceProjectionService,
+    WebspaceRecoveryCoordinator,
     WebspaceScenarioSwitchingService,
     WebspaceTaskState,
 )
@@ -75,8 +76,8 @@ _TASK_STATE = WebspaceTaskState()
 _CACHE_STATE = WebspaceCacheState()
 _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
 _PROJECTION_SERVICE = WebspaceProjectionService()
+_RECOVERY_COORDINATOR = WebspaceRecoveryCoordinator(command_cache_limit=256)
 _SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
-_WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
 _SKILL_DECLS_CACHE_TTL_S = 300.0
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
 
@@ -737,81 +738,6 @@ def _reload_command_dedupe_ttl_s() -> float:
     if value > 3600.0:
         return 3600.0
     return value
-
-
-def _recovery_command_cache_key(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    cmd_id: str,
-) -> str:
-    raw = {
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-        "cmd_id": str(cmd_id or "").strip(),
-    }
-    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:16]
-
-
-def _claim_recovery_command_once(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    cmd_id: str | None,
-    fingerprint: str,
-) -> tuple[bool, dict[str, Any] | None]:
-    cmd_id = str(cmd_id or "").strip()
-    ttl_s = _reload_command_dedupe_ttl_s()
-    if not cmd_id or ttl_s <= 0.0:
-        return True, None
-
-    now = time.time()
-    expired = [
-        key
-        for key, entry in _TASK_STATE.record_items(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
-        if now - float(entry.get("ts") or 0.0) > ttl_s
-    ]
-    _TASK_STATE.discard_records(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, expired)
-    while (
-        _TASK_STATE.record_count(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
-        >= _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT
-    ):
-        records = _TASK_STATE.record_items(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND)
-        oldest_key, _oldest = min(
-            records,
-            key=lambda item: float(item[1].get("ts") or 0.0),
-        )
-        _TASK_STATE.pop_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, oldest_key)
-
-    key = _recovery_command_cache_key(
-        webspace_id=webspace_id,
-        action=action,
-        scenario_id=scenario_id,
-        cmd_id=cmd_id,
-    )
-    existing = _TASK_STATE.get_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, key)
-    if existing:
-        duplicate = dict(existing)
-        duplicate["age_s"] = round(max(0.0, now - float(existing.get("ts") or now)), 3)
-        duplicate["ttl_s"] = ttl_s
-        duplicate["cmd_id"] = cmd_id
-        duplicate["cache_key"] = key
-        return False, duplicate
-
-    _TASK_STATE.put_record(_TASK_STATE.WEBSPACE_RECOVERY_COMMAND, key, {
-        "ts": now,
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-        "fingerprint": str(fingerprint or "").strip(),
-        "cmd_id": cmd_id,
-        "cache_key": key,
-    })
-    return True, None
 
 
 def _project_scenario_timeout_s() -> float:
@@ -7638,26 +7564,6 @@ def _payload_command_trace(payload: Dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _recovery_request_fingerprint(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    command_trace: Mapping[str, Any] | None = None,
-) -> str:
-    trace = command_trace if isinstance(command_trace, Mapping) else {}
-    trace_fp = str(trace.get("gateway_command_fingerprint") or "").strip()
-    if trace_fp:
-        return trace_fp
-    raw = {
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-    }
-    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:12]
-
-
 async def _resolve_rebuild_scenario_target(
     webspace_id: str,
     requested_scenario_id: str | None,
@@ -7709,32 +7615,27 @@ async def _refresh_projection_rules_for_rebuild(
     scenario_id: str | None = None,
     scenario_resolution: str | None = None,
 ) -> dict[str, Any]:
-    target_scenario = str(scenario_id or "").strip() or None
-    target_resolution = str(scenario_resolution or "").strip() or None
-    if not target_scenario or not target_resolution:
-        try:
-            _state, resolved_scenario, resolved_resolution = await _resolve_rebuild_scenario_target(
-                webspace_id,
-                target_scenario,
-                prefer_manifest_home_before_current=False,
-            )
-            if not target_scenario:
-                target_scenario = resolved_scenario
-            if not target_resolution:
-                target_resolution = resolved_resolution
-        except Exception:
-            _log.debug("failed to resolve projection refresh target for webspace=%s", webspace_id, exc_info=True)
-            target_scenario = target_scenario or None
-            target_resolution = target_resolution or None
-    target_space = _resolve_projection_refresh_space(webspace_id)
-    result = _PROJECTION_SERVICE.refresh_rules(
+    async def _resolve_target(target: str, requested: str | None):
+        return await _resolve_rebuild_scenario_target(
+            target,
+            requested,
+            prefer_manifest_home_before_current=False,
+        )
+
+    result = await _PROJECTION_SERVICE.refresh_for_rebuild(
         registry=getattr(ctx, "projections", None),
-        scenario_id=target_scenario,
-        scenario_resolution=target_resolution,
-        space=target_space,
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        scenario_resolution=scenario_resolution,
+        resolve_target=_resolve_target,
+        resolve_space=_resolve_projection_refresh_space,
     )
     if result.get("error"):
-        _log.debug("failed to refresh data_projections for scenario=%s: %s", target_scenario, result["error"])
+        _log.debug(
+            "failed to refresh data_projections for scenario=%s: %s",
+            result.get("scenario_id"),
+            result["error"],
+        )
     return result
 
 
@@ -10498,129 +10399,40 @@ async def reload_webspace_from_scenario(
         }
 
     command_trace = _payload_command_trace(event_payload or {})
-    recovery_fingerprint = _recovery_request_fingerprint(
+    rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
+    recovery_decision = _RECOVERY_COORDINATOR.begin(
         webspace_id=webspace_id,
         action=requested_action,
         scenario_id=scenario_id,
         command_trace=command_trace,
+        previous_state=rebuild_state_before,
+        command_ttl_s=_reload_command_dedupe_ttl_s(),
+        duplicate_window_s=_reload_dedupe_window_s(),
+        pending_stale_after_s=_reload_pending_stale_after_s(),
     )
-    claimed_command, duplicate_command = _claim_recovery_command_once(
-        webspace_id=webspace_id,
-        action=requested_action,
-        scenario_id=scenario_id,
-        cmd_id=command_trace.get("cmd_id"),
-        fingerprint=recovery_fingerprint,
-    )
-    if not claimed_command:
-        duplicate_total = int(describe_webspace_rebuild_state(webspace_id).get("recovery_duplicate_total") or 0) + 1
-        _set_webspace_rebuild_status(
-            webspace_id,
-            recovery_fingerprint=recovery_fingerprint,
-            recovery_duplicate_total=duplicate_total,
-            recovery_last_duplicate_at=time.time(),
-            recovery_last_duplicate_reason="duplicate_recovery_command",
-            recovery_last_duplicate_age_s=duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
-            recovery_last_command_client=command_trace.get("gateway_client"),
-            recovery_last_command_id=command_trace.get("cmd_id"),
-            recovery_last_command_seq=int(command_trace.get("gateway_command_seq") or 0),
-        )
-        _log.warning(
-            "deduplicated webspace recovery command webspace=%s action=%s scenario=%s cmd=%s seq=%s client=%s fp=%s age_s=%s ttl_s=%s dup_total=%s",
-            webspace_id,
-            requested_action,
-            scenario_id,
-            command_trace.get("cmd_id") or "-",
-            command_trace.get("gateway_command_seq") or 0,
-            command_trace.get("gateway_client") or "-",
-            recovery_fingerprint,
-            duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else "-",
-            duplicate_command.get("ttl_s") if isinstance(duplicate_command, dict) else "-",
-            duplicate_total,
-        )
-        return {
-            "ok": True,
-            "accepted": True,
-            "deduplicated": True,
-            "skip_reason": "duplicate_recovery_command",
-            "action": requested_action,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_resolution": scenario_resolution,
-            "kind": state.kind,
-            "source_mode": state.source_mode,
-            "home_scenario": state.effective_home_scenario,
-            "current_scenario_before": state.current_scenario,
-            "recovery_fingerprint": recovery_fingerprint,
-            "recovery_duplicate_total": duplicate_total,
-            "duplicate_age_s": duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
-            "rebuild": describe_webspace_rebuild_state(webspace_id),
-        }
-
-    rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
-    duplicate_window_s = _reload_dedupe_window_s()
-    previous_action = str(rebuild_state_before.get("action") or "").strip().lower()
-    previous_scenario = str(rebuild_state_before.get("scenario_id") or "").strip() or None
+    recovery_fingerprint = recovery_decision.fingerprint
     previous_fingerprint = str(rebuild_state_before.get("recovery_fingerprint") or "").strip()
-    previous_pending = bool(rebuild_state_before.get("pending"))
-    previous_status = str(rebuild_state_before.get("status") or "").strip().lower()
-    previous_updated_at = rebuild_state_before.get("updated_at")
-    if previous_updated_at is None:
-        previous_updated_at = rebuild_state_before.get("finished_at")
-    if previous_updated_at is None:
-        previous_updated_at = rebuild_state_before.get("started_at")
-    previous_age_s: float | None = None
-    try:
-        if previous_updated_at is not None:
-            previous_age_s = round(max(0.0, time.time() - float(previous_updated_at)), 3)
-    except Exception:
-        previous_age_s = None
-    pending_stale_after_s = _reload_pending_stale_after_s()
-    previous_pending_stale = bool(
-        previous_pending
-        and pending_stale_after_s > 0.0
-        and previous_age_s is not None
-        and previous_age_s >= pending_stale_after_s
-    )
-
-    duplicate_reason: str | None = None
-    if (
-        previous_action == requested_action
-        and previous_scenario == scenario_id
-        and previous_fingerprint
-        and previous_fingerprint == recovery_fingerprint
-    ):
-        if previous_pending and not previous_pending_stale:
-            duplicate_reason = "already_pending_recovery"
-        elif (
-            duplicate_window_s > 0.0
-            and previous_age_s is not None
-            and previous_age_s <= duplicate_window_s
-            and previous_status in {"running", "ready", "scheduled"}
-        ):
-            duplicate_reason = "duplicate_recovery_request"
-
-    if previous_pending_stale:
+    if recovery_decision.previous_pending_stale:
         _log.warning(
             "stale pending webspace recovery will be superseded webspace=%s action=%s scenario=%s prev_status=%s age_s=%s stale_after_s=%s fp=%s",
             webspace_id,
             requested_action,
             scenario_id,
-            previous_status or "-",
-            previous_age_s if previous_age_s is not None else "-",
-            pending_stale_after_s,
+            recovery_decision.previous_status or "-",
+            recovery_decision.duplicate_age_s if recovery_decision.duplicate_age_s is not None else "-",
+            recovery_decision.pending_stale_after_s,
             previous_fingerprint or "-",
         )
 
-    if duplicate_reason:
+    if recovery_decision.deduplicated:
         duplicate_total = int(rebuild_state_before.get("recovery_duplicate_total") or 0) + 1
-        duplicate_now = time.time()
         _set_webspace_rebuild_status(
             webspace_id,
             recovery_fingerprint=recovery_fingerprint,
             recovery_duplicate_total=duplicate_total,
-            recovery_last_duplicate_at=duplicate_now,
-            recovery_last_duplicate_reason=duplicate_reason,
-            recovery_last_duplicate_age_s=previous_age_s,
+            recovery_last_duplicate_at=time.time(),
+            recovery_last_duplicate_reason=recovery_decision.duplicate_reason,
+            recovery_last_duplicate_age_s=recovery_decision.duplicate_age_s,
             recovery_last_command_client=command_trace.get("gateway_client"),
             recovery_last_command_id=command_trace.get("cmd_id"),
             recovery_last_command_seq=int(command_trace.get("gateway_command_seq") or 0),
@@ -10630,9 +10442,9 @@ async def reload_webspace_from_scenario(
             webspace_id,
             requested_action,
             scenario_id,
-            duplicate_reason,
-            previous_status or "-",
-            previous_age_s if previous_age_s is not None else "-",
+            recovery_decision.duplicate_reason,
+            recovery_decision.previous_status or "-",
+            recovery_decision.duplicate_age_s if recovery_decision.duplicate_age_s is not None else "-",
             command_trace.get("cmd_id") or "-",
             command_trace.get("gateway_command_seq") or 0,
             command_trace.get("gateway_client") or "-",
@@ -10643,7 +10455,7 @@ async def reload_webspace_from_scenario(
             "ok": True,
             "accepted": True,
             "deduplicated": True,
-            "skip_reason": duplicate_reason,
+            "skip_reason": recovery_decision.duplicate_reason,
             "action": requested_action,
             "webspace_id": webspace_id,
             "scenario_id": scenario_id,
@@ -10654,7 +10466,7 @@ async def reload_webspace_from_scenario(
             "current_scenario_before": state.current_scenario,
             "recovery_fingerprint": recovery_fingerprint,
             "recovery_duplicate_total": duplicate_total,
-            "duplicate_age_s": previous_age_s,
+            "duplicate_age_s": recovery_decision.duplicate_age_s,
             "rebuild": describe_webspace_rebuild_state(webspace_id),
         }
 
@@ -11099,10 +10911,7 @@ async def apply_builder_revision_materialization(
 
 
 async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
-    """
-    Restore a webspace from its latest persisted YStore snapshot and reconcile
-    its materialized effective UI/runtime projection.
-    """
+    """Restore persisted state and run coordinator-owned semantic reconcile."""
     webspace_id = str(webspace_id or "").strip()
     if not webspace_id:
         raise ValueError("webspace_id is required")
@@ -11110,50 +10919,40 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
     from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
     from adaos.services.yjs.store import restore_ystore_for_webspace  # pylint: disable=import-outside-toplevel
 
-    restore_result = await restore_ystore_for_webspace(webspace_id)
-    if not bool(restore_result.get("accepted")):
-        return restore_result
+    async def _reset_room(target: str) -> dict[str, Any]:
+        return await reset_live_webspace_room(target, close_reason="webspace_restore")
 
-    reset_result: dict[str, Any] = {}
-    try:
-        reset_result = await reset_live_webspace_room(webspace_id, close_reason="webspace_restore")
-    except Exception:
-        _log.warning("failed to reset live room before restore for webspace=%s", webspace_id, exc_info=True)
+    async def _read_current_scenario(target: str) -> str | None:
+        async with _open_readonly_operational_ydoc(target) as ydoc:
+            return _normalize_optional_token(ydoc.get_map("ui").get("current_scenario"))
 
-    restored_current_scenario: str | None = None
-    try:
-        async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
-            restored_current_scenario = _normalize_optional_token(
-                ydoc.get_map("ui").get("current_scenario")
-            )
-    except Exception:
-        restored_current_scenario = None
-    if restored_current_scenario:
-        try:
-            workspace_index.set_workspace_current_scenario_overlay(webspace_id, restored_current_scenario)
-        except Exception:
-            _log.debug(
-                "failed to persist restored current scenario overlay webspace=%s scenario=%s",
-                webspace_id,
-                restored_current_scenario,
-                exc_info=True,
-            )
+    async def _rebuild(target: str, restore_result: Mapping[str, Any]) -> dict[str, Any]:
+        return await rebuild_webspace_from_sources(
+            target,
+            action="restore",
+            source_of_truth="snapshot",
+            reseed_from_scenario=False,
+            event_payload={"snapshot_path": str(restore_result.get("snapshot_path") or "")},
+        )
 
-    rebuild_result = await rebuild_webspace_from_sources(
-        webspace_id,
-        action="restore",
-        source_of_truth="snapshot",
-        reseed_from_scenario=False,
-        event_payload={"snapshot_path": str(restore_result.get("snapshot_path") or "")},
+    def _on_error(stage: str, _exc: BaseException) -> None:
+        log = _log.warning if stage == "reset_room" else _log.debug
+        log(
+            "webspace snapshot restore stage failed stage=%s webspace=%s",
+            stage,
+            webspace_id,
+            exc_info=True,
+        )
+
+    return await _RECOVERY_COORDINATOR.restore_snapshot(
+        webspace_id=webspace_id,
+        restore_store=restore_ystore_for_webspace,
+        reset_room=_reset_room,
+        read_current_scenario=_read_current_scenario,
+        persist_current_scenario=workspace_index.set_workspace_current_scenario_overlay,
+        rebuild=_rebuild,
+        on_error=_on_error,
     )
-
-    return {
-        **restore_result,
-        **rebuild_result,
-        "action": "restore",
-        "source_of_truth": "snapshot",
-        "reset_room": reset_result,
-    }
 
 
 async def switch_webspace_scenario(

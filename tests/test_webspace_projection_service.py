@@ -59,3 +59,33 @@ def test_projection_service_reports_timeout() -> None:
     result = asyncio.run(WebspaceProjectionService().project(operation=slow, timeout_s=0.001))
 
     assert result == {"status": "timed_out"}
+
+
+def test_projection_service_resolves_missing_rebuild_target() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class Registry:
+        def load_from_scenario(self, scenario_id: str, *, space: str) -> int:
+            calls.append((scenario_id, space))
+            return 4
+
+    async def resolve_target(webspace_id: str, scenario_id: str | None):
+        assert webspace_id == "desktop"
+        assert scenario_id is None
+        return SimpleNamespace(), "home", "manifest_home"
+
+    result = asyncio.run(
+        WebspaceProjectionService().refresh_for_rebuild(
+            registry=Registry(),
+            webspace_id="desktop",
+            scenario_id=None,
+            scenario_resolution=None,
+            resolve_target=resolve_target,
+            resolve_space=lambda _webspace_id: "dev",
+        )
+    )
+
+    assert result["scenario_id"] == "home"
+    assert result["scenario_resolution"] == "manifest_home"
+    assert result["rules_loaded"] == 4
+    assert calls == [("home", "dev")]

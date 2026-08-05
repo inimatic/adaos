@@ -93,6 +93,44 @@ class WebspaceProjectionService:
                 "error": f"{exc.__class__.__name__}: {exc}",
             }
 
+    async def refresh_for_rebuild(
+        self,
+        *,
+        registry: Any,
+        webspace_id: str,
+        scenario_id: str | None,
+        scenario_resolution: str | None,
+        resolve_target: Callable[[str, str | None], Awaitable[tuple[Any, str, str]]],
+        resolve_space: Callable[[str], str],
+    ) -> dict[str, Any]:
+        """Resolve and refresh the projection layer as one lifecycle step."""
+        target_scenario = str(scenario_id or "").strip() or None
+        target_resolution = str(scenario_resolution or "").strip() or None
+        if not target_scenario or not target_resolution:
+            try:
+                _state, resolved_scenario, resolved_resolution = await resolve_target(
+                    webspace_id,
+                    target_scenario,
+                )
+                target_scenario = target_scenario or resolved_scenario
+                target_resolution = target_resolution or resolved_resolution
+            except Exception as exc:
+                return {
+                    "attempted": False,
+                    "scenario_id": target_scenario,
+                    "scenario_resolution": target_resolution,
+                    "space": resolve_space(webspace_id),
+                    "rules_loaded": 0,
+                    "source": "target_resolution",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+        return self.refresh_rules(
+            registry=registry,
+            scenario_id=target_scenario,
+            scenario_resolution=target_resolution,
+            space=resolve_space(webspace_id),
+        )
+
     async def project(
         self,
         *,
