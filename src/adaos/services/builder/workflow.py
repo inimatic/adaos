@@ -2100,7 +2100,7 @@ class BuilderWorkflowService:
                     "Prepare trial",
                     "trial_activation",
                     target_ref=change_ref,
-                    workflow_command="prepare_trial_compatibility",
+                    workflow_command="start_trial",
                 )
             if capabilities.get("can_decide_candidate"):
                 candidate_id = str(_mapping(projection.get("delivery")).get("candidate_id") or "").strip()
@@ -4122,10 +4122,28 @@ class BuilderWorkflowService:
             add_change_evidence(change_id)
             update_change_set(status="checkpointed", gate="trial")
             return
+        if action == "candidate_preparation_started":
+            self._require_active(workflow, "automation", action)
+            if str(automation.get("status") or "") != "completed":
+                raise BuilderWorkflowError("trial activation requires completed automation")
+            if str(delivery.get("status") or "") != "checkpoint":
+                raise BuilderWorkflowError("trial activation requires an exact checkpoint")
+            delivery.update(
+                {
+                    "status": "activating",
+                    "activity_attempt_id": str(metadata.get("activity_attempt_id") or "").strip() or None,
+                    "activation_started_at": changed_at,
+                    "activation_error": None,
+                }
+            )
+            update_change_set(status="trial_waiting", gate="trial")
+            return
         if action == "candidate_prepared":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("candidate preparation requires completed automation")
+            if str(delivery.get("status") or "") not in {"activating", "checkpoint"}:
+                raise BuilderWorkflowError("candidate result requires an active Trial activity")
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             release_digest = str(metadata.get("release_digest") or "").strip()
             package_digest = str(metadata.get("package_digest") or "").strip()
@@ -4150,6 +4168,22 @@ class BuilderWorkflowService:
                 }
             )
             update_change_set(status="trial", gate="trial")
+            return
+        if action in {"candidate_preparation_failed", "candidate_preparation_unknown"}:
+            if str(delivery.get("status") or "") != "activating":
+                raise BuilderWorkflowError("Trial failure requires an active Trial activity")
+            unknown = action == "candidate_preparation_unknown"
+            delivery.update(
+                {
+                    "status": "unknown" if unknown else "checkpoint",
+                    "activation_error": str(metadata.get("error") or "trial_activation_failed")[:1000],
+                    "activation_finished_at": changed_at,
+                }
+            )
+            update_change_set(
+                status="reconciliation_required" if unknown else "checkpointed",
+                gate="trial",
+            )
             return
         if action in {"candidate_accepted", "candidate_rejected"}:
             if str(delivery.get("status") or "") != "trial":
@@ -4195,12 +4229,29 @@ class BuilderWorkflowService:
             )
             update_change_set(status="rebase_required", gate="automation")
             return
-        if action == "publish":
+        if action == "publication_started":
             self._require_active(workflow, "automation", action)
             if str(automation.get("status") or "") != "completed":
                 raise BuilderWorkflowError("publication requires completed automation")
             if str(delivery.get("status") or "") != "accepted":
                 raise BuilderWorkflowError("publication requires an accepted candidate trial")
+            delivery["status"] = "publication_waiting"
+            publication.update(
+                {
+                    "status": "publishing",
+                    "activity_attempt_id": str(metadata.get("activity_attempt_id") or "").strip() or None,
+                    "started_at": changed_at,
+                    "error": None,
+                }
+            )
+            update_change_set(status="publication_waiting", gate="publication")
+            return
+        if action == "publish":
+            self._require_active(workflow, "automation", action)
+            if str(automation.get("status") or "") != "completed":
+                raise BuilderWorkflowError("publication requires completed automation")
+            if str(delivery.get("status") or "") not in {"accepted", "publication_waiting"}:
+                raise BuilderWorkflowError("publication result requires an active Publication activity")
             candidate_id = str(metadata.get("candidate_id") or "").strip()
             if candidate_id != str(delivery.get("candidate_id") or ""):
                 raise BuilderWorkflowError("publication candidate does not match the accepted trial")
@@ -4249,6 +4300,23 @@ class BuilderWorkflowService:
                 }
             )
             update_change_set(status="published", gate="complete")
+            return
+        if action in {"publication_failed", "publication_unknown"}:
+            if str(delivery.get("status") or "") != "publication_waiting":
+                raise BuilderWorkflowError("Publication failure requires an active Publication activity")
+            unknown = action == "publication_unknown"
+            publication.update(
+                {
+                    "status": "unknown" if unknown else "failed",
+                    "error": str(metadata.get("error") or "publication_failed")[:1000],
+                    "finished_at": changed_at,
+                }
+            )
+            delivery["status"] = "unknown" if unknown else "accepted"
+            update_change_set(
+                status="reconciliation_required" if unknown else "accepted",
+                gate="publication",
+            )
             return
         raise BuilderWorkflowError(f"unsupported Builder workflow transition: {action}")
 

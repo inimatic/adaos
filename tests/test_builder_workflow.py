@@ -33,6 +33,53 @@ def _apply_evidence(*, draft_id: str = "draft.recipes") -> dict[str, object]:
     }
 
 
+def _confirmed(metadata: dict[str, object] | None = None) -> dict[str, object]:
+    return {**dict(metadata or {}), "confirmed": True}
+
+
+def _prepare_candidate(
+    service: BuilderWorkflowService,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    current = service.describe("scenario", "recipes")
+    delivery = dict(current.get("delivery") or {})
+    if delivery.get("status") != "checkpoint":
+        service.transition(
+            "scenario",
+            "recipes",
+            "checkpoint_recorded",
+            metadata=_confirmed(
+                {
+                    "change_id": "checkpoint-before-trial",
+                    "package_digest": str(metadata.get("package_digest") or "sha256:" + "c" * 64),
+                    "source_revision": "c" * 40,
+                }
+            ),
+        )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed({"activity_attempt_id": "trial-attempt:test"}),
+    )
+    return service.transition(
+        "scenario", "recipes", "candidate_prepared", metadata=metadata
+    )["workflow"]
+
+
+def _publish_candidate(
+    service: BuilderWorkflowService,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"activity_attempt_id": "publication-attempt:test"}),
+    )
+    return service.transition("scenario", "recipes", "publish", metadata=metadata)["workflow"]
+
+
 @pytest.fixture
 def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
     skills = tmp_path / "skills"
@@ -589,7 +636,7 @@ def test_change_set_routes_interface_work_through_prototype_first(
         "scenario",
         "recipes",
         "stabilize_prototype",
-        metadata={"revision": "001"},
+        metadata=_confirmed({"revision": "001"}),
     )["workflow"]
     assert approved["change_set"]["status"] == "approved"
     assert approved["change_set"]["gate"] == "automation"
@@ -643,7 +690,7 @@ def test_change_set_projects_one_canonical_change_and_transition_runs(
         "recipes",
         "stabilize_prototype",
         actor="builder.ui",
-        metadata={"revision": "001", "run_id": "RUN-approve-search"},
+        metadata=_confirmed({"revision": "001", "run_id": "RUN-approve-search"}),
         expected_generation=planned["generation"],
     )["workflow"]
 
@@ -912,7 +959,9 @@ def test_change_set_routes_functional_work_directly_to_automation(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+        metadata=_confirmed(
+            {"task_id": "task.sync", "change_id": "change-sync-implementation"}
+        ),
     )["workflow"]
     assert started["active_phase"] == "automation"
     assert started["change_set"]["status"] == "in_progress"
@@ -973,7 +1022,9 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+        metadata=_confirmed(
+            {"task_id": "task.sync", "change_id": "change-sync-implementation"}
+        ),
     )
     completed = service.transition(
         "scenario",
@@ -999,25 +1050,23 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "scenario",
         "recipes",
         "checkpoint_recorded",
-        metadata={
+        metadata=_confirmed({
             "change_id": "checkpoint-sync",
             "package_digest": "sha256:" + "1" * 64,
             "source_revision": "a" * 40,
-        },
+        }),
     )["workflow"]
     assert checkpointed["change_set"]["status"] == "checkpointed"
     assert "checkpoint-sync" in checkpointed["change_set"]["member_change_ids"]
 
-    trial = service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    trial = _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-sync",
             "release_digest": "sha256:" + "2" * 64,
             "package_digest": "sha256:" + "3" * 64,
         },
-    )["workflow"]
+    )
     assert trial["change_set"]["status"] == "trial"
 
     service.transition(
@@ -1029,17 +1078,15 @@ def test_change_set_advances_through_automation_trial_and_publication(
             "candidate_digest": "sha256:" + "3" * 64,
         },
     )
-    published = service.transition(
-        "scenario",
-        "recipes",
-        "publish",
-        metadata={
+    published = _publish_candidate(
+        service,
+        {
             "candidate_id": "candidate-sync",
             "candidate_digest": "sha256:" + "3" * 64,
             "version": "0.2.0",
             "apply_evidence": _apply_evidence(),
         },
-    )["workflow"]
+    )
     assert published["change_set"]["status"] == "published"
     assert published["change_set"]["gate"] == "complete"
     assert published["governed"]["state"] == "published"
@@ -1121,13 +1168,13 @@ def test_followup_request_extends_active_change_set_and_invalidates_trial(
             ],
         },
     )
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-1",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1173,7 +1220,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"source_prototype_revision": "UI 001", "task_id": "task.1"},
+        metadata=_confirmed({"source_prototype_revision": "UI 001", "task_id": "task.1"}),
     )["workflow"]
     assert handed_off["active_phase"] == "automation"
     assert handed_off["prototype"]["status"] == "frozen"
@@ -1190,11 +1237,9 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert completed["capabilities"]["can_prepare_candidate"] is True
     assert completed["capabilities"]["can_publish"] is False
 
-    trial = service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    trial = _prepare_candidate(
+        service,
+        {
             "candidate_id": "recipes-0-1-1-abc",
             "release": "recipes@0.1.1",
             "release_digest": "sha256:" + "1" * 64,
@@ -1202,7 +1247,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
             "base_release": "recipes@0.1.0",
             "trial_workspace": "trials/recipes/workspace",
         },
-    )["workflow"]
+    )
     assert trial["delivery"]["status"] == "trial"
     assert trial["capabilities"]["can_decide_candidate"] is True
 
@@ -1218,18 +1263,16 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert accepted["delivery"]["status"] == "accepted"
     assert accepted["capabilities"]["can_publish"] is True
 
-    published = service.transition(
-        "scenario",
-        "recipes",
-        "publish",
-        metadata={
+    published = _publish_candidate(
+        service,
+        {
             "version": "0.1.1",
             "task_id": "task.1",
             "candidate_id": "recipes-0-1-1-abc",
             "candidate_digest": "sha256:" + "2" * 64,
             "apply_evidence": _apply_evidence(),
         },
-    )["workflow"]
+    )
     assert published["active_phase"] == "automation"
     assert published["publication"]["current_version"] == "0.1.1"
     assert published["publication"]["status"] == "published"
@@ -1245,8 +1288,11 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert [item["action"] for item in persisted["workflow"]["history"]] == [
         "automation_started",
         "automation_completed",
+        "checkpoint_recorded",
+        "candidate_preparation_started",
         "candidate_prepared",
         "candidate_accepted",
+        "publication_started",
         "publish",
     ]
 
@@ -1325,7 +1371,9 @@ def test_return_to_prototype_marks_checkpoint_delivery_stale(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
     service.transition(
         "scenario",
         "recipes",
@@ -1387,13 +1435,13 @@ def test_new_automation_work_invalidates_an_unpublished_candidate(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-1",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1447,13 +1495,13 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-obsolete",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1520,7 +1568,7 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.initial", "source_prototype_revision": "001"},
+        metadata=_confirmed({"task_id": "task.initial", "source_prototype_revision": "001"}),
     )
     service.transition(
         "scenario",
@@ -1528,11 +1576,9 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "automation_completed",
         metadata={"task_id": "task.initial", "version": "0.1.0"},
     )
-    service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-stale",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,

@@ -147,6 +147,7 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
         actor_id="user:local",
         expected_generation=interaction["generation"],
         idempotency_key="web:e2e:accept-prototype",
+        values={"confirmed": True},
         action_token=accept["token"],
     )["response"]
     approved = service.invoke_interaction_response(
@@ -161,7 +162,11 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
         "scenario",
         "empty_scenario",
         "automation_started",
-        metadata={"task_id": "RUN-empty-1", "originating_change_id": "CH-empty"},
+        metadata={
+            "task_id": "RUN-empty-1",
+            "originating_change_id": "CH-empty",
+            "confirmed": True,
+        },
     )["workflow"]
     assert running["governed"]["state"] == "automation_waiting"
     verified = service.transition(
@@ -186,9 +191,17 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
             "package_digest": PACKAGE_DIGEST,
             "source_revision": "c" * 40,
             "evidence_refs": ["git:checkpoint"],
+            "confirmed": True,
         },
     )["workflow"]
     assert checkpoint["governed"]["state"] == "trial_ready"
+    waiting_trial = service.transition(
+        "scenario",
+        "empty_scenario",
+        "candidate_preparation_started",
+        metadata={"evidence_refs": ["trial:activation-accepted"], "confirmed": True},
+    )["workflow"]
+    assert waiting_trial["governed"]["state"] == "trial_waiting"
     trial = service.transition(
         "scenario",
         "empty_scenario",
@@ -225,6 +238,13 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
         },
     )["workflow"]
     assert accepted["governed"]["state"] == "publication_ready"
+    waiting_publication = service.transition(
+        "scenario",
+        "empty_scenario",
+        "publication_started",
+        metadata={"evidence_refs": ["registry:publication-accepted"]},
+    )["workflow"]
+    assert waiting_publication["governed"]["state"] == "publication_waiting"
     published = service.transition(
         "scenario",
         "empty_scenario",
@@ -257,15 +277,17 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
         for item in published["history"]
         if item.get("canonical")
     ]
-    assert canonical_history[-8:] == [
+    assert canonical_history[-10:] == [
         "record_prototype_revision",
         "accept_prototype",
         "start_automation",
         "record_automation_success",
         "accept_verification",
-        "prepare_trial_compatibility",
+        "start_trial",
+        "record_trial_success",
         "accept_trial",
-        "publish_compatibility",
+        "begin_publication",
+        "record_publication_success",
     ]
     evidence_refs = {
         ref
@@ -281,7 +303,7 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
     } <= evidence_refs
 
 
-def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path: Path) -> None:
+def test_protected_command_requires_explicit_confirmation_across_ingress(tmp_path: Path) -> None:
     button_service = _service(tmp_path / "button", "button_project")
     telegram_service = _service(tmp_path / "telegram", "telegram_project")
     text_service = _service(tmp_path / "text", "text_project")
@@ -311,6 +333,7 @@ def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path
         expected_generation=0,
         idempotency_key="button:accept",
         action_token=token,
+        values={"confirmed": True},
         metadata={"io_type": "web"},
     )["response"]
 
@@ -350,57 +373,62 @@ def test_informal_reply_and_deterministic_control_share_command_ingress(tmp_path
         "accept_prototype",
         explicit_interaction_id=text_interaction["interaction_id"],
     )
-    text_response = intent_mediation.commit_proposal(
-        proposal["proposal_id"],
-        actor_id="user:local",
-        idempotency_key="telegram:text:accept",
-    )["response"]
+    assert proposal["disposition"] == "clarification_required"
 
     web_result = button_service.invoke_interaction_response(
         "scenario", "button_project", button_response, actor="user:local"
     )
-    telegram_result = telegram_service.invoke_interaction_response(
-        "scenario", "telegram_project", telegram_response, actor="user:local"
-    )
-    text_result = text_service.invoke_interaction_response(
-        "scenario", "text_project", text_response, actor="user:local"
-    )
+    with pytest.raises(BuilderWorkflowError, match="explicit confirmed response"):
+        telegram_service.invoke_interaction_response(
+            "scenario", "telegram_project", telegram_response, actor="user:local"
+        )
+    with pytest.raises(intent_mediation.IntentMediationError, match="not committable"):
+        intent_mediation.commit_proposal(
+            proposal["proposal_id"],
+            actor_id="user:local",
+            idempotency_key="telegram:text:accept",
+        )
     sdk_result = sdk_service.invoke_command(
         "scenario",
         "sdk_project",
         "accept_prototype",
         actor="user:local",
         idempotency_key="sdk:accept",
+        input_value={"confirmed": True},
     )
 
     invocations = [
         web_result["invocation"],
-        telegram_result["invocation"],
-        text_result["invocation"],
         sdk_result["invocation"],
     ]
-    assert [item["source"] for item in invocations] == ["web", "telegram", "intent", "sdk"]
+    assert [item["source"] for item in invocations] == ["web", "sdk"]
     assert {item["command"]["command_id"] for item in invocations} == {"accept_prototype"}
     assert {item["command"]["workflow_type"] for item in invocations} == {"builder.change"}
     assert {item["command"]["expected_generation"] for item in invocations} == {1}
     assert {item["risk"] for item in invocations} == {"isolated_write"}
     assert {item["target_ref"]["kind"] for item in invocations} == {"change"}
-    assert {item["confirmation_required"] for item in invocations} == {False}
+    assert {item["confirmation_required"] for item in invocations} == {True}
     assert all(
         item["workflow"]["governed"]["state"] == "automation_ready"
-        for item in (web_result, telegram_result, text_result, sdk_result)
+        for item in (web_result, sdk_result)
     )
 
 
 def test_background_result_updates_originating_change_not_current_view(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _plan(service, change_id="CH-background", affected_ref="widget:background")
-    service.transition("scenario", "empty_scenario", "stabilize_prototype")
+    service.transition(
+        "scenario", "empty_scenario", "stabilize_prototype", metadata={"confirmed": True}
+    )
     service.transition(
         "scenario",
         "empty_scenario",
         "automation_started",
-        metadata={"task_id": "RUN-background", "originating_change_id": "CH-background"},
+        metadata={
+            "task_id": "RUN-background",
+            "originating_change_id": "CH-background",
+            "confirmed": True,
+        },
     )
     current = _plan(
         service,

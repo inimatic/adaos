@@ -84,7 +84,7 @@ def test_project_aggregate_is_schema_valid_and_reference_oriented(service: Build
             "relation": "contains_issue",
         }
     ]
-    assert project["workflow_definition_version"] == "1.0.0"
+    assert project["workflow_definition_version"] == "1.1.0"
     assert project["policy"]["risk_policy"]["fail_closed"] is True
     assert project["explanation"]["status"] == "active"
     assert "request" not in project["changes"][0]
@@ -204,9 +204,14 @@ def test_completed_mutation_advances_project_base_and_requires_explicit_rebase(
         "CH-favorites",
         expected_view_generation=second["project"]["view_generation"],
     )
-    service.transition("scenario", "recipes", "stabilize_prototype")
+    service.transition(
+        "scenario", "recipes", "stabilize_prototype", metadata={"confirmed": True}
+    )
     running = service.transition(
-        "scenario", "recipes", "automation_started", metadata={"task_id": "RUN-favorites"}
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "RUN-favorites", "confirmed": True},
     )["workflow"]
     active = next(item for item in running["project"]["changes"] if item["change_id"] == "CH-favorites")
     assert active["mutation_status"] == "active"
@@ -221,10 +226,15 @@ def test_completed_mutation_advances_project_base_and_requires_explicit_rebase(
         "CH-search",
         expected_view_generation=completed["project"]["view_generation"],
     )["workflow"]
-    service.transition("scenario", "recipes", "stabilize_prototype")
+    service.transition(
+        "scenario", "recipes", "stabilize_prototype", metadata={"confirmed": True}
+    )
     with pytest.raises(BuilderWorkflowError, match="explicit rebase is required"):
         service.transition(
-            "scenario", "recipes", "automation_started", metadata={"task_id": "RUN-search"}
+            "scenario",
+            "recipes",
+            "automation_started",
+            metadata={"task_id": "RUN-search", "confirmed": True},
         )
 
     rebased = service.rebase_change(
@@ -237,6 +247,9 @@ def test_completed_mutation_advances_project_base_and_requires_explicit_rebase(
     search = next(item for item in rebased["project"]["changes"] if item["change_id"] == "CH-search")
     assert search["base_generation"] == 1
     resumed = service.transition(
-        "scenario", "recipes", "automation_started", metadata={"task_id": "RUN-search"}
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "RUN-search", "confirmed": True},
     )["workflow"]
     assert resumed["governed"]["state"] == "automation_waiting"

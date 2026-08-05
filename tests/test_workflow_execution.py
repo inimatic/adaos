@@ -108,6 +108,7 @@ def test_web_interaction_and_sdk_share_one_invocation_and_durable_reply_boundary
         action["token"],
         actor_id="user:local",
         idempotency_key="web:accept-prototype",
+        values={"confirmed": True},
         metadata={"io_type": "web"},
     )["response"]
     invocation = prepare_interaction_invocation(response)
@@ -123,8 +124,11 @@ def test_web_interaction_and_sdk_share_one_invocation_and_durable_reply_boundary
         command_id="accept_prototype",
         expected_generation=0,
         idempotency_key="sdk:accept-prototype",
+        input_value={"confirmed": True},
         target_ref=invocation["target_ref"],
         context_ref=workflow_ref("command_context", "sdk:test"),
+        risk="isolated_write",
+        confirmation_required=True,
     )
 
     assert invocation["source"] == "web"
@@ -226,6 +230,7 @@ def _cross_channel_invocations(
                 expected_generation=0,
                 idempotency_key="text:start-automation",
                 original_text="start automation",
+                values={"confirmed": True},
                 proposed_action_id=action["action_id"],
                 intent_proposal=proposal,
                 metadata={"io_type": "text"},
@@ -235,6 +240,7 @@ def _cross_channel_invocations(
                 action["token"],
                 actor_id="user:local",
                 idempotency_key=f"{channel}:start-automation",
+                values={"confirmed": True},
                 metadata={"io_type": channel},
             )["response"]
         invocations[channel] = prepare_interaction_invocation(response)
@@ -245,9 +251,11 @@ def _cross_channel_invocations(
         command_id="start_automation",
         expected_generation=int(instance["generation"]),
         idempotency_key="sdk:start-automation",
+        input_value={"confirmed": True},
         target_ref=selected_target,
         context_ref=workflow_ref("command_context", "builder:ingress"),
         risk="isolated_write",
+        confirmation_required=True,
     )
     return invocations, definition, adapters
 

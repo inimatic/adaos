@@ -123,7 +123,7 @@ def test_normative_builder_definition_is_compiled_and_explainable() -> None:
     ]
     assert report["unreachable_states"] == []
     assert set(report["terminal_states"]) == {"cancelled", "published", "superseded"}
-    assert {"prototype_editing", "automation_waiting", "trial_review", "publication_ready"} <= {
+    assert {"prototype_editing", "automation_waiting", "trial_waiting", "trial_review", "publication_ready"} <= {
         item["id"] for item in graph["states"]
     }
     assert all(
@@ -261,7 +261,9 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
 ) -> None:
     compatibility_service = _service(tmp_path)
     workspace = tmp_path / "workspace"
-    source_definition = builder_change_definition()
+    target_definition = builder_change_definition()
+    source_definition = copy.deepcopy(target_definition)
+    source_definition["definition_version"] = "1.0.0"
     source_built, source_root = _build_builder_package(tmp_path, source_definition)
     _activate_builder_package(workspace, source_built, source_root)
     service = BuilderWorkflowService(
@@ -273,8 +275,6 @@ def test_builder_package_cutover_migrates_restarts_and_rolls_back_in_flight_inst
     )
     before = _plan(service)["governed"]
 
-    target_definition = copy.deepcopy(source_definition)
-    target_definition["definition_version"] = "1.1.0"
     target_built, target_root = _build_builder_package(tmp_path, target_definition)
     migration = {
         "schema": "adaos.workflow.definition_migration.v1",
@@ -361,11 +361,16 @@ def test_legacy_transition_is_admitted_and_persisted_by_canonical_statechart(tmp
     assert planned["governed"]["state"] == "prototype_editing"
     assert planned["workflow_description"]["state"] == "prototype_editing"
 
-    approved = service.transition("scenario", "recipes", "stabilize_prototype")["workflow"]
+    approved = service.transition(
+        "scenario", "recipes", "stabilize_prototype", metadata={"confirmed": True}
+    )["workflow"]
     assert approved["governed"]["state"] == "automation_ready"
 
     running = service.transition(
-        "scenario", "recipes", "automation_started", metadata={"task_id": "RUN-1"}
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "RUN-1", "confirmed": True},
     )["workflow"]
     assert running["governed"]["state"] == "automation_waiting"
     assert running["history"][-1]["canonical"]["command"] == "start_automation"
@@ -378,7 +383,12 @@ def test_legacy_transition_is_admitted_and_persisted_by_canonical_statechart(tmp
 def test_process_projection_is_dependent_lineage_with_exact_preview_labels(tmp_path: Path) -> None:
     service = _service(tmp_path)
     _plan(service, lane="automation")
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "RUN-1"})
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata={"task_id": "RUN-1", "confirmed": True},
+    )
     service.transition(
         "scenario",
         "recipes",

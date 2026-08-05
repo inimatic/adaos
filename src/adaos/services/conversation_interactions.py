@@ -948,6 +948,7 @@ def submit_action_token(
     *,
     actor_id: str,
     idempotency_key: str,
+    values: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
@@ -959,6 +960,7 @@ def submit_action_token(
         actor_id=actor_id,
         expected_generation=int(presentation["interaction_generation"]),
         idempotency_key=idempotency_key,
+        values=values,
         action_token=action_token,
         metadata=metadata,
         now=now,

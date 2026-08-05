@@ -19,7 +19,7 @@ from adaos.services.workflow_registry import platform_workflow_adapter_registry
 
 
 BUILDER_CHANGE_WORKFLOW_TYPE = "builder.change"
-BUILDER_CHANGE_DEFINITION_VERSION = "1.0.0"
+BUILDER_CHANGE_DEFINITION_VERSION = "1.1.0"
 _BUILDER_CHANGE_RESOURCE = Path(__file__).with_name("builder_change.workflow.json")
 
 
@@ -53,6 +53,10 @@ def legacy_state(workflow: Mapping[str, Any]) -> str:
     if change_status == "rejected":
         return "cancelled"
     delivery_status = str(delivery.get("status") or "idle")
+    if delivery_status == "activating":
+        return "trial_waiting"
+    if delivery_status == "publication_waiting":
+        return "publication_waiting"
     if delivery_status == "accepted":
         return "publication_ready"
     if delivery_status == "trial":
@@ -174,12 +178,18 @@ def canonical_command(action: str, workflow: Mapping[str, Any], metadata: Mappin
         "return_to_prototype": "record_prototype_derivation_success",
         "return_to_prototype_failed": "record_prototype_derivation_failure",
         "checkpoint_recorded": "accept_verification",
-        "candidate_prepared": "prepare_trial_compatibility",
+        "candidate_preparation_started": "start_trial",
+        "candidate_prepared": "record_trial_success",
+        "candidate_preparation_failed": "record_trial_failure",
+        "candidate_preparation_unknown": "record_trial_unknown",
         "candidate_accepted": "accept_trial",
         "candidate_rejected": "reject_trial",
         "candidate_stale": "invalidate_candidate",
         "review_constraint_added": "accept_review_constraint",
-        "publish": "publish_compatibility",
+        "publication_started": "begin_publication",
+        "publish": "record_publication_success",
+        "publication_failed": "record_publication_failure",
+        "publication_unknown": "record_publication_unknown",
     }
     return mapping.get(action)
 
@@ -201,11 +211,17 @@ def legacy_action_for_command(command: str) -> str | None:
         "record_prototype_derivation_success": "return_to_prototype",
         "record_prototype_derivation_failure": "return_to_prototype_failed",
         "accept_verification": "checkpoint_recorded",
-        "prepare_trial_compatibility": "candidate_prepared",
+        "start_trial": "candidate_preparation_started",
+        "record_trial_success": "candidate_prepared",
+        "record_trial_failure": "candidate_preparation_failed",
+        "record_trial_unknown": "candidate_preparation_unknown",
         "accept_trial": "candidate_accepted",
         "reject_trial": "candidate_rejected",
         "invalidate_candidate": "candidate_stale",
-        "publish_compatibility": "publish",
+        "begin_publication": "publication_started",
+        "record_publication_success": "publish",
+        "record_publication_failure": "publication_failed",
+        "record_publication_unknown": "publication_unknown",
     }
     return mapping.get(str(command or "").strip())
 
@@ -256,7 +272,7 @@ def admit_legacy_transition(
     input_value = {
         "confirmed": bool(
             metadata.get("confirmed")
-            or command in {"accept_trial", "begin_publication", "publish_compatibility", "record_publication_success"}
+            or command in {"accept_trial", "begin_publication", "record_publication_success"}
         ),
         "evidence_refs": [str(item) for item in metadata.get("evidence_refs") or [] if str(item).strip()][:100],
         "legacy_action": str(action),
