@@ -9,6 +9,7 @@ from adaos.services.governed_workflow import (
     workflow_ref,
 )
 from adaos.services.workflow_execution import (
+    WorkflowActivityRunner,
     WorkflowExecutorRegistration,
     WorkflowExecutorRegistry,
     cross_channel_ingress_conformance,
@@ -168,6 +169,8 @@ def test_web_interaction_and_sdk_share_one_invocation_and_durable_reply_boundary
 
 def _cross_channel_invocations(
     instance: dict[str, object],
+    *,
+    suffix: str = "",
 ) -> tuple[dict[str, dict[str, object]], object, object]:
     definition = compiled_builder_change_definition()
     adapters = platform_workflow_adapter_registry()
@@ -196,9 +199,9 @@ def _cross_channel_invocations(
     for channel in ("web", "telegram", "text"):
         interaction = conversation_interactions.interaction_from_workflow_description(
             description,
-            conversation_id=f"conversation:ingress:{channel}",
+            conversation_id=f"conversation:ingress:{channel}{suffix}",
             owner="skill:builder_skill",
-            interaction_id=f"interaction:ingress:{channel}",
+            interaction_id=f"interaction:ingress:{channel}{suffix}",
             workflow_ref=workflow,
             command_context_ref=workflow_ref("command_context", "builder:ingress"),
         )
@@ -213,7 +216,7 @@ def _cross_channel_invocations(
         if channel == "text":
             proposal = build_workflow_intent_proposal(
                 conversation_id=interaction["conversation_id"],
-                source_message_id="message:ingress:text",
+                source_message_id=f"message:ingress:text{suffix}",
                 source_text="start automation",
                 workflow_type=definition.workflow_type,
                 command_id="start_automation",
@@ -228,7 +231,7 @@ def _cross_channel_invocations(
                 interaction["interaction_id"],
                 actor_id="user:local",
                 expected_generation=0,
-                idempotency_key="text:start-automation",
+                idempotency_key=f"text:start-automation{suffix}",
                 original_text="start automation",
                 values={"confirmed": True},
                 proposed_action_id=action["action_id"],
@@ -239,7 +242,7 @@ def _cross_channel_invocations(
             response = conversation_interactions.submit_action_token(
                 action["token"],
                 actor_id="user:local",
-                idempotency_key=f"{channel}:start-automation",
+                idempotency_key=f"{channel}:start-automation{suffix}",
                 values={"confirmed": True},
                 metadata={"io_type": channel},
             )["response"]
@@ -250,7 +253,7 @@ def _cross_channel_invocations(
         actor_id="user:local",
         command_id="start_automation",
         expected_generation=int(instance["generation"]),
-        idempotency_key="sdk:start-automation",
+        idempotency_key=f"sdk:start-automation{suffix}",
         input_value={"confirmed": True},
         target_ref=selected_target,
         context_ref=workflow_ref("command_context", "builder:ingress"),
@@ -263,7 +266,7 @@ def _cross_channel_invocations(
 def test_cross_channel_ingress_harness_proves_same_guard_target_and_executor_failure() -> None:
     instance = new_instance(compiled_builder_change_definition(), "change:ingress-harness")
     instance["state"] = "automation_ready"
-    invocations, definition, adapters = _cross_channel_invocations(instance)
+    invocations, definition, adapters = _cross_channel_invocations(instance, suffix=":runner")
 
     report = cross_channel_ingress_conformance(
         invocations,
@@ -286,6 +289,104 @@ def test_cross_channel_ingress_harness_proves_same_guard_target_and_executor_fai
     assert {item["execution"]["reason_code"] for item in report["channels"]} == {
         "executor_unavailable"
     }
+
+
+def test_activity_runner_persists_started_and_terminal_without_reexecuting_effect() -> None:
+    instance = new_instance(compiled_builder_change_definition(), "change:activity-runner")
+    instance["state"] = "automation_ready"
+    invocations, definition, adapters = _cross_channel_invocations(instance)
+    contract = adapters.get("activity", "builder.codex.run")
+    executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker",
+            ),
+        ),
+    )
+    executed: list[dict[str, object]] = []
+    admitted = execute_invocation(
+        invocations["web"],
+        definition,
+        instance,
+        principal=_principal(),
+        adapters=adapters,
+        executors=executors,
+    )
+    runner = WorkflowActivityRunner(
+        executors,
+        "builder.codex.worker",
+        {
+            "builder.codex.run": lambda attempt: (
+                executed.append(dict(attempt))
+                or {
+                    "outcome": "succeeded",
+                    "text": "Automation task accepted by the isolated worker.",
+                    "data": {"task_id": "task:codex:1"},
+                    "evidence_refs": ["evidence:codex:accepted"],
+                }
+            )
+        },
+    )
+
+    completed = runner.run_once()
+
+    assert admitted["accepted"] is True
+    assert completed and completed["status"] == "succeeded"
+    assert completed["evidence_refs"] == ["evidence:codex:accepted"]
+    assert executed[0]["effect_binding"]["command_input"]["confirmed"] is True
+    assert runner.run_once() is None
+    assert durable_delivery.get_envelope(
+        f"response:{completed['attempt_id']}:started"
+    )["category"] == "started"
+    assert durable_delivery.get_envelope(
+        f"response:{completed['attempt_id']}:terminal"
+    )["category"] == "terminal"
+
+
+def test_activity_runner_marks_post_effect_exception_unknown_and_never_retries() -> None:
+    instance = new_instance(compiled_builder_change_definition(), "change:activity-runner-unknown")
+    instance["state"] = "automation_ready"
+    invocations, definition, adapters = _cross_channel_invocations(instance, suffix=":unknown")
+    contract = adapters.get("activity", "builder.codex.run")
+    executors = WorkflowExecutorRegistry(
+        adapters,
+        (
+            WorkflowExecutorRegistration(
+                adapter_id="builder.codex.run",
+                contract_digest=contract["contract_digest"],
+                executor_id="builder.codex.worker.unknown",
+            ),
+        ),
+    )
+    execute_invocation(
+        invocations["web"],
+        definition,
+        instance,
+        principal=_principal(),
+        adapters=adapters,
+        executors=executors,
+    )
+
+    def fail_after_effect(_attempt):
+        raise RuntimeError("worker connection was lost")
+
+    runner = WorkflowActivityRunner(
+        executors,
+        "builder.codex.worker.unknown",
+        {"builder.codex.run": fail_after_effect},
+    )
+    completed = runner.run_once()
+
+    assert completed and completed["status"] == "outcome_unknown"
+    assert runner.run_once() is None
+    recovery = workflow_persistence.recovery_report(instance["instance_id"])
+    assert recovery["safe_resume"] == []
+    assert [item["attempt_id"] for item in recovery["reconciliation_required"]] == [
+        completed["attempt_id"]
+    ]
 
 
 def _digest_target(value: object) -> str:

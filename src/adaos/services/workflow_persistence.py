@@ -366,6 +366,58 @@ def claim_activity(attempt_id: str, *, now: str | None = None) -> dict[str, Any]
     return _attempt(attempt_id)
 
 
+def get_activity_attempt(attempt_id: str) -> dict[str, Any]:
+    """Return one payload-bounded activity attempt for diagnostics or a worker."""
+
+    return _attempt(attempt_id)
+
+
+def claim_next_activity(executor_id: str, *, now: str | None = None) -> dict[str, Any] | None:
+    """Atomically claim one not-started activity bound to an exact executor.
+
+    A pre-effect claim abandoned by a dead worker is safe to resume.  Running
+    or outcome-unknown effects are never selected here and require explicit
+    reconciliation instead of an automatic retry.
+    """
+
+    executor = str(executor_id or "").strip()
+    if not executor:
+        raise WorkflowPersistenceError("executor_id is required")
+    ensure_schema()
+    timestamp = now or _now()
+    with _sql().connect() as con:
+        con.row_factory = sqlite3.Row
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute(
+            """
+            SELECT attempt_id, effect_binding_json
+            FROM governed_workflow_activity_attempts
+            WHERE status IN ('scheduled','claimed') AND effect_started=0
+            ORDER BY created_at
+            LIMIT 200
+            """
+        ).fetchall()
+        selected_id = None
+        for row in rows:
+            binding = json.loads(row["effect_binding_json"])
+            if str(binding.get("executor") or "").strip() == executor:
+                selected_id = str(row["attempt_id"])
+                break
+        if selected_id is None:
+            con.rollback()
+            return None
+        con.execute(
+            """
+            UPDATE governed_workflow_activity_attempts
+            SET status='claimed', updated_at=?
+            WHERE attempt_id=? AND status IN ('scheduled','claimed') AND effect_started=0
+            """,
+            (timestamp, selected_id),
+        )
+        con.commit()
+    return _attempt(selected_id)
+
+
 def mark_effect_started(attempt_id: str, *, now: str | None = None) -> dict[str, Any]:
     attempt = _attempt(attempt_id)
     if attempt["status"] == "running" and attempt["effect_started"]:
@@ -391,9 +443,9 @@ def complete_activity(
 ) -> dict[str, Any]:
     attempt = _attempt(attempt_id)
     selected = str(outcome or "").strip().lower()
-    if selected not in {"succeeded", "failed", "cancelled", "outcome_unknown"}:
+    if selected not in {"succeeded", "failed", "input_required", "cancelled", "outcome_unknown"}:
         raise WorkflowPersistenceError("invalid activity outcome")
-    if attempt["status"] in {"succeeded", "failed", "cancelled", "outcome_unknown"}:
+    if attempt["status"] in {"succeeded", "failed", "input_required", "cancelled", "outcome_unknown"}:
         if attempt["status"] != selected:
             raise WorkflowPersistenceError("terminal activity outcome cannot be changed")
         return attempt
@@ -454,7 +506,7 @@ def cancel_activity(
     now: str | None = None,
 ) -> dict[str, Any]:
     attempt = _attempt(attempt_id)
-    if attempt["status"] in {"succeeded", "failed", "cancelled", "outcome_unknown"}:
+    if attempt["status"] in {"succeeded", "failed", "input_required", "cancelled", "outcome_unknown"}:
         return attempt
     outcome = "outcome_unknown" if attempt["effect_started"] else "cancelled"
     return complete_activity(

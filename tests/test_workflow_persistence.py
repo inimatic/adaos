@@ -43,7 +43,7 @@ def test_atomic_commit_checks_and_idempotent_journal() -> None:
     decision = _decision(
         "change:persistence:checks",
         state="publication_ready",
-        command="publish_compatibility",
+        command="begin_publication",
         confirmed=True,
     )
     binding = {"activity": "builder.publication.publish", "executor": "builder:publisher"}
@@ -112,7 +112,7 @@ def test_atomic_commit_checks_and_idempotent_journal() -> None:
         effect_binding=binding,
     )
 
-    assert committed["instance"]["state"] == "published"
+    assert committed["instance"]["state"] == "publication_waiting"
     assert duplicate["duplicate"] is True
     assert len(workflow_persistence.list_events("change:persistence:checks")) == 1
     outbox = workflow_persistence.claim_outbox()
@@ -126,9 +126,9 @@ def test_atomic_commit_checks_and_idempotent_journal() -> None:
 
 
 _ACTIVITY_CASES = [
-    ("automation_ready", "start_automation", "builder.codex.run", False),
-    ("verification", "request_prototype_derivation", "builder.prototype.derive", False),
-    ("trial_ready", "start_trial", "builder.trial.activate", False),
+    ("automation_ready", "start_automation", "builder.codex.run", True),
+    ("verification", "request_prototype_derivation", "builder.prototype.derive", True),
+    ("trial_ready", "start_trial", "builder.trial.activate", True),
     ("publication_ready", "begin_publication", "builder.publication.publish", True),
 ]
 
@@ -191,6 +191,7 @@ def test_cancellation_is_safe_before_effect_and_unknown_after_effect_start() -> 
         "change:cancel:safe",
         state="automation_ready",
         command="start_automation",
+        confirmed=True,
     )
     safe_commit = workflow_persistence.commit_decision(
         safe,
@@ -207,6 +208,7 @@ def test_cancellation_is_safe_before_effect_and_unknown_after_effect_start() -> 
         "change:cancel:unknown",
         state="automation_ready",
         command="start_automation",
+        confirmed=True,
     )
     unknown_commit = workflow_persistence.commit_decision(
         unknown,
@@ -246,7 +248,7 @@ def test_stale_snapshot_cannot_overwrite_committed_generation() -> None:
 def test_definition_migration_updates_durable_index_and_snapshot_atomically() -> None:
     source = compiled_builder_change_definition()
     target_value = copy.deepcopy(source.source)
-    target_value["definition_version"] = "1.1.0"
+    target_value["definition_version"] = "1.1.1"
     instance = new_instance(source, "change:persistence:migration")
     workflow_persistence.create_instance(instance)
     migration = {
@@ -254,7 +256,7 @@ def test_definition_migration_updates_durable_index_and_snapshot_atomically() ->
         "migration_id": "builder_change_storage_1_1",
         "workflow_type": source.workflow_type,
         "from_definition_version": source.definition_version,
-        "to_definition_version": "1.1.0",
+        "to_definition_version": "1.1.1",
         "allowed_source_states": [source.initial_state],
         "state_map": {source.initial_state: source.initial_state},
         "context_set": {"definition_migrated": True},
@@ -273,18 +275,18 @@ def test_definition_migration_updates_durable_index_and_snapshot_atomically() ->
         actor="user:local",
         permissions=("workflow.definition.migrate",),
         expected_generation=0,
-        idempotency_key="migration:persistence:1.1.0",
+        idempotency_key="migration:persistence:1.1.1",
     )
 
     workflow_persistence.commit_decision(
         decision,
-        idempotency_key="migration:persistence:1.1.0",
+        idempotency_key="migration:persistence:1.1.1",
         permission_granted=True,
     )
 
     stored = workflow_persistence.get_instance(instance["instance_id"])
     assert stored is not None
-    assert stored["definition_version"] == "1.1.0"
+    assert stored["definition_version"] == "1.1.1"
     assert stored["context"]["definition_migrated"] is True
     event = workflow_persistence.list_events(instance["instance_id"])[0]
     assert event["type"] == "workflow.definition.migrated"
@@ -293,7 +295,7 @@ def test_definition_migration_updates_durable_index_and_snapshot_atomically() ->
 def test_definition_migration_checkpoint_rolls_back_by_exact_generation() -> None:
     source = compiled_builder_change_definition()
     target_value = copy.deepcopy(source.source)
-    target_value["definition_version"] = "1.1.0"
+    target_value["definition_version"] = "1.1.1"
     instance = new_instance(source, "change:persistence:migration-rollback")
     workflow_persistence.create_instance(instance)
     checkpoint = workflow_persistence.export_instance(instance["instance_id"])
@@ -302,7 +304,7 @@ def test_definition_migration_checkpoint_rolls_back_by_exact_generation() -> Non
         "migration_id": "builder_change_rollback_1_1",
         "workflow_type": source.workflow_type,
         "from_definition_version": source.definition_version,
-        "to_definition_version": "1.1.0",
+        "to_definition_version": "1.1.1",
         "allowed_source_states": [source.initial_state],
         "state_map": {source.initial_state: source.initial_state},
         "context_set": {"definition_migrated": True},
@@ -321,17 +323,17 @@ def test_definition_migration_checkpoint_rolls_back_by_exact_generation() -> Non
         actor="user:local",
         permissions=("workflow.definition.migrate",),
         expected_generation=0,
-        idempotency_key="migration:persistence:rollback:1.1.0",
+        idempotency_key="migration:persistence:rollback:1.1.1",
     )
     workflow_persistence.commit_decision(
         decision,
-        idempotency_key="migration:persistence:rollback:1.1.0",
+        idempotency_key="migration:persistence:rollback:1.1.1",
         permission_granted=True,
     )
 
     restored = workflow_persistence.rollback_instance(
         checkpoint,
-        expected_current_definition_version="1.1.0",
+        expected_current_definition_version="1.1.1",
         expected_current_generation=1,
     )
 
@@ -341,7 +343,7 @@ def test_definition_migration_checkpoint_rolls_back_by_exact_generation() -> Non
     with pytest.raises(workflow_persistence.WorkflowPersistenceError, match="compare-and-swap"):
         workflow_persistence.rollback_instance(
             checkpoint,
-            expected_current_definition_version="1.1.0",
+            expected_current_definition_version="1.1.1",
             expected_current_generation=1,
         )
 
@@ -357,7 +359,7 @@ def test_checkpoint_rollback_refuses_a_newer_started_effect() -> None:
         definition,
         instance,
         "start_automation",
-        input_value={},
+        input_value={"confirmed": True},
         actor="user:local",
         roles=("registered",),
         expected_generation=0,

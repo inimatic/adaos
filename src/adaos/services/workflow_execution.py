@@ -5,7 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from adaos.services import conversation_store, durable_delivery, workflow_persistence
 from adaos.services.governed_workflow import (
@@ -24,6 +24,7 @@ from adaos.services.workflow_registry import WorkflowAdapterRegistry
 WORKFLOW_INVOCATION_SCHEMA = "adaos.workflow.invocation.v1"
 WORKFLOW_INGRESS_CONFORMANCE_SCHEMA = "adaos.workflow.ingress_conformance.v1"
 _INGRESS_CHANNELS = ("web", "telegram", "text", "sdk")
+WorkflowActivityHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 class WorkflowExecutionError(ValueError):
@@ -127,6 +128,110 @@ class WorkflowExecutorRegistry:
                 "contract_digest": None,
             }
         return registration.to_dict()
+
+
+@dataclass(slots=True)
+class WorkflowActivityRunner:
+    """Run exact registered activity handlers over the durable attempt ledger.
+
+    The handler is invoked only after the attempt is durably claimed and marked
+    as effect-started.  Any exception after that boundary is persisted as
+    ``outcome_unknown`` and is never retried by this runner.
+    """
+
+    executors: WorkflowExecutorRegistry
+    executor_id: str
+    handlers: Mapping[str, WorkflowActivityHandler]
+
+    def __post_init__(self) -> None:
+        executor = str(self.executor_id or "").strip()
+        if not executor:
+            raise WorkflowExecutionError("activity runner executor_id is required")
+        for adapter_id, handler in self.handlers.items():
+            status = self.executors.status(str(adapter_id))
+            if not status.get("available") or status.get("executor_id") != executor:
+                raise WorkflowExecutionError(
+                    f"activity handler does not match a ready executor registration: {adapter_id}"
+                )
+            if not callable(handler):
+                raise WorkflowExecutionError(f"activity handler is not callable: {adapter_id}")
+
+    def run_once(self) -> dict[str, Any] | None:
+        attempt = workflow_persistence.claim_next_activity(self.executor_id)
+        if attempt is None:
+            return None
+        activity = str(attempt.get("activity") or "").strip()
+        handler = self.handlers.get(activity)
+        if handler is None:
+            # No effect has started, so the claim remains safe for a correctly
+            # configured runner.  Do not convert configuration drift into an
+            # uncertain external outcome.
+            raise WorkflowExecutionError(f"activity handler is unavailable: {activity}")
+        binding = dict(attempt.get("effect_binding") or {})
+        conversation_id = str(binding.get("conversation_id") or "").strip()
+        route_ids = [str(item) for item in binding.get("reply_route_ids") or [] if str(item)]
+        common = {
+            "workflow_ref": {"kind": "workflow", "id": attempt["instance_id"], "generation": attempt["generation"]},
+            "interaction_ref": copy.deepcopy(binding.get("interaction_ref")),
+            "command_id": str(binding.get("command_id") or attempt["transition_id"]),
+            "reply_route_ids": route_ids,
+            "turn_trace_id": attempt.get("turn_trace_id"),
+            "trace": copy.deepcopy(dict(attempt.get("trace") or {})),
+            "task_ref": {"kind": "task", "id": attempt["attempt_id"]},
+        }
+        if conversation_id:
+            durable_delivery.enqueue_response(
+                conversation_id,
+                "started",
+                text=f"{activity} started.",
+                data={"attempt_id": attempt["attempt_id"], "activity": activity},
+                envelope_id=f"response:{attempt['attempt_id']}:started",
+                **common,
+            )
+        started = workflow_persistence.mark_effect_started(attempt["attempt_id"])
+        try:
+            raw = handler(copy.deepcopy(started))
+            result = copy.deepcopy(dict(raw or {}))
+        except Exception as exc:
+            completed = workflow_persistence.complete_activity(
+                attempt["attempt_id"],
+                "outcome_unknown",
+                result={"reason_code": "handler_exception_after_effect_start", "error": str(exc)[:1000]},
+            )
+            if conversation_id:
+                durable_delivery.enqueue_response(
+                    conversation_id,
+                    "terminal",
+                    text=f"{activity} outcome is unknown and requires reconciliation.",
+                    data={"attempt_id": attempt["attempt_id"], "outcome": "outcome_unknown"},
+                    envelope_id=f"response:{attempt['attempt_id']}:terminal",
+                    **common,
+                )
+            return completed
+        outcome = str(result.get("outcome") or "succeeded").strip().lower()
+        if outcome not in {"succeeded", "failed", "input_required", "cancelled", "outcome_unknown"}:
+            outcome = "outcome_unknown"
+            result = {
+                **result,
+                "reason_code": "invalid_activity_outcome",
+            }
+        completed = workflow_persistence.complete_activity(
+            attempt["attempt_id"],
+            outcome,
+            result=dict(result.get("data") or result),
+            evidence_refs=tuple(str(item) for item in result.get("evidence_refs") or []),
+        )
+        if conversation_id:
+            category = "input_required" if outcome == "input_required" else "terminal"
+            durable_delivery.enqueue_response(
+                conversation_id,
+                category,
+                text=str(result.get("text") or f"{activity} {outcome}."),
+                data={"attempt_id": attempt["attempt_id"], "outcome": outcome, **dict(result.get("data") or {})},
+                envelope_id=f"response:{attempt['attempt_id']}:{category}",
+                **common,
+            )
+        return completed
 
 
 def description_with_executor_readiness(
@@ -643,6 +748,13 @@ def execute_invocation(
                 "activity": activity,
                 "executor": status.get("executor_id"),
                 "contract_digest": status.get("contract_digest"),
+                "invocation_id": record.get("invocation_id"),
+                "conversation_id": record.get("conversation_id"),
+                "interaction_ref": copy.deepcopy(record.get("interaction_ref")),
+                "command_id": command.get("command_id"),
+                "command_input": copy.deepcopy(dict(command.get("input") or {})),
+                "target_ref": copy.deepcopy(record.get("target_ref")),
+                "reply_route_ids": _reply_route_ids(record),
                 "turn_trace_id": record.get("turn_trace_id"),
                 "trace": copy.deepcopy(dict(record.get("trace") or {})),
             }
@@ -718,6 +830,8 @@ __all__ = [
     "WORKFLOW_INGRESS_CONFORMANCE_SCHEMA",
     "WORKFLOW_INVOCATION_SCHEMA",
     "WorkflowExecutionError",
+    "WorkflowActivityHandler",
+    "WorkflowActivityRunner",
     "WorkflowExecutorRegistration",
     "WorkflowExecutorRegistry",
     "cross_channel_ingress_conformance",
