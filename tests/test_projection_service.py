@@ -19,7 +19,11 @@ from adaos.services.scenario import projection_service as projection_service_mod
 
 
 @pytest.fixture(autouse=True)
-def _reset_projection_runtime_diagnostics() -> None:
+def _reset_projection_runtime_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Projection tests that exercise core-owned persistence must not inherit a
+    # skill ContextVar left by an earlier full-suite runtime task. Individual
+    # skill-ownership tests override this explicitly after fixture setup.
+    monkeypatch.setattr(projection_service_module, "get_current_skill", lambda: None)
     projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
