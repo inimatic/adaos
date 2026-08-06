@@ -9,8 +9,10 @@ from adaos.services.skill import service_supervisor_runtime as runtime_module
 class _FakeSupervisor:
     def __init__(self) -> None:
         self.events: list[tuple[str, str | None]] = []
+        self.discovery_forces: list[bool] = []
 
-    def ensure_discovered(self) -> None:
+    def ensure_discovered(self, *, force: bool = False) -> None:
+        self.discovery_forces.append(force)
         return None
 
     def list(self) -> list[str]:
@@ -45,6 +47,16 @@ def test_service_supervisor_runtime_stops_service_on_skill_deactivated(monkeypat
     asyncio.run(runtime_module._on_skill_deactivated({"name": "service_skill"}))
 
     assert fake.events == [("stop", "service_skill")]
+
+
+def test_service_supervisor_runtime_forces_discovery_on_skill_activation(monkeypatch) -> None:
+    fake = _FakeSupervisor()
+    monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+
+    asyncio.run(runtime_module._on_skill_activated({"skill_name": "service_skill"}))
+
+    assert fake.discovery_forces == [True]
+    assert fake.events == [("restart", "service_skill")]
 
 
 def test_service_supervisor_runtime_discovers_services_off_event_loop(monkeypatch) -> None:

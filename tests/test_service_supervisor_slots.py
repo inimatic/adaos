@@ -140,6 +140,52 @@ def test_service_supervisor_reuses_unchanged_non_service_manifest(monkeypatch):
     assert target_reads == 1
 
 
+def test_service_supervisor_skips_full_scan_when_discovery_sources_are_unchanged(monkeypatch):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+
+    skills_root = Path(get_ctx().paths.skills_dir())
+    skill_root = skills_root / "module_skill"
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "skill.yaml").write_text(
+        "name: module_skill\nversion: 0.1.0\nruntime:\n  kind: module\n",
+        encoding="utf-8",
+    )
+
+    original = mod._runtime_is_deactivated
+    discovery_visits = 0
+
+    def _counted_deactivation(root: Path, name: str) -> bool:
+        nonlocal discovery_visits
+        discovery_visits += 1
+        return original(root, name)
+
+    monkeypatch.setattr(mod, "_runtime_is_deactivated", _counted_deactivation)
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor.ensure_discovered(force=True)
+    first_scan_visits = discovery_visits
+
+    supervisor._discover_last_at = 0.0
+    supervisor.ensure_discovered()
+
+    assert first_scan_visits > 0
+    assert discovery_visits == first_scan_visits
+
+    registry_path = Path(get_ctx().paths.workspace_dir()) / "registry.json"
+    registry_path.write_text('{"version": 2}\n', encoding="utf-8")
+    supervisor._discover_last_at = 0.0
+    supervisor.ensure_discovered()
+    after_registry_change = discovery_visits
+
+    assert after_registry_change > first_scan_visits
+
+    supervisor._discover_last_at = 0.0
+    supervisor._discover_last_full_at = time.monotonic() - supervisor._discover_full_interval_s - 1.0
+    supervisor.ensure_discovered()
+
+    assert discovery_visits > after_registry_change
+
+
 def test_service_supervisor_refresh_discovery_does_not_block_event_loop():
     from adaos.services.skill import service_supervisor as mod
 

@@ -149,24 +149,27 @@ def _emit_runtime_recovery(topic: str, payload: dict[str, Any]) -> None:
         _log.debug("failed to emit runtime recovery event topic=%s", topic, exc_info=True)
 
 
-def _discover_service_names(supervisor: Any) -> set[str]:
+def _discover_service_names(supervisor: Any, *, force: bool = False) -> set[str]:
     """Run filesystem/process discovery away from the runtime event loop."""
 
-    supervisor.ensure_discovered()
+    if force:
+        supervisor.ensure_discovered(force=True)
+    else:
+        supervisor.ensure_discovered()
     return {str(name) for name in supervisor.list()}
 
 
-async def _is_managed_service(supervisor: Any, skill_name: str) -> bool:
-    names = await asyncio.to_thread(_discover_service_names, supervisor)
+async def _is_managed_service(supervisor: Any, skill_name: str, *, force_discovery: bool = False) -> bool:
+    names = await asyncio.to_thread(_discover_service_names, supervisor, force=force_discovery)
     return skill_name in names
 
 
-async def _restart_if_service(skill_name: str | None, *, reason: str) -> bool:
+async def _restart_if_service(skill_name: str | None, *, reason: str, force_discovery: bool = False) -> bool:
     if not skill_name:
         return False
     try:
         supervisor = get_service_supervisor()
-        if not await _is_managed_service(supervisor, skill_name):
+        if not await _is_managed_service(supervisor, skill_name, force_discovery=force_discovery):
             return False
         await supervisor.restart(skill_name)
         _log.info("service restarted skill=%s reason=%s", skill_name, reason)
@@ -227,7 +230,7 @@ async def _stop_all_services(*, reason: str) -> bool:
             shutdown_exc = exc
             _log.warning("failed to shutdown service supervisor reason=%s", reason, exc_info=True)
     ok = True
-    for skill_name in service_names:
+    for skill_name in sorted(service_names):
         try:
             await supervisor.stop(skill_name)
             _log.info("service stopped skill=%s reason=%s", skill_name, reason)
@@ -328,12 +331,12 @@ async def _on_runtime_recovery_response(evt: Any) -> None:
 
 @subscribe("skills.activated")
 async def _on_skill_activated(payload: Dict[str, Any]) -> None:
-    await _restart_if_service(payload.get("skill_name"), reason="skills.activated")
+    await _restart_if_service(payload.get("skill_name"), reason="skills.activated", force_discovery=True)
 
 
 @subscribe("skills.rolledback")
 async def _on_skill_rolledback(payload: Dict[str, Any]) -> None:
-    await _restart_if_service(payload.get("skill_name"), reason="skills.rolledback")
+    await _restart_if_service(payload.get("skill_name"), reason="skills.rolledback", force_discovery=True)
 
 
 @subscribe("skills.deactivated")
