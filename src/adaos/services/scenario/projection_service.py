@@ -1301,11 +1301,8 @@ def _set_nested_y_map_path(root: Any, txn: Any, segments: List[str], payload: An
     if not leaf_key:
         return None
     try:
-        current = parent.get(leaf_key)
-        if _json_like_equal(current, payload):
-            return False
-        parent.set(txn, leaf_key, _clone_json_like(payload))
-        return True
+        changed, _mode = set_map_value_if_changed(parent, txn, leaf_key, payload)
+        return changed
     except Exception:
         return None
 
