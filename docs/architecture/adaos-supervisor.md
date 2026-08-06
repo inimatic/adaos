@@ -299,8 +299,15 @@ The realtime sidecar remains the authority only for:
 - reconnect loops
 - socket diagnostics
 - local relay IO
+- delivery of persisted supervisor/runtime state plus sidecar transport
+  evidence to the Root lifecycle authority
 
 It must not absorb supervisor responsibilities.
+
+The browser therefore never diagnoses an update by polling the supervisor.
+Supervisor persists its local transition truth, sidecar delivers it, and Root
+publishes the authoritative leased browser view described in
+[Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md).
 
 ## Implementation decomposition boundary
 

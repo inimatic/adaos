@@ -63,6 +63,10 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
   two sessions may overlap only until the old runtime drains
 - relays raw NATS bytes in both directions
 - writes periodic diagnostics to `.adaos/diagnostics/realtime_sidecar.jsonl`
+- acts as the durable diagnostic bridge to Root by combining its transport
+  observation with persisted supervisor/runtime lifecycle snapshots; it sends
+  on semantic change plus a bounded heartbeat and never becomes the update or
+  runtime-semantics authority
 - exposes a runtime status surface in protocol terms:
   - transport readiness
   - control readiness
@@ -92,6 +96,9 @@ Managed autostart / runtime boundary:
 - WebRTC direct channels are still negotiated by the runtime/browser transport
   layer; a server-side Yjs datachannel opt-out prevents browser sync promotion
   to `webrtc_data:yjs` even when the peer and other datachannels are connected
+- Root publishes the resulting browser-facing lifecycle through the contract
+  in [Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md); browsers wait
+  on that event stream instead of polling sidecar, supervisor, and runtime
 - the media proxy does not expose the full hub API to the LAN; it serves only
   token-protected, already-published media files from AdaOS media storage and
   supports `GET`, `HEAD`, and byte `Range` requests

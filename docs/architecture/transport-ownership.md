@@ -47,6 +47,7 @@ If a sidecar is used, it owns:
 - heartbeat wiring
 - wire diagnostics
 - local relay endpoint for the hub main process
+- delivery of compact supervisor/runtime/transport lifecycle evidence to Root
 
 The sidecar must not own:
 
@@ -64,6 +65,7 @@ Root owns:
 - trust issuance
 - root-side replay and dedupe for eligible streams
 - route rendezvous where applicable
+- the leased, browser-facing Hub lifecycle and capability projection
 
 Root does not own:
 

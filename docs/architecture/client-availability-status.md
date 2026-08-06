@@ -91,11 +91,18 @@ sync, root-routed media, incomplete sidecar handoff, or unavailable members.
 
 ### Runtime And Detail Delivery
 
-The header and client behavior consume
-`/api/node/reliability/runtime`. This ETag-enabled beacon contains
-only route, state-sync, WebRTC Yjs, sidecar handoff, runtime-fault, and compact
+The header and client behavior use the Root
+[Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md) as the availability
+and action-gating source. The lifecycle lease supplies update state, route and
+runtime readiness, and explicit server capabilities. Local channel/Yjs
+observations refine the presentation but do not override an expired or denied
+lifecycle capability.
+
+`/api/node/reliability/runtime` remains a bounded diagnostic sample containing
+route, state-sync, WebRTC Yjs, sidecar handoff, runtime-fault, and compact
 quality evidence. It must not read the status-card registry, enumerate members,
-or build the full reliability snapshot.
+or build the full reliability snapshot, and it is not the browser availability
+authority.
 
 Opening the availability panel requests
 `/api/node/reliability/details`. The details response adds the
@@ -104,12 +111,11 @@ separate client stream and must not replace the runtime beacon used by header
 state or recovery decisions. `mode=thin`, `mode=full`, and the legacy runtime
 endpoint remain compatibility and operator-diagnostic surfaces.
 
-The runtime beacon is event-driven. It is requested once when the effective
-browser session or WS/YJS connectivity state changes; it is not polled on a
-background interval. Rapid state changes may restart browser observables, but
-requests remain single-flight and subject to a short retrigger cooldown. The
-header primarily projects the browser's local transport and YJS state between
-those boundary probes.
+The runtime beacon is event-driven. It is requested once when a fresh lifecycle
+event permits live reads and the effective browser session or WS/YJS
+connectivity state changes. It is not polled on a background interval and is
+not requested while lifecycle says to wait. Requests remain single-flight and
+subject to a short retrigger cooldown.
 
 Materialization HTTP snapshots are also fallback-only. A ready YJS document
 must render directly without a snapshot request. When YJS is incomplete, the

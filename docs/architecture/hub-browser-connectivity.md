@@ -7,6 +7,7 @@ hub through the root control plane.
 Read this with:
 
 - [Channel Semantics](channel-semantics.md)
+- [Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md)
 - [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md)
 - [Semantic State Plane](semantic-state-plane.md)
 - [Device Access and Browsers](device-access-and-browsers.md)
@@ -63,25 +64,30 @@ is an upgrade, not a dependency for correctness.
 
 ## Production Strategy
 
-The production strategy is baseline-first with parallel upgrade:
+The production strategy is lifecycle-gated baseline-first with parallel
+upgrade:
 
-1. Bootstrap over HTTP to establish identity, runtime epoch, initial snapshot,
+1. Subscribe to the Root lifecycle authority and install its fail-closed
+   capability gate.
+2. Bootstrap over HTTP only when `live_reads` permits it, establishing identity,
+   runtime epoch, initial snapshot,
    and diagnostics.
-2. Attach `/ws` as the baseline command/event/presence path.
-3. Attach `/yws/<webspace>` as the baseline collaborative sync path.
-4. Start WebRTC probing in parallel after baseline correctness is available.
-5. Promote a semantic channel to WebRTC only after the data channel is open,
+3. Attach `/ws` when `open_control` permits the baseline
+   command/event/presence path.
+4. Attach `/yws/<webspace>` when `open_yws` permits collaborative sync.
+5. Start WebRTC probing in parallel after baseline correctness is available.
+6. Promote a semantic channel to WebRTC only after the data channel is open,
    acked, and stable for that channel's stability window.
-6. Demote commands/events to `/ws` and sync to `/yws` quickly on direct-path
+7. Demote commands/events to `/ws` and sync to `/yws` quickly on direct-path
    failure. Demotion must not mark the whole browser offline if the baseline
    path is still healthy.
-7. While the baseline path remains healthy, keep one bounded recovery timer for
+8. While the baseline path remains healthy, keep one bounded recovery timer for
    the preferred direct path. A disconnect grace period, failed probe, backoff,
    or cooldown must always end in another scheduled probe; a page reload must
    never be required to promote the connection back to WebRTC.
-8. Keep HTTP request-scoped actions, snapshots, and diagnostics as the brownout
-   fallback. Long polling may be used for last-resort progress/diagnostics, but
-   it is not the steady-state realtime channel.
+9. Keep HTTP request-scoped actions and explicit diagnostics as the brownout
+   fallback. Offline/update recovery waits on lifecycle SSE; it does not start
+   long polling or independent status/summary reconnect loops.
 
 WebRTC-first is not the default production policy. ICE and browser lifecycle
 can add seconds of uncertainty, while WS/YWS can already provide correctness.
@@ -191,6 +197,12 @@ Implemented:
 - [x] Browser has a Yjs DataChannel provider for direct WebRTC sync experiments.
 - [x] Browser arms a routed YWS idle recovery watchdog when an initialized
       root-routed session has no live sync provider.
+- [x] Root publishes one leased lifecycle/capability snapshot and SSE stream;
+      browser control, YWS, diagnostics, and action availability consume it.
+- [x] Browser waits for lifecycle events during offline/update windows instead
+      of polling status, reliability summary, and supervisor state.
+- [x] Established WebRTC member commands can bypass Root control while runtime
+      capability remains ready; runtime continues to own the peer.
 
 Required for a reliable hub-browser quality bar:
 

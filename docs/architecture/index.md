@@ -67,6 +67,7 @@ Current target-state control-plane extensions are documented in:
 - [Incident Registry](incident-registry.md): production direction for normalizing transport, runtime, skill, sync, and pressure symptoms into domain-attributed incidents for humans and LLM planning
 - [Member-Hub Connectivity](member-hub-connectivity.md): target control-plane architecture for member join, member-hub lifecycle ownership, restart-aware health semantics, and QR onboarding
 - [Hub-Browser Connectivity](hub-browser-connectivity.md): target guarantees, protocol ladder, quality gates, and implementation checklist for local and root-routed browser links to a hub
+- [Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md): authoritative Root lifecycle lease, sidecar diagnostic bridge, browser event-wait policy, capability gates, and runtime-owned WebRTC/YWS boundary
 - [Device Access and Browsers](device-access-and-browsers.md): target architecture for durable device identity, browser and member access policy, device-centric desktop UX, and reusable access management surfaces
 - [Personalization, Identity, and Access](personalization-identity-access.md): target local-first model for profiles, user keys, devices, memberships, roles, capabilities, QR/link join flows, privacy zones, and audit
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md): MoSCoW checklist for landing backend slices, current-user browser settings, AdaOS Connect join UX, user management, grants, recovery, privacy, and optional external identity
