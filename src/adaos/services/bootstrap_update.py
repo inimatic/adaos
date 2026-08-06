@@ -32,6 +32,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/bootstrap_runtime/lifecycle.py",
     "src/adaos/services/bootstrap_runtime/nats_bridge.py",
     "src/adaos/services/bootstrap_runtime/nats_root_runtime.py",
+    "src/adaos/services/bootstrap_runtime/route_tunnel_runtime.py",
     "src/adaos/services/bootstrap_runtime/root_transport.py",
     "src/adaos/services/bootstrap_runtime/status_policy.py",
     "src/adaos/services/bootstrap_runtime/status_watchdog.py",
