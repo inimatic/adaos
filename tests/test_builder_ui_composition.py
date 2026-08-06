@@ -26,14 +26,16 @@ def _webui() -> dict:
                                 "title": "Add item",
                                 "area": "main",
                                 "actions": [{"id": "submit", "activity": "shopping.create"}],
-                                "fields": [
-                                    {
-                                        "id": "title",
-                                        "type": "text",
-                                        "label": "Item",
-                                        "stateKey": "draft.title",
-                                    }
-                                ],
+                                "inputs": {
+                                    "fields": [
+                                        {
+                                            "id": "title",
+                                            "type": "text",
+                                            "label": "Item",
+                                            "stateKey": "draft.title",
+                                        }
+                                    ]
+                                },
                             },
                             {
                                 "id": "shopping-list",

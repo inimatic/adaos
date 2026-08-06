@@ -1,0 +1,19 @@
+{
+  "states": [
+    {"state_id": "empty", "evidence_ref": "fixture:requests:empty"},
+    {"state_id": "normal", "evidence_ref": "fixture:requests:normal"},
+    {"state_id": "validation_failure", "evidence_ref": "story:request.input"},
+    {"state_id": "unavailable", "evidence_ref": "story:request.failure"},
+    {"state_id": "delayed_input_required", "evidence_ref": "story:request.input"},
+    {"state_id": "role_denied", "evidence_ref": "fixture:requests:role-denied"},
+    {"state_id": "long_content", "evidence_ref": "fixture:requests:long-content"},
+    {"state_id": "locale_en", "evidence_ref": "locale:en"},
+    {"state_id": "locale_ru", "evidence_ref": "locale:ru"},
+    {"state_id": "compact", "evidence_ref": "breakpoint:compact"},
+    {"state_id": "wide", "evidence_ref": "breakpoint:wide"},
+    {"state_id": "offline", "evidence_ref": "fixture:requests:offline"},
+    {"state_id": "conflict", "evidence_ref": "fixture:requests:conflict"},
+    {"state_id": "rate_limited", "evidence_ref": "fixture:requests:rate-limited"},
+    {"state_id": "large_dataset", "evidence_ref": "fixture:requests:large"}
+  ]
+}

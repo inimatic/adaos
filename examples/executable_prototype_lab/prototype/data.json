@@ -1,0 +1,64 @@
+{
+  "schema": "adaos.builder.prototype_data.v1",
+  "source_id": "prototype.requests",
+  "mode": "local_crud",
+  "record_schema": {
+    "type": "object",
+    "required": ["id", "title", "details", "status"],
+    "properties": {
+      "id": {"type": "string", "minLength": 1},
+      "title": {"type": "string", "minLength": 1},
+      "details": {"type": "string"},
+      "status": {"enum": ["draft", "submitted"]}
+    },
+    "additionalProperties": false
+  },
+  "seed": [
+    {"id": "req-001", "title": "Prepare a demo", "details": "Show the safe prototype path.", "status": "draft"}
+  ],
+  "fixtures": {
+    "request.policy": {
+      "result": {"allowed": true, "reason": "recorded prototype policy"},
+      "provenance": "recording:request-policy:2026-08-06"
+    }
+  },
+  "activities": [
+    {
+      "activity_id": "prototype.request.list",
+      "operation": "list",
+      "input_schema": {"type": "object", "additionalProperties": false},
+      "output_schema": {"type": "array", "items": {"type": "object"}},
+      "side_effect_class": "read_only",
+      "implementation_status": "mapped",
+      "implementation_ref": "skill:request_service.list"
+    },
+    {
+      "activity_id": "prototype.request.create",
+      "operation": "create",
+      "input_schema": {"type": "object", "required": ["record"], "properties": {"record": {"type": "object"}}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "side_effect_class": "local_reversible",
+      "implementation_status": "missing",
+      "implementation_ref": null
+    },
+    {
+      "activity_id": "prototype.request.policy",
+      "operation": "fixture",
+      "fixture_key": "request.policy",
+      "input_schema": {"type": "object"},
+      "output_schema": {"type": "object", "required": ["allowed", "reason"]},
+      "side_effect_class": "read_only",
+      "implementation_status": "mapped",
+      "implementation_ref": "skill:request_service.policy"
+    },
+    {
+      "activity_id": "prototype.request.suggest",
+      "operation": "generate",
+      "input_schema": {"type": "object"},
+      "output_schema": {"type": "object", "required": ["text", "fixture"]},
+      "side_effect_class": "read_only",
+      "implementation_status": "prototype_only",
+      "implementation_ref": null
+    }
+  ]
+}

@@ -112,8 +112,15 @@ def validate_conversational_workflow_slice(
     actual_source_digest = workflow_definition_digest(source_definition)
     if candidate["source_definition_digest"] != actual_source_digest:
         raise BuilderWorkflowError("prototype workflow slice is stale against its source definition")
+    candidate_definition = candidate["definition"]
+    if set(candidate_definition) == {"source_ref"}:
+        referenced = str(candidate_definition.get("source_ref") or "").strip()
+        expected_ref = str(candidate["source_definition_ref"]).split("@", 1)[0]
+        if referenced != expected_ref:
+            raise BuilderWorkflowError("prototype workflow definition_ref differs from its pinned source")
+        candidate_definition = copy.deepcopy(dict(source_definition))
     try:
-        compiled = compile_definition(candidate["definition"])
+        compiled = compile_definition(candidate_definition)
     except WorkflowDefinitionError as exc:
         raise BuilderWorkflowError(f"invalid prototype workflow definition: {exc}") from exc
     _validate_profile(candidate, compiled)

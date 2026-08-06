@@ -85,14 +85,24 @@ def extract_composition_slice(
     if location is None:
         raise BuilderWorkflowError(f"UI composition target is not attached: {target_ref}")
     container, order, parent, collection = location
+    path = _path(webui, target) or []
+    logical_parent = parent
+    if kind == "field" and not str((parent or {}).get("id") or "").strip():
+        logical_parent = next(
+            (
+                item
+                for item in reversed(path)
+                if str(item.get("id") or "").strip() and str(item.get("type") or "").strip()
+            ),
+            parent,
+        )
     sibling_refs = [
         ref
         for item in container
-        if (ref := _sibling_ref(item, kind=kind, parent=parent)) is not None
+        if (ref := _sibling_ref(item, kind=kind, parent=logical_parent)) is not None
     ]
     if target_ref not in sibling_refs:
         raise BuilderWorkflowError(f"UI composition target lacks stable sibling identity: {target_ref}")
-    path = _path(webui, target) or []
     ancestor_refs = [ref for item in path if (ref := _node_ref(item)) is not None]
     layout_owner = next(
         (item for item in reversed(path) if isinstance(item, Mapping) and "layout" in item),
@@ -118,7 +128,7 @@ def extract_composition_slice(
     visible = sibling_refs[start:end]
     evidence_source = {
         "target": copy.deepcopy(target),
-        "parent_ref": _node_ref(parent or {}),
+        "parent_ref": _node_ref(logical_parent or {}),
         "visible_neighbor_refs": visible,
         "layout": layout,
         "responsive": responsive,
@@ -135,7 +145,7 @@ def extract_composition_slice(
             "label": str(label) if label is not None else None,
             "area": str(target.get("area")) if target.get("area") is not None else None,
         },
-        "parent_ref": _node_ref(parent or {}),
+        "parent_ref": _node_ref(logical_parent or {}),
         "siblings": sibling_refs,
         "order": order,
         "ancestors": ancestor_refs,

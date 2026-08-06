@@ -1,0 +1,17 @@
+{
+  "schema": "adaos.builder.binding_profile.v1",
+  "profile_id": "request-fixture",
+  "mode": "fixture",
+  "logical_schema_ref": "schema:prototype.requests",
+  "source_ref": "fixture:prototype.requests:v1",
+  "sensitivity": "internal",
+  "capabilities": ["read", "write"],
+  "read_policy": "fixture",
+  "write_policy": "none",
+  "owner": "builder",
+  "expires_at": null,
+  "redaction": "none",
+  "implementation_mappings": [
+    {"logical_ref": "schema:prototype.requests", "implementation_ref": null, "status": "missing"}
+  ]
+}

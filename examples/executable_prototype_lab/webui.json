@@ -1,0 +1,87 @@
+{
+  "schema": "adaos.webui.v1",
+  "generated_by": "executable_prototype_lab",
+  "ui": {
+    "application": {
+      "desktop": {
+        "pageSchema": {
+          "id": "prototype-request-page",
+          "title": "Service requests",
+          "title_i18n": {"key": "prototype.request.title", "fallback": "Service requests"},
+          "layout": {
+            "type": "split",
+            "pattern": "focus-detail",
+            "areas": [
+              {"id": "main", "role": "main"},
+              {"id": "details", "role": "aux"}
+            ],
+            "responsive": {"compact": "stack", "wide": "split"},
+            "auxWidth": 360
+          },
+          "widgets": [
+            {
+              "id": "request-form",
+              "type": "ui.form",
+              "area": "main",
+              "title": "New request",
+              "inputs": {
+                "layout": "responsiveGrid",
+                "fields": [
+                  {"id": "request-title", "type": "text", "label": "Title", "stateKey": "draft.title", "required": true},
+                  {"id": "request-details", "type": "textarea", "label": "Details", "stateKey": "draft.details", "required": true},
+                  {"id": "request-priority", "type": "select", "label": "Priority", "stateKey": "draft.priority", "options": ["normal", "urgent"]}
+                ],
+                "buttons": [{"id": "continue", "label": "Continue", "kind": "primary"}]
+              },
+              "actions": [
+                {"on": "submit", "type": "updateState", "params": {"prototypeStatus": "review"}}
+              ],
+              "interaction": {"initialFocus": {"ref": "field:request-form:request-title", "strategy": "always", "required": true}}
+            },
+            {
+              "id": "request-list",
+              "type": "ui.list",
+              "area": "main",
+              "title": "Requests",
+              "inputs": {"variant": "cards", "titleKey": "title", "subtitleKey": "status"},
+              "dataSource": {
+                "kind": "static",
+                "value": [
+                  {"id": "req-001", "title": "Prepare a demo", "status": "draft"}
+                ]
+              },
+              "loading": {
+                "emptyText": "No requests yet",
+                "degradedText": "Prototype data is unavailable",
+                "skeleton": "card"
+              }
+            },
+            {
+              "id": "simulation-trace",
+              "type": "feedback.log",
+              "area": "details",
+              "title": "Simulation trace",
+              "dataSource": {
+                "kind": "static",
+                "value": [
+                  {"activity": "prototype.request.collect", "status": "ready", "note": "No production write"}
+                ]
+              }
+            }
+          ],
+          "initialState": {
+            "draft": {"title": "", "details": "", "priority": "normal"},
+            "prototypeStatus": "draft"
+          },
+          "meta": {
+            "builder": {
+              "executable_prototype": true,
+              "data_definition": "prototype/data.json",
+              "workflow_slice": "prototype/workflow_slice.json"
+            }
+          }
+        }
+      }
+    }
+  }
+}
