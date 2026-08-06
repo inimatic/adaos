@@ -228,7 +228,8 @@ if ($BuildVendoredYPy) {
   uv venv --python $env:UV_PYTHON .venv
   if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
   $adaosPython = Join-Path $PWD ".venv\Scripts\python.exe"
-  uv pip install --python $adaosPython --no-sources --only-binary y-py --editable ".[dev]"
+  $userInstallSpec = if ($Dev) { ".[dev]" } else { "." }
+  uv pip install --python $adaosPython --no-sources --only-binary y-py --editable $userInstallSpec
   if ($LASTEXITCODE -ne 0) { throw "AdaOS dependency install failed" }
 }
 .\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"

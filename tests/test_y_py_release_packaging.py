@@ -25,6 +25,24 @@ def test_repository_development_keeps_vendored_y_py_override() -> None:
     assert config["tool"]["uv"]["sources"]["y-py"] == {"path": "vendor/y-py"}
 
 
+def test_user_install_does_not_require_vosk_or_dev_dependencies() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    project = config["project"]
+
+    assert not any(str(item).startswith("vosk") for item in project["dependencies"])
+    assert project["optional-dependencies"]["offline-stt"] == ["vosk>=0.3.45"]
+
+    for relative_path in ("tools/bootstrap.sh", "tools/bootstrap_uv.sh"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert 'USER_INSTALL_SPEC="."' in script
+        assert 'USER_INSTALL_SPEC=".[dev]"' in script
+
+    for relative_path in ("tools/bootstrap.ps1", "tools/bootstrap_uv.ps1"):
+        script = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert '$userInstallSpec = if ($Dev) { ".[dev]" } else { "." }' in script
+
+
 def test_user_bootstraps_only_require_rust_for_explicit_vendored_builds() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 

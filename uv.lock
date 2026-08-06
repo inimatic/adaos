@@ -37,7 +37,6 @@ dependencies = [
     { name = "sqlite-utils" },
     { name = "typer" },
     { name = "uvicorn" },
-    { name = "vosk" },
     { name = "watchdog" },
     { name = "websockets" },
     { name = "y-py", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
@@ -51,6 +50,9 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "responses" },
+]
+offline-stt = [
+    { name = "vosk" },
 ]
 
 [package.metadata]
@@ -84,7 +86,7 @@ requires-dist = [
     { name = "sqlite-utils", specifier = ">=3.36" },
     { name = "typer", specifier = ">=0.16.0" },
     { name = "uvicorn" },
-    { name = "vosk", specifier = ">=0.3.45" },
+    { name = "vosk", marker = "extra == 'offline-stt'", specifier = ">=0.3.45" },
     { name = "watchdog", specifier = ">=4.0.1" },
     { name = "websockets", specifier = ">=11.0" },
     { name = "y-py", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", directory = "vendor/y-py" },
@@ -93,7 +95,7 @@ requires-dist = [
     { name = "y-py", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", directory = "vendor/y-py" },
     { name = "ypy-websocket", specifier = ">=0.12.4" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "offline-stt"]
 
 [[package]]
 name = "aiohappyeyeballs"

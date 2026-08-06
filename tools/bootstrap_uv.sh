@@ -588,7 +588,11 @@ else
   uv venv --python "$UV_PYTHON" "$PWD/.venv" || die "uv venv failed"
   ADAOS_PY="$PWD/.venv/bin/python"
   [[ -x "$ADAOS_PY" ]] || die "Expected venv python at $ADAOS_PY"
-  uv pip install --python "$ADAOS_PY" --no-sources --only-binary y-py --editable ".[dev]" || die "AdaOS dependency install failed"
+  USER_INSTALL_SPEC="."
+  if [[ "${DEV_MODE:-0}" == "1" ]]; then
+    USER_INSTALL_SPEC=".[dev]"
+  fi
+  uv pip install --python "$ADAOS_PY" --no-sources --only-binary y-py --editable "$USER_INSTALL_SPEC" || die "AdaOS dependency install failed"
 fi
 ok "Python environment ready"
 

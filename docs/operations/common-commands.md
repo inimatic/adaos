@@ -129,7 +129,7 @@ uv sync --locked --extra dev
 adaos --help
 ```
 
-Normal bootstrap uses precompiled patched `y-py` wheels. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above.
+Normal bootstrap uses precompiled patched `y-py` wheels and omits the optional Vosk offline-STT backend. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above. On systems for which Vosk publishes a wheel, add offline STT explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
 
 ## Git checkout maintenance
 

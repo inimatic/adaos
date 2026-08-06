@@ -320,6 +320,7 @@ catch { }
 
 .\.venv\Scripts\python.exe -m pip install -U pip
 if ($LASTEXITCODE -ne 0) { Write-Host "pip upgrade failed." -ForegroundColor Red; exit 1 }
+$userInstallSpec = if ($Dev) { ".[dev]" } else { "." }
 if ($BuildVendoredYPy) {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         Write-Host "Rust/Cargo >=1.72 is required with -BuildVendoredYPy. Install Rust with rustup." -ForegroundColor Red
@@ -334,7 +335,7 @@ if ($BuildVendoredYPy) {
     if ($LASTEXITCODE -ne 0) { Write-Host "vendored y-py install failed." -ForegroundColor Red; exit 1 }
 }
 else {
-    .\.venv\Scripts\python.exe -m pip install --only-binary y-py -e .[dev]
+    .\.venv\Scripts\python.exe -m pip install --only-binary y-py -e $userInstallSpec
     if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
 }
 .\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"
@@ -345,7 +346,7 @@ try {
 }
 catch {
     Write-Host "AdaOS is not importable from .venv. Try:" -ForegroundColor Yellow
-    Write-Host "  .\\.venv\\Scripts\\python.exe -m pip install -e .[dev]" -ForegroundColor Yellow
+    Write-Host "  .\\.venv\\Scripts\\python.exe -m pip install -e $userInstallSpec" -ForegroundColor Yellow
     exit 1
 }
 

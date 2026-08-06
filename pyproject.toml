@@ -33,7 +33,6 @@ dependencies = [
   "PyYAML>=6.0.2",
   "pytest>=8.3.2",
   "watchdog>=4.0.1",
-  "vosk>=0.3.45",
   "sounddevice>=0.4.7",
   "requests>=2.31.0",
   "pyttsx3",
@@ -90,6 +89,7 @@ adaos = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "anyio>=4", "responses>=0.25", "pytest-cov>=5"]
+offline-stt = ["vosk>=0.3.45"]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"

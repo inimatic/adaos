@@ -658,13 +658,17 @@ if ! venv_is_usable; then
 fi
 . "$VENV_ACTIVATE"
 python -m pip install -U pip >/dev/null
+USER_INSTALL_SPEC="."
+if [[ "${DEV_MODE:-0}" == "1" ]]; then
+  USER_INSTALL_SPEC=".[dev]"
+fi
 if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]; then
   command -v cargo >/dev/null 2>&1 || fail "Rust/Cargo >=1.72 is required with --build-vendored-y-py. Install Rust with rustup."
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
   python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
   python -m pip install --force-reinstall --no-deps ./vendor/y-py || fail "vendored y-py install failed"
 else
-  python -m pip install --only-binary y-py -e .[dev] || fail "pip install -e .[dev] failed"
+  python -m pip install --only-binary y-py -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
 fi
 python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
   || fail "AdaOS requires patched y-py==0.6.2+adaos.1"
