@@ -1,6 +1,6 @@
 id: executable_prototype_lab
 name: executable_prototype_lab
-version: 0.1.0
+version: 0.1.1
 title: Executable Prototype Lab
 description: Safe executable requirements for a conversational service request.
 type: desktop

@@ -2,6 +2,8 @@
   "schema": "adaos.webui.v1",
   "generated_by": "executable_prototype_lab",
   "ui": {
+    "manifest": "webui.json",
+    "version": "0.1.1",
     "application": {
       "desktop": {
         "pageSchema": {
