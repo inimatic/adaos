@@ -616,9 +616,14 @@ Implementation status, 2026-08-06:
 - `run_boot_sequence()` and its compatibility implementation are now thin
   composition delegates; boot ordering/subscriptions live in
   `bootstrap_runtime/boot_sequence.py`
-- the long-lived NATS/root subscription, route-tunnel, delivery, and watchdog
-  runtime lives in `bootstrap_runtime/nats_root_runtime.py`; explicit reconnect
-  and authority waiting live on `RootTransportService`
+- `bootstrap_runtime/nats_root_runtime.py` is now composition-only; the
+  long-lived connection/session owner lives in `nats_transport_runtime.py`,
+  credential persistence and refresh throttling live in `nats_credentials.py`,
+  and browser/root HTTP/WS tunnel state plus cleanup live in
+  `route_tunnel_runtime.py`
+- explicit reconnect and authority waiting remain on `RootTransportService`;
+  the transport runtime consumes those lifecycle operations instead of
+  duplicating them
 - `bootstrap.py` remains the compatibility/composition surface (about 1.3k
   lines after the split), while transport state has one owner and the promoted
   root dependency closure explicitly includes every extracted module
@@ -639,6 +644,17 @@ reconverged to `ready` with no blockers, and the same window contained no
 closed by this decomposition tranche. The remaining fanout/blocking-work
 investigation stays tracked separately under `RT-FANOUT` / `LRLT-001` /
 `LRLT-002`.
+
+The first follow-up hardening slice is implemented locally. Supervisor public
+status reads are now single-flight and TTL-cached; a transient local probe
+failure serves an explicitly marked stale last-known-good projection for a
+bounded window instead of immediately turning a ready required upstream link
+into false `degraded`. `core.update.status` and `hub.core_update.status` are
+latest-state bounded eventbus topics with per-handler supersession, and
+synchronous skill subscribers for those topics run off the event-loop thread.
+NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
+`sys.ready` also run in workers. Target-stand pressure evidence is still needed
+before closing the tracking items.
 
 ### Exit criteria
 
