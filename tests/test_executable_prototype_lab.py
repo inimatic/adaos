@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 from pathlib import Path
 
 from adaos.sdk.builder.prototype import (
@@ -10,6 +11,7 @@ from adaos.sdk.builder.prototype import (
     start_data_runtime,
     validate_workflow_slice,
 )
+from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.scenario.validation import validate_scenario_path
 
 
@@ -121,3 +123,53 @@ def test_executable_prototype_lab_runs_full_fail_closed_handoff() -> None:
     assert ready["ready"] is True
     assert ready["blockers"] == []
     assert ready["digest"].startswith("sha256:")
+
+
+def test_executable_prototype_enters_bounded_builder_context(tmp_path: Path) -> None:
+    scenarios = tmp_path / "scenarios"
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    project = scenarios / "executable_prototype_lab"
+    shutil.copytree(ROOT, project)
+    service = BuilderWorkflowService(skills, scenarios, tmp_path / "state")
+    service.transition(
+        "scenario",
+        "executable_prototype_lab",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-executable-context",
+            "request": "Move the request list after the form.",
+            "issues": [
+                {
+                    "issue_id": "layout",
+                    "title": "Keep request composition explicit",
+                    "lane": "prototype",
+                    "semantic_refs": ["widget:request-list"],
+                    "acceptance_criteria": ["The request list follows the form."],
+                }
+            ],
+        },
+    )
+
+    packet = service.build_context_packet(
+        "scenario",
+        "executable_prototype_lab",
+        required_facets=["target_structure", "executable_prototype"],
+        enforce_context_coverage=True,
+    )
+
+    prototype = packet["facets"]["executable_prototype"]
+    assert prototype["status"] == "present"
+    assert prototype["data_mode"] == "local_crud"
+    assert prototype["simulation_trace"]["implementation_evidence"] is False
+    assert prototype["implementation_mapping"] == {
+        "schema": "adaos.builder.implementation_mapping_report.v1",
+        "profile_id": "request-fixture",
+        "mode": "fixture",
+        "mapping_count": 1,
+        "missing": ["schema:prototype.requests"],
+        "ready": False,
+    }
+    assert prototype["workflow_validation"]["valid"] is True
+    assert prototype["composition_slices"][0]["target"]["ref"] == "widget:request-list"
+    assert prototype["artifacts"]["workflow_slice"]["ref"] == "prototype/workflow_slice.json"
