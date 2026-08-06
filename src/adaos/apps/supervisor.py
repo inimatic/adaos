@@ -2549,6 +2549,7 @@ class SupervisorManager:
     @staticmethod
     def _memory_operations() -> MemoryProfilingOperations:
         return MemoryProfilingOperations(
+            default_profiler_adapter=DEFAULT_PROFILER_ADAPTER,
             http_exception_type=HTTPException,
             implemented_profile_control_actions=IMPLEMENTED_PROFILE_CONTROL_ACTIONS,
             implemented_profile_control_mode=IMPLEMENTED_PROFILE_CONTROL_MODE,
@@ -2581,8 +2582,11 @@ class SupervisorManager:
             append_memory_telemetry_sample=append_memory_telemetry_sample,
             ensure_memory_store=ensure_memory_store,
             read_memory_session_index=read_memory_session_index,
+            read_memory_session_operations=read_memory_session_operations,
+            read_memory_session_summary=read_memory_session_summary,
             read_memory_telemetry_tail=read_memory_telemetry_tail,
             supervisor_memory_sessions_index_path=supervisor_memory_sessions_index_path,
+            supervisor_memory_session_artifacts_dir=supervisor_memory_session_artifacts_dir,
             supervisor_memory_telemetry_path=supervisor_memory_telemetry_path,
         )
 
@@ -3044,113 +3048,14 @@ class SupervisorManager:
         stage: str,
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        token = str(session_id or "").strip()
-        if not token:
-            return None
-        summary = read_memory_session_summary(token)
-        if not isinstance(summary, dict):
-            return None
-        stage_token = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(stage or "incident"))
-        stage_token = stage_token.strip("-_") or "incident"
-        artifact_id = f"local-incident-{stage_token}"
-        now = time.time()
-        operations_tail = read_memory_session_operations(token, limit=200)
-        telemetry_tail = self._memory_session_telemetry_window(summary, limit=200)
-        yjs_pressure: dict[str, Any] = {}
-        try:
-            from adaos.services.yjs.gateway_ws import yjs_pressure_snapshot
-
-            snapshot = yjs_pressure_snapshot()
-            yjs_pressure = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            yjs_pressure = {}
-        route_diagnostics: dict[str, Any] = {}
-        try:
-            from adaos.services.reliability import channel_diagnostics_snapshot
-
-            snapshot = channel_diagnostics_snapshot()
-            route_diagnostics = (
-                dict(snapshot.get("route") or {})
-                if isinstance(snapshot, dict) and isinstance(snapshot.get("route"), dict)
-                else {}
-            )
-        except Exception:
-            route_diagnostics = {}
-        member_snapshot_rebuild: dict[str, Any] = {}
-        try:
-            from adaos.services.scenario.webspace_runtime import member_snapshot_rebuild_runtime_snapshot
-
-            snapshot = member_snapshot_rebuild_runtime_snapshot(limit=25)
-            member_snapshot_rebuild = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            member_snapshot_rebuild = {}
-        eventbus_backlog: dict[str, Any] = {}
-        try:
-            snapshot = self._ctx.bus.backlog_snapshot() if hasattr(self._ctx.bus, "backlog_snapshot") else {}
-            eventbus_backlog = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            eventbus_backlog = {}
-        incident_summary: dict[str, Any] = {}
-        try:
-            from adaos.services.hmg_incident_summary import build_hmg_incident_summary
-
-            incident_summary = build_hmg_incident_summary(
-                route_diagnostics=route_diagnostics,
-                yjs_pressure=yjs_pressure,
-                member_snapshot_rebuild=member_snapshot_rebuild,
-                eventbus_backlog=eventbus_backlog,
-            )
-        except Exception:
-            incident_summary = {}
-        payload = {
-            "captured_at": now,
-            "reason": str(reason or "").strip() or "memory_profile_failure",
-            "stage": stage_token,
-            "details": dict(details or {}),
-            "session": summary,
-            "runtime": self._memory_runtime_state_payload(),
-            "telemetry_tail": [dict(item) for item in telemetry_tail[-50:] if isinstance(item, dict)],
-            "operations_tail": [dict(item) for item in operations_tail[-50:] if isinstance(item, dict)],
-            "yjs_pressure": yjs_pressure,
-            "route_diagnostics": route_diagnostics,
-            "member_snapshot_rebuild": member_snapshot_rebuild,
-            "eventbus_backlog": eventbus_backlog,
-            "incident_summary": incident_summary,
-        }
-        artifact_dir = supervisor_memory_session_artifacts_dir(token)
-        path = (artifact_dir / f"{artifact_id}.json").resolve()
-        content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        path.write_bytes(content)
-        artifact_ref = {
-            "artifact_id": artifact_id,
-            "kind": "local_incident_context",
-            "path": str(path),
-            "content_type": "application/json",
-            "size_bytes": len(content),
-            "sha256": hashlib.sha256(content).hexdigest(),
-            "created_at": now,
-            "published_ref": None,
-        }
-        refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
-        summary["artifact_refs"] = [
-            dict(item)
-            for item in refs
-            if isinstance(item, dict) and str(item.get("artifact_id") or "").strip() != artifact_id
-        ] + [artifact_ref]
-        window = summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}
-        window = dict(window)
-        window["local_incident_artifact_id"] = artifact_id
-        window["local_incident_stage"] = stage_token
-        window["local_incident_reason"] = str(reason or "").strip() or "memory_profile_failure"
-        window["local_incident_captured_at"] = now
-        if incident_summary:
-            window["local_incident_headline"] = str(incident_summary.get("headline") or "").strip() or None
-            window["local_incident_dominant_signal"] = (
-                str(incident_summary.get("dominant_signal") or "").strip() or None
-            )
-        summary["operation_window"] = window
-        self._upsert_memory_session_summary(summary)
-        return artifact_ref
+        return self._memory_profiling.capture_local_incident_artifact(
+            self,
+            self._memory_operations(),
+            session_id,
+            reason=reason,
+            stage=stage,
+            details=details,
+        )
 
     def _fail_active_memory_session(
         self,
@@ -7129,150 +7034,10 @@ class SupervisorManager:
         return _public_update_status_payload(self._local_supervisor_update_status_payload(runtime_api_timeout=0.1))
 
     def public_memory_status(self) -> dict[str, Any]:
-        runtime = self._memory_runtime_state_payload()
-        last_session_id = str(runtime.get("last_session_id") or "").strip() or None
-        active_session_id = str(runtime.get("active_session_id") or "").strip() or None
-        last_session = read_memory_session_summary(last_session_id) if last_session_id else None
-        active_session = read_memory_session_summary(active_session_id) if active_session_id else None
-        session = active_session if isinstance(active_session, dict) and active_session else last_session
-        compact_session = None
-        if isinstance(session, dict):
-            compact_session = {
-                "session_id": str(session.get("session_id") or "").strip() or None,
-                "profile_mode": str(session.get("profile_mode") or "").strip() or None,
-                "session_state": str(session.get("session_state") or "").strip() or None,
-                "trigger_source": str(session.get("trigger_source") or "").strip() or None,
-                "trigger_reason": str(session.get("trigger_reason") or "").strip() or None,
-                "requested_at": session.get("requested_at"),
-                "finished_at": session.get("finished_at"),
-                "stopped_at": session.get("stopped_at"),
-                "publish_state": str(session.get("publish_state") or "").strip() or None,
-                "published_ref": str(session.get("published_ref") or "").strip() or None,
-                "failure_reason": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("failure_reason")
-                    or ""
-                ).strip() or None,
-                "failure_stage": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("failure_stage")
-                    or ""
-                ).strip() or None,
-                "local_incident_artifact_id": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_artifact_id")
-                    or ""
-                ).strip() or None,
-                "local_incident_headline": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_headline")
-                    or ""
-                ).strip() or None,
-                "local_incident_dominant_signal": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_dominant_signal")
-                    or ""
-                ).strip() or None,
-                "retry_depth": int(session.get("retry_depth") or 0),
-                "suspected_leak": bool(session.get("suspected_leak")),
-            }
-        process_tree = runtime.get("current_process_tree") if isinstance(runtime.get("current_process_tree"), dict) else {}
-        top_children: list[dict[str, Any]] = []
-        if isinstance(process_tree.get("children"), list):
-            for item in process_tree.get("children", [])[:8]:
-                if not isinstance(item, dict):
-                    continue
-                top_children.append(
-                    {
-                        "pid": item.get("pid"),
-                        "ppid": item.get("ppid"),
-                        "name": str(item.get("name") or "").strip() or None,
-                        "rss_bytes": item.get("rss_bytes"),
-                        "skill_runtime": str(item.get("skill_runtime") or "").strip() or None,
-                        "cmdline_label": str(item.get("cmdline_label") or "").strip() or None,
-                    }
-                )
-        return {
-            "ok": True,
-            "memory": {
-                "authority": str(runtime.get("authority") or "supervisor"),
-                "profile_control_mode": str(runtime.get("profile_control_mode") or IMPLEMENTED_PROFILE_CONTROL_MODE),
-                "current_profile_mode": str(runtime.get("current_profile_mode") or "normal"),
-                "requested_profile_mode": str(runtime.get("requested_profile_mode") or "").strip() or None,
-                "requested_session_id": str(runtime.get("requested_session_id") or "").strip() or None,
-                "active_session_id": active_session_id,
-                "last_session_id": last_session_id,
-                "publish_request_session_id": str(runtime.get("publish_request_session_id") or "").strip() or None,
-                "suspicion_state": str(runtime.get("suspicion_state") or "idle"),
-                "suspicion_reason": str(runtime.get("suspicion_reason") or "").strip() or None,
-                "managed_pid": runtime.get("managed_pid"),
-                "current_sample_state": str(runtime.get("current_sample_state") or "unknown"),
-                "current_sample_reason": str(runtime.get("current_sample_reason") or "").strip() or None,
-                "current_process_rss_bytes": runtime.get("current_process_rss_bytes"),
-                "current_family_rss_bytes": runtime.get("current_family_rss_bytes"),
-                "current_children_rss_bytes": process_tree.get("children_rss_bytes"),
-                "current_children_total": process_tree.get("children_total"),
-                "current_children_returned": process_tree.get("children_returned"),
-                "current_top_child_processes": top_children,
-                "baseline_scope_key": str(runtime.get("baseline_scope_key") or "").strip() or None,
-                "baseline_pid": runtime.get("baseline_pid"),
-                "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
-                "baseline_phase": str(runtime.get("baseline_phase") or "").strip() or None,
-                "baseline_started_at": runtime.get("baseline_started_at"),
-                "baseline_matured_at": runtime.get("baseline_matured_at"),
-                "baseline_age_sec": runtime.get("baseline_age_sec"),
-                "baseline_warmup_sec": runtime.get("baseline_warmup_sec"),
-                "baseline_maturity_slope_threshold_bytes_per_min": runtime.get(
-                    "baseline_maturity_slope_threshold_bytes_per_min"
-                ),
-                "baseline_last_adjusted_at": runtime.get("baseline_last_adjusted_at"),
-                "baseline_last_adjustment_reason": str(runtime.get("baseline_last_adjustment_reason") or "").strip()
-                or None,
-                "baseline_adjustment_total": int(runtime.get("baseline_adjustment_total") or 0),
-                "rss_growth_bytes": runtime.get("rss_growth_bytes"),
-                "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
-                "last_telemetry_sampled_at": runtime.get("last_telemetry_sampled_at"),
-                "last_telemetry_age_sec": runtime.get("last_telemetry_age_sec"),
-                "last_observed_process_rss_bytes": runtime.get("last_observed_process_rss_bytes"),
-                "last_observed_family_rss_bytes": runtime.get("last_observed_family_rss_bytes"),
-                "last_observed_rss_growth_bytes": runtime.get("last_observed_rss_growth_bytes"),
-                "last_observed_rss_growth_bytes_per_min": runtime.get("last_observed_rss_growth_bytes_per_min"),
-                "available_memory_bytes": runtime.get("available_memory_bytes"),
-                "available_memory_percent": runtime.get("available_memory_percent"),
-                "auto_profile_min_uptime_sec": runtime.get("auto_profile_min_uptime_sec"),
-                "auto_profile_last_block_reason": str(runtime.get("auto_profile_last_block_reason") or "").strip()
-                or None,
-                "auto_profile_last_block_at": runtime.get("auto_profile_last_block_at"),
-                "critical_available_percent_threshold": runtime.get("critical_available_percent_threshold"),
-                "critical_available_bytes_threshold": runtime.get("critical_available_bytes_threshold"),
-                "critical_duration_sec": runtime.get("critical_duration_sec"),
-                "critical_restart_cooldown_sec": runtime.get("critical_restart_cooldown_sec"),
-                "critical_state": str(runtime.get("critical_state") or "normal"),
-                "critical_reason": str(runtime.get("critical_reason") or "").strip() or None,
-                "critical_since": runtime.get("critical_since"),
-                "critical_restart_last_at": runtime.get("critical_restart_last_at"),
-                "selected_profiler_adapter": str(runtime.get("selected_profiler_adapter") or DEFAULT_PROFILER_ADAPTER),
-                "sessions_total": int(runtime.get("sessions_total") or 0),
-                "last_session": compact_session,
-                "updated_at": runtime.get("updated_at"),
-            },
-            "_served_by": "supervisor",
-        }
+        return self._memory_profiling.public_status(
+            self,
+            self._memory_operations(),
+        )
 
     async def _request_runtime_shutdown(self, *, reason: str, drain_timeout_sec: float, signal_delay_sec: float) -> dict[str, Any]:
         async with self._lock:
