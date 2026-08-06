@@ -1454,6 +1454,16 @@ class HubPeer:
         }
 
     def _emit_state_event(self, *, reason: str) -> None:
+        active_peer = _peers.get(self.peer_id)
+        if active_peer is not None and active_peer is not self:
+            _log.debug(
+                "suppressing stale peer state device=%s peer=%s generation=%s reason=%s",
+                self.device_id,
+                self.peer_id,
+                self.generation_id or "-",
+                reason,
+            )
+            return
         try:
             ctx = get_ctx()
         except Exception:

@@ -1010,3 +1010,21 @@ def test_webrtc_peer_snapshot_prunes_stale_peers(monkeypatch) -> None:
     assert snapshot["pruned_stale_peers"] == 1
     assert stale.device_id not in peer_mod._peers
     assert stale.scheduled_reasons == ["stale_peer_prune:0.0"]
+
+
+def test_replaced_peer_does_not_emit_stale_state(monkeypatch) -> None:
+    peer_mod = _load_peer_module(monkeypatch)
+    emitted: list[dict[str, object]] = []
+    old_peer = peer_mod.HubPeer.__new__(peer_mod.HubPeer)
+    old_peer.device_id = "browser-1"
+    old_peer.peer_id = "browser-1"
+    old_peer.generation_id = "old"
+    old_peer.snapshot_record = lambda: {"generation_id": "old"}
+    peer_mod._peers.clear()
+    peer_mod._peers[old_peer.peer_id] = object()
+    monkeypatch.setattr(peer_mod, "get_ctx", lambda: SimpleNamespace(bus=object()))
+    monkeypatch.setattr(peer_mod, "bus_emit", lambda _bus, _kind, payload, _source: emitted.append(payload))
+
+    old_peer._emit_state_event(reason="connection_state:closed")
+
+    assert emitted == []

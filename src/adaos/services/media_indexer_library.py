@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from adaos.services.agent_context import get_ctx
 MEDIA_INDEXER_SKILL_NAME = "media_indexer_skill"
 MEDIA_INDEXER_STATE_METADATA_REL = Path("internal") / "faiss" / "metadata.json"
 MEDIA_INDEXER_WORKSPACE_METADATA_REL = Path("data") / "internal" / "media_indexer" / "faiss" / "metadata.json"
+MEDIA_INDEXER_PLAYBACK_INDEX = "playback.sqlite3"
 SUPPORTED_INDEXER_MEDIA_EXTENSIONS = {
     ".mp4",
     ".webm",
@@ -47,6 +49,7 @@ _MIME_OVERRIDES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
 }
+_METADATA_CACHE: dict[str, Any] = {"key": None, "value": {}}
 
 
 def guess_indexer_media_type(filename: str) -> str:
@@ -61,6 +64,16 @@ def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any
     normalized = str(playback_id or "").strip().lower()
     if not normalized or len(normalized) > 128 or not all(ch in "0123456789abcdef" for ch in normalized):
         raise ValueError("invalid_playback_id")
+
+    indexed, sidecar_available = _lookup_playback_index(playback_id=normalized)
+    if indexed is not None:
+        payload, metadata = indexed
+        roots = _candidate_index_roots(metadata, payload)
+        if not roots:
+            raise FileNotFoundError("media_indexer_directory_missing")
+        return _resolve_payload_target(payload, roots)
+    if sidecar_available:
+        raise FileNotFoundError("media_indexer_item_not_found")
 
     metadata = _latest_index_metadata()
     if not metadata:
@@ -82,6 +95,16 @@ def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str
     name = Path(raw).name
     if not name or name != raw or name in {".", ".."} or "\x00" in name or "/" in raw or "\\" in raw:
         raise ValueError("invalid_filename")
+
+    indexed, sidecar_available = _lookup_playback_index(filename=name)
+    if indexed is not None:
+        payload, metadata = indexed
+        roots = _candidate_index_roots(metadata, payload)
+        if not roots:
+            raise FileNotFoundError("media_indexer_directory_missing")
+        return _resolve_payload_target(payload, roots)
+    if sidecar_available:
+        raise FileNotFoundError("media_indexer_item_not_found")
 
     metadata = _latest_index_metadata()
     if not metadata:
@@ -173,13 +196,60 @@ def _latest_index_metadata() -> dict[str, Any]:
         return {}
     candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     for path in candidates:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+        if _METADATA_CACHE.get("key") == cache_key:
+            return dict(_METADATA_CACHE.get("value") or {})
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         if isinstance(data, dict):
+            _METADATA_CACHE["key"] = cache_key
+            _METADATA_CACHE["value"] = data
             return data
     return {}
+
+
+def _lookup_playback_index(
+    *,
+    playback_id: str | None = None,
+    filename: str | None = None,
+) -> tuple[tuple[dict[str, Any], dict[str, Any]] | None, bool]:
+    sidecar_available = False
+    for metadata_path in _metadata_candidates():
+        path = metadata_path.with_name(MEDIA_INDEXER_PLAYBACK_INDEX)
+        if not path.exists():
+            continue
+        sidecar_available = True
+        try:
+            connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1.0)
+            try:
+                if playback_id:
+                    row = connection.execute(
+                        "SELECT payload_json FROM items WHERE playback_id = ? LIMIT 1",
+                        (playback_id,),
+                    ).fetchone()
+                else:
+                    row = connection.execute(
+                        "SELECT payload_json FROM items WHERE name = ? LIMIT 1",
+                        (str(filename or ""),),
+                    ).fetchone()
+                if not row:
+                    continue
+                root_row = connection.execute(
+                    "SELECT value FROM meta WHERE key = 'indexed_directory' LIMIT 1"
+                ).fetchone()
+                payload = json.loads(str(row[0] or "{}"))
+                if not isinstance(payload, dict):
+                    continue
+                metadata = {"indexed_directory": str(root_row[0] if root_row else "")}
+                return (payload, metadata), sidecar_available
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return None, sidecar_available
 
 
 def _metadata_candidates() -> list[Path]:
