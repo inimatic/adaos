@@ -1,4 +1,5 @@
 from .api import SupervisorApiAdapter, SupervisorRoute, create_supervisor_app
+from .config import SupervisorRuntimeConfig
 from .memory import MemoryProfilingOperations, MemoryProfilingService
 from .monitoring import SupervisorMonitoringOperations, SupervisorMonitoringService
 from .process import AdoptedProcess, ProcessSupervisor, ProcessSupervisorOperations
@@ -7,7 +8,8 @@ from .routes import create_supervisor_routes
 from .status import SupervisorStatusOperations, SupervisorStatusService
 from .update_execution import SupervisorUpdateExecution, SupervisorUpdateExecutionOperations
 from .update_reconciliation import UpdateReconciliationOperations, UpdateReconciliationService
-from .update_state import UpdateStateMachine
+from .update_state import UpdateAttemptStore, UpdateStateMachine
+from .watchdog_status import WatchdogStatusCompactor
 
 __all__ = [
     "AdoptedProcess",
@@ -21,11 +23,14 @@ __all__ = [
     "RuntimeRecoveryOperations",
     "RuntimeRecoveryPolicy",
     "SupervisorApiAdapter",
+    "SupervisorRuntimeConfig",
     "SupervisorUpdateExecution",
     "SupervisorUpdateExecutionOperations",
     "UpdateReconciliationOperations",
     "UpdateReconciliationService",
     "UpdateStateMachine",
+    "UpdateAttemptStore",
+    "WatchdogStatusCompactor",
     "SupervisorRoute",
     "SupervisorStatusOperations",
     "SupervisorStatusService",

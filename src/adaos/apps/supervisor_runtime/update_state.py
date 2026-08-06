@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping
 
 
@@ -221,3 +223,154 @@ class UpdateStateMachine:
             self.target_version_matches(expected, data.get(key))
             for key in ("target_version", "build_version", "git_commit", "git_short_commit")
         )
+
+
+class UpdateAttemptStore:
+    """Normalize and persist the supervisor-owned update-attempt contract."""
+
+    CONTRACT_VERSION = "1"
+
+    @staticmethod
+    def epoch(value: Any) -> float:
+        try:
+            return float(value or 0.0)
+        except Exception:
+            return 0.0
+
+    def normalize(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        source = dict(payload)
+        epoch = self.epoch
+        normalized = {
+            "contract_version": str(
+                source.get("contract_version") or self.CONTRACT_VERSION
+            ),
+            "authority": str(source.get("authority") or "supervisor"),
+            "state": str(source.get("state") or "").strip().lower() or None,
+            "action": str(source.get("action") or "").strip().lower() or None,
+            "requested_at": epoch(source.get("requested_at")) or None,
+            "transitioned_at": epoch(source.get("transitioned_at")) or None,
+            "scheduled_for": epoch(source.get("scheduled_for")) or None,
+            "updated_at": epoch(source.get("updated_at")) or None,
+            "completed_at": epoch(source.get("completed_at")) or None,
+            "countdown_sec": epoch(source.get("countdown_sec")) or None,
+            "drain_timeout_sec": epoch(source.get("drain_timeout_sec")) or None,
+            "signal_delay_sec": epoch(source.get("signal_delay_sec")) or None,
+            "target_rev": str(source.get("target_rev") or "").strip() or None,
+            "target_version": str(source.get("target_version") or "").strip() or None,
+            "reason": str(source.get("reason") or "").strip() or None,
+            "planned_reason": str(source.get("planned_reason") or "").strip() or None,
+            "completion_reason": str(source.get("completion_reason") or "").strip()
+            or None,
+            "accepted": bool(source.get("accepted")),
+            "awaiting_restart": bool(source.get("awaiting_restart")),
+            "restart_required": bool(source.get("restart_required")),
+            "restart_mode": str(source.get("restart_mode") or "").strip() or None,
+            "restart_requested_at": epoch(source.get("restart_requested_at")) or None,
+            "restart_requested_by_instance_id": str(
+                source.get("restart_requested_by_instance_id") or ""
+            ).strip()
+            or None,
+            "restart_requested_by_pid": int(epoch(source.get("restart_requested_by_pid")))
+            or None,
+            "restart_requested_by_started_at": epoch(
+                source.get("restart_requested_by_started_at")
+            )
+            or None,
+            "root_promotion_supervisor_instance_id": str(
+                source.get("root_promotion_supervisor_instance_id") or ""
+            ).strip()
+            or None,
+            "root_promotion_supervisor_pid": int(
+                epoch(source.get("root_promotion_supervisor_pid"))
+            )
+            or None,
+            "root_promotion_supervisor_started_at": epoch(
+                source.get("root_promotion_supervisor_started_at")
+            )
+            or None,
+            "min_update_period_sec": epoch(source.get("min_update_period_sec")) or None,
+            "subsequent_transition": bool(source.get("subsequent_transition")),
+            "subsequent_transition_requested_at": epoch(
+                source.get("subsequent_transition_requested_at")
+            )
+            or None,
+            "candidate_prewarm_state": str(
+                source.get("candidate_prewarm_state") or ""
+            ).strip()
+            or None,
+            "candidate_prewarm_message": str(
+                source.get("candidate_prewarm_message") or ""
+            ).strip()
+            or None,
+            "candidate_prewarm_ready_at": epoch(
+                source.get("candidate_prewarm_ready_at")
+            )
+            or None,
+            "candidate_prewarm_deferral_count": max(
+                0, int(epoch(source.get("candidate_prewarm_deferral_count")))
+            ),
+            "candidate_prewarm_max_deferrals": max(
+                0, int(epoch(source.get("candidate_prewarm_max_deferrals")))
+            ),
+            "prepare_lease_path": str(source.get("prepare_lease_path") or "").strip()
+            or None,
+            "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip()
+            or None,
+            "prepare_timeout_sec": epoch(source.get("prepare_timeout_sec")) or None,
+            "subsequent_transition_request": dict(
+                source.get("subsequent_transition_request") or {}
+            )
+            if isinstance(source.get("subsequent_transition_request"), dict)
+            else None,
+            "last_status": dict(source.get("last_status") or {})
+            if isinstance(source.get("last_status"), dict)
+            else {},
+        }
+        if normalized["updated_at"] is None:
+            normalized["updated_at"] = time.time()
+        return normalized
+
+    def read(
+        self,
+        path: Path,
+        *,
+        read_json: Callable[[Path], dict[str, Any] | None],
+    ) -> dict[str, Any] | None:
+        return self.normalize(read_json(path))
+
+    def write(
+        self,
+        path: Path,
+        payload: dict[str, Any],
+        *,
+        write_json: Callable[[Path, dict[str, Any]], None],
+    ) -> dict[str, Any]:
+        normalized = self.normalize(payload)
+        if not isinstance(normalized, dict):
+            raise ValueError("update attempt payload must be a dict")
+        write_json(path, normalized)
+        return normalized
+
+    @classmethod
+    def status_updated_at(cls, payload: Mapping[str, Any]) -> float:
+        for key in ("updated_at", "validated_at", "finished_at", "started_at"):
+            value = cls.epoch(payload.get(key))
+            if value > 0.0:
+                return value
+        return 0.0
+
+    @classmethod
+    def transition_at(cls, payload: Mapping[str, Any]) -> float:
+        for key in (
+            "transitioned_at",
+            "scheduled_for",
+            "requested_at",
+            "updated_at",
+            "created_at",
+        ):
+            value = cls.epoch(payload.get(key))
+            if value > 0.0:
+                return value
+        return 0.0

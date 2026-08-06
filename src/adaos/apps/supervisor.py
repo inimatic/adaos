@@ -16,7 +16,6 @@ import threading
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 from string import Formatter
 from typing import Any
@@ -43,13 +42,16 @@ from adaos.apps.supervisor_runtime import (
     SupervisorApiAdapter,
     SupervisorMonitoringOperations,
     SupervisorMonitoringService,
+    SupervisorRuntimeConfig,
     SupervisorStatusOperations,
     SupervisorStatusService,
     SupervisorUpdateExecution,
     SupervisorUpdateExecutionOperations,
     UpdateReconciliationOperations,
     UpdateReconciliationService,
+    UpdateAttemptStore,
     UpdateStateMachine,
+    WatchdogStatusCompactor,
     create_supervisor_app,
     create_supervisor_routes,
 )
@@ -139,8 +141,11 @@ _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 _PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
 _UPDATE_STATE_MACHINE = UpdateStateMachine()
+_UPDATE_ATTEMPTS = UpdateAttemptStore()
 _UPDATE_RECONCILIATION = UpdateReconciliationService()
 _MEMORY_PROFILING = MemoryProfilingService()
+_RUNTIME_CONFIG = SupervisorRuntimeConfig()
+_WATCHDOG_STATUS = WatchdogStatusCompactor()
 
 
 def _update_reconciliation_operations() -> UpdateReconciliationOperations:
@@ -368,224 +373,45 @@ def _compact_json_value(
     max_items: int = 20,
     max_text: int = 512,
 ) -> Any:
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        if len(value) <= max_text:
-            return value
-        return f"{value[:max_text]}...<truncated:{len(value) - max_text}>"
-    if depth >= max_depth:
-        if isinstance(value, dict):
-            return {"_truncated": True, "type": "dict", "size": len(value)}
-        if isinstance(value, (list, tuple)):
-            return {"_truncated": True, "type": "list", "size": len(value)}
-        return repr(value)
-    if isinstance(value, dict):
-        result: dict[str, Any] = {}
-        for index, (key, item) in enumerate(value.items()):
-            if index >= max_items:
-                result["_truncated_items"] = max(0, len(value) - max_items)
-                break
-            result[str(key)] = _compact_json_value(
-                item,
-                depth=depth + 1,
-                max_depth=max_depth,
-                max_items=max_items,
-                max_text=max_text,
-            )
-        return result
-    if isinstance(value, (list, tuple)):
-        items = [
-            _compact_json_value(
-                item,
-                depth=depth + 1,
-                max_depth=max_depth,
-                max_items=max_items,
-                max_text=max_text,
-            )
-            for item in list(value)[:max_items]
-        ]
-        if len(value) > max_items:
-            items.append({"_truncated_items": len(value) - max_items})
-        return items
-    return repr(value)
+    return _WATCHDOG_STATUS.compact_json_value(
+        value,
+        depth=depth,
+        max_depth=max_depth,
+        max_items=max_items,
+        max_text=max_text,
+    )
 
 
 def _compact_watchdog_channel_state(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    keys = {
-        "root_control_status",
-        "route_status",
-        "hub_root_status",
-        "hub_root_state",
-        "hub_root_browser_status",
-        "hub_root_browser_state",
-        "hub_member_status",
-        "member_state",
-        "assessment_state",
-        "assessment_reason",
-        "transition_state",
-        "transition_reason",
-        "connected",
-        "last_error",
-        "last_close_reason",
-        "last_summary",
-        "hub_url",
-    }
-    return {
-        key: _compact_json_value(item, max_depth=2, max_text=256)
-        for key, item in value.items()
-        if key in keys and item is not None
-    }
+    return _WATCHDOG_STATUS.compact_channel_state(value)
 
 
 def _compact_watchdog_required_link(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    keys = {
-        "kind",
-        "role",
-        "owner",
-        "state",
-        "reason",
-        "ready",
-        "visible",
-        "desired_state",
-        "current_owner",
-        "planned_owner",
-        "future_owner",
-        "continuity_mode",
-        "sidecar_enabled",
-        "reconnect_total",
-        "cooldown_sec",
-        "verify_timeout_sec",
-        "served_by",
-        "blockers",
-        "transport_state",
-        "transition_state",
-        "handoff_state",
-        "handoff_ready",
-        "recovery_policy",
-    }
-    return {
-        key: _compact_json_value(item, max_depth=2, max_text=256)
-        for key, item in value.items()
-        if key in keys and item is not None
-    }
+    return _WATCHDOG_STATUS.compact_required_link(value)
 
 
 def _compact_watchdog_decision(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    keys = {
-        "reason",
-        "message",
-        "action",
-        "transport_owner",
-        "root_control_status",
-        "route_status",
-        "hub_root_status",
-        "hub_root_state",
-        "hub_root_browser_status",
-        "hub_root_browser_state",
-        "continuity_mode",
-        "handoff_state",
-        "handoff_ready",
-        "recovery_policy",
-        "hub_member_status",
-        "member_state",
-        "assessment_state",
-        "assessment_reason",
-        "transition_state",
-        "transition_reason",
-        "last_error",
-        "last_close_reason",
-        "last_event",
-        "last_summary",
-    }
-    result = {
-        key: _compact_json_value(item, max_depth=2, max_text=256)
-        for key, item in value.items()
-        if key in keys and item is not None
-    }
-    channel = value.get("channel_before")
-    compact_channel = _compact_watchdog_channel_state(channel)
-    if compact_channel:
-        result["channel"] = compact_channel
-    required_link = _compact_watchdog_required_link(value.get("required_upstream_link"))
-    if required_link:
-        result["required_upstream_link"] = required_link
-    return result
+    return _WATCHDOG_STATUS.compact_decision(value)
 
 
 def _compact_watchdog_verification(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    result = {
-        key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
-        for key in ("ok", "state", "source", "attempts", "timeout_sec", "error")
-        if value.get(key) is not None
-    }
-    channel = _compact_watchdog_channel_state(value.get("channel"))
-    if channel:
-        result["channel"] = channel
-    return result
+    return _WATCHDOG_STATUS.compact_verification(value)
 
 
 def _compact_watchdog_result(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    keys = {"ok", "accepted", "error", "message", "state", "restart", "reconnect", "action"}
-    return {
-        key: _compact_json_value(item, max_depth=2, max_text=256)
-        for key, item in value.items()
-        if key in keys and item is not None
-    }
+    return _WATCHDOG_STATUS.compact_result(value)
 
 
 def _compact_watchdog_last_result(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    result = {
-        key: _compact_json_value(value.get(key), max_depth=1, max_text=256)
-        for key in ("requested_at", "action")
-        if value.get(key) is not None
-    }
-    decision = _compact_watchdog_decision(value.get("decision"))
-    if decision:
-        result["decision"] = decision
-    action_result = _compact_watchdog_result(value.get("result"))
-    if action_result:
-        result["result"] = action_result
-    verification = _compact_watchdog_verification(value.get("verification"))
-    if verification:
-        result["verification"] = verification
-    return result
+    return _WATCHDOG_STATUS.compact_last_result(value)
 
 
 def _compact_watchdog_event(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    result = {
-        key: _compact_json_value(value.get(key), max_depth=2, max_text=256)
-        for key in ("ts", "runtime_url", "event", "action", "transport_owner")
-        if value.get(key) is not None
-    }
-    decision = _compact_watchdog_decision(value.get("decision"))
-    if decision:
-        result["decision"] = decision
-    action_result = _compact_watchdog_result(value.get("result"))
-    if action_result:
-        result["result"] = action_result
-    verification = _compact_watchdog_verification(value.get("verification"))
-    if verification:
-        result["verification"] = verification
-    return result
+    return _WATCHDOG_STATUS.compact_event(value)
 
 
 def _read_jsonl_tail(path: Path, *, limit: int = 20, max_bytes: int = 256 * 1024) -> list[dict[str, Any]]:
-    return bounded_jsonl_tail(path, limit=limit, max_bytes=max(4096, int(max_bytes or 0)))
+    return _WATCHDOG_STATUS.read_tail(path, limit=limit, max_bytes=max_bytes)
 
 
 def _local_update_payload() -> dict[str, Any]:
@@ -675,20 +501,11 @@ def _promote_root_with_validated_candidate(
 
 
 def _update_attempt_timeout_sec() -> float:
-    try:
-        return max(10.0, float(str(os.getenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC") or "180").strip()))
-    except Exception:
-        return 180.0
+    return _RUNTIME_CONFIG.update_attempt_timeout_sec()
 
 
 def _update_prepare_timeout_sec() -> float:
-    try:
-        return max(
-            _update_attempt_timeout_sec(),
-            float(str(os.getenv("ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC") or "900").strip()),
-        )
-    except Exception:
-        return max(_update_attempt_timeout_sec(), 900.0)
+    return _RUNTIME_CONFIG.update_prepare_timeout_sec()
 
 
 def _update_status_timeout_sec(status: dict[str, Any] | None) -> float:
@@ -701,58 +518,27 @@ def _update_status_timeout_sec(status: dict[str, Any] | None) -> float:
 
 
 def _min_update_period_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC") or "300").strip()))
-    except Exception:
-        return 300.0
+    return _RUNTIME_CONFIG.min_update_period_sec()
 
 
 def _live_media_guard_defer_sec() -> float:
-    try:
-        return max(30.0, float(str(os.getenv("ADAOS_SUPERVISOR_LIVE_MEDIA_DEFER_SEC") or "300").strip()))
-    except Exception:
-        return 300.0
+    return _RUNTIME_CONFIG.live_media_guard_defer_sec()
 
 
 def _auto_update_complete_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_AUTO_UPDATE_COMPLETE")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.auto_update_complete_enabled()
 
 
 def _root_restart_delay_sec() -> float:
-    try:
-        return max(0.1, float(str(os.getenv("ADAOS_SUPERVISOR_ROOT_RESTART_DELAY_SEC") or "0.25").strip()))
-    except Exception:
-        return 0.25
+    return _RUNTIME_CONFIG.root_restart_delay_sec()
 
 
 def _autostart_self_restart_supported() -> bool:
-    if not sys.platform.startswith("linux"):
-        return False
-    raw = os.getenv("ADAOS_AUTOSTART_MANAGED")
-    if raw is not None and str(raw).strip():
-        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-    return bool(str(os.getenv("INVOCATION_ID") or "").strip())
+    return _RUNTIME_CONFIG.autostart_self_restart_supported()
 
 
 def _slot_runtime_ports(primary_port: int) -> dict[str, int]:
-    fallback_a = int(primary_port)
-    fallback_b = fallback_a + 1
-    try:
-        slot_a = int(str(os.getenv("ADAOS_SUPERVISOR_SLOT_A_PORT") or fallback_a).strip() or fallback_a)
-    except Exception:
-        slot_a = fallback_a
-    try:
-        slot_b = int(str(os.getenv("ADAOS_SUPERVISOR_SLOT_B_PORT") or fallback_b).strip() or fallback_b)
-    except Exception:
-        slot_b = fallback_b
-    if slot_a <= 0:
-        slot_a = fallback_a
-    if slot_b <= 0:
-        slot_b = fallback_b
-    return {"A": slot_a, "B": slot_b}
+    return _RUNTIME_CONFIG.slot_runtime_ports(primary_port)
 
 
 def _slot_runtime_port(slot: str | None, primary_port: int) -> int:
@@ -761,303 +547,156 @@ def _slot_runtime_port(slot: str | None, primary_port: int) -> int:
 
 
 def _warm_switch_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_ENABLED")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.warm_switch_enabled()
 
 
 def _warm_switch_min_available_bytes() -> int:
-    try:
-        return max(0, int(float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MIN_AVAILABLE_MB") or "256").strip()) * 1024 * 1024))
-    except Exception:
-        return 256 * 1024 * 1024
+    return _RUNTIME_CONFIG.warm_switch_min_available_bytes()
 
 
 def _warm_switch_min_candidate_bytes() -> int:
-    try:
-        return max(0, int(float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MIN_CANDIDATE_MB") or "192").strip()) * 1024 * 1024))
-    except Exception:
-        return 192 * 1024 * 1024
+    return _RUNTIME_CONFIG.warm_switch_min_candidate_bytes()
 
 
 def _warm_switch_max_candidate_rss_bytes() -> int:
-    raw = os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_CANDIDATE_RSS_MB")
-    if raw is not None:
-        try:
-            return max(0, int(float(str(raw).strip()) * 1024 * 1024))
-        except Exception:
-            return 1536 * 1024 * 1024
-    total = _total_memory_bytes()
-    if total and total > 0:
-        return max(512 * 1024 * 1024, min(1536 * 1024 * 1024, int(float(total) * 0.40)))
-    return 1536 * 1024 * 1024
+    return _RUNTIME_CONFIG.warm_switch_max_candidate_rss_bytes(
+        total_memory_bytes=_total_memory_bytes()
+    )
 
 
 def _warm_switch_rss_multiplier() -> float:
-    try:
-        return max(1.0, float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_RSS_MULTIPLIER") or "1.15").strip()))
-    except Exception:
-        return 1.15
+    return _RUNTIME_CONFIG.warm_switch_rss_multiplier()
 
 
 def _warm_switch_candidate_ready_timeout_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC") or "60").strip()))
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.warm_switch_candidate_ready_timeout_sec()
 
 
 def _warm_switch_strict_cutover_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_STRICT_WARM_SWITCH_CUTOVER")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.warm_switch_strict_cutover_enabled()
 
 
 def _warm_switch_cold_fallback_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK")
-    if raw is None:
-        return False
-    return str(raw or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _RUNTIME_CONFIG.warm_switch_cold_fallback_enabled()
 
 
 def _warm_switch_defer_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_DEFER_SEC") or "60").strip()))
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.warm_switch_defer_sec()
 
 
 def _warm_switch_max_deferrals() -> int:
-    try:
-        return max(
-            0,
-            int(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS") or "1").strip()),
-        )
-    except Exception:
-        return 1
+    return _RUNTIME_CONFIG.warm_switch_max_deferrals()
 
 
 def _sidecar_code_change_debounce_sec() -> float:
-    try:
-        return max(0.5, float(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_CODE_DEBOUNCE_SEC") or "3").strip()))
-    except Exception:
-        return 3.0
+    return _RUNTIME_CONFIG.sidecar_code_change_debounce_sec()
 
 
 def _sidecar_restart_window_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_RESTART_WINDOW_SEC") or "60").strip()))
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.sidecar_restart_window_sec()
 
 
 def _sidecar_restart_limit() -> int:
-    try:
-        return max(2, int(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_RESTART_LIMIT") or "4").strip()))
-    except Exception:
-        return 4
+    return _RUNTIME_CONFIG.sidecar_restart_limit()
 
 
 def _sidecar_restart_base_backoff_sec() -> float:
-    try:
-        return max(1.0, float(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_RESTART_BASE_BACKOFF_SEC") or "2").strip()))
-    except Exception:
-        return 2.0
+    return _RUNTIME_CONFIG.sidecar_restart_base_backoff_sec()
 
 
 def _sidecar_restart_max_backoff_sec() -> float:
-    try:
-        return max(2.0, float(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_RESTART_MAX_BACKOFF_SEC") or "30").strip()))
-    except Exception:
-        return 30.0
+    return _RUNTIME_CONFIG.sidecar_restart_max_backoff_sec()
 
 
 def _sidecar_restart_circuit_open_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_SIDECAR_RESTART_CIRCUIT_OPEN_SEC") or "90").strip()))
-    except Exception:
-        return 90.0
+    return _RUNTIME_CONFIG.sidecar_restart_circuit_open_sec()
 
 
 def _hub_root_watchdog_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_WATCHDOG")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.hub_root_watchdog_enabled()
 
 
 def _hub_root_watchdog_cooldown_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_RECONNECT_COOLDOWN_SEC") or "30").strip()))
-    except Exception:
-        return 30.0
+    return _RUNTIME_CONFIG.hub_root_watchdog_cooldown_sec()
 
 
 def _hub_root_watchdog_reset_degraded_route_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROUTE_DEGRADED_RESET")
-    if raw is None:
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _RUNTIME_CONFIG.hub_root_watchdog_reset_degraded_route_enabled()
 
 
 def _hub_root_watchdog_verify_timeout_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_TIMEOUT_SEC") or "15").strip()))
-    except Exception:
-        return 15.0
+    return _RUNTIME_CONFIG.hub_root_watchdog_verify_timeout_sec()
 
 
 def _hub_root_watchdog_verify_interval_sec() -> float:
-    try:
-        return max(0.25, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_INTERVAL_SEC") or "1").strip()))
-    except Exception:
-        return 1.0
+    return _RUNTIME_CONFIG.hub_root_watchdog_verify_interval_sec()
 
 
 def _hub_root_root_probe_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.hub_root_root_probe_enabled()
 
 
 def _hub_root_root_probe_interval_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_INTERVAL_SEC") or "30").strip()))
-    except Exception:
-        return 30.0
+    return _RUNTIME_CONFIG.hub_root_root_probe_interval_sec()
 
 
 def _hub_root_root_probe_timeout_sec() -> float:
-    try:
-        return max(0.1, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_TIMEOUT_SEC") or "1.5").strip()))
-    except Exception:
-        return 1.5
+    return _RUNTIME_CONFIG.hub_root_root_probe_timeout_sec()
 
 
 def _hub_root_root_probe_ttl_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_HUB_ROOT_ROOT_PROBE_TTL_SEC") or "120").strip()))
-    except Exception:
-        return 120.0
+    return _RUNTIME_CONFIG.hub_root_root_probe_ttl_sec()
 
 
 def _parse_root_probe_time(value: Any) -> float | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        return float(raw)
-    except Exception:
-        pass
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return float(parsed.timestamp())
-    except Exception:
-        return None
+    return _RUNTIME_CONFIG.parse_root_probe_time(value)
 
 
 def _member_hub_watchdog_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_WATCHDOG")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.member_hub_watchdog_enabled()
 
 
 def _member_hub_watchdog_cooldown_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_RECONNECT_COOLDOWN_SEC") or "20").strip()))
-    except Exception:
-        return 20.0
+    return _RUNTIME_CONFIG.member_hub_watchdog_cooldown_sec()
 
 
 def _member_hub_watchdog_verify_timeout_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_VERIFY_TIMEOUT_SEC") or "10").strip()))
-    except Exception:
-        return 10.0
+    return _RUNTIME_CONFIG.member_hub_watchdog_verify_timeout_sec()
 
 
 def _member_hub_watchdog_verify_interval_sec() -> float:
-    try:
-        return max(0.25, float(str(os.getenv("ADAOS_SUPERVISOR_MEMBER_HUB_VERIFY_INTERVAL_SEC") or "1").strip()))
-    except Exception:
-        return 1.0
+    return _RUNTIME_CONFIG.member_hub_watchdog_verify_interval_sec()
 
 
 def _post_recovery_core_update_reconcile_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.post_recovery_core_update_reconcile_enabled()
 
 
 def _post_recovery_core_update_reconcile_cooldown_sec() -> float:
-    try:
-        return max(
-            10.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE_COOLDOWN_SEC") or "120").strip()),
-        )
-    except Exception:
-        return 120.0
+    return _RUNTIME_CONFIG.post_recovery_core_update_reconcile_cooldown_sec()
 
 
 def _post_recovery_core_update_reconcile_countdown_sec() -> float:
-    try:
-        return max(
-            0.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_CORE_UPDATE_RECONCILE_COUNTDOWN_SEC") or "60").strip()),
-        )
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.post_recovery_core_update_reconcile_countdown_sec()
 
 
 def _periodic_core_update_reconcile_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_PERIODIC_CORE_UPDATE_RECONCILE")
-    if raw is None:
-        raw = os.getenv("ADAOS_SUPERVISOR_CORE_UPDATE_RECONCILE")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.periodic_core_update_reconcile_enabled()
 
 
 def _periodic_core_update_reconcile_interval_sec() -> float:
-    try:
-        return max(
-            30.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_CORE_UPDATE_RECONCILE_INTERVAL_SEC") or "120").strip()),
-        )
-    except Exception:
-        return 120.0
+    return _RUNTIME_CONFIG.periodic_core_update_reconcile_interval_sec()
 
 
 def _post_recovery_member_hub_refresh_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_MEMBER_HUB_REFRESH")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+    return _RUNTIME_CONFIG.post_recovery_member_hub_refresh_enabled()
 
 
 def _post_recovery_member_hub_refresh_cooldown_sec() -> float:
-    try:
-        return max(
-            10.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_POST_RECOVERY_MEMBER_HUB_REFRESH_COOLDOWN_SEC") or "60").strip()),
-        )
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.post_recovery_member_hub_refresh_cooldown_sec()
 
 
-UPDATE_ATTEMPT_CONTRACT_VERSION = "1"
+UPDATE_ATTEMPT_CONTRACT_VERSION = UpdateAttemptStore.CONTRACT_VERSION
 
 
 def _new_runtime_instance_id(*, slot: str | None, transition_role: str) -> str:
@@ -1067,111 +706,34 @@ def _new_runtime_instance_id(*, slot: str | None, transition_role: str) -> str:
 
 
 def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(payload, dict):
-        return None
-    source = dict(payload)
-    state = str(source.get("state") or "").strip().lower()
-    action = str(source.get("action") or "").strip().lower() or None
-    normalized = {
-        "contract_version": str(source.get("contract_version") or UPDATE_ATTEMPT_CONTRACT_VERSION),
-        "authority": str(source.get("authority") or "supervisor"),
-        "state": state or None,
-        "action": action,
-        "requested_at": _epoch(source.get("requested_at")) or None,
-        "transitioned_at": _epoch(source.get("transitioned_at")) or None,
-        "scheduled_for": _epoch(source.get("scheduled_for")) or None,
-        "updated_at": _epoch(source.get("updated_at")) or None,
-        "completed_at": _epoch(source.get("completed_at")) or None,
-        "countdown_sec": _epoch(source.get("countdown_sec")) or None,
-        "drain_timeout_sec": _epoch(source.get("drain_timeout_sec")) or None,
-        "signal_delay_sec": _epoch(source.get("signal_delay_sec")) or None,
-        "target_rev": str(source.get("target_rev") or "").strip() or None,
-        "target_version": str(source.get("target_version") or "").strip() or None,
-        "reason": str(source.get("reason") or "").strip() or None,
-        "planned_reason": str(source.get("planned_reason") or "").strip() or None,
-        "completion_reason": str(source.get("completion_reason") or "").strip() or None,
-        "accepted": bool(source.get("accepted")),
-        "awaiting_restart": bool(source.get("awaiting_restart")),
-        "restart_required": bool(source.get("restart_required")),
-        "restart_mode": str(source.get("restart_mode") or "").strip() or None,
-        "restart_requested_at": _epoch(source.get("restart_requested_at")) or None,
-        "restart_requested_by_instance_id": str(source.get("restart_requested_by_instance_id") or "").strip()
-        or None,
-        "restart_requested_by_pid": int(_epoch(source.get("restart_requested_by_pid"))) or None,
-        "restart_requested_by_started_at": _epoch(source.get("restart_requested_by_started_at")) or None,
-        "root_promotion_supervisor_instance_id": str(
-            source.get("root_promotion_supervisor_instance_id") or ""
-        ).strip()
-        or None,
-        "root_promotion_supervisor_pid": int(_epoch(source.get("root_promotion_supervisor_pid"))) or None,
-        "root_promotion_supervisor_started_at": _epoch(source.get("root_promotion_supervisor_started_at")) or None,
-        "min_update_period_sec": _epoch(source.get("min_update_period_sec")) or None,
-        "subsequent_transition": bool(source.get("subsequent_transition")),
-        "subsequent_transition_requested_at": _epoch(source.get("subsequent_transition_requested_at")) or None,
-        "candidate_prewarm_state": str(source.get("candidate_prewarm_state") or "").strip() or None,
-        "candidate_prewarm_message": str(source.get("candidate_prewarm_message") or "").strip() or None,
-        "candidate_prewarm_ready_at": _epoch(source.get("candidate_prewarm_ready_at")) or None,
-        "candidate_prewarm_deferral_count": max(
-            0,
-            int(_epoch(source.get("candidate_prewarm_deferral_count"))),
-        ),
-        "candidate_prewarm_max_deferrals": max(
-            0,
-            int(_epoch(source.get("candidate_prewarm_max_deferrals"))),
-        ),
-        "prepare_lease_path": str(source.get("prepare_lease_path") or "").strip() or None,
-        "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip() or None,
-        "prepare_timeout_sec": _epoch(source.get("prepare_timeout_sec")) or None,
-        "subsequent_transition_request": dict(source.get("subsequent_transition_request") or {})
-        if isinstance(source.get("subsequent_transition_request"), dict)
-        else None,
-        "last_status": dict(source.get("last_status") or {}) if isinstance(source.get("last_status"), dict) else {},
-    }
-    if normalized["updated_at"] is None:
-        normalized["updated_at"] = time.time()
-    return normalized
+    return _UPDATE_ATTEMPTS.normalize(payload)
 
 
 def _read_update_attempt() -> dict[str, Any] | None:
-    payload = _read_json(_supervisor_update_attempt_path())
-    return _normalize_update_attempt(payload if isinstance(payload, dict) else None)
+    return _UPDATE_ATTEMPTS.read(
+        _supervisor_update_attempt_path(),
+        read_json=_read_json,
+    )
 
 
 def _write_update_attempt(payload: dict[str, Any]) -> dict[str, Any]:
-    merged = _normalize_update_attempt(payload)
-    if not isinstance(merged, dict):
-        raise ValueError("update attempt payload must be a dict")
-    _write_json(_supervisor_update_attempt_path(), merged)
-    return merged
+    return _UPDATE_ATTEMPTS.write(
+        _supervisor_update_attempt_path(),
+        payload,
+        write_json=_write_json,
+    )
 
 
 def _epoch(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except Exception:
-        return 0.0
+    return _UPDATE_ATTEMPTS.epoch(value)
 
 
 def _status_updated_at(payload: dict[str, Any]) -> float:
-    for key in ("updated_at", "validated_at", "finished_at", "started_at"):
-        try:
-            value = float(payload.get(key) or 0.0)
-        except Exception:
-            value = 0.0
-        if value > 0.0:
-            return value
-    return 0.0
+    return _UPDATE_ATTEMPTS.status_updated_at(payload)
 
 
 def _attempt_transition_at(payload: dict[str, Any]) -> float:
-    for key in ("transitioned_at", "scheduled_for", "requested_at", "updated_at", "created_at"):
-        try:
-            value = float(payload.get(key) or 0.0)
-        except Exception:
-            value = 0.0
-        if value > 0.0:
-            return value
-    return 0.0
+    return _UPDATE_ATTEMPTS.transition_at(payload)
 
 
 def _update_transition_timed_out(*, status_age: float, transition_age: float, timeout_sec: float) -> bool:
@@ -2018,27 +1580,17 @@ def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.7
 
 
 def _runtime_listener_restart_timeout_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_RUNTIME_LISTENER_TIMEOUT_SEC") or "45").strip()))
-    except Exception:
-        return 45.0
+    return _RUNTIME_CONFIG.runtime_listener_restart_timeout_sec()
 
 
 def _runtime_listener_startup_grace_sec() -> float:
-    try:
-        return max(
-            _runtime_listener_restart_timeout_sec(),
-            float(str(os.getenv("ADAOS_SUPERVISOR_RUNTIME_STARTUP_GRACE_SEC") or "90").strip()),
-        )
-    except Exception:
-        return max(_runtime_listener_restart_timeout_sec(), 90.0)
+    return _RUNTIME_CONFIG.runtime_listener_startup_grace_sec(
+        listener_timeout_sec=_runtime_listener_restart_timeout_sec()
+    )
 
 
 def _runtime_api_restart_timeout_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_RUNTIME_API_TIMEOUT_SEC") or "60").strip()))
-    except Exception:
-        return 60.0
+    return _RUNTIME_CONFIG.runtime_api_restart_timeout_sec()
 
 
 def _runtime_shutdown_request_timeout(*, drain_timeout_sec: float, signal_delay_sec: float) -> float:
