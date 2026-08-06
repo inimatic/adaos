@@ -247,7 +247,9 @@ binding и Project focus не обязаны быть глобально оди�
    расширения согласованного scope.
 3. `Согласовать прототип` один раз переводит workflow к Automation и не выдаёт
    `interaction response differs from the durable record`; transport metadata
-   не входит в digest-защищённый `InteractionResponse`.
+   не входит в digest-защищённый `InteractionResponse`. Подписанный action-token
+   является явным подтверждением пользователя и сохраняет `confirmed=true`;
+   свободный текст и NLU-догадка таким подтверждением не считаются.
 4. Оставить Preview открытым и создать следующую Prototype-ревизию. При том же
    scenario клиент обязан увидеть новый `materialization.identity.revision`
    и обновить render без повторного открытия ссылки. Выбор исторической ревизии
@@ -418,5 +420,16 @@ Change и не переписывает опубликованный резул�
   пользователю не показан.
 - DEV regression `builder_skill`: 167/167; core placement/Trial regression:
   100/100; client Trial-navigation/Voice-consumed-controls: 22/22.
+- Дополнительная проверка после исправления cross-channel approval:
+  `builder_skill` — 169/169, core interaction/workflow — 62/62, клиентский
+  YDoc/Desktop набор — 165/165 плюс TypeScript compile. Решение пользователя
+  по ревизии `004` восстановлено через новый подписанный action-token:
+  Project перешёл в `automation_ready`, generation `9`, accepted Prototype ref
+  указывает на `scenario:executable_prototype_lab@004`.
+- Telegram-originated запрос с устойчивым transport id спроецирован ровно один
+  раз как сообщение роли `user` в канонический Project thread; ответ Builder
+  находится в той же истории. Открытый Preview после HTTP refresh сохраняет
+  identity текущей ревизии, поэтому следующая ревизия того же scenario снова
+  обнаруживается без повторного открытия ссылки.
 - Это не закрывает `GWR5-37` и `GWR5-38`: нужен новый полный LLM/Codex run через
   runtime-only Trial и live mutating Telegram callback на русском и английском.

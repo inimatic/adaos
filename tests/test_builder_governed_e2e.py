@@ -381,10 +381,9 @@ def test_protected_command_requires_explicit_confirmation_across_ingress(tmp_pat
     web_result = button_service.invoke_interaction_response(
         "scenario", "button_project", button_response, actor="user:local"
     )
-    with pytest.raises(BuilderWorkflowError, match="explicit confirmed response"):
-        telegram_service.invoke_interaction_response(
-            "scenario", "telegram_project", telegram_response, actor="user:local"
-        )
+    telegram_result = telegram_service.invoke_interaction_response(
+        "scenario", "telegram_project", telegram_response, actor="user:local"
+    )
     with pytest.raises(intent_mediation.IntentMediationError, match="not committable"):
         intent_mediation.commit_proposal(
             proposal["proposal_id"],
@@ -402,9 +401,10 @@ def test_protected_command_requires_explicit_confirmation_across_ingress(tmp_pat
 
     invocations = [
         web_result["invocation"],
+        telegram_result["invocation"],
         sdk_result["invocation"],
     ]
-    assert [item["source"] for item in invocations] == ["web", "sdk"]
+    assert [item["source"] for item in invocations] == ["web", "telegram", "sdk"]
     assert {item["command"]["command_id"] for item in invocations} == {"accept_prototype"}
     assert {item["command"]["workflow_type"] for item in invocations} == {"builder.change"}
     assert {item["command"]["expected_generation"] for item in invocations} == {1}
@@ -413,7 +413,7 @@ def test_protected_command_requires_explicit_confirmation_across_ingress(tmp_pat
     assert {item["confirmation_required"] for item in invocations} == {True}
     assert all(
         item["workflow"]["governed"]["state"] == "automation_ready"
-        for item in (web_result, sdk_result)
+        for item in (web_result, telegram_result, sdk_result)
     )
 
 

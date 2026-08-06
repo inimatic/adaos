@@ -808,6 +808,14 @@ def submit_response(
                 "value": copy.deepcopy(action["value"]),
             }
         )
+        # A capability-negotiated action token is an exact, durable user
+        # gesture bound to one authoritative action.  For actions whose
+        # workflow policy requires confirmation, clicking that explicitly
+        # labelled action is the confirmation.  Free-form text and inferred
+        # NLU proposals do not pass through this branch and therefore cannot
+        # acquire confirmation implicitly.
+        if bool(action.get("confirmation_required")):
+            response_values.setdefault("confirmed", True)
         input_kind = str(semantic["input_spec"]["kind"])
         if input_kind == "choice":
             response_values["choice"] = copy.deepcopy(action["value"])

@@ -464,6 +464,14 @@ workflow invocation. This separation is required for idempotent Telegram/Web/
 Voice callbacks and prevents a valid approval from failing after transport
 handoff.
 
+An opaque action token is also the explicit user gesture for the exact action
+whose presentation it identifies. When that authoritative action carries
+`confirmation_required`, admitting its signed token records `confirmed=true`
+in the immutable response. This does not apply to fuzzy text or an uncommitted
+NLU proposal: those paths still require clarification or a separate explicit
+confirmation. Web, Telegram, Voice, and exact-label fallback therefore preserve
+one confirmation rule instead of implementing channel-specific exceptions.
+
 Availability is the intersection of the canonical transition, guards,
 principal policy, target/generation freshness, executor readiness, and channel
 capabilities. A valid pure gate such as `accept_prototype` must not be hidden by

@@ -383,9 +383,14 @@ blocked.
   the follow-up increment separates immutable InteractionResponse content from
   per-delivery metadata and projects Telegram user ingress into the canonical
   Builder project conversation with a stable id. Local regressions cover the
-  previously failing Prototype approval and cross-channel user-turn history;
-  live mutating Telegram acceptance is still required before closing this
-  item.
+  previously failing Prototype approval and cross-channel user-turn history.
+  The same increment closes the callback confirmation gap: a signed token for
+  an authoritative `confirmation_required` action persists `confirmed=true`,
+  while fuzzy text remains non-authoritative. A 2026-08-06 replay of the exact
+  durable failed response proved that payload/delivery separation was fixed and
+  exposed the missing confirmation bit; the corrected Web/Telegram/SDK
+  conformance suite now passes. A fresh live mutating Telegram action remains
+  required before closing this item.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
