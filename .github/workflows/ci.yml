@@ -2,6 +2,8 @@ name: AdaOS CI
 
 on:
   push:
+    # Keep the rollout branch until installers, backend webhooks, and active slots
+    # have been migrated to the repository default branch together.
     branches: [rev2026]
     paths-ignore:
       - "docs/**"
