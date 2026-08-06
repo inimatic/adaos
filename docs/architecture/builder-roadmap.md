@@ -1247,38 +1247,60 @@ Executable Prototype foundation:
   Prototype is an executable requirement model over distinct UI composition,
   data binding, conversational workflow, and activity-requirement planes, not a
   static mockup or an implementation claim.
-- [ ] `[must]` Implement one shared Prototype Data Runtime contract for static
+- [x] `[must]` Implement one shared Prototype Data Runtime contract for static
   examples, local state, disposable local CRUD, recorded provider fixtures, and
   typed synthetic/model-generated data. Every operation uses a semantic command,
   visible data mode, bounded reset policy, and no undeclared external authority.
-- [ ] `[must]` Emit typed, implementation-neutral Activity Requirements and a
+  `adaos.builder.prototype_data.v1` and `PrototypeDataRuntime` now validate
+  schemas, generations, deterministic fixtures/generation, local mutations,
+  reset, and trace provenance behind the SDK facade.
+- [x] `[must]` Emit typed, implementation-neutral Activity Requirements and a
   semantic Simulation Trace for every demonstrated non-local behavior. Mock
   execution must not satisfy Automation evidence or claim that a database,
-  provider, or model implementation exists.
-- [ ] `[must]` Build a compact UI Composition Slice for LLM work containing exact
+  provider, or model implementation exists. The trace ABI carries explicit
+  Prototype provenance, while Builder context marks it
+  `implementation_evidence=false` and exposes missing Automation mappings.
+- [x] `[must]` Build a compact UI Composition Slice for LLM work containing exact
   target refs and source revision, parent/siblings/order/grouping, responsive
   constraints, actions, bindings, ABI fragments, and acceptance constraints.
   Spatial requests such as "put checkboxes on the left" fail for clarification
-  before model execution when target/reference/breakpoint is ambiguous.
-- [ ] `[should]` Add bounded structured renderer evidence for the affected
+  before model execution when target/reference/breakpoint is ambiguous. Exact
+  slices are now included in the bounded Builder context facet for declared
+  executable Prototype projects.
+- [x] `[should]` Add bounded structured renderer evidence for the affected
   viewport and breakpoints, then verify spatial acceptance constraints after
-  render without serializing the complete desktop into the model packet.
-- [ ] `[must]` Implement the constrained conversational
+  render without serializing the complete desktop into the model packet. The
+  evidence contract admits only target-local visible order/rects under an
+  explicit budget and the handoff requires compact and wide evidence.
+- [x] `[must]` Implement the constrained conversational
   `PrototypeWorkflowProfile`: one bounded entry, sequential states, conditional
   choice, typed input, mock activities, `success`/`failure`/`input_required`,
   cancel, one declared retry, localized interactions, and three deterministic
   stories. The LLM proposes a candidate slice/semantic patch; it never writes an
-  active `workflow.json` directly.
-- [ ] `[must]` Produce an Automation handoff bundle containing exact UI and
+  active `workflow.json` directly. Validation reuses the canonical compiler and
+  existing conversational story runner; accepted output remains an
+  `automation_only` candidate patch.
+- [x] `[must]` Produce an Automation handoff bundle containing exact UI and
   conversational revisions, logical schemas, binding profile, Activity
   Requirements, implementation-mapping report, fixtures/provenance, accepted
   stories, outcomes, and Review constraints. Missing required mappings block
   Automation or candidate promotion; the same stories run against implemented
-  bindings.
-- [ ] `[should]` Prove representative `empty`, normal, validation-failure,
+  bindings. `BuilderAutomationService.start_from_execute` admits the exact
+  project-bound digest before mutation and passes the full handoff to isolated
+  Codex context.
+- [x] `[should]` Prove representative `empty`, normal, validation-failure,
   provider-unavailable, delayed/input-required, role-denied, long-content,
-  English/Russian, compact, and wide profiles. Add offline, conflict, rate-limit,
-  and large-volume profiles only after the deterministic core is stable.
+  English/Russian, compact, and wide profiles. The stabilized reference proof
+  also covers offline, conflict, rate-limit, and large-volume fixtures with
+  typed inputs and expected observations.
+
+Implementation evidence (2026-08-06): commits `c3b963d5` through `d70d3e23`
+add the five ABI schemas, shared runtime/SDK services, manifest binding,
+bounded Builder context projection, fail-closed Automation admission, and the
+portable `examples/executable_prototype_lab` scenario. Focused Builder, ABI,
+workflow, Automation, and end-to-end tests exercise both rejected incomplete
+mapping and admitted exact-handoff paths. The same scenario is installed in
+local DEV under `sn_6acf0c01` and passes the standard scenario validator.
 - [x] `[deferred]` Keep screenshots out of the default context packet. Defer
   capture, multimodal target resolution, screenshot-derived layout inference,
   and visual-diff acceptance until structured composition evidence is shown

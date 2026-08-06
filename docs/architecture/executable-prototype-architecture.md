@@ -36,6 +36,34 @@ Screenshot input, general visual workflow design, full workflow round trips,
 and automatic reverse engineering are explicitly deferred. Their contracts are
 retained below so the MVP does not close the extension seam.
 
+## Implemented MVP Baseline
+
+As of 2026-08-06, the Must/Should executable-Prototype foundation is
+implemented and validated locally:
+
+- `scenario.yaml` and `skill.yaml` may declare one typed `prototype_runtime`
+  bundle with `data`, `binding`, `workflow_slice`, and
+  `representative_states` JSON refs under the component's `prototype/`
+  directory; path traversal and incomplete declarations fail schema or load;
+- the shared `adaos.sdk.builder.prototype` facade exposes disposable data
+  execution, UI composition slicing and spatial checks, conversational slice
+  validation, and Automation handoff construction;
+- Builder context packets load only manifest-declared bounded JSON, retain each
+  exact ref/digest, validate the data/binding/workflow contracts, include
+  target-local composition, and mark Simulation Trace as Prototype evidence,
+  never implementation evidence;
+- Automation verifies the handoff schema, project identity, evidence digest,
+  story results, renderer evidence, representative states, and every required
+  mapping before any workflow/session mutation;
+- `examples/executable_prototype_lab` is the portable reference project and is
+  also installed as a local DEV scenario under subnet `sn_6acf0c01`.
+
+The reference deliberately checks in one missing data mapping and one missing
+workflow activity mapping. Its end-to-end test first proves rejection, then
+maps the same immutable evidence in memory and proves admission into the
+existing Automation rail. This keeps a passing demo from concealing the most
+important safety property.
+
 ## Product Objective
 
 The Prototype stage should answer four questions before general programming:
@@ -181,8 +209,11 @@ The minimum scenario catalogue is:
 - long labels/data and both supported locales;
 - declared compact and wide composition.
 
-Offline, concurrent-conflict, rate-limit, and large-volume profiles are
-`should` extensions after the deterministic MVP cases are stable.
+Offline, concurrent-conflict, rate-limit, and large-volume profiles were
+classified as `should` extensions after the deterministic MVP cases. The
+reference scenario now includes typed fixtures for all four in addition to the
+minimum catalogue; they remain bounded evidence profiles, not claims of live
+provider fault injection.
 
 ## Semantic UI Composition For LLM Work
 
@@ -408,3 +439,11 @@ project proves:
    behavior;
 7. an Automation packet with complete activity mappings and the same stories;
 8. a missing mapping that fails before Automation or candidate promotion.
+
+The local reference suite now proves all eight items. It additionally verifies
+the `prototype_runtime` manifest contract for scenarios, authoring-time skills,
+and runtime skill validation; bounded compact/wide renderer evidence; stale
+workflow digest rejection; one-retry/cancel limits; all 15 representative
+profiles; exact handoff digest admission; and propagation of the admitted
+packet into the isolated Codex request. Screenshots and the deferred general
+workflow round trip remain outside this completion statement.
