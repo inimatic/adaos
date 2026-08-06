@@ -3991,6 +3991,57 @@ def test_text_fallback_does_not_edit_the_user_message() -> None:
     ) is None
 
 
+def test_interaction_dispatch_rehydrates_the_digest_protected_records(monkeypatch) -> None:
+    durable_interaction = {
+        "interaction_id": "interaction.builder",
+        "generation": 1,
+        "conversation_id": "conv.builder",
+        "metadata": {
+            "domain": "builder",
+            "latest_response_id": "response.builder",
+        },
+    }
+    durable_response = {
+        "response_id": "response.builder",
+        "interaction_id": "interaction.builder",
+        "interaction_generation": 0,
+        "actor_id": "transport:telegram:42",
+        "values": {"confirmed": True},
+        "metadata": {"io_type": "telegram"},
+    }
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "get_interaction",
+        lambda interaction_id: dict(durable_interaction) if interaction_id == "interaction.builder" else None,
+    )
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "get_interaction_response",
+        lambda response_id: dict(durable_response) if response_id == "response.builder" else None,
+    )
+    event_payload = {
+        "interaction": {
+            **durable_interaction,
+            "metadata": {"domain": "builder", "delivery_only": True},
+        },
+        "response": {
+            **durable_response,
+            "metadata": {"io_type": "telegram", "delivery_only": True},
+        },
+        "duplicate": False,
+    }
+
+    hydrated = router_service_module._rehydrate_durable_interaction_event(event_payload)
+
+    assert hydrated["interaction"] == durable_interaction
+    assert hydrated["response"] == durable_response
+    assert event_payload["response"]["metadata"]["delivery_only"] is True
+
+    durable_interaction["metadata"]["latest_response_id"] = "response.newer"
+    with pytest.raises(ValueError, match="superseded"):
+        router_service_module._rehydrate_durable_interaction_event(event_payload)
+
+
 async def test_builder_interaction_response_dispatches_to_authoritative_dev_runtime(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict]] = []
@@ -4022,6 +4073,11 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
     monkeypatch.setattr(router_service_module, "SkillManager", _Manager)
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == "dev1-dev")
+    monkeypatch.setattr(
+        router_service_module,
+        "_rehydrate_durable_interaction_event",
+        lambda payload: dict(payload),
+    )
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
     monkeypatch.setattr(

@@ -431,5 +431,13 @@ Change и не переписывает опубликованный резул�
   находится в той же истории. Открытый Preview после HTTP refresh сохраняет
   identity текущей ревизии, поэтому следующая ревизия того же scenario снова
   обнаруживается без повторного открытия ссылки.
+- Реальный Telegram callback `Начать автоматизацию` обнаружил повторное
+  расхождение EventBus-проекции с digest-защищённой записью. Router переведён
+  на fail-closed rehydrate по `interaction_id`/`response_id`. После загрузки
+  исправленного ядра исходное решение исполнено с тем же idempotency key:
+  `executable_prototype_lab@004` перешёл в `automation_waiting`, Automation
+  iteration `1`, source revision `004`; локальный Codex task
+  `task.01KZBS9SQX2Z97C6V0DB53Z05C` запущен. Router regression — 54/54,
+  interaction/workflow regression — 69/69.
 - Это не закрывает `GWR5-37` и `GWR5-38`: нужен новый полный LLM/Codex run через
   runtime-only Trial и live mutating Telegram callback на русском и английском.

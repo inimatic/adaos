@@ -389,8 +389,14 @@ blocked.
   while fuzzy text remains non-authoritative. A 2026-08-06 replay of the exact
   durable failed response proved that payload/delivery separation was fixed and
   exposed the missing confirmation bit; the corrected Web/Telegram/SDK
-  conformance suite now passes. A fresh live mutating Telegram action remains
-  required before closing this item.
+  conformance suite now passes. A subsequent real Telegram
+  `Начать автоматизацию` callback exposed one remaining boundary defect: Router
+  forwarded the transient EventBus projection instead of reloading the durable
+  decision. Router now treats the event as notification-only, rehydrates and
+  cross-checks both ledger records, and the exact response advanced
+  `executable_prototype_lab@004` to `automation_waiting` with its local Codex
+  task running. One post-fix live mutating callback through the complete Router
+  path remains required before closing this item.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,

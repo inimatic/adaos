@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 from pathlib import Path
 import asyncio
+import copy
 import json
 import time
 import requests
@@ -122,6 +123,63 @@ def _telegram_output_projection(*args: Any, **kwargs: Any) -> Any:
 
 def _telegram_interaction_consumed_projection(*args: Any, **kwargs: Any) -> Any:
     return _call_telegram_helper("_telegram_interaction_consumed_projection", *args, **kwargs)
+
+
+def _rehydrate_durable_interaction_event(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Replace event projections with their authoritative durable records.
+
+    ``conversation.interaction.responded`` is a notification that a durable
+    decision exists, not a second authority-bearing copy of that decision.
+    Event transport, presentation retirement, or tool dispatch may add
+    delivery metadata to their own envelopes.  Reloading both records here
+    keeps those concerns outside the digest-protected business response while
+    retaining the existing exact-record check at workflow admission.
+    """
+
+    event_payload = copy.deepcopy(dict(payload or {}))
+    event_interaction = (
+        event_payload.get("interaction")
+        if isinstance(event_payload.get("interaction"), Mapping)
+        else {}
+    )
+    event_response = (
+        event_payload.get("response")
+        if isinstance(event_payload.get("response"), Mapping)
+        else {}
+    )
+    interaction_id = str(event_interaction.get("interaction_id") or "").strip()
+    response_id = str(event_response.get("response_id") or "").strip()
+    if not interaction_id or not response_id:
+        raise ValueError("interaction response event identity is required")
+
+    durable_interaction = conversation_store.get_interaction(interaction_id)
+    durable_response = conversation_store.get_interaction_response(response_id)
+    if not isinstance(durable_interaction, Mapping) or not isinstance(durable_response, Mapping):
+        raise ValueError("durable interaction response event record is unavailable")
+    if str(durable_interaction.get("interaction_id") or "").strip() != interaction_id:
+        raise ValueError("durable interaction identity differs from the event")
+    if str(durable_response.get("response_id") or "").strip() != response_id:
+        raise ValueError("durable interaction response identity differs from the event")
+    if str(durable_response.get("interaction_id") or "").strip() != interaction_id:
+        raise ValueError("durable response belongs to another interaction")
+    interaction_generation = durable_interaction.get("generation")
+    response_generation = durable_response.get("interaction_generation")
+    if interaction_generation is None or response_generation is None:
+        raise ValueError("durable interaction response generation is required")
+    if int(interaction_generation) != int(response_generation) + 1:
+        raise ValueError("durable interaction response is no longer current")
+    interaction_meta = (
+        durable_interaction.get("metadata")
+        if isinstance(durable_interaction.get("metadata"), Mapping)
+        else {}
+    )
+    latest_response_id = str(interaction_meta.get("latest_response_id") or "").strip()
+    if latest_response_id and latest_response_id != response_id:
+        raise ValueError("durable interaction response was superseded")
+
+    event_payload["interaction"] = copy.deepcopy(dict(durable_interaction))
+    event_payload["response"] = copy.deepcopy(dict(durable_response))
+    return event_payload
 
 
 def _builder_transport_integrity_error(*args: Any, **kwargs: Any) -> Any:
@@ -4086,8 +4144,19 @@ class RouterService:
                 )
 
         async def _on_conversation_interaction_responded(ev: Event) -> None:
-            payload = ev.payload if isinstance(ev.payload, Mapping) else {}
-            if not payload or bool(payload.get("duplicate")):
+            raw_payload = ev.payload if isinstance(ev.payload, Mapping) else {}
+            if not raw_payload or bool(raw_payload.get("duplicate")):
+                return
+            try:
+                payload = await asyncio.to_thread(
+                    _rehydrate_durable_interaction_event,
+                    raw_payload,
+                )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "interaction response event rejected before dispatch",
+                    exc_info=True,
+                )
                 return
             interaction = payload.get("interaction") if isinstance(payload.get("interaction"), Mapping) else {}
             response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}

@@ -464,6 +464,14 @@ workflow invocation. This separation is required for idempotent Telegram/Web/
 Voice callbacks and prevents a valid approval from failing after transport
 handoff.
 
+`conversation.interaction.responded` is consequently a notification of a
+durable decision, not another copy of its authority. Before retiring controls
+or dispatching a Builder command, Router reloads the Interaction and
+InteractionResponse from the durable ledger, verifies the response-to-
+interaction binding, and forwards those exact records. Missing or mismatched
+identities fail closed. This prevents EventBus serialization and delivery
+metadata from making a valid signed decision fail its digest check.
+
 An opaque action token is also the explicit user gesture for the exact action
 whose presentation it identifies. When that authoritative action carries
 `confirmation_required`, admitting its signed token records `confirmed=true`
