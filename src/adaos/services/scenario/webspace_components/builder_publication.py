@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 @dataclass(frozen=True)
 class BuilderPublicationOperations:
@@ -155,9 +157,9 @@ class WebspaceBuilderPublicationService:
         operations: BuilderPublicationOperations,
     ) -> tuple[dict[str, Any] | None, str | None]:
         stage_token = str(stage or "").strip().lower()
-        if stage_token not in {"prototype", "automation", "publication"}:
+        if stage_token not in {"prototype", "automation", "trial", "publication"}:
             return None, None
-        source_space = "workspace" if stage_token == "publication" else "dev"
+        source_space = "workspace" if stage_token in {"trial", "publication"} else "dev"
         content: Mapping[str, Any] | None = None
         revision_token = str(revision or "").strip()
         if stage_token == "prototype" and revision_token:
@@ -193,6 +195,56 @@ class WebspaceBuilderPublicationService:
             except (OSError, json.JSONDecodeError):
                 snapshot_payload = None
             content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
+        elif stage_token == "trial":
+            from adaos.services.artifact_pipeline.trial_activation import TrialActivationStore
+            from adaos.services.runtime_paths import current_state_dir
+
+            activations = TrialActivationStore(
+                current_state_dir() / "artifact_pipeline" / "trial-activations"
+            )
+            activation = activations.find_for_target(
+                scenario_id=scenario_id,
+                revision=revision_token or None,
+            )
+            if activation is None:
+                raise ValueError(
+                    f"Builder Trial activation is unavailable: {scenario_id}@{revision_token or 'current'}"
+                )
+            runtime_binding = (
+                activation.get("runtime_binding")
+                if isinstance(activation.get("runtime_binding"), Mapping)
+                else {}
+            )
+            scenario_root = (
+                Path(str(runtime_binding.get("path") or ""))
+                / "scenarios"
+                / scenario_id
+            )
+            manifest: Mapping[str, Any] = {}
+            manifest_path = scenario_root / "scenario.yaml"
+            if manifest_path.is_file():
+                try:
+                    loaded = yaml.safe_load(manifest_path.read_text(encoding="utf-8-sig")) or {}
+                    manifest = loaded if isinstance(loaded, Mapping) else {}
+                except Exception:
+                    manifest = {}
+            ui = manifest.get("ui") if isinstance(manifest.get("ui"), Mapping) else {}
+            descriptor_name = str(ui.get("manifest") or "").strip()
+            candidates = [
+                scenario_root / descriptor_name if descriptor_name else None,
+                scenario_root / "webui.json",
+                scenario_root / "scenario.json",
+            ]
+            for candidate_path in candidates:
+                if candidate_path is None or not candidate_path.is_file():
+                    continue
+                try:
+                    loaded = json.loads(candidate_path.read_text(encoding="utf-8-sig"))
+                except Exception:
+                    continue
+                if isinstance(loaded, Mapping):
+                    content = loaded
+                    break
         if not isinstance(content, Mapping):
             content = operations.scenarios_loader.read_content(
                 scenario_id, space=source_space
@@ -260,6 +312,7 @@ class WebspaceBuilderPublicationService:
             prefix = {
                 "prototype": f"proto:{str(revision or 'current').strip() or 'current'}",
                 "automation": "active:",
+                "trial": f"trial:{str(revision or 'current').strip() or 'current'}",
                 "publication": f"public:{str(revision or 'current').strip() or 'current'}",
             }[stage_token]
             page["title"] = str(label or f"{prefix} {existing_title}").strip()

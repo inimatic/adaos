@@ -481,6 +481,11 @@ def prepare_candidate(
     *,
     change_ids: list[str] | tuple[str, ...],
     validation_evidence: Mapping[str, Any] | None = None,
+    target_webspace_id: str = "desktop",
+    target_space_kind: str = "development",
+    target_zone: str | None = None,
+    target_subnet_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     normalized_kind = _kind(kind)
     normalized_id = _project_id(project_id)
@@ -493,6 +498,11 @@ def prepare_candidate(
             normalized_id,
             change_ids=bounded_changes,
             validation_evidence=validation_evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
         )
     )
     _publish_content_changed(normalized_kind, normalized_id, reason="candidate_prepared")
@@ -532,6 +542,11 @@ def prepare_rebased_candidate(
     project_id: str,
     *,
     validation_evidence: Mapping[str, Any] | None = None,
+    target_webspace_id: str = "desktop",
+    target_space_kind: str = "development",
+    target_zone: str | None = None,
+    target_subnet_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     candidate_token = str(stale_candidate_id or "").strip()
     if not candidate_token:
@@ -544,6 +559,11 @@ def prepare_rebased_candidate(
             normalized_kind,
             normalized_id,
             validation_evidence=validation_evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
         )
     )
     _publish_content_changed(normalized_kind, normalized_id, reason="candidate_rebased")

@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from adaos.sdk.builder import automation, workflow
+from adaos.sdk import navigation
+from adaos.sdk.builder import automation, preview, workflow
 from adaos.sdk.developer import projects
 
 
@@ -60,6 +61,8 @@ def prepare_trial(
     *,
     actor: str,
     idempotency_key: str,
+    source_webspace_id: str = "desktop",
+    target_webspace_id: str | None = None,
 ) -> dict[str, Any]:
     state = workflow.get_state(object_type, object_id)
     delivery = _mapping(state.get("delivery"))
@@ -101,6 +104,15 @@ def prepare_trial(
         "automation_task_id": automation_state.get("head_task_id"),
         "change_id": change.get("change_id") or change.get("change_set_id"),
     }
+    source_webspace = str(source_webspace_id or "desktop").strip() or "desktop"
+    trial_webspace = str(target_webspace_id or "").strip()
+    if not trial_webspace:
+        try:
+            trial_webspace = preview.dev_webspace_id(source_webspace)
+        except Exception:
+            trial_webspace = ""
+    trial_webspace = trial_webspace or source_webspace
+    scope = navigation.runtime_scope()
     try:
         stale_candidate = str(delivery.get("replaces_candidate_id") or "").strip()
         if stale_candidate:
@@ -109,6 +121,11 @@ def prepare_trial(
                 object_type,
                 object_id,
                 validation_evidence=validation_evidence,
+                target_webspace_id=trial_webspace,
+                target_space_kind="development",
+                target_zone=str(scope.get("zone") or "").strip() or None,
+                target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
+                idempotency_key=idempotency_key,
             )
         else:
             result = projects.prepare_candidate(
@@ -116,6 +133,11 @@ def prepare_trial(
                 object_id,
                 change_ids=change_ids,
                 validation_evidence=validation_evidence,
+                target_webspace_id=trial_webspace,
+                target_space_kind="development",
+                target_zone=str(scope.get("zone") or "").strip() or None,
+                target_subnet_id=str(scope.get("subnet_id") or "").strip() or None,
+                idempotency_key=idempotency_key,
             )
     except Exception as exc:
         workflow.transition(
@@ -177,7 +199,37 @@ def prepare_trial(
             "idempotency_key": idempotency_key,
         },
     )
-    return {**dict(result), "workflow": completed.get("workflow"), "started": started}
+    completed_workflow = _mapping(completed.get("workflow"))
+    activation = _mapping(result.get("trial_activation"))
+    activation_target = _mapping(activation.get("target"))
+    if object_type == "scenario" and activation:
+        placed = workflow.record_project_placement(
+            object_type,
+            object_id,
+            {
+                "kind": "trial",
+                "result_ref": {
+                    "kind": "candidate",
+                    "id": candidate_id,
+                    "version": str(release.get("version") or "").strip(),
+                    "digest": package_digest,
+                },
+                "target": {
+                    "zone": activation_target.get("zone"),
+                    "subnet_id": activation_target.get("subnet_id"),
+                    "webspace_id": activation_target.get("webspace_id") or trial_webspace,
+                    "space_kind": activation_target.get("space_kind") or "development",
+                },
+                "scenario_id": activation_target.get("scenario_id") or object_id,
+                "data_mode": activation.get("data_mode") or "empty",
+                "runtime_binding": activation.get("runtime_binding") or {},
+                "trial_activation_ref": activation.get("activation_id"),
+                "safety": activation.get("safety_evidence") or {},
+            },
+            expected_generation=int(completed_workflow.get("generation") or 0),
+        )
+        completed_workflow = _mapping(placed.get("workflow"))
+    return {**dict(result), "workflow": completed_workflow, "started": started}
 
 
 def decide_trial(
@@ -366,6 +418,9 @@ def invoke_activity_command(
             object_id,
             actor=actor,
             idempotency_key=idempotency_key,
+            source_webspace_id=webspace_id,
+            target_webspace_id=str(details.get("target_webspace_id") or "").strip()
+            or None,
         )
     if token in {"accept_trial", "reject_trial"}:
         return decide_trial(

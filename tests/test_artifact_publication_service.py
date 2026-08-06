@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -221,6 +222,15 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert trial.isolation_evidence["status"] == "verified"
     assert trial.reload_receipt["status"] == "skipped"
     assert trial.health_receipt["status"] == "passed"
+    assert prepared.trial_workspace == (
+        workspace / ".runtime" / "trials" / prepared.candidate.candidate_id / "workspace"
+    )
+    assert prepared.trial_activation["schema"] == "adaos.trial.activation.v1"
+    assert prepared.trial_activation["status"] == "active"
+    assert prepared.trial_activation["target"]["webspace_id"] == "desktop"
+    assert prepared.trial_activation["candidate_ref"]["package_digest"] == (
+        prepared.candidate.package_digest
+    )
     trial_lock = WorkspaceActivationManager(
         workspace_root=prepared.trial_workspace,
         package_store=service.package_store,
@@ -231,6 +241,12 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert (prepared.trial_workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
     assert not (workspace / "scenarios" / "recipes").exists()
     assert (workspace / "primary-marker.txt").read_text(encoding="utf-8") == "unchanged"
+
+    shutil.rmtree(prepared.trial_workspace)
+    rebuilt = service.reconcile_trial_activation(prepared.candidate.candidate_id)
+    assert rebuilt["status"] == "active"
+    assert rebuilt["reconciled_at"]
+    assert (prepared.trial_workspace / "scenarios" / "recipes" / "scenario.yaml").is_file()
 
     accepted = service.decide_candidate(
         prepared.candidate.candidate_id,

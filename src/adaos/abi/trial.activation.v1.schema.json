@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.trial.activation.v1",
+  "title": "AdaOS Runtime Trial Activation",
+  "type": "object",
+  "required": [
+    "schema", "activation_id", "trial_id", "project_ref", "candidate_ref",
+    "release_ref", "package_refs", "target", "audience", "data_mode",
+    "data_ref", "safety_evidence", "runtime_binding", "previous_bindings",
+    "status", "health_evidence", "rollback", "idempotency_key", "started_at",
+    "expires_at", "completed_at", "detached_at", "reconciled_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.trial.activation.v1" },
+    "activation_id": { "type": "string", "minLength": 1 },
+    "trial_id": { "type": "string", "minLength": 1 },
+    "project_ref": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["skill", "scenario"] },
+        "id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "candidate_ref": {
+      "type": "object",
+      "required": ["candidate_id", "release_digest", "package_digest"],
+      "additionalProperties": { "type": "string" }
+    },
+    "release_ref": {
+      "type": "object",
+      "required": ["project_id", "version", "digest"],
+      "additionalProperties": { "type": "string" }
+    },
+    "package_refs": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "target": {
+      "type": "object",
+      "required": ["zone", "subnet_id", "webspace_id", "space_kind", "scenario_id"],
+      "properties": {
+        "zone": { "type": ["string", "null"] },
+        "subnet_id": { "type": ["string", "null"] },
+        "webspace_id": { "type": "string", "minLength": 1 },
+        "space_kind": { "enum": ["workspace", "development", "trial"] },
+        "scenario_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "audience": { "type": "string", "minLength": 1 },
+    "data_mode": { "enum": ["empty", "mock", "snapshot", "read_only", "real"] },
+    "data_ref": { "type": ["string", "null"] },
+    "safety_evidence": { "type": "object" },
+    "runtime_binding": { "type": "object" },
+    "previous_bindings": { "type": "array", "items": { "type": "object" } },
+    "status": { "enum": ["active", "reconciling", "detached", "failed", "expired", "completed"] },
+    "health_evidence": { "type": "object" },
+    "rollback": { "type": "object" },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": ["string", "null"], "format": "date-time" },
+    "detached_at": { "type": ["string", "null"], "format": "date-time" },
+    "reconciled_at": { "type": ["string", "null"], "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

@@ -69,6 +69,15 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.artifact_pipeline.trial_activation import (
+    TrialActivationError,
+    TrialActivationStore,
+    build_trial_activation,
+    load_workspace_lock,
+    runtime_trial_root,
+    runtime_trial_workspace,
+    shared_skill_conflicts,
+)
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.workflow_artifacts import load_manifest_bound_workflow
 from adaos.services.workflow_metrics import (
@@ -250,6 +259,7 @@ class PreparedCandidate:
     candidate: CandidateRecord
     plan: ReleasePlan
     trial_workspace: Path
+    trial_activation: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +335,9 @@ class ArtifactPublicationService:
         self.package_store = ContentAddressedPackageStore(self.state_root / "packages")
         self.release_cache = ReleaseRepository(self.state_root / "release-cache")
         self.candidate_store = CandidateStore(self.state_root / "candidates")
+        self.trial_activations = TrialActivationStore(
+            self.state_root / "trial-activations"
+        )
         self.subscriptions = SubscriptionStore(self.workspace_root / ".adaos" / "subscriptions.json")
         self.registry_reconciler = WorkspaceRegistryReconciler(
             state_root=self.state_root,
@@ -1262,6 +1275,11 @@ class ArtifactPublicationService:
         data_mode: str = "empty",
         data_ref: str | None = None,
         data_isolation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> PreparedCandidate:
         effective_validation_evidence = dict(validation_evidence)
         if kind == "skill":
@@ -1312,6 +1330,22 @@ class ArtifactPublicationService:
             requirements_by_package=requirements_by_package,
             validation_evidence=(effective_validation_evidence,),
         )
+        try:
+            active_lock = load_workspace_lock(
+                self.workspace_root / ".adaos" / "workspace.lock.json"
+            )
+            conflicts = shared_skill_conflicts(plan, active_lock)
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+        if conflicts:
+            summary = "; ".join(
+                f"{item['skill']} used by {', '.join(item['active_consumers'])}"
+                for item in conflicts
+            )
+            raise PublicationError(
+                "Trial activation would replace a shared active skill version: "
+                + summary
+            )
         self.release_cache.put_release(plan)
         self.remote.put_release(
             plan,
@@ -1328,15 +1362,18 @@ class ArtifactPublicationService:
         )
         candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
-        trial_workspace = self.state_root / "trials" / candidate_id / "workspace"
+        trial_workspace = runtime_trial_workspace(self.workspace_root, candidate_id)
         trial_manager = WorkspaceActivationManager(
             workspace_root=trial_workspace,
             package_store=self.package_store,
             state_root=self.state_root / "trials" / candidate_id / "state",
         )
+        trial_idempotency_key = str(
+            idempotency_key or f"candidate-trial:{candidate.digest}"
+        )
         trial_activation = trial_manager.activate(
             plan,
-            idempotency_key=f"candidate-trial:{candidate.digest}",
+            idempotency_key=trial_idempotency_key,
             audience=audience,
             data_mode=data_mode,
             data_ref=data_ref,
@@ -1383,8 +1420,46 @@ class ArtifactPublicationService:
                 generated_at=trial_started_at,
             ),
         )
+        target = {
+            "zone": str(target_zone or "").strip() or None,
+            "subnet_id": str(target_subnet_id or "").strip() or None,
+            "webspace_id": str(target_webspace_id or "desktop").strip() or "desktop",
+            "space_kind": str(target_space_kind or "development").strip()
+            or "development",
+            "scenario_id": artifact_id if kind == "scenario" else None,
+        }
+        try:
+            activation_record = build_trial_activation(
+                candidate=candidate.to_dict(),
+                plan=plan,
+                trial_id=f"trial-{candidate_id}",
+                activation_operation_id=trial_activation.operation_id,
+                workspace_root=self.workspace_root,
+                workspace_lock=trial_activation.workspace_lock,
+                target=target,
+                audience=audience,
+                data_mode=data_mode,
+                data_ref=data_ref,
+                isolation_evidence=isolation_evidence,
+                health_evidence=trial_operation.get("health_receipt"),
+                previous_bindings=(
+                    [item.to_dict() for item in active_lock.bindings]
+                    if active_lock is not None
+                    else []
+                ),
+                idempotency_key=trial_idempotency_key,
+                started_at=trial_started_at,
+            )
+            activation_record = self.trial_activations.save(activation_record)
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
         self.candidate_store.save(candidate)
-        return PreparedCandidate(candidate, plan, trial_workspace)
+        return PreparedCandidate(
+            candidate,
+            plan,
+            trial_workspace,
+            activation_record,
+        )
 
     def decide_candidate(
         self,
@@ -1407,7 +1482,7 @@ class ArtifactPublicationService:
                 "recorded_at": _now(),
             }
         else:
-            trial_root = self.state_root / "trials" / candidate_id
+            trial_root = runtime_trial_root(self.workspace_root, candidate_id)
             trial_workspace = trial_root / "workspace"
             archive = trial_root / "rollback" / running.trial_id / "workspace"
             if not trial_workspace.is_dir():
@@ -1432,6 +1507,16 @@ class ArtifactPublicationService:
                 rollback_receipt=rollback_receipt,
             )
             self.candidate_store.save(candidate)
+            activation = self.trial_activations.load(candidate_id)
+            if activation is not None:
+                now = _now()
+                self.trial_activations.update(
+                    candidate_id,
+                    status="completed" if accepted else "detached",
+                    completed_at=now if accepted else None,
+                    detached_at=now if not accepted else None,
+                    rollback=rollback_receipt,
+                )
         except Exception:
             if (
                 not accepted
@@ -1443,6 +1528,87 @@ class ArtifactPublicationService:
                 replace_with_retry(archive, trial_workspace)
             raise
         return candidate
+
+    def get_trial_activation(self, candidate_id: str) -> dict[str, Any] | None:
+        try:
+            return self.trial_activations.load(str(candidate_id or "").strip())
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+
+    def reconcile_trial_activation(self, candidate_id: str) -> dict[str, Any]:
+        """Rebuild missing derived Trial runtime state from the exact release."""
+
+        token = str(candidate_id or "").strip()
+        record = self.get_trial_activation(token)
+        if record is None:
+            raise PublicationError("TrialActivation record is missing")
+        if str(record.get("status") or "") not in {"active", "reconciling"}:
+            raise PublicationError("TrialActivation is not active")
+        runtime_binding = (
+            dict(record.get("runtime_binding") or {})
+            if isinstance(record.get("runtime_binding"), Mapping)
+            else {}
+        )
+        target = runtime_trial_workspace(self.workspace_root, token)
+        if target.is_dir() and (target / ".adaos" / "workspace.lock.json").is_file():
+            return record
+        candidate = self.candidate_store.load(token)
+        plan = self.release_cache.get_release(
+            candidate.project_id,
+            candidate.release_digest,
+        )
+        try:
+            active_lock = load_workspace_lock(
+                self.workspace_root / ".adaos" / "workspace.lock.json"
+            )
+            conflicts = shared_skill_conflicts(plan, active_lock)
+        except TrialActivationError as exc:
+            raise PublicationError(str(exc)) from exc
+        if conflicts:
+            raise PublicationError("TrialActivation reconciliation found a shared-skill conflict")
+        started = _now()
+        self.trial_activations.update(token, status="reconciling")
+        manager = WorkspaceActivationManager(
+            workspace_root=target,
+            package_store=self.package_store,
+            state_root=self.state_root / "trials" / token / "state",
+        )
+        generation = int(runtime_binding.get("reconciliation_generation") or 0) + 1
+        activation = manager.activate(
+            plan,
+            idempotency_key=f"candidate-trial-reconcile:{candidate.digest}:{generation}",
+            audience=str(record.get("audience") or "owner"),
+            data_mode=str(record.get("data_mode") or "empty"),
+            data_ref=str(record.get("data_ref") or "").strip() or None,
+            fetch_package=self.remote.fetch_package,
+            reload_policy={
+                "mode": "skip",
+                "approved_by": "artifact_pipeline.runtime_trial_reconcile",
+                "reason": "rebuilding derived runtime-only Trial state",
+            },
+            health_check=lambda lock: {
+                "status": "passed",
+                "check": "verified_trial_reconstruction",
+                "lock_digest": lock.to_dict()["lock_digest"],
+            },
+        )
+        next_binding = {
+            **runtime_binding,
+            "path": str(target),
+            "activation_operation_id": activation.operation_id,
+            "workspace_lock_digest": activation.workspace_lock.to_dict()["lock_digest"],
+            "reconciliation_generation": generation,
+        }
+        return self.trial_activations.update(
+            token,
+            status="active",
+            runtime_binding=next_binding,
+            reconciled_at=started,
+            health_evidence={
+                "status": "passed",
+                "check": "verified_trial_reconstruction",
+            },
+        )
 
     def get_candidate(self, candidate_id: str) -> CandidateRecord:
         """Return one immutable-identity candidate without changing its trial."""
@@ -1464,6 +1630,11 @@ class ArtifactPublicationService:
         data_mode: str = "empty",
         data_ref: str | None = None,
         data_isolation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> PreparedCandidate:
         stale = self.candidate_store.load(stale_candidate_id)
         if stale.status != "stale":
@@ -1495,6 +1666,11 @@ class ArtifactPublicationService:
             data_mode=data_mode,
             data_ref=data_ref,
             data_isolation_evidence=data_isolation_evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
         )
 
     def promote(

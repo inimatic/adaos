@@ -4742,6 +4742,59 @@ def test_builder_publication_preview_reads_workspace_snapshot(monkeypatch) -> No
     assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == "public:0.2.0 Published recipes"
 
 
+def test_builder_trial_preview_reads_exact_runtime_activation(monkeypatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    runtime_workspace = tmp_path / "workspace" / ".runtime" / "trials" / "candidate-1" / "workspace"
+    scenario_root = runtime_workspace / "scenarios" / "recipes"
+    scenario_root.mkdir(parents=True)
+    (scenario_root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.2.0\nui:\n  manifest: webui.json\n",
+        encoding="utf-8",
+    )
+    (scenario_root / "webui.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.webui.v1",
+                "ui": {
+                    "application": {
+                        "desktop": {"pageSchema": {"title": "Candidate recipes"}}
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    records = state_dir / "artifact_pipeline" / "trial-activations"
+    records.mkdir(parents=True)
+    (records / "candidate-1.json").write_text(
+        json.dumps(
+            {
+                "schema": "adaos.trial.activation.v1",
+                "status": "active",
+                "candidate_ref": {"candidate_id": "candidate-1"},
+                "release_ref": {"version": "0.2.0"},
+                "target": {"scenario_id": "recipes", "webspace_id": "dev1-dev"},
+                "runtime_binding": {"path": str(runtime_workspace)},
+                "updated_at": "2026-08-06T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.runtime_paths.current_state_dir", lambda: state_dir)
+
+    content, source_space = webspace_runtime_module._builder_preview_content_override(
+        "recipes",
+        stage="trial",
+        revision="0.2.0",
+        label=None,
+    )
+
+    assert source_space == "workspace"
+    assert content["ui"]["application"]["desktop"]["pageSchema"]["title"] == (
+        "trial:0.2.0 Candidate recipes"
+    )
+
+
 def test_builder_publication_preview_reads_verified_installed_package_when_slot_is_inactive(
     monkeypatch,
     tmp_path: Path,

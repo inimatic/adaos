@@ -2342,6 +2342,11 @@ class RootDeveloperService:
         *,
         change_ids: tuple[str, ...],
         validation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
@@ -2358,12 +2363,18 @@ class RootDeveloperService:
             artifact_dir=source,
             change_ids=change_ids,
             validation_evidence=evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
         )
         return {
             "ok": True,
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
+            "trial_activation": dict(prepared.trial_activation),
         }
 
     def decide_artifact_candidate(
@@ -2385,9 +2396,10 @@ class RootDeveloperService:
         cfg = self._load_config()
         token = str(candidate_id or "").strip()
         candidate = self._artifact_publication_service(cfg).get_candidate(token)
+        publication = self._artifact_publication_service(cfg)
         trial_workspace = (
-            Path(self.ctx.paths.state_dir())
-            / "artifact_pipeline"
+            Path(self.ctx.paths.workspace_dir())
+            / ".runtime"
             / "trials"
             / token
             / "workspace"
@@ -2396,7 +2408,15 @@ class RootDeveloperService:
             "ok": True,
             "candidate": candidate.to_dict(),
             "trial_workspace": str(trial_workspace),
+            "trial_activation": publication.get_trial_activation(token),
         }
+
+    def reconcile_artifact_trial_activation(self, candidate_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        activation = self._artifact_publication_service(cfg).reconcile_trial_activation(
+            str(candidate_id or "").strip()
+        )
+        return {"ok": True, "trial_activation": activation}
 
     def recover_artifact_candidate_activation(
         self,
@@ -2422,6 +2442,11 @@ class RootDeveloperService:
         name: str,
         *,
         validation_evidence: Mapping[str, Any] | None = None,
+        target_webspace_id: str = "desktop",
+        target_space_kind: str = "development",
+        target_zone: str | None = None,
+        target_subnet_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         cfg = self._load_config()
         plural: Literal["skills", "scenarios"] = "skills" if kind == "skill" else "scenarios"
@@ -2438,12 +2463,18 @@ class RootDeveloperService:
             artifact_id=name,
             artifact_dir=source,
             validation_evidence=evidence,
+            target_webspace_id=target_webspace_id,
+            target_space_kind=target_space_kind,
+            target_zone=target_zone,
+            target_subnet_id=target_subnet_id,
+            idempotency_key=idempotency_key,
         )
         return {
             "ok": True,
             "candidate": prepared.candidate.to_dict(),
             "release": prepared.plan.release.to_dict(),
             "trial_workspace": str(prepared.trial_workspace),
+            "trial_activation": dict(prepared.trial_activation),
             "replaces_candidate_id": stale_candidate_id,
         }
 

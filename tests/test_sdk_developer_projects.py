@@ -156,7 +156,15 @@ class _DeveloperService:
     def publish_scenario(self, name, **_kwargs):
         return _Result(name=name, path=Path(f"/workspace/scenarios/{name}"))
 
-    def prepare_artifact_candidate(self, kind, name, *, change_ids, validation_evidence=None):
+    def prepare_artifact_candidate(
+        self,
+        kind,
+        name,
+        *,
+        change_ids,
+        validation_evidence=None,
+        **_runtime_trial,
+    ):
         return {
             "ok": True,
             "candidate": {"candidate_id": f"{name}-candidate", "change_ids": list(change_ids)},
@@ -190,6 +198,7 @@ class _DeveloperService:
         name,
         *,
         validation_evidence=None,
+        **_runtime_trial,
     ):
         return {
             "ok": True,

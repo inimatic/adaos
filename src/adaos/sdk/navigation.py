@@ -24,7 +24,7 @@ WEBSPACE_OPEN = "webspace.open"
 
 INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN})
 SPACE_KINDS = frozenset({"workspace", "development", "preview", "trial"})
-PREVIEW_STAGES = frozenset({"prototype", "automation", "publication"})
+PREVIEW_STAGES = frozenset({"prototype", "automation", "trial", "publication"})
 
 _QUERY_ORDER = (
     "intent",

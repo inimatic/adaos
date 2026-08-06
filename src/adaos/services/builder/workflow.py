@@ -1713,6 +1713,18 @@ class BuilderWorkflowService:
             "workspace_installation": {"en": "Workspace installation", "ru": "Установка в Workspace"},
             "placement": {"en": "Webspace placement", "ru": "Размещение в Webspace"},
         }
+        status_labels = {
+            "active": {"en": "active", "ru": "активно"},
+            "working": {"en": "in progress", "ru": "в работе"},
+            "waiting": {"en": "waiting", "ru": "ожидание"},
+            "reviewing": {"en": "awaiting review", "ru": "ожидает проверки"},
+            "completed": {"en": "completed", "ru": "завершено"},
+            "accepted": {"en": "accepted", "ru": "принято"},
+            "published": {"en": "published", "ru": "опубликовано"},
+            "installed": {"en": "installed", "ru": "установлено"},
+            "failed": {"en": "failed", "ru": "ошибка"},
+            "rejected": {"en": "changes requested", "ru": "нужна доработка"},
+        }
         nodes = [dict(item) for item in process.get("nodes") or [] if isinstance(item, Mapping)]
         lines = [
             (
@@ -1726,13 +1738,46 @@ class BuilderWorkflowService:
             label = str(_mapping(labels.get(kind)).get(selected_locale) or kind)
             detail = str(item.get("label") or "").strip()
             status = str(item.get("status") or "").strip()
-            lines.append(f"✓ {label}: {detail} [{status}]")
+            generic_prefixes = {
+                "change": "Change ",
+                "automation": "Automation ",
+                "verification": "Verification",
+                "trial": "Trial ",
+                "publication": "Publication ",
+                "workspace_installation": "Workspace installation ",
+                "placement": "Webspace ",
+            }
+            prefix = generic_prefixes.get(kind, "")
+            if prefix and detail.startswith(prefix):
+                detail = detail[len(prefix) :].strip()
+            if detail == "Verification":
+                detail = ""
+            localized_status = str(
+                _mapping(status_labels.get(status)).get(selected_locale) or status
+            )
+            marker = (
+                "✗"
+                if status in {"failed", "rejected", "blocked"}
+                else "→"
+                if status in {"active", "working", "waiting", "reviewing", "running"}
+                else "✓"
+            )
+            detail_text = f": {detail}" if detail else ""
+            lines.append(f"{marker} {label}{detail_text} — {localized_status}")
         workflow_state = str(process.get("workflow_state") or "ready")
-        lines.append(
-            f"Current state: {workflow_state}"
-            if selected_locale == "en"
-            else f"Текущее состояние: {workflow_state}"
-        )
+        compact = self._compact_explanation(projection)
+        next_commands = [
+            str(item) for item in compact.get("next_commands") or [] if str(item).strip()
+        ]
+        if next_commands:
+            primary = builder_action_label(next_commands[0], locale=selected_locale)
+            lines.append(
+                f"Next: {primary}"
+                if selected_locale == "en"
+                else f"Дальше: {primary}"
+            )
+        elif compact.get("reason"):
+            lines.append(str(compact.get("reason")))
         return {
             "schema": "adaos.builder.process_explanation.v1",
             "project_ref": process.get("project_ref"),
@@ -2048,7 +2093,7 @@ class BuilderWorkflowService:
             space_kind=str(target.get("space_kind") or ("trial" if kind == "trial" else "workspace")),
             expected_scenario_id=str(placement.get("scenario_id") or object_id).strip() or None,
             expected_revision=str(result_ref.get("version") or "").strip() or None,
-            preview_stage="publication" if kind == "stable" else None,
+            preview_stage="publication" if kind == "stable" else "trial",
         )
         return {
             "schema": "adaos.builder.placement_navigation.v1",
