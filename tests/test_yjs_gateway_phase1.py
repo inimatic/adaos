@@ -3574,6 +3574,7 @@ def test_process_events_command_submits_conversation_interaction_token(monkeypat
     assert calls[0]["token"] == "ia:0:abc"
     assert calls[0]["idempotency_key"] == "web:m1:ia:0:abc"
     assert calls[0]["metadata"]["webspace_id"] == "dev1-dev"
+    assert calls[0]["metadata"]["source_message_id"] == "m1"
     assert published[0][0] == "conversation.interaction.responded"
     assert responses[-1]["ok"] is True
 

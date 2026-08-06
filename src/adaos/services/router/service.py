@@ -4011,12 +4011,95 @@ class RouterService:
             tool = str(policy.get("tool") or "handle_text").strip() or "handle_text"
             return _call_runtime_skill_tool(skill, tool, {"text": text}, meta)
 
+        async def _consume_voice_chat_interaction_controls(
+            interaction: Mapping[str, Any],
+            response: Mapping[str, Any],
+        ) -> None:
+            """Retire a used Web/Voice control in both ledger and live projection."""
+
+            response_meta = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            consumed = response.get("consumed_command") if isinstance(response.get("consumed_command"), Mapping) else {}
+            source_message_id = str(response_meta.get("source_message_id") or "").strip()
+            if (
+                str(response_meta.get("io_type") or "").strip() != "web"
+                or str(response.get("status") or "").strip() != "answered"
+                or not source_message_id
+                or not consumed
+            ):
+                return
+            message = await asyncio.to_thread(conversation_store.get_message, source_message_id)
+            if not isinstance(message, dict):
+                return
+            label = str(consumed.get("label") or consumed.get("command") or "").strip()
+            locale_context = interaction.get("locale_context") if isinstance(interaction.get("locale_context"), Mapping) else {}
+            locale = str(locale_context.get("locale") or "").strip().lower()
+            selected_prefix = "✓ Выбрано:" if locale.startswith("ru") else "✓ Selected:"
+            suffix = f"{selected_prefix} {label}" if label else selected_prefix.rstrip(":")
+            current_text = str(message.get("text") or "")
+            updated_text = current_text if suffix in current_text else f"{current_text}\n\n{suffix}".strip()
+            consumed_state = {
+                "interaction_id": str(interaction.get("interaction_id") or "").strip(),
+                "response_id": str(response.get("response_id") or "").strip(),
+                "command": str(consumed.get("command") or "").strip(),
+                "label": label,
+            }
+            updated = await asyncio.to_thread(
+                conversation_store.update_message,
+                source_message_id,
+                text=updated_text,
+                payload={"actions": [], "interaction_consumed": consumed_state},
+            )
+            updated_webspace_id = str(updated.get("webspace_id") or response_meta.get("webspace_id") or "").strip()
+            for cache_key, cached in list(_voice_chat_stream_cache.items()):
+                if updated_webspace_id and cache_key[0] != updated_webspace_id:
+                    continue
+                raw_messages = cached.get("messages") if isinstance(cached, dict) else None
+                if not isinstance(raw_messages, list) or not any(
+                    str(item.get("id") or "") == source_message_id
+                    for item in raw_messages
+                    if isinstance(item, Mapping)
+                ):
+                    continue
+                next_messages = [
+                    dict(updated) if str(item.get("id") or "") == source_message_id else dict(item)
+                    for item in raw_messages
+                    if isinstance(item, Mapping)
+                ]
+                last_refresh_ts = time.time()
+                _publish_voice_chat_stream(
+                    cache_key[0],
+                    cache_key[1] or None,
+                    next_messages,
+                    last_refresh_ts,
+                    before_cursor=str(cached.get("before_cursor") or ""),
+                    has_more_before=bool(cached.get("has_more_before")),
+                    total_message_count=int(cached.get("total_message_count") or len(next_messages)),
+                )
+                _schedule_voice_chat_persist(
+                    cache_key[0],
+                    cache_key[1] or None,
+                    next_messages,
+                    last_refresh_ts,
+                    before_cursor=str(cached.get("before_cursor") or ""),
+                    has_more_before=bool(cached.get("has_more_before")),
+                    total_message_count=int(cached.get("total_message_count") or len(next_messages)),
+                )
+
         async def _on_conversation_interaction_responded(ev: Event) -> None:
             payload = ev.payload if isinstance(ev.payload, Mapping) else {}
             if not payload or bool(payload.get("duplicate")):
                 return
             interaction = payload.get("interaction") if isinstance(payload.get("interaction"), Mapping) else {}
             response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+            try:
+                await _consume_voice_chat_interaction_controls(interaction, response)
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "voice chat interaction consumption failed interaction_id=%s response_id=%s",
+                    interaction.get("interaction_id"),
+                    response.get("response_id"),
+                    exc_info=True,
+                )
             try:
                 consumed_projection = _telegram_interaction_consumed_projection(interaction, response)
                 if consumed_projection is not None:

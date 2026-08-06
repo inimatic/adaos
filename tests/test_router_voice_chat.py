@@ -3995,6 +3995,7 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict]] = []
     outputs: list[Event] = []
+    message_updates: list[dict] = []
 
     class _Manager:
         def __init__(self, **_kwargs):
@@ -4023,6 +4024,27 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
     monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == "dev1-dev")
     monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "get_message",
+        lambda message_id: {
+            "id": message_id,
+            "webspace_id": "dev1",
+            "text": "Choose a project",
+            "actions": [{"label": "Recipes"}],
+        },
+    )
+
+    def _update_message(message_id, **kwargs):
+        message_updates.append({"message_id": message_id, **kwargs})
+        return {
+            "id": message_id,
+            "webspace_id": "dev1",
+            "text": kwargs["text"],
+            **dict(kwargs.get("payload") or {}),
+        }
+
+    monkeypatch.setattr(router_service_module.conversation_store, "update_message", _update_message)
 
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
@@ -4086,3 +4108,57 @@ async def test_builder_interaction_response_dispatches_to_authoritative_dev_runt
         "callback_query_id": "callback-3230",
     }
     assert outputs[0].payload["_protocol"]["presentation_state"] == "consumed"
+
+    bus.publish(
+        Event(
+            type="conversation.interaction.responded",
+            source="test",
+            ts=2.0,
+            payload={
+                "interaction": {
+                    "interaction_id": "interaction.builder.web",
+                    "conversation_id": "conv.builder",
+                    "locale_context": {"locale": "en"},
+                    "metadata": {
+                        "domain": "builder",
+                        "project_ref": "scenario:builder",
+                        "source_webspace_id": "dev1",
+                        "execution_webspace_id": "dev1-dev",
+                    },
+                },
+                "response": {
+                    "response_id": "response.builder.web",
+                    "status": "answered",
+                    "consumed_command": {
+                        "action_id": "select-recipes",
+                        "label": "Recipes",
+                        "command": "builder.project.select",
+                        "value": "recipes",
+                        "target_ref": {"kind": "scenario", "id": "recipes"},
+                    },
+                    "metadata": {
+                        "io_type": "web",
+                        "webspace_id": "dev1",
+                        "source_message_id": "message.builder.web",
+                    },
+                },
+                "duplicate": False,
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=2.0)
+    assert message_updates == [
+        {
+            "message_id": "message.builder.web",
+            "text": "Choose a project\n\n✓ Selected: Recipes",
+            "payload": {
+                "actions": [],
+                "interaction_consumed": {
+                    "interaction_id": "interaction.builder.web",
+                    "response_id": "response.builder.web",
+                    "command": "builder.project.select",
+                    "label": "Recipes",
+                },
+            },
+        }
+    ]

@@ -9115,6 +9115,8 @@ async def process_events_command(
                 metadata={
                     **meta,
                     "io_type": "web",
+                    "source_message_id": str(event_payload.get("source_message_id") or "").strip()
+                    or None,
                     "webspace_id": str(
                         event_payload.get("webspace_id") or meta.get("webspace_id") or ""
                     ).strip(),

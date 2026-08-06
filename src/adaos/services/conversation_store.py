@@ -1335,6 +1335,7 @@ def _row_to_message(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
     msg["ts"] = float(_row_value(row, "ts") or msg.get("ts") or 0.0)
     msg["seq"] = int(_row_value(row, "seq") or 0)
     msg["conversation_id"] = str(_row_value(row, "conversation_id") or "")
+    msg["webspace_id"] = str(_row_value(row, "webspace_id") or "")
     if _row_value(row, "thread_id"):
         msg["thread_id"] = str(_row_value(row, "thread_id"))
     msg["dialog_channel_id"] = str(_row_value(row, "channel_id") or "")
@@ -3363,6 +3364,21 @@ def update_message(
             con.rollback()
             raise
     return _row_to_message(updated)
+
+
+def get_message(message_id: str) -> dict[str, Any] | None:
+    """Return one durable message by its stable ledger identity."""
+
+    token = str(message_id or "").strip()
+    if not token or not ensure_schema():
+        return None
+    with _sql().connect() as con:  # type: ignore[union-attr]
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM conversation_messages WHERE message_id=?",
+            (token,),
+        ).fetchone()
+    return _row_to_message(row) if row is not None else None
 
 
 def upsert_job_message(
