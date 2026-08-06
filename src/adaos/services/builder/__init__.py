@@ -6,6 +6,7 @@ from .automation import BuilderAutomationService
 from .project_catalog import BuilderProjectCatalogService
 from .workflow import BuilderWorkflowError, BuilderWorkflowService
 from .semantic_ui import BuilderSemanticUIService
+from .prototype_runtime import PrototypeDataRuntime
 
 __all__ = [
     "BuilderAutomationService",
@@ -15,4 +16,5 @@ __all__ = [
     "BuilderWorkbenchService",
     "BuilderWorkflowError",
     "BuilderWorkflowService",
+    "PrototypeDataRuntime",
 ]

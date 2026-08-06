@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_data.v1",
+  "title": "AdaOS Builder Executable Prototype Data Definition",
+  "type": "object",
+  "required": ["schema", "source_id", "mode", "record_schema", "seed", "activities"],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_data.v1" },
+    "source_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,159}$" },
+    "mode": { "enum": ["static", "local_crud", "recorded_provider", "synthetic"] },
+    "record_schema": { "type": "object" },
+    "seed": { "type": "array", "maxItems": 1000, "items": { "type": "object" } },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["result"],
+        "properties": {
+          "result": {},
+          "provenance": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "activities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["activity_id", "operation", "input_schema", "output_schema", "side_effect_class", "implementation_status"],
+        "properties": {
+          "activity_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,159}$" },
+          "operation": { "enum": ["list", "get", "create", "update", "delete", "reset", "fixture", "generate"] },
+          "input_schema": { "type": "object" },
+          "output_schema": { "type": "object" },
+          "side_effect_class": { "enum": ["read_only", "local_reversible"] },
+          "implementation_status": { "enum": ["prototype_only", "mapped", "missing"] },
+          "implementation_ref": { "type": ["string", "null"], "maxLength": 500 },
+          "fixture_key": { "type": ["string", "null"], "maxLength": 160 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

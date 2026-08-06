@@ -57,6 +57,8 @@ def _load_service_skill_schema() -> dict:
         "builder.review_anchor.v1.schema.json",
         "builder.acceptance_constraint.v1.schema.json",
         "builder.context_ref.v1.schema.json",
+        "builder.prototype_data.v1.schema.json",
+        "builder.prototype_trace.v1.schema.json",
     ],
 )
 def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
