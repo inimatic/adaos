@@ -1,0 +1,20 @@
+{
+  "schema": "adaos.workflow.definition_migration.v1",
+  "migration_id": "builder_change_1_0_to_1_1",
+  "workflow_type": "builder.change",
+  "from_definition_version": "1.0.0",
+  "to_definition_version": "1.1.0",
+  "allowed_source_states": ["automation"],
+  "state_map": {
+    "automation": "implementation"
+  },
+  "context_set": {
+    "migration_fixture": "1.1.0"
+  },
+  "context_remove": ["legacy_phase"],
+  "authority": {
+    "actors": ["user"],
+    "permissions": ["workflow.definition.migrate"]
+  },
+  "explanation": "Rename the Automation state without changing the active Builder change."
+}

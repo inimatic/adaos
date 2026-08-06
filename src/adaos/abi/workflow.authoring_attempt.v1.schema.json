@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.authoring_attempt.v1",
+  "title": "AdaOS Workflow Authoring Attempt",
+  "type": "object",
+  "required": [
+    "schema",
+    "attempt_id",
+    "context_id",
+    "context_digest",
+    "workflow_type",
+    "model",
+    "candidate_definition_digest",
+    "validation_report_digest",
+    "status",
+    "diagnostics",
+    "repair_history",
+    "recorded_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.authoring_attempt.v1" },
+    "attempt_id": { "$ref": "#/$defs/id" },
+    "context_id": { "$ref": "#/$defs/id" },
+    "context_digest": { "$ref": "#/$defs/digest" },
+    "workflow_type": { "type": ["string", "null"], "maxLength": 160 },
+    "model": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "prompt_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "temperature": { "type": ["number", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "candidate_definition_digest": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "validation_report_digest": { "$ref": "#/$defs/digest" },
+    "status": { "enum": ["validation_passed", "validation_failed", "rejected"] },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "path", "message"],
+        "properties": {
+          "code": { "$ref": "#/$defs/id" },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "details": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "repair_history": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["repair_id", "diagnostics_digest", "action_summary"],
+        "properties": {
+          "repair_id": { "$ref": "#/$defs/id" },
+          "diagnostics_digest": { "$ref": "#/$defs/digest" },
+          "action_summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

@@ -329,6 +329,29 @@ def test_room_serve_preflights_state_vector_before_native_call(monkeypatch) -> N
     assert room._diag_native_preflight_last_reason == "native_panic"
 
 
+def test_tracked_client_send_prunes_failed_transport_without_failing_room() -> None:
+    class _FailedClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def send(self, _message: bytes) -> None:
+            raise RuntimeError("transport_closed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    failed = _FailedClient()
+    healthy = object()
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = [failed, healthy]
+
+    asyncio.run(room._tracked_client_send(failed, b"update", 6))
+
+    assert failed.closed is True
+    assert room.clients == [healthy]
+    assert room._diag_pending_send_tasks == 0
+
+
 def test_room_serve_keeps_initial_browser_sync_server_authoritative(monkeypatch) -> None:
     processed: list[bytes] = []
 
@@ -432,6 +455,71 @@ def test_room_serve_answers_step1_and_applies_updates_after_authoritative_initia
     assert room._diag_authoritative_initial_last_sync_type == "SYNC_STEP2"
 
 
+def test_room_serve_uses_protocol_step1_without_redundant_effective_replay(
+    monkeypatch,
+) -> None:
+    processed: list[bytes] = []
+    replay_calls: list[str] = []
+
+    class _Websocket:
+        path = "/yws/dev1-dev"
+
+        def __init__(self) -> None:
+            self._messages = iter(
+                [
+                    b"\x00\x00client-vector",
+                    b"\x00\x01initial-client-state",
+                ]
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+        async def send(self, _message: bytes) -> None:
+            return None
+
+    async def _sync(_ydoc, _websocket, _log) -> None:
+        return None
+
+    async def _process(message, _ydoc, _websocket, _log) -> None:
+        processed.append(message)
+
+    async def _replay(self, websocket) -> bool:
+        replay_calls.append(websocket.path)
+        return True
+
+    monkeypatch.setattr(gateway_module, "sync", _sync)
+    monkeypatch.setattr(gateway_module, "process_sync_message", _process)
+    monkeypatch.setattr(gateway_module, "read_sync_message", lambda payload: payload)
+    monkeypatch.setattr(
+        gateway_module,
+        "_preflight_inbound_y_sync_payload",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(gateway_module, "_YROOM_SERVER_AUTHORITATIVE_INITIAL_SYNC", True)
+    monkeypatch.setattr(
+        gateway_module.DiagnosticYRoom,
+        "_send_initial_effective_state_replay",
+        _replay,
+    )
+
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room.clients = []
+    room.ydoc = y_py.YDoc()
+    asyncio.run(room.serve(_Websocket()))
+
+    assert processed == [b"\x00client-vector"]
+    assert replay_calls == []
+    assert room._diag_effective_initial_replay_dedupe_total == 1
+    assert room._diag_authoritative_initial_skip_total == 1
+
+
 def test_repair_room_effective_branches_runs_directly_on_owner_thread(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
@@ -480,6 +568,37 @@ def test_repair_room_effective_branches_skips_wrong_thread_without_owner_loop(mo
     assert update == b""
     assert mode == "skipped_no_owner_loop"
     assert calls == []
+
+
+def test_authoritative_selector_drift_is_repaired_before_update_broadcast(monkeypatch) -> None:
+    room = gateway_module.DiagnosticYRoom(log=_fake_log())
+    room._webspace_id = "selector-guard"
+    room.ydoc = y_py.YDoc()
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "builder")
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    gateway_module.note_authoritative_current_scenario(
+        "selector-guard",
+        "test04_recipes",
+        reason="unit_switch",
+    )
+    calls: list[tuple[int, str]] = []
+
+    async def _repair(*, update_bytes: int, reason: str) -> bytes:
+        calls.append((update_bytes, reason))
+        return b"selector-repair"
+
+    monkeypatch.setattr(room, "_repair_effective_branches_after_client_update", _repair)
+
+    repair = asyncio.run(room._repair_authoritative_selector_after_update(update_bytes=123))
+
+    assert repair == b"selector-repair"
+    assert calls == [(123, "authoritative_selector_drift")]
+
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
+    assert asyncio.run(room._repair_authoritative_selector_after_update(update_bytes=10)) is None
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
 
 
 def test_pending_effective_repair_replay_flushes_to_yws_adapter(monkeypatch) -> None:
@@ -915,6 +1034,9 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
             os_name="Android",
             form_factor="TV",
             user_agent="ua",
+            media_route_status_level="warning",
+            media_route_status_reason="device_changed",
+            media_route_recent_device_change="true",
         )
     )
 
@@ -931,6 +1053,9 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
             "os_name": "Android",
             "form_factor": "TV",
             "user_agent": "ua",
+            "media_route_status_level": "warning",
+            "media_route_status_reason": "device_changed",
+            "media_route_recent_device_change": "true",
         }
     ]
 
@@ -2132,6 +2257,15 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
             self._update_send_stream = _FakeStatsStream(buffer_used=5, waiting_send=2, waiting_receive=1)
             self._update_receive_stream = _FakeStatsStream(buffer_used=5, waiting_send=2, waiting_receive=1)
 
+        def _diag_snapshot(self):
+            return {
+                "effective_initial_replay_total": 1,
+                "effective_initial_replay_bytes": 512,
+                "effective_initial_replay_skip_total": 2,
+                "effective_initial_replay_dedupe_total": 3,
+                "effective_initial_replay_last_reason": "malformed_preflight",
+            }
+
     key = "gateway-room-debug"
     room = _FakeRoom()
     gateway_module.y_server.rooms[key] = room
@@ -2182,6 +2316,11 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert room_info["last_open_bootstrap_mode"] == "scenario_projection"
     assert room_info["update_send_stream"]["current_buffer_used"] == 5
     assert room_info["update_send_stream"]["tasks_waiting_send"] == 2
+    assert room_info["diagnostic"]["effective_initial_replay_total"] == 1
+    assert room_info["diagnostic"]["effective_initial_replay_bytes"] == 512
+    assert room_info["diagnostic"]["effective_initial_replay_skip_total"] == 2
+    assert room_info["diagnostic"]["effective_initial_replay_dedupe_total"] == 3
+    assert room_info["diagnostic"]["effective_initial_replay_last_reason"] == "malformed_preflight"
     assert room_info["last_reset_reason"] == "manual_test"
     assert room_info["last_reset_closed_webrtc_peers"] == 2
     assert transport["active_room_total"] >= 1
@@ -2405,6 +2544,57 @@ def test_materialized_payload_apply_ready_snapshot_trusts_successful_summary() -
         payload,
         {"failed_branches": 0, "stale_fingerprint_branches": 1},
     ) is None
+
+
+def test_materialized_payload_establishes_selector_authority_before_room_mutation(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    key = "materialized-selector-authority"
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
+    ydoc = y_py.YDoc()
+    room = SimpleNamespace(ydoc=ydoc, clients=[])
+    observed_authority: list[str | None] = []
+
+    def _fake_apply(
+        self,
+        target_ydoc,
+        webspace_id,
+        _payload,
+        **_kwargs,
+    ) -> None:
+        observed_authority.append(gateway_module._authoritative_current_scenario(webspace_id))
+        with target_ydoc.begin_transaction() as txn:
+            target_ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
+        self._last_apply_summary = {"failed_branches": 0, "changed_branches": 0}
+        self._last_rebuild_timings_ms = {"total": 1.0}
+
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "apply_materialized_payload_to_doc",
+        _fake_apply,
+    )
+
+    _update, result = asyncio.run(
+        gateway_module._apply_room_materialized_payload(
+            key,
+            None,
+            room,
+            {
+                "scenario_id": "test04_recipes",
+                "metadata": {
+                    "materialization": {
+                        "required_branches": [],
+                    },
+                },
+            },
+            reason="unit",
+        )
+    )
+
+    assert result["ready"] is True
+    assert observed_authority == ["test04_recipes"]
+    assert gateway_module._authoritative_current_scenario(key) == "test04_recipes"
+    gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
 
 
 def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypatch) -> None:
@@ -3342,6 +3532,52 @@ def test_process_events_command_responds_pending_action_directly(monkeypatch) ->
     assert responses[-1]["data"] == {"response": {"response_action_id": "refuse"}, "terminal": True}
 
 
+def test_process_events_command_submits_conversation_interaction_token(monkeypatch) -> None:
+    responses: list[dict[str, object]] = []
+    published: list[tuple[str, dict[str, object] | None]] = []
+    calls: list[dict[str, object]] = []
+
+    from adaos.services import conversation_interactions
+
+    monkeypatch.setattr(
+        gateway_module,
+        "_make_publish_bus",
+        lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))),
+    )
+
+    def _submit_action_token(token, **kwargs):
+        calls.append({"token": token, **kwargs})
+        return {"interaction": {"interaction_id": "interaction.web"}, "response": {"status": "answered"}, "duplicate": False}
+
+    monkeypatch.setattr(conversation_interactions, "submit_action_token", _submit_action_token)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="conversation.interaction.respond.request",
+            cmd_id="cmd-interaction-1",
+            payload={
+                "webspace_id": "dev1-dev",
+                "action_token": "ia:0:abc",
+                "idempotency_key": "web:m1:ia:0:abc",
+                "source_message_id": "m1",
+                "_meta": {"route_id": "voice_chat"},
+            },
+            device_id="dev-1",
+            webspace_id="dev1-dev",
+            send_response=_send_response,
+        )
+    )
+
+    assert calls[0]["token"] == "ia:0:abc"
+    assert calls[0]["idempotency_key"] == "web:m1:ia:0:abc"
+    assert calls[0]["metadata"]["webspace_id"] == "dev1-dev"
+    assert published[0][0] == "conversation.interaction.responded"
+    assert responses[-1]["ok"] is True
+
+
 def test_process_events_command_requires_scenario_id_for_set_home(monkeypatch) -> None:
     published: list[tuple[str, dict[str, object] | None]] = []
     responses: list[dict[str, object]] = []
@@ -3424,6 +3660,51 @@ def test_process_events_command_ensure_dev_returns_webspace_id(monkeypatch) -> N
         "kind": "dev",
         "source_mode": "dev",
     }
+
+
+def test_process_events_command_switches_scenario_before_using_webspace(monkeypatch) -> None:
+    from adaos.services.scenario import webspace_runtime as webspace_runtime_module
+
+    responses: list[dict[str, object]] = []
+    calls: list[tuple[str, object]] = []
+
+    async def _fake_switch(
+        webspace_id: str,
+        scenario_id: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls.append(("switch", (webspace_id, scenario_id, kwargs)))
+        return {"ok": True, "accepted": True, "webspace_id": webspace_id, "scenario_id": scenario_id}
+
+    async def _fake_presence(webspace_id: str, device_id: str) -> None:
+        calls.append(("presence", (webspace_id, device_id)))
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    monkeypatch.setattr(webspace_runtime_module, "switch_webspace_scenario", _fake_switch)
+    monkeypatch.setattr(gateway_module, "_update_device_presence", _fake_presence)
+    monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda *_args, **_kwargs: None))
+
+    selected = asyncio.run(
+        gateway_module.process_events_command(
+            kind="desktop.webspace.use",
+            cmd_id="cmd-navigation",
+            payload={"webspace_id": "dev1-dev", "scenario_id": "test04_recipes"},
+            device_id="browser-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+            client_label="navigation-e2e",
+        )
+    )
+
+    assert selected == "dev1-dev"
+    assert calls[0][0] == "switch"
+    assert calls[0][1][0:2] == ("dev1-dev", "test04_recipes")
+    assert calls[0][1][2]["wait_for_rebuild"] is True
+    assert calls[1] == ("presence", ("dev1-dev", "browser-1"))
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["scenario_id"] == "test04_recipes"
 
 
 def test_process_events_command_publishes_device_registered(monkeypatch) -> None:
@@ -3669,11 +3950,12 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
         captured["offer"] = kwargs
         return {"type": "answer", "sdp": "answer-sdp"}
 
-    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None) -> None:
+    async def _handle_remote_ice(device_id: str, candidate: object, generation_id=None, peer_id=None) -> None:
         captured["ice"] = {
             "device_id": device_id,
             "candidate": candidate,
             "generation_id": generation_id,
+            "peer_id": peer_id,
         }
 
     monkeypatch.setitem(
@@ -3700,9 +3982,13 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
                             "type": "offer",
                             "sdp": "offer-sdp",
                             "device_id": "dev-signal",
+                            "peer_id": "peer-tab-1",
                             "webspace_id": "ops",
                             "generation_id": "rtc-generation-1",
                             "negotiation_mode": "fresh_peer",
+                            "browser_session_id": "bs-tab-1",
+                            "client_build_id": "build-1",
+                            "client_build_version": "0.0.267",
                         },
                     }
                 ),
@@ -3714,6 +4000,7 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
                         "kind": "rtc.ice",
                         "payload": {
                             "device_id": "dev-signal",
+                            "peer_id": "peer-tab-1",
                             "webspace_id": "ops",
                             "generation_id": "rtc-generation-1",
                             "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
@@ -3739,13 +4026,18 @@ def test_events_ws_uses_rtc_payload_identity_before_device_register(monkeypatch)
 
     assert websocket.accepted is True
     assert captured["offer"]["device_id"] == "dev-signal"  # type: ignore[index]
+    assert captured["offer"]["peer_id"] == "peer-tab-1"  # type: ignore[index]
     assert captured["offer"]["webspace_id"] == "ops"  # type: ignore[index]
     assert captured["offer"]["generation_id"] == "rtc-generation-1"  # type: ignore[index]
     assert captured["offer"]["negotiation_mode"] == "fresh_peer"  # type: ignore[index]
+    assert captured["offer"]["browser_session_id"] == "bs-tab-1"  # type: ignore[index]
+    assert captured["offer"]["client_build_id"] == "build-1"  # type: ignore[index]
+    assert captured["offer"]["client_build_version"] == "0.0.267"  # type: ignore[index]
     assert captured["ice"] == {
         "device_id": "dev-signal",
         "candidate": {"candidate": "candidate:1", "sdpMid": "0", "sdpMLineIndex": 0},
         "generation_id": "rtc-generation-1",
+        "peer_id": "peer-tab-1",
     }
     assert websocket.sent[0] == {
         "ch": "events",
@@ -3827,6 +4119,34 @@ def test_close_browser_yws_connections_by_device_or_session() -> None:
 def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+
+
+def test_yjs_balancer_reports_attempt_ids_for_their_exact_browser_session(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    monkeypatch.setattr(gateway_module, "_y_server_runtime_snapshot", lambda: {"ready": True, "room_total": 1})
+
+    tab_a = SimpleNamespace(query_params={"dev": "dev-shared", "browser_session_id": "tab-a"})
+    tab_b = SimpleNamespace(query_params={"dev": "dev-shared", "browser_session_id": "tab-b"})
+    gateway_module._set_websocket_yws_attempt_id(tab_a, "attempt-a")
+    gateway_module._set_websocket_yws_attempt_id(tab_b, "attempt-b")
+    gateway_module._track_yws_connection("ops", tab_a, device_id="dev-shared")
+    gateway_module._track_yws_connection("ops", tab_b, device_id="dev-shared")
+
+    rows = gateway_module.yjs_balancer_snapshot(webspace_id="ops")["usage"]["active_client_sessions"]
+
+    assert {
+        row["client_limit_id"]: row["attempt_ids"]
+        for row in rows
+    } == {
+        "tab-a": ["attempt-a"],
+        "tab-b": ["attempt-b"],
+    }
+
+    gateway_module._untrack_yws_connection("ops", tab_a)
+    gateway_module._untrack_yws_connection("ops", tab_b)
     _clear_yws_guard_state()
     gateway_module._YWS_GUARD_DIAG.clear()
     monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 4)
@@ -4823,6 +5143,44 @@ def test_acquire_yws_room_uses_cache_when_bootstrap_lags(monkeypatch) -> None:
         gateway_module.y_server.rooms = original_rooms
 
     assert resolved is room
+
+
+def test_acquire_yws_room_shares_one_room_across_devices_in_same_webspace(monkeypatch) -> None:
+    """Browser identity selects a connection, never a private Webspace state."""
+    monkeypatch.setattr(gateway_module, "_YWS_ROOM_READY_TIMEOUT_S", 0.0)
+    rooms: dict[str, object] = {}
+
+    async def _fake_get_room(name: str) -> object:
+        await asyncio.sleep(0)
+        return rooms.setdefault(name, object())
+
+    async def _exercise() -> tuple[object, object, object]:
+        first, second, other = await asyncio.gather(
+            gateway_module._acquire_yws_room(
+                "dev1-dev",
+                "browser-device-a",
+                yws_attempt_id="webrtc-yjs:page-a",
+            ),
+            gateway_module._acquire_yws_room(
+                "dev1-dev",
+                "browser-device-b",
+                yws_attempt_id="webrtc-yjs:page-b",
+            ),
+            gateway_module._acquire_yws_room(
+                "desktop",
+                "browser-device-a",
+                yws_attempt_id="webrtc-yjs:page-c",
+            ),
+        )
+        return first, second, other
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _fake_get_room)
+
+    first, second, other = asyncio.run(_exercise())
+
+    assert first is second
+    assert first is not other
+    assert set(rooms) == {"dev1-dev", "desktop"}
 
 
 def test_acquire_yws_room_leaves_bootstrap_running_after_wait_timeout(monkeypatch) -> None:

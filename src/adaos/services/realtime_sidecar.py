@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from adaos.services.bounded_io import env_int, rotate_file_if_needed
+from adaos.services.env_policy import TRUE_VALUES, env_bool, env_int as runtime_env_int
 from adaos.services.nats_config import (
     normalize_nats_ws_url,
     nats_url_uses_websocket,
@@ -35,6 +37,7 @@ from adaos.services.nats_ws_transport import (
 )
 from adaos.services.runtime_dotenv import merged_runtime_dotenv_env
 from adaos.services.runtime_paths import current_base_dir, current_repo_root
+from adaos.services.runtime_topology import DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT, supervisor_base_from_env
 
 NATS_PING = b"PING\r\n"
 NATS_PONG = b"PONG\r\n"
@@ -78,7 +81,7 @@ def _truthy(value: Any, *, default: bool = False) -> bool:
         return default
     if not text:
         return default
-    return text in {"1", "true", "on", "yes"}
+    return text in TRUE_VALUES
 
 
 def _realtime_remote_quarantine_s() -> float:
@@ -286,7 +289,10 @@ def realtime_sidecar_enabled(*, role: str | None = None, os_name: str | None = N
 
 
 def realtime_sidecar_host() -> str:
-    return str(os.getenv("ADAOS_REALTIME_HOST", "127.0.0.1") or "127.0.0.1").strip() or "127.0.0.1"
+    return (
+        str(os.getenv("ADAOS_REALTIME_HOST", DEFAULT_LOOPBACK_HOST) or DEFAULT_LOOPBACK_HOST).strip()
+        or DEFAULT_LOOPBACK_HOST
+    )
 
 
 def realtime_sidecar_port() -> int:
@@ -300,12 +306,24 @@ def realtime_sidecar_port() -> int:
     return port
 
 
+def realtime_sidecar_control_port() -> int:
+    default_port = int(realtime_sidecar_port()) + 4
+    raw = os.getenv("ADAOS_REALTIME_CONTROL_PORT")
+    try:
+        port = int(str(raw or default_port).strip() or str(default_port))
+    except Exception:
+        port = default_port
+    if port <= 0:
+        port = default_port
+    return port
+
+
 def realtime_sidecar_local_url() -> str:
     return f"nats://{realtime_sidecar_host()}:{realtime_sidecar_port()}"
 
 
 def _realtime_sidecar_lifecycle_manager() -> str:
-    return "supervisor" if _truthy(os.getenv("ADAOS_SUPERVISOR_ENABLED"), default=False) else "runtime"
+    return "supervisor" if env_bool("ADAOS_SUPERVISOR_ENABLED") else "runtime"
 
 
 def _route_tunnel_runtime_paths() -> dict[str, str]:
@@ -411,7 +429,7 @@ def _media_proxy_public_bases(*, host: str | None = None, port: int | None = Non
 
 
 def _media_proxy_listener_url(*, host: str, port: int) -> str:
-    return f"http://{str(host or '').strip() or '127.0.0.1'}:{int(port)}"
+    return f"http://{str(host or '').strip() or DEFAULT_LOOPBACK_HOST}:{int(port)}"
 
 
 def _route_tunnel_upstream_host() -> str:
@@ -421,32 +439,23 @@ def _route_tunnel_upstream_host() -> str:
     raw = str(os.getenv("ADAOS_RUNTIME_HOST") or "").strip()
     if raw:
         return raw
-    return "127.0.0.1"
+    return DEFAULT_LOOPBACK_HOST
 
 
 def _route_tunnel_upstream_port() -> int:
     dynamic = _route_tunnel_supervisor_runtime_endpoint()
     if dynamic is not None:
         return dynamic[1]
-    raw = os.getenv("ADAOS_RUNTIME_PORT")
-    try:
-        port = int(str(raw or "8777").strip() or "8777")
-    except Exception:
-        port = 8777
-    if port <= 0:
-        port = 8777
-    return port
+    return runtime_env_int("ADAOS_RUNTIME_PORT", DEFAULT_RUNTIME_PORT, minimum=1)
 
 
 def _route_tunnel_supervisor_base_url() -> str | None:
-    if str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+    if not env_bool("ADAOS_SUPERVISOR_ENABLED"):
         return None
     raw = str(os.getenv("ADAOS_SUPERVISOR_URL") or os.getenv("ADAOS_SUPERVISOR_BASE") or "").strip().rstrip("/")
     if raw:
         return raw
-    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-    return f"http://{host}:{port}"
+    return supervisor_base_from_env()
 
 
 def _route_tunnel_runtime_endpoint_from_payload(payload: dict[str, Any] | None) -> tuple[str, int] | None:
@@ -1104,20 +1113,13 @@ def _realtime_ws_proxy() -> str | bool | None:
 
 
 def _realtime_nats_ping_interval_s() -> float | None:
-    raw = os.getenv("ADAOS_REALTIME_NATS_PING_S")
-    if raw is None:
-        raw = os.getenv("ADAOS_REALTIME_UPSTREAM_NATS_PING_S")
-    if raw is None:
-        return 15.0
-    try:
-        value = float(str(raw).strip() or "0")
-    except Exception:
-        return None
-    if value <= 0.0:
-        return None
-    if value < 5.0:
-        value = 5.0
-    return value
+    # The sidecar is a transparent byte relay, not a NATS protocol endpoint.
+    # Injecting PING between two TCP reads can place those bytes inside a PUB
+    # payload while its declared size remains unchanged. NATS then reports a
+    # parser error at MSG_END_R and closes the upstream connection. Keepalive
+    # belongs to the runtime NATS client; WebSocket control ping/pong remains
+    # available to the transport. Legacy env knobs are intentionally ignored.
+    return None
 
 
 def _realtime_probe_grace_s() -> float:
@@ -1285,6 +1287,13 @@ async def _is_port_open(host: str, port: int) -> bool:
 
 async def probe_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float = 2.0) -> bool:
     try:
+        if _find_realtime_listener_pid(host, port):
+            return True
+    except Exception:
+        pass
+    if not _truthy(os.getenv("ADAOS_REALTIME_READY_PROBE_CONNECT"), default=False):
+        return False
+    try:
         return bool(await asyncio.wait_for(_is_port_open(host, port), timeout=max(0.1, float(timeout_s))))
     except Exception:
         return False
@@ -1358,6 +1367,13 @@ async def start_realtime_sidecar_subprocess(
         "--port",
         str(port),
     ]
+    creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    if os.name == "nt":
+        # A dedicated process group lets the runtime request a graceful
+        # CTRL_BREAK shutdown.  TerminateProcess would tear down an active
+        # WebSocket without a close frame and surface as synthetic code 1006
+        # on the peer even during an operator-requested restart.
+        creationflags |= int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     proc = subprocess.Popen(
         args,
         cwd=str(launch_cwd),
@@ -1366,11 +1382,7 @@ async def start_realtime_sidecar_subprocess(
         stdout=stdout_handle,
         stderr=subprocess.STDOUT,
         start_new_session=(os.name != "nt"),
-        creationflags=(
-            int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            if os.name == "nt"
-            else 0
-        ),
+        creationflags=creationflags,
     )
     with contextlib.suppress(Exception):
         stdout_handle.close()
@@ -1381,16 +1393,61 @@ async def start_realtime_sidecar_subprocess(
     return proc
 
 
+def _realtime_sidecar_shutdown_signal() -> Any:
+    if os.name == "nt":
+        return getattr(signal, "CTRL_BREAK_EVENT", None)
+    return getattr(signal, "SIGTERM", None)
+
+
+async def _request_realtime_sidecar_graceful_shutdown(*, timeout_s: float = 2.0) -> bool:
+    writer: asyncio.StreamWriter | None = None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(realtime_sidecar_host(), realtime_sidecar_control_port()),
+            timeout=max(0.1, float(timeout_s)),
+        )
+        writer.write(
+            b"POST /shutdown HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Connection: close\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+        await asyncio.wait_for(writer.drain(), timeout=max(0.1, float(timeout_s)))
+        response = await asyncio.wait_for(reader.read(256), timeout=max(0.1, float(timeout_s)))
+        return response.startswith(b"HTTP/1.1 202")
+    except Exception:
+        return False
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
 async def stop_realtime_sidecar_subprocess(proc: subprocess.Popen[Any] | None) -> None:
     if proc is None:
         return
     if proc.poll() is not None:
         return
-    with contextlib.suppress(Exception):
-        proc.terminate()
+    graceful_requested = await _request_realtime_sidecar_graceful_shutdown()
+    graceful_signal = _realtime_sidecar_shutdown_signal()
+    if not graceful_requested and graceful_signal is not None:
+        try:
+            proc.send_signal(graceful_signal)
+            graceful_requested = True
+        except Exception:
+            graceful_requested = False
+    if not graceful_requested:
+        with contextlib.suppress(Exception):
+            proc.terminate()
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        if proc.poll() is not None:
+        listener_pid = await asyncio.to_thread(
+            _find_realtime_listener_pid,
+            realtime_sidecar_host(),
+            realtime_sidecar_port(),
+        )
+        if proc.poll() is not None and listener_pid is None:
             return
         await asyncio.sleep(0.1)
     with contextlib.suppress(Exception):
@@ -1527,11 +1584,13 @@ class RealtimeSidecarServer:
         self._host = str(host or "127.0.0.1")
         self._port = int(port)
         self._server: asyncio.AbstractServer | None = None
+        self._control_server: asyncio.AbstractServer | None = None
         self._route_servers: dict[str, Any] = {}
         self._media_server: asyncio.AbstractServer | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
         self._diag_task: asyncio.Task[Any] | None = None
         self._stopped = asyncio.Event()
+        self._shutdown_requested = asyncio.Event()
         self._stats = _RelayStats()
         self._pending_ping_sources: deque[str] = deque()
         _reset_route_tunnel_runtime_state()
@@ -1661,6 +1720,21 @@ class RealtimeSidecarServer:
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self._host, self._port)
+        try:
+            self._control_server = await asyncio.start_server(
+                self._handle_control_client,
+                self._host,
+                realtime_sidecar_control_port(),
+            )
+            self._log(
+                f"control ready listen=http://{self._host}:{realtime_sidecar_control_port()}"
+            )
+        except Exception as exc:
+            self._control_server = None
+            self._log(
+                f"control bind failed listen={self._host}:{realtime_sidecar_control_port()} "
+                f"err={type(exc).__name__}: {exc}"
+            )
         await self._start_route_tunnel_listeners()
         await self._start_media_proxy_listener()
         self._diag_task = asyncio.create_task(self._diag_loop(), name="adaos-realtime-diag")
@@ -1674,7 +1748,56 @@ class RealtimeSidecarServer:
             await self.start()
         assert self._server is not None
         async with self._server:
-            await self._server.serve_forever()
+            serve_task = asyncio.create_task(
+                self._server.serve_forever(),
+                name="adaos-realtime-nats-listener",
+            )
+            shutdown_task = asyncio.create_task(
+                self._shutdown_requested.wait(),
+                name="adaos-realtime-control-shutdown",
+            )
+            try:
+                done, _pending = await asyncio.wait(
+                    (serve_task, shutdown_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if shutdown_task in done and not serve_task.done():
+                    serve_task.cancel()
+                await serve_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if not shutdown_task.done():
+                    shutdown_task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await shutdown_task
+
+    async def _handle_control_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        accepted = False
+        try:
+            request = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+            request_line = request.split(b"\r\n", 1)[0]
+            accepted = request_line == b"POST /shutdown HTTP/1.1"
+            status = b"202 Accepted" if accepted else b"404 Not Found"
+            writer.write(
+                b"HTTP/1.1 "
+                + status
+                + b"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+            )
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        if accepted:
+            self._log("graceful shutdown requested through local control endpoint")
+            self._shutdown_requested.set()
 
     async def close(self) -> None:
         self._stopped.set()
@@ -1684,6 +1807,11 @@ class RealtimeSidecarServer:
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
         self._active_tasks.clear()
+        if self._control_server is not None:
+            self._control_server.close()
+            with contextlib.suppress(BaseException):
+                await self._control_server.wait_closed()
+            self._control_server = None
         for server in list(self._route_servers.values()):
             server.close()
         for server in list(self._route_servers.values()):
@@ -2409,7 +2537,6 @@ class RealtimeSidecarServer:
         if len(self._live_session_tasks()) <= 1:
             self._pending_ping_sources = pending_ping_sources
         client_pings_outstanding = 0
-        sidecar_pings_outstanding = 0
 
         async def _queue_remote_payload(payload: bytes) -> None:
             await send_q.put(payload)
@@ -2433,7 +2560,7 @@ class RealtimeSidecarServer:
                 await _queue_remote_payload(chunk)
 
         async def _remote_writer_loop() -> None:
-            nonlocal client_pings_outstanding, sidecar_pings_outstanding
+            nonlocal client_pings_outstanding
             recv_task: asyncio.Task[Any] | None = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
             wake_task: asyncio.Task[Any] | None = None
             try:
@@ -2461,14 +2588,6 @@ class RealtimeSidecarServer:
                         elif payload == NATS_PONG:
                             self._stats.remote_nats_pongs_rx += 1
                             source = pending_ping_sources.popleft() if pending_ping_sources else None
-                            if source == "sidecar":
-                                if sidecar_pings_outstanding > 0:
-                                    sidecar_pings_outstanding -= 1
-                                if self._stats.sidecar_nats_pings_outstanding > 0:
-                                    self._stats.sidecar_nats_pings_outstanding -= 1
-                                self._stats.sidecar_nats_pongs_rx += 1
-                                recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
-                                continue
                             if source == "client":
                                 if client_pings_outstanding > 0:
                                     client_pings_outstanding -= 1
@@ -2478,13 +2597,6 @@ class RealtimeSidecarServer:
                                 client_pings_outstanding -= 1
                                 if self._stats.client_nats_pings_outstanding > 0:
                                     self._stats.client_nats_pings_outstanding -= 1
-                            elif sidecar_pings_outstanding > 0:
-                                sidecar_pings_outstanding -= 1
-                                if self._stats.sidecar_nats_pings_outstanding > 0:
-                                    self._stats.sidecar_nats_pings_outstanding -= 1
-                                self._stats.sidecar_nats_pongs_rx += 1
-                                recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
-                                continue
                         await recv_q.put(payload)
                         recv_task = asyncio.create_task(ws.recv(), name="adaos-realtime-ws-recv")
                         continue
@@ -2531,29 +2643,12 @@ class RealtimeSidecarServer:
                 self._stats.local_tx_bytes += len(payload)
                 self._stats.last_local_tx_at = time.monotonic()
 
-        async def _sidecar_keepalive_loop(*, interval_s: float) -> None:
-            nonlocal sidecar_pings_outstanding
-            while True:
-                await asyncio.sleep(interval_s)
-                if getattr(ws, "closed", False):
-                    return
-                if sidecar_pings_outstanding > 0:
-                    continue
-                pending_ping_sources.append("sidecar")
-                sidecar_pings_outstanding += 1
-                self._stats.sidecar_nats_pings_tx += 1
-                self._stats.sidecar_nats_pings_outstanding += 1
-                await _queue_remote_payload(NATS_PING)
-
-        interval_s = _realtime_nats_ping_interval_s()
-        self._stats.sidecar_nats_ping_interval_s = interval_s
+        self._stats.sidecar_nats_ping_interval_s = _realtime_nats_ping_interval_s()
         tasks = [
             asyncio.create_task(_local_reader_loop(), name="adaos-realtime-l2r"),
             asyncio.create_task(_remote_writer_loop(), name="adaos-realtime-ws-io"),
             asyncio.create_task(_remote_reader_loop(), name="adaos-realtime-r2l"),
         ]
-        if interval_s is not None:
-            tasks.append(asyncio.create_task(_sidecar_keepalive_loop(interval_s=interval_s), name="adaos-realtime-ka"))
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
@@ -2659,15 +2754,64 @@ class RealtimeSidecarServer:
             self._stats.active_session = bool(self._live_session_tasks())
 
 
+def _install_realtime_shutdown_handlers(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    shutdown_requested: asyncio.Event,
+) -> dict[Any, Any]:
+    previous: dict[Any, Any] = {}
+
+    def _request_shutdown(_signum: int, _frame: Any) -> None:
+        loop.call_soon_threadsafe(shutdown_requested.set)
+
+    names = ("SIGBREAK",) if os.name == "nt" else ("SIGTERM",)
+    for name in names:
+        signum = getattr(signal, name, None)
+        if signum is None:
+            continue
+        try:
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, _request_shutdown)
+        except (OSError, RuntimeError, ValueError):
+            previous.pop(signum, None)
+    return previous
+
+
+def _restore_realtime_shutdown_handlers(previous: dict[Any, Any]) -> None:
+    for signum, handler in previous.items():
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
+            signal.signal(signum, handler)
+
+
 async def run_realtime_sidecar(*, host: str | None = None, port: int | None = None) -> int:
     apply_realtime_loop_policy()
     server = RealtimeSidecarServer(host=host or realtime_sidecar_host(), port=port or realtime_sidecar_port())
+    shutdown_requested = asyncio.Event()
+    previous_handlers = _install_realtime_shutdown_handlers(
+        loop=asyncio.get_running_loop(),
+        shutdown_requested=shutdown_requested,
+    )
+    serve_task: asyncio.Task[Any] | None = None
+    shutdown_task: asyncio.Task[Any] | None = None
     try:
-        await server.serve_forever()
+        serve_task = asyncio.create_task(server.serve_forever(), name="adaos-realtime-serve")
+        shutdown_task = asyncio.create_task(shutdown_requested.wait(), name="adaos-realtime-shutdown")
+        done, _pending = await asyncio.wait(
+            (serve_task, shutdown_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if shutdown_task in done and not serve_task.done():
+            serve_task.cancel()
+        await serve_task
     except asyncio.CancelledError:
         pass
     finally:
+        if shutdown_task is not None and not shutdown_task.done():
+            shutdown_task.cancel()
+            with contextlib.suppress(BaseException):
+                await shutdown_task
         await server.close()
+        _restore_realtime_shutdown_handlers(previous_handlers)
     return 0
 
 

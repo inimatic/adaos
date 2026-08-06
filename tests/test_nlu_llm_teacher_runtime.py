@@ -1694,6 +1694,7 @@ async def test_llm_teacher_rejects_regex_when_strategy_prefers_rasa_example(monk
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import llm_teacher_runtime as llm
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.nlu.teacher_runtime import _on_example_save
     from adaos.services.yjs.doc import async_get_ydoc
 
@@ -1788,7 +1789,13 @@ async def test_llm_teacher_rejects_regex_when_strategy_prefers_rasa_example(monk
     await ctx.bus.wait_for_idle(timeout=2.0)
 
     saved = json.loads((scenario_root / "scenario.json").read_text(encoding="utf-8"))
-    assert request_text in saved["nlu"]["intents"][intent_name]["examples"]
+    assert "examples" not in saved["nlu"]["intents"][intent_name]
+    assert any(
+        item["text"] == request_text
+        and item["intent"] == intent_name
+        and item["target"] == {"type": "scenario", "id": scenario_id}
+        for item in read_store(ctx)["examples"]
+    )
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}
         dataset = list((teacher or {}).get("dataset") or [])
@@ -2837,7 +2844,16 @@ async def test_llm_teacher_trains_skill_action_regex_and_rolls_back(monkeypatch)
     assert via == "regex.dynamic"
     assert slots.get("city") == "Oslo"
     saved_skill = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
-    assert (saved_skill.get("nlu") or {}).get("regex_rules")
+    assert not ((saved_skill.get("nlu") or {}).get("regex_rules") or [])
+    async with async_get_ydoc(webspace_id) as ydoc:
+        runtime_rules = list(
+            ((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or []
+        )
+    assert any(
+        item.get("candidate_id") == candidate_id
+        and item.get("provenance", {}).get("target") == {"type": "skill", "id": skill_id}
+        for item in runtime_rules
+    )
 
     await _on_regex_rule_rollback({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
     intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)
@@ -2952,7 +2968,17 @@ async def test_llm_teacher_trains_interface_action_regex_and_rolls_back(monkeypa
     assert intent == intent_name
     assert via == "regex.dynamic"
     saved_scenario = json.loads(scenario_json.read_text(encoding="utf-8"))
-    assert (saved_scenario.get("nlu") or {}).get("regex_rules")
+    assert not ((saved_scenario.get("nlu") or {}).get("regex_rules") or [])
+    async with async_get_ydoc(webspace_id) as ydoc:
+        runtime_rules = list(
+            ((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or []
+        )
+    assert any(
+        item.get("candidate_id") == candidate_id
+        and item.get("provenance", {}).get("target")
+        == {"type": "scenario", "id": scenario_id}
+        for item in runtime_rules
+    )
 
     await _on_regex_rule_rollback({"webspace_id": webspace_id, "candidate_id": candidate_id, "_meta": {"webspace_id": webspace_id}})
     intent, slots, via, _raw = await _try_regex_intent(request_text, webspace_id=webspace_id)

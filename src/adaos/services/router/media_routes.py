@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Callable
 
 
 _ROUTE_LABELS: dict[str, str] = {
@@ -235,4 +236,356 @@ def resolve_media_route_intent(
     }
 
 
-__all__ = ["resolve_media_route_intent"]
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _route_ability_available(route_state: dict[str, Any], topology_id: str) -> bool:
+    capabilities = route_state.get("capabilities") if isinstance(route_state.get("capabilities"), dict) else {}
+    abilities = capabilities.get("ability") if isinstance(capabilities.get("ability"), dict) else {}
+    entry = abilities.get(topology_id) if isinstance(abilities.get(topology_id), dict) else {}
+    return _coerce_bool(entry.get("available"))
+
+
+def _route_target_member_id(route_state: dict[str, Any]) -> str:
+    preferred_member_id = str(route_state.get("preferred_member_id") or "").strip()
+    if preferred_member_id:
+        return preferred_member_id
+    producer_target = route_state.get("producer_target") if isinstance(route_state.get("producer_target"), dict) else {}
+    return str(producer_target.get("member_id") or "").strip()
+
+
+def _route_signature(route_state: dict[str, Any] | None) -> tuple[str, str, str, str, str]:
+    state = route_state if isinstance(route_state, dict) else {}
+    producer_target = state.get("producer_target") if isinstance(state.get("producer_target"), dict) else {}
+    return (
+        str(state.get("active_route") or "").strip(),
+        str(state.get("delivery_topology") or "").strip(),
+        _route_target_member_id(state),
+        str(producer_target.get("kind") or "").strip(),
+        str(producer_target.get("webspace_id") or "").strip(),
+    )
+
+
+def _build_media_route_attempt(
+    previous_route_state: dict[str, Any] | None,
+    normalized_route_state: dict[str, Any],
+    *,
+    cause: str,
+    ts: float,
+    observed_failure: str | None = None,
+    coerce_value: Callable[[Any], Any] | None = None,
+) -> dict[str, Any]:
+    coerce = coerce_value or (lambda value: value)
+    previous = previous_route_state if isinstance(previous_route_state, dict) else {}
+    previous_attempt = coerce(previous.get("attempt"))
+    previous_attempt = dict(previous_attempt) if isinstance(previous_attempt, dict) else {}
+    previous_signature = _route_signature(previous)
+    next_signature = _route_signature(normalized_route_state)
+    has_previous_selection = any(previous_signature)
+    route_changed = next_signature != previous_signature
+    sequence = _coerce_int(previous_attempt.get("sequence"))
+    if sequence <= 0:
+        sequence = 1
+    elif route_changed and has_previous_selection:
+        sequence += 1
+    switch_total = _coerce_int(previous_attempt.get("switch_total"))
+    if route_changed and has_previous_selection:
+        switch_total += 1
+    selected_at = _coerce_float(previous_attempt.get("selected_at"))
+    if selected_at is None or (route_changed and has_previous_selection):
+        selected_at = ts
+    last_switch_at = _coerce_float(previous_attempt.get("last_switch_at"))
+    if route_changed and has_previous_selection:
+        last_switch_at = ts
+    previous_route = str(previous.get("active_route") or "").strip()
+    previous_delivery_topology = str(previous.get("delivery_topology") or "").strip()
+    previous_member_id = _route_target_member_id(previous)
+    producer_target = (
+        normalized_route_state.get("producer_target")
+        if isinstance(normalized_route_state.get("producer_target"), dict)
+        else {}
+    )
+    current_failure = str(observed_failure or "").strip() or None
+    if current_failure is None:
+        current_failure = str(previous_attempt.get("observed_failure") or "").strip() or None
+
+    attempt = {
+        "sequence": sequence,
+        "state": "selected" if str(normalized_route_state.get("active_route") or "").strip() else "unavailable",
+        "active_route": normalized_route_state.get("active_route"),
+        "delivery_topology": normalized_route_state.get("delivery_topology"),
+        "preferred_route": normalized_route_state.get("preferred_route"),
+        "preferred_member_id": normalized_route_state.get("preferred_member_id"),
+        "producer_target": dict(producer_target) if producer_target else None,
+        "selection_reason": normalized_route_state.get("selection_reason"),
+        "degradation_reason": normalized_route_state.get("degradation_reason"),
+        "refresh_cause": cause,
+        "observed_failure": current_failure,
+        "switch_total": switch_total,
+        "selected_at": selected_at,
+        "last_switch_at": last_switch_at,
+    }
+    if route_changed and has_previous_selection:
+        if previous_route:
+            attempt["previous_route"] = previous_route
+        if previous_delivery_topology:
+            attempt["previous_delivery_topology"] = previous_delivery_topology
+        if previous_member_id:
+            attempt["previous_member_id"] = previous_member_id
+    else:
+        prior_route = str(previous_attempt.get("previous_route") or "").strip()
+        prior_topology = str(previous_attempt.get("previous_delivery_topology") or "").strip()
+        prior_member = str(previous_attempt.get("previous_member_id") or "").strip()
+        if prior_route:
+            attempt["previous_route"] = prior_route
+        if prior_topology:
+            attempt["previous_delivery_topology"] = prior_topology
+        if prior_member:
+            attempt["previous_member_id"] = prior_member
+    return attempt
+
+
+def build_media_route_refresh_payload(
+    route_state: dict[str, Any],
+    *,
+    cause: str,
+    browser_session_totals: tuple[int, int],
+    observed_failure: str | None = None,
+) -> dict[str, Any]:
+    member_browser = (
+        route_state.get("member_browser_direct")
+        if isinstance(route_state.get("member_browser_direct"), dict)
+        else {}
+    )
+    browser_session_total, connected_browser_session_total = browser_session_totals
+    payload: dict[str, Any] = {
+        "need": str(route_state.get("route_intent") or "scenario_response_media"),
+        "producer_preference": str(route_state.get("producer_preference") or ""),
+        "direct_local_ready": _route_ability_available(route_state, "local_http"),
+        "root_routed_ready": _route_ability_available(route_state, "root_media_relay"),
+        "hub_webrtc_ready": _route_ability_available(route_state, "hub_webrtc_loopback"),
+        "browser_session_total": browser_session_total,
+        "connected_browser_session_total": connected_browser_session_total,
+        "refresh_cause": cause,
+    }
+    if member_browser:
+        payload["member_browser_direct"] = {}
+        if "admitted" in member_browser:
+            payload["member_browser_direct"]["admitted"] = _coerce_bool(member_browser.get("admitted"))
+    monitoring = route_state.get("monitoring") if isinstance(route_state.get("monitoring"), dict) else {}
+    existing_failure = str(monitoring.get("observed_failure") or "").strip()
+    if observed_failure:
+        payload["observed_failure"] = observed_failure
+    elif existing_failure:
+        payload["observed_failure"] = existing_failure
+    return payload
+
+
+def resolve_media_route_state(
+    payload: dict[str, Any],
+    *,
+    webspace_id: str,
+    browser_session_totals: tuple[int, int],
+    previous_route_state: dict[str, Any] | None = None,
+    coerce_value: Callable[[Any], Any] | None = None,
+) -> dict[str, Any] | None:
+    coerce = coerce_value or (lambda value: value)
+    raw_route = payload.get("route")
+    if not isinstance(raw_route, dict) and isinstance(payload.get("route_intent"), dict):
+        raw_route = payload.get("route_intent")
+
+    route_state = coerce(raw_route) if isinstance(raw_route, dict) else None
+    member_browser = payload.get("member_browser_direct")
+    member_browser = member_browser if isinstance(member_browser, dict) else {}
+    current_browser_session_total, current_connected_browser_session_total = browser_session_totals
+    route_producer_target = (
+        route_state.get("producer_target")
+        if isinstance(route_state, dict) and isinstance(route_state.get("producer_target"), dict)
+        else {}
+    )
+    preferred_member_id = str(payload.get("preferred_member_id") or "").strip()
+    if not preferred_member_id and isinstance(route_state, dict):
+        preferred_member_id = str(route_state.get("preferred_member_id") or "").strip()
+    if not preferred_member_id:
+        preferred_member_id = str(route_producer_target.get("member_id") or "").strip()
+    raw_candidate_members = (
+        member_browser.get("candidate_members")
+        if isinstance(member_browser.get("candidate_members"), list)
+        else payload.get("candidate_member_ids")
+    )
+    candidate_member_ids = (
+        [str(item or "").strip() for item in raw_candidate_members if str(item or "").strip()]
+        if isinstance(raw_candidate_members, list)
+        else []
+    )
+    admitted_member_browser = (
+        _coerce_bool(member_browser.get("admitted"))
+        if member_browser and "admitted" in member_browser
+        else _coerce_bool(payload.get("member_browser_direct_admitted"))
+    )
+    auto_member_browser: dict[str, Any] = {}
+    if not preferred_member_id or not candidate_member_ids:
+        try:
+            from adaos.services.media_capability import member_browser_direct_foundation
+
+            auto_member_browser = member_browser_direct_foundation(
+                browser_session_total=(
+                    _coerce_int(member_browser.get("browser_session_total"))
+                    if member_browser and "browser_session_total" in member_browser
+                    else (
+                        _coerce_int(payload.get("browser_session_total"))
+                        if "browser_session_total" in payload
+                        else current_browser_session_total
+                    )
+                ),
+                connected_browser_session_total=(
+                    _coerce_int(member_browser.get("connected_browser_session_total"))
+                    if member_browser and "connected_browser_session_total" in member_browser
+                    else (
+                        _coerce_int(payload.get("connected_browser_session_total"))
+                        if "connected_browser_session_total" in payload
+                        else current_connected_browser_session_total
+                    )
+                ),
+                admitted=admitted_member_browser,
+            )
+        except Exception:
+            auto_member_browser = {}
+    if not preferred_member_id:
+        preferred_member_id = str(auto_member_browser.get("preferred_member_id") or "").strip()
+    if not candidate_member_ids:
+        candidate_member_ids = [
+            str(item or "").strip()
+            for item in list(auto_member_browser.get("candidate_members") or [])
+            if str(item or "").strip()
+        ]
+
+    if route_state is None:
+        route_state = resolve_media_route_intent(
+            need=str(payload.get("need") or payload.get("route_intent") or "scenario_response_media"),
+            target_webspace_id=webspace_id,
+            producer_preference=str(payload.get("producer_preference") or ""),
+            preferred_member_id=preferred_member_id or None,
+            candidate_member_ids=candidate_member_ids,
+            direct_local_ready=_coerce_bool(payload.get("direct_local_ready")),
+            root_routed_ready=_coerce_bool(payload.get("root_routed_ready")),
+            hub_webrtc_ready=_coerce_bool(payload.get("hub_webrtc_ready")),
+            member_browser_direct_possible=(
+                _coerce_bool(member_browser.get("possible"))
+                if member_browser and "possible" in member_browser
+                else (
+                    _coerce_bool(payload.get("member_browser_direct_possible"))
+                    if "member_browser_direct_possible" in payload
+                    else _coerce_bool(auto_member_browser.get("possible"))
+                )
+            ),
+            member_browser_direct_admitted=(
+                _coerce_bool(member_browser.get("admitted"))
+                if member_browser and "admitted" in member_browser
+                else (
+                    _coerce_bool(payload.get("member_browser_direct_admitted"))
+                    if "member_browser_direct_admitted" in payload
+                    else _coerce_bool(auto_member_browser.get("admitted"))
+                )
+            ),
+            member_browser_direct_reason=(
+                str(member_browser.get("reason") or "").strip()
+                or str(payload.get("member_browser_direct_reason") or "").strip()
+                or str(auto_member_browser.get("reason") or "").strip()
+                or None
+            ),
+            candidate_member_total=(
+                _coerce_int(member_browser.get("candidate_member_total"))
+                if member_browser and "candidate_member_total" in member_browser
+                else (
+                    _coerce_int(payload.get("candidate_member_total"))
+                    if "candidate_member_total" in payload
+                    else _coerce_int(auto_member_browser.get("candidate_member_total"))
+                )
+            ),
+            browser_session_total=(
+                _coerce_int(member_browser.get("browser_session_total"))
+                if member_browser and "browser_session_total" in member_browser
+                else (
+                    _coerce_int(payload.get("browser_session_total"))
+                    if "browser_session_total" in payload
+                    else _coerce_int(auto_member_browser.get("browser_session_total"))
+                )
+            ),
+            observed_failure=str(payload.get("observed_failure") or "").strip() or None,
+        )
+
+    if not isinstance(route_state, dict):
+        return None
+
+    monitoring = coerce(route_state.get("monitoring"))
+    monitoring = dict(monitoring) if isinstance(monitoring, dict) else {}
+    observed_failure = str(payload.get("observed_failure") or "").strip()
+    if observed_failure and not monitoring.get("observed_failure"):
+        monitoring["observed_failure"] = observed_failure
+
+    normalized = dict(route_state)
+    normalized_member_browser = coerce(normalized.get("member_browser_direct"))
+    normalized_member_browser = dict(normalized_member_browser) if isinstance(normalized_member_browser, dict) else {}
+    if preferred_member_id and not normalized.get("preferred_member_id"):
+        normalized["preferred_member_id"] = preferred_member_id
+    if candidate_member_ids and not isinstance(normalized_member_browser.get("candidate_members"), list):
+        normalized_member_browser["candidate_members"] = list(candidate_member_ids)
+    if preferred_member_id and not normalized_member_browser.get("preferred_member_id"):
+        normalized_member_browser["preferred_member_id"] = preferred_member_id
+    if candidate_member_ids and not normalized_member_browser.get("candidate_member_total"):
+        normalized_member_browser["candidate_member_total"] = len(candidate_member_ids)
+    if normalized_member_browser:
+        normalized["member_browser_direct"] = normalized_member_browser
+    refresh_cause = str(payload.get("refresh_cause") or "io.out.media.route").strip() or "io.out.media.route"
+    updated_at = float(payload.get("ts") or time.time())
+    effective_observed_failure = str(monitoring.get("observed_failure") or "").strip() or None
+    attempt = _build_media_route_attempt(
+        previous_route_state,
+        normalized,
+        cause=refresh_cause,
+        ts=updated_at,
+        observed_failure=effective_observed_failure,
+        coerce_value=coerce,
+    )
+    normalized["attempt"] = attempt
+    normalized["target_webspace_id"] = webspace_id
+    normalized["route_administrator"] = "router"
+    normalized["updated_at"] = updated_at
+    monitoring["refresh_cause"] = refresh_cause
+    monitoring["attempt_sequence"] = attempt.get("sequence")
+    monitoring["switch_total"] = attempt.get("switch_total")
+    monitoring["last_switch_at"] = attempt.get("last_switch_at")
+    if monitoring:
+        normalized["monitoring"] = monitoring
+    return normalized
+
+
+__all__ = [
+    "build_media_route_refresh_payload",
+    "resolve_media_route_intent",
+    "resolve_media_route_state",
+]

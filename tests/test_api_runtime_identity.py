@@ -197,6 +197,101 @@ def test_node_status_overlays_fresh_sidecar_runtime(monkeypatch) -> None:
     assert supervisor_runtime["runtime"]["sidecar_source"] == "reliability.sidecar_runtime_snapshot"
 
 
+def test_subnet_identity_is_distinct_from_hub_node_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                subnet_id="sn_92ffc943",
+                node_names=["homepoint"],
+                primary_node_name="homepoint",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "load_subnet_alias",
+        lambda *, subnet_id=None: "ruhub" if subnet_id == "sn_92ffc943" else None,
+    )
+
+    payload = asyncio.run(api_server.get_alias())
+
+    assert payload == {
+        "ok": True,
+        "schema": "adaos.subnet.identity.v1",
+        "subnet_id": "sn_92ffc943",
+        "subnet_names": ["ruhub"],
+        "primary_subnet_name": "ruhub",
+        "alias": "ruhub",
+    }
+    assert "node_names" not in payload
+    assert "primary_node_name" not in payload
+
+
+def test_set_subnet_alias_acknowledges_durable_identity_before_projection(monkeypatch) -> None:
+    saved: list[tuple[str, str]] = []
+    bus = types.SimpleNamespace(publish=lambda _event: None)
+    config = types.SimpleNamespace(subnet_id="sn_92ffc943")
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: types.SimpleNamespace(config=config, bus=bus),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "save_subnet_alias",
+        lambda alias, *, subnet_id=None: saved.append((alias, subnet_id)),
+    )
+    monkeypatch.setattr(
+        api_server,
+        "load_subnet_alias",
+        lambda *, subnet_id=None: "ruhub" if subnet_id == "sn_92ffc943" else None,
+    )
+    background = BackgroundTasks()
+
+    payload = asyncio.run(
+        api_server.set_alias(
+            api_server.SetAliasRequest(alias="ruhub"),
+            background,
+        )
+    )
+
+    assert saved == [("ruhub", "sn_92ffc943")]
+    assert payload["primary_subnet_name"] == "ruhub"
+    assert payload["projection_refreshed"] is False
+    assert payload["projection_refresh_scheduled"] is True
+    assert len(background.tasks) == 1
+    assert background.tasks[0].args[1] is bus
+
+
+def test_subnet_alias_background_refresh_publishes_timestamped_event(monkeypatch) -> None:
+    from adaos.services import named_entity_projection
+
+    published: list[object] = []
+
+    async def _request_projection(**_kwargs):
+        return {"pending": False}
+
+    monkeypatch.setattr(named_entity_projection, "default_webspace_id", lambda: "default")
+    monkeypatch.setattr(named_entity_projection, "request_named_entity_projection", _request_projection)
+    bus = types.SimpleNamespace(publish=published.append)
+    event_payload = {
+        "alias": "ruhub",
+        "subnet_id": "sn_92ffc943",
+        "webspace_id": None,
+    }
+
+    asyncio.run(api_server._refresh_subnet_alias_dependents(event_payload, bus))
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.type == "subnet.alias.changed"
+    assert event.payload == event_payload
+    assert event.source == "api"
+    assert isinstance(event.ts, float)
+
+
 @pytest.mark.parametrize("origin", ["https://inimatic.web.app", "https://inimatic.com"])
 def test_private_network_access_middleware_allows_cross_origin_loopback_probe(origin: str) -> None:
     scope = {

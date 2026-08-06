@@ -1018,8 +1018,11 @@ class HubLinkManager:
         _publish_link_event("subnet.member.state.refresh.requested", payload)
         return {"ok": True, **payload}
 
-    async def unregister(self, node_id: str) -> None:
+    async def unregister(self, node_id: str, *, expected_link: HubMemberLink | None = None) -> None:
         async with self._lock:
+            link = self._links.get(node_id)
+            if expected_link is not None and link is not expected_link:
+                return
             link = self._links.pop(node_id, None)
         if not link:
             return

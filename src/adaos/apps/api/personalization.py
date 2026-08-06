@@ -5,7 +5,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
@@ -14,9 +14,11 @@ from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
 from adaos.domain.personalization_access import GrantConstraint, ScopeRef, SubjectRef
+from adaos.sdk import navigation as sdk_navigation
 from adaos.services import personalization_runtime
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.personalization_access import PersonalizationAccessError
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 router = APIRouter(prefix="/personalization", tags=["personalization"])
@@ -237,7 +239,7 @@ def _setting_text(ctx: AgentContext, name: str, fallback: str = "") -> str:
 
 
 def _root_hub_base(ctx: AgentContext) -> str:
-    api_base = _setting_text(ctx, "api_base", "https://api.inimatic.com").rstrip("/")
+    api_base = _setting_text(ctx, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL).rstrip("/")
     subnet_id = personalization_runtime.current_subnet_id(ctx)
     if subnet_id:
         return f"{api_base}/hubs/{subnet_id}"
@@ -247,14 +249,16 @@ def _root_hub_base(ctx: AgentContext) -> str:
 def _base_join_url(request: Request, ctx: AgentContext, invite_id: str) -> str:
     app_base = _setting_text(ctx, "app_base", str(request.base_url)).rstrip("/") or str(request.base_url).rstrip("/")
     subnet_id = personalization_runtime.current_subnet_id(ctx)
-    params: dict[str, str] = {
-        "adaos_invite": invite_id,
-        "try_local_hub": "0",
-    }
+    params: dict[str, str] = {"adaos_invite": invite_id}
     if subnet_id:
-        params["mode"] = "login"
-        params["target_subnet"] = subnet_id
-        params["adaos_subnet"] = subnet_id
+        destination = sdk_navigation.login_destination(
+            zone=_current_zone_id(ctx) or None,
+            subnet_id=subnet_id,
+            auto_login=True,
+            try_local_hub=False,
+        )
+        destination_url = sdk_navigation.build_url(destination, base_url=app_base)
+        params.update(dict(parse_qsl(urlsplit(destination_url).query, keep_blank_values=True)))
     hub_base = _root_hub_base(ctx)
     if hub_base:
         params["adaos_hub_base"] = hub_base
@@ -339,7 +343,12 @@ def _register_root_invite_session(
             or (invite_payload.get("claim_url") if isinstance(invite_payload, Mapping) else "")
             or ""
         ).strip()
-        if "mode=registration" in claim_url and "user_code=" in claim_url and "zone=" in claim_url:
+        destination = sdk_navigation.parse_url(claim_url)
+        if (
+            destination.get("intent") == sdk_navigation.CONNECT_REGISTER
+            and destination.get("user_code")
+            and destination.get("zone")
+        ):
             return claim_url
     except Exception:
         return None

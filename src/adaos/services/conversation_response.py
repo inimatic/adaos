@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import is_dataclass
 from typing import Any, Mapping, Sequence
+import hashlib
+import logging
 import time
 import uuid
 
@@ -11,6 +13,30 @@ from adaos.services import conversation_store
 
 DEFAULT_RENDER_TARGETS = ("text_tail",)
 CARD_CONTENT_TYPES = {"card", "card_list", "table", "form", "webui", "builder_evidence"}
+_LOG = logging.getLogger("adaos.conversation.response")
+
+
+def _response_idempotency_key(
+    *,
+    meta: Mapping[str, Any],
+    request_id: str | None,
+    turn_trace_id: str | None,
+) -> str | None:
+    explicit = str(meta.get("response_idempotency_key") or "").strip()
+    if explicit:
+        return explicit
+    request_ref = str(request_id or meta.get("request_id") or meta.get("idempotency_key") or "").strip()
+    if not request_ref:
+        return None
+    presentation_ref = str(
+        meta.get("interaction_presentation_id")
+        or meta.get("interaction_id")
+        or turn_trace_id
+        or meta.get("turn_trace_id")
+        or "message"
+    ).strip()
+    digest = hashlib.sha256(f"{request_ref}\n{presentation_ref}".encode("utf-8")).hexdigest()
+    return f"response:{digest}"
 
 
 def materialize_response(
@@ -64,6 +90,13 @@ def materialize_response(
         clean_meta.setdefault("turn_trace_id", turn_trace_id)
     if thread_id:
         clean_meta.setdefault("thread_id", thread_id)
+    response_idempotency_key = _response_idempotency_key(
+        meta=clean_meta,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+    )
+    if response_idempotency_key:
+        clean_meta["response_idempotency_key"] = response_idempotency_key
 
     published: list[dict[str, Any]] = []
     stored: dict[str, Any] | None = None
@@ -88,6 +121,12 @@ def materialize_response(
                 "dialog_channel_id": channel_id,
                 "_meta": clean_meta,
             }
+            actions = envelope.get("actions") if isinstance(envelope.get("actions"), list) else []
+            if actions:
+                payload["actions"] = [dict(item) for item in actions if isinstance(item, Mapping)]
+            interaction = envelope.get("interaction") if isinstance(envelope.get("interaction"), Mapping) else None
+            if interaction:
+                payload["interaction"] = dict(interaction)
             if thread_id:
                 payload["thread_id"] = thread_id
             if actor_id:
@@ -209,7 +248,11 @@ def normalize_response_envelope(
     if value is None:
         text = str(response or "").strip()
         value = {"content": [{"type": "text", "text": text}]} if text else {}
-    if "response_envelope" in value and isinstance(value.get("response_envelope"), Mapping):
+    if value.get("schema") == "adaos.conversation.output.v1":
+        value = _presentation_from_conversation_output(value)
+    elif value.get("schema") == "adaos.conversation.response_envelope.v1":
+        value = _presentation_from_durable_envelope(value)
+    elif "response_envelope" in value and isinstance(value.get("response_envelope"), Mapping):
         value = dict(value["response_envelope"])
     elif "response" in value and isinstance(value.get("response"), Mapping):
         value = dict(value["response"])
@@ -236,6 +279,71 @@ def normalize_response_envelope(
     value["render_targets"] = tuple(response_plan["targets"])
     value["response_plan"] = response_plan
     return value
+
+
+def _semantic_content_parts(value: Mapping[str, Any]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for raw in value.get("content_parts") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        kind = str(raw.get("kind") or "text")
+        part: dict[str, Any] = {"type": "text" if kind == "text" else kind}
+        if raw.get("text") is not None:
+            part["text"] = str(raw.get("text") or "")
+        if isinstance(raw.get("data"), Mapping):
+            part["data"] = dict(raw["data"])
+        if raw.get("artifact_ref") is not None:
+            part["artifact_ref"] = dict(raw["artifact_ref"])
+        parts.append(part)
+    if not any(str(item.get("type") or "") == "text" for item in parts):
+        summary = str(value.get("summary") or "").strip()
+        if summary:
+            parts.insert(0, {"type": "text", "text": summary})
+    return parts
+
+
+def _semantic_meta(value: Mapping[str, Any]) -> dict[str, Any]:
+    reason = value.get("reason") if isinstance(value.get("reason"), Mapping) else {}
+    return {
+        **dict(value.get("metadata") if isinstance(value.get("metadata"), Mapping) else {}),
+        "semantic_output_id": value.get("output_id") or value.get("semantic_output_id"),
+        "semantic_output_kind": value.get("kind"),
+        "semantic_output_reason": dict(reason),
+        "semantic_output_risk": value.get("risk_level"),
+        "semantic_output_provenance": dict(value.get("provenance") or {}),
+        "trace": dict(value.get("trace") or {}),
+    }
+
+
+def _presentation_from_conversation_output(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "message_id": value.get("output_id"),
+        "conversation_id": value.get("conversation_id"),
+        "content": _semantic_content_parts(value),
+        "actions": [dict(item) for item in value.get("actions") or [] if isinstance(item, Mapping)],
+        "meta": _semantic_meta(value),
+    }
+
+
+def _presentation_from_durable_envelope(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = value.get("payload") if isinstance(value.get("payload"), Mapping) else {}
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    semantic = {
+        **dict(data),
+        "output_id": data.get("semantic_output_id"),
+        "conversation_id": value.get("conversation_id"),
+        "summary": data.get("summary") or payload.get("text"),
+    }
+    presentation = _presentation_from_conversation_output(semantic)
+    presentation["message_id"] = value.get("envelope_id")
+    presentation["meta"] = {
+        **dict(presentation.get("meta") or {}),
+        "response_envelope_id": value.get("envelope_id"),
+        "response_category": value.get("category"),
+        "response_sequence": value.get("sequence"),
+        "response_status": value.get("status"),
+    }
+    return presentation
 
 
 def plan_response_targets(
@@ -354,7 +462,7 @@ def _append_ledger_message(
             active_agent_id=actor_id,
             meta={"route_id": route_id, "channel_id": channel_id},
         )
-        return conversation_store.append_message(
+        return conversation_store.materialize_message(
             conversation_id=conversation_id,
             thread_id=thread_id,
             webspace_id=webspace_id,
@@ -370,10 +478,23 @@ def _append_ledger_message(
             route_id=route_id,
             request_id=request_id,
             turn_trace_id=turn_trace_id,
-            idempotency_key=str(meta.get("idempotency_key") or "").strip() or None,
+            idempotency_key=str(
+                meta.get("response_idempotency_key")
+                or meta.get("idempotency_key")
+                or ""
+            ).strip()
+            or None,
             ts=float(payload.get("ts") or time.time()),
         )
-    except Exception:
+    except Exception as exc:
+        _LOG.warning(
+            "conversation response ledger append failed conversation=%s webspace=%s request=%s error=%s",
+            conversation_id,
+            webspace_id,
+            str(request_id or "").strip() or "-",
+            type(exc).__name__,
+            exc_info=True,
+        )
         return None
 
 

@@ -39,7 +39,7 @@ from adaos.adapters.db import sqlite as sqlite_db
 from adaos.apps.api.auth import require_owner_token
 from adaos.services.id_gen import new_id
 from adaos.services.root_mcp.targets import upsert_managed_target
-from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.services.scenario.manager import ScenarioManager
 from adaos.services.skill.manager import SkillManager
@@ -672,15 +672,53 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
     activated = False
     try:
         if target.exists():
-            target.replace(backup)
-            target_moved = True
+            try:
+                target.replace(backup)
+                target_moved = True
+            except PermissionError as exc:
+                # Windows refuses to rename a directory while an IDE, shell,
+                # or read-only observer retains a handle below it. Individual
+                # files are normally still replaceable. Keep publication
+                # transactional by synchronizing staged files atomically with
+                # a complete rollback copy instead of asking callers to copy
+                # a live artifact by hand.
+                _log.warning(
+                    "artifact directory swap is locked; using file-atomic activation target=%s: %s",
+                    target,
+                    exc,
+                )
+                _replace_directory_contents_transactionally(staged, target)
+                activated = True
+                return
         try:
             staged.replace(target)
             activated = True
+        except PermissionError as activation_error:
+            # A directory handle can also prevent Windows from installing the
+            # staged directory after the old copy was moved successfully. Put
+            # the old copy back before using the same file-atomic fallback;
+            # otherwise the fallback would have no rollback baseline.
+            if target_moved:
+                try:
+                    _restore_directory_backup(backup, target)
+                    target_moved = False
+                except Exception as rollback_error:
+                    raise RootServiceError(
+                        "Artifact activation failed and rollback could not restore the previous copy; "
+                        f"backup retained at {backup}: {type(rollback_error).__name__}: {rollback_error}"
+                    ) from activation_error
+            _log.warning(
+                "staged artifact directory activation is locked; using file-atomic activation target=%s: %s",
+                target,
+                activation_error,
+            )
+            _replace_directory_contents_transactionally(staged, target)
+            activated = True
+            return
         except Exception as activation_error:
             if target_moved:
                 try:
-                    backup.replace(target)
+                    _restore_directory_backup(backup, target)
                     target_moved = False
                 except Exception as rollback_error:
                     raise RootServiceError(
@@ -702,6 +740,118 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
     finally:
         if not activated and staged.exists():
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def _restore_directory_backup(
+    backup: Path,
+    target: Path,
+    *,
+    attempts: int = 5,
+    retry_delay_s: float = 0.05,
+) -> None:
+    """Restore a just-renamed directory across transient Windows handle races."""
+
+    last_error: PermissionError | None = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            backup.replace(target)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt + 1 >= max(1, int(attempts)):
+                break
+            time.sleep(max(0.0, float(retry_delay_s)) * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+
+
+def _replace_directory_contents_transactionally(staged: Path, target: Path) -> None:
+    """Activate staged contents when a live directory cannot be renamed.
+
+    Every regular file is installed with ``os.replace``. A sibling rollback
+    tree is created before the first write and retained if rollback itself
+    cannot complete. Runtime/cache directories excluded from artifact packages
+    are left untouched.
+    """
+
+    staged = staged.expanduser().resolve()
+    target = target.expanduser().resolve()
+    if staged.parent != target.parent:
+        raise RootServiceError("Staged artifact must be on the same filesystem as its target")
+    if not target.exists() or not target.is_dir():
+        raise RootServiceError("File-atomic activation requires an existing target directory")
+
+    rollback = target.parent / f".{target.name}.rollback-{os.getpid()}-{uuid4().hex}"
+    try:
+        shutil.copytree(
+            target,
+            rollback,
+            ignore=shutil.ignore_patterns(*_SKIP_DIRS, *_SKIP_FILES, "*.pyc", "*.pyo"),
+        )
+        try:
+            _synchronize_directory_files(staged, target)
+        except Exception as activation_error:
+            try:
+                _synchronize_directory_files(rollback, target)
+            except Exception as rollback_error:
+                raise RootServiceError(
+                    "Artifact activation failed and rollback could not restore the previous files; "
+                    f"backup retained at {rollback}: {type(rollback_error).__name__}: {rollback_error}"
+                ) from activation_error
+            raise
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+        if rollback.exists():
+            try:
+                shutil.rmtree(rollback)
+            except OSError as cleanup_error:
+                _log.warning(
+                    "Artifact file-atomic activation finished but rollback cleanup failed; "
+                    "backup retained at %s: %s",
+                    rollback,
+                    cleanup_error,
+                )
+
+
+def _synchronize_directory_files(source: Path, target: Path) -> None:
+    """Synchronize one artifact tree using atomic replacement per file."""
+
+    source = source.expanduser().resolve()
+    target = target.expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    source_files = {
+        path.relative_to(source)
+        for path in source.rglob("*")
+        if path.is_file() and not _should_skip(path.relative_to(source))
+    }
+
+    for relative in sorted(source_files, key=lambda item: item.as_posix()):
+        src = source / relative
+        dst = target / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        temporary = dst.with_name(f".{dst.name}.publish-{os.getpid()}-{uuid4().hex}")
+        try:
+            shutil.copy2(src, temporary)
+            os.replace(temporary, dst)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    existing = sorted(
+        target.rglob("*"),
+        key=lambda item: (len(item.relative_to(target).parts), item.as_posix()),
+        reverse=True,
+    )
+    for path in existing:
+        relative = path.relative_to(target)
+        if any(part in _SKIP_DIRS for part in relative.parts):
+            continue
+        if path.is_file() and relative not in source_files:
+            path.unlink()
+        elif path.is_dir():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
 
 
 def _extract_zip_bytes(data: bytes, target: Path) -> None:
@@ -1773,7 +1923,7 @@ class RootDeveloperService:
     def _client(self, cfg: NodeConfig) -> RootHttpClient:
         if self._client_factory:
             return self._client_factory(cfg)
-        base_url = cfg.root_settings.base_url or "https://api.inimatic.com"
+        base_url = cfg.root_settings.base_url or DEFAULT_PUBLIC_ROOT_BASE_URL
         return RootHttpClient(base_url=base_url)
 
     def _owner_auth_client(self, cfg: NodeConfig) -> RootHttpClient:
@@ -2062,20 +2212,38 @@ class RootDeveloperService:
         )
 
     @staticmethod
-    def _workspace_lock_components(lock: Any, *, kind: str) -> list[Any]:
+    def _workspace_lock_components(
+        lock: Any,
+        *,
+        kind: str,
+        component_keys: frozenset[str] | None = None,
+    ) -> list[Any]:
         expected = str(kind or "").strip().lower().rstrip("s")
         return [
             component
             for component in getattr(lock, "components", ()) or ()
             if str(getattr(component, "kind", "") or "").strip().lower().rstrip("s") == expected
+            and (
+                component_keys is None
+                or str(getattr(component, "key", "") or "") in component_keys
+            )
         ]
 
-    def _reload_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
-        """Converge every installed skill runtime to the just-activated WorkspaceLock."""
+    def _reload_published_workspace_runtime(
+        self,
+        lock: Any,
+        *,
+        component_keys: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
+        """Converge skill runtimes in the activated project dependency closure."""
 
         manager = _get_skill_manager(self.ctx)
         refreshed: list[dict[str, Any]] = []
-        for component in self._workspace_lock_components(lock, kind="skill"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="skill",
+            component_keys=component_keys,
+        ):
             skill_id = str(getattr(component, "artifact_id", "") or "").strip()
             version = str(getattr(component, "version", "") or "").strip()
             if not skill_id or not version:
@@ -2101,14 +2269,24 @@ class RootDeveloperService:
         return {
             "status": "completed",
             "lock_revision": getattr(lock, "lock_revision", None),
+            "component_keys": sorted(component_keys or ()),
             "skills": refreshed,
         }
 
-    def _health_published_workspace_runtime(self, lock: Any) -> dict[str, Any]:
+    def _health_published_workspace_runtime(
+        self,
+        lock: Any,
+        *,
+        component_keys: frozenset[str] | None = None,
+    ) -> dict[str, Any]:
         manager = _get_skill_manager(self.ctx)
         checks: list[dict[str, Any]] = []
         failures: list[str] = []
-        for component in self._workspace_lock_components(lock, kind="skill"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="skill",
+            component_keys=component_keys,
+        ):
             skill_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             status = manager.runtime_status(skill_id)
@@ -2126,7 +2304,11 @@ class RootDeveloperService:
             )
             if not ready:
                 failures.append(f"skill:{skill_id} expected={expected} active={active or 'none'}")
-        for component in self._workspace_lock_components(lock, kind="scenario"):
+        for component in self._workspace_lock_components(
+            lock,
+            kind="scenario",
+            component_keys=component_keys,
+        ):
             scenario_id = str(getattr(component, "artifact_id", "") or "").strip()
             expected = str(getattr(component, "version", "") or "").strip()
             manifest_path = Path(self.ctx.paths.scenarios_dir()) / scenario_id / "scenario.yaml"
@@ -2149,6 +2331,7 @@ class RootDeveloperService:
         return {
             "status": "healthy",
             "lock_revision": getattr(lock, "lock_revision", None),
+            "component_keys": sorted(component_keys or ()),
             "checks": checks,
         }
 
@@ -2197,6 +2380,23 @@ class RootDeveloperService:
             observations=observations,
         )
         return {"ok": True, "candidate": candidate.to_dict()}
+
+    def get_artifact_candidate(self, candidate_id: str) -> dict[str, Any]:
+        cfg = self._load_config()
+        token = str(candidate_id or "").strip()
+        candidate = self._artifact_publication_service(cfg).get_candidate(token)
+        trial_workspace = (
+            Path(self.ctx.paths.state_dir())
+            / "artifact_pipeline"
+            / "trials"
+            / token
+            / "workspace"
+        )
+        return {
+            "ok": True,
+            "candidate": candidate.to_dict(),
+            "trial_workspace": str(trial_workspace),
+        }
 
     def recover_artifact_candidate_activation(
         self,
@@ -2255,12 +2455,29 @@ class RootDeveloperService:
     ) -> dict[str, Any]:
         cfg = self._load_config()
         publication = self._artifact_publication_service(cfg)
+        candidate_release = publication.get_candidate_release(candidate_id)
+        affected_component_keys = frozenset(
+            package.key for package in candidate_release.packages
+        )
+
+        def reload_candidate_runtime(lock: Any) -> dict[str, Any]:
+            return self._reload_published_workspace_runtime(
+                lock,
+                component_keys=affected_component_keys,
+            )
+
+        def health_candidate_runtime(lock: Any) -> dict[str, Any]:
+            return self._health_published_workspace_runtime(
+                lock,
+                component_keys=affected_component_keys,
+            )
+
         try:
             promoted = publication.promote(
                 candidate_id,
                 permission_decision=permission_decision,
-                reload_runtime=self._reload_published_workspace_runtime,
-                health_check=self._health_published_workspace_runtime,
+                reload_runtime=reload_candidate_runtime,
+                health_check=health_candidate_runtime,
             )
         except PublicationStaleError as exc:
             return {
@@ -2282,6 +2499,93 @@ class RootDeveloperService:
             raise RootServiceError(
                 "Promoted release does not contain its project component; workspace was not reconciled"
             )
+        promotion_operation = publication.load_promotion(candidate_id) or {}
+        promotion_receipts = (
+            promotion_operation.get("receipts")
+            if isinstance(promotion_operation.get("receipts"), Mapping)
+            else {}
+        )
+        activation_receipt = (
+            promotion_receipts.get("workspace_activated")
+            if isinstance(promotion_receipts.get("workspace_activated"), Mapping)
+            else {}
+        )
+        permission = (
+            dict(permission_decision)
+            if isinstance(permission_decision, Mapping)
+            else {"approved": bool(permission_decision)}
+        )
+        accepted_trial = next(
+            (
+                item
+                for item in reversed(promoted.candidate.trials)
+                if item.status == "accepted"
+            ),
+            None,
+        )
+        trial_observations = (
+            [dict(item) for item in accepted_trial.observations]
+            if accepted_trial is not None
+            else []
+        )
+        actor_id = str(permission.get("actor") or "").strip()
+        if not actor_id:
+            actor_id = next(
+                (
+                    str(item.get("actor") or item.get("actor_id") or "").strip()
+                    for item in trial_observations
+                    if str(item.get("actor") or item.get("actor_id") or "").strip()
+                ),
+                "builder.user",
+            )
+        runtime_slot = next(
+            (
+                item.slot_id
+                for item in promoted.activation.workspace_lock.slots
+                if item.project_id == promoted.candidate.project_id
+            ),
+            f"workspace-lock:{promoted.activation.workspace_lock.lock_revision}",
+        )
+        policy_evidence = [
+            {
+                "kind": "publication_permission",
+                "approved": permission.get("approved") is True,
+                "actor": actor_id,
+            },
+            *trial_observations,
+        ]
+        apply_evidence = {
+            "draft_ref": {
+                "draft_id": f"candidate:{promoted.candidate.candidate_id}",
+                "revision": promoted.candidate.source_ref.revision,
+            },
+            "validation_evidence": [
+                dict(item) for item in promoted.candidate.validation_evidence
+            ],
+            "approval": {
+                "approval_id": str(
+                    permission.get("approval_id")
+                    or f"candidate:{promoted.candidate.candidate_id}:approval"
+                ),
+                "actor_id": actor_id,
+                "actor_type": str(permission.get("actor_type") or "user"),
+                "approved_at": promoted.candidate.updated_at,
+                "policy_evidence": policy_evidence,
+            },
+            "activation": {
+                "operation_id": promoted.activation.operation_id,
+                "runtime_slot": runtime_slot,
+                "health_receipt": dict(activation_receipt.get("health_receipt") or {}),
+                "reload_receipt": dict(activation_receipt.get("reload_receipt") or {}),
+                "workspace_lock_digest": promoted.activation.workspace_lock.to_dict()[
+                    "lock_digest"
+                ],
+            },
+            "rollback": {
+                "mode": "workspace_lock_restore",
+                "operation_ref": promoted.activation.operation_id,
+            },
+        }
         return {
             "ok": True,
             "candidate_id": candidate_id,
@@ -2296,6 +2600,7 @@ class RootDeveloperService:
             "subscription": promoted.subscription.to_dict(),
             "commit": None,
             "activation_mode": "package_lock",
+            "apply_evidence": apply_evidence,
         }
 
     def check_artifact_subscription(self, project_id: str) -> dict[str, Any]:
@@ -2782,6 +3087,12 @@ class RootDeveloperService:
             _write_manifest(manifest_path, data)
             if kind != "scenarios":
                 break
+        if manifest_meta is not None:
+            conversational_manifest = target / "conversational" / "manifest.yaml"
+            if conversational_manifest.is_file():
+                conversational_data = _load_manifest(conversational_manifest)
+                conversational_data["version"] = manifest_meta.get("version")
+                _write_manifest(conversational_manifest, conversational_data)
         return manifest_meta
 
     def _manifest_candidates(self, kind: Literal["skills", "scenarios"]) -> list[str]:
@@ -3117,6 +3428,9 @@ class RootDeveloperService:
             source / ("skill.yaml" if kind == "skills" else "scenario.yaml"),
             workspace / "registry.json",
         ]
+        conversational_manifest = source / "conversational" / "manifest.yaml"
+        if conversational_manifest.is_file():
+            rollback_paths.append(conversational_manifest)
         if kind == "scenarios":
             rollback_paths.append(source / "scenario.json")
             rollback_paths.append(source / "webui.json")
@@ -3622,43 +3936,51 @@ class RootDeveloperService:
                 warnings=tuple(warnings),
             )
 
-        backup: Path | None = None
-        if target.exists():
-            backup = target.parent / f".{target.name}.publish-backup"
-            if backup.exists():
-                shutil.rmtree(backup)
-            target.rename(backup)
-
         scaffold = scaffold_skill_create if kind == "skills" else scaffold_scenario_create
         created = False
         manifest_meta: dict[str, str] | None = None
+        staged: Path | None = None
         try:
-            scaffold(name, template=str(source), version=new_version, register=True, push=False)
-            created = True
-            manifest_meta = self._update_manifest(
-                kind,
-                target,
-                name,
-                None,
-                version_bump_index=None,
-                set_prototype=False,
-                explicit_version=new_version,
-            )
+            if target.exists():
+                staged = target.parent / f".{target.name}.publish-{os.getpid()}-{uuid4().hex}"
+                shutil.copytree(
+                    source,
+                    staged,
+                    ignore=shutil.ignore_patterns(*_SKIP_DIRS, *_SKIP_FILES, "*.pyc", "*.pyo"),
+                )
+                manifest_meta = self._update_manifest(
+                    kind,
+                    staged,
+                    name,
+                    None,
+                    version_bump_index=None,
+                    set_prototype=False,
+                    explicit_version=new_version,
+                )
+                self._validate_artifact_preflight(kind, name, staged)
+                _replace_directory_transactionally(staged, target)
+                staged = None
+            else:
+                scaffold(name, template=str(source), version=new_version, register=True, push=False)
+                created = True
+                manifest_meta = self._update_manifest(
+                    kind,
+                    target,
+                    name,
+                    None,
+                    version_bump_index=None,
+                    set_prototype=False,
+                    explicit_version=new_version,
+                )
         except Exception:
+            if staged and staged.exists():
+                shutil.rmtree(staged, ignore_errors=True)
             if created and target.exists():
                 try:
                     shutil.rmtree(target)
                 except OSError:
                     pass
-            if backup and backup.exists():
-                try:
-                    backup.rename(target)
-                except OSError:
-                    pass
             raise
-        else:
-            if backup and backup.exists():
-                shutil.rmtree(backup)
 
         updated_at = (manifest_meta or {}).get("updated_at") or _current_timestamp()
         try:

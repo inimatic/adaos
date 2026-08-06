@@ -41,6 +41,11 @@
       "$ref": "#/$defs/skillInterface",
       "description": "Skill-owned declarative UI view contract. Views are public domain UI addresses; widgets and modals are renderer surfaces that implement them."
     },
+    "behaviors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/declarativeBehavior" },
+      "description": "Deterministic interaction state machines for buttons, tabs, modals, pages, and multi-step flows. These records select existing declarative actions; they do not embed executable code."
+    },
     "webio": { "$ref": "#/$defs/webio" },
     "ydoc_defaults": {
       "description": "Default Yjs values applied once per webspace. Keys are 'root/key' paths (e.g. 'data/voice_chat').",
@@ -54,6 +59,55 @@
     }
   },
   "$defs": {
+    "declarativeBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "initial", "states", "transitions"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["button", "tabs", "modal", "page", "multistep"] },
+        "statePath": { "type": "string", "minLength": 1 },
+        "initial": { "type": "string", "minLength": 1 },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string" },
+              "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+              "view": { "type": "string" },
+              "visibleIf": { "type": ["string", "boolean"] },
+              "terminal": { "type": "boolean" }
+            }
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["on", "from", "to"],
+            "properties": {
+              "on": { "type": "string", "minLength": 1 },
+              "from": {
+                "oneOf": [
+                  { "type": "string", "minLength": 1 },
+                  { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+                ]
+              },
+              "to": { "type": "string", "minLength": 1 },
+              "guard": { "type": "string" },
+              "action": { "type": "object", "additionalProperties": true },
+              "effect": { "enum": ["none", "local_state", "runtime_action"] }
+            }
+          }
+        }
+      }
+    },
     "id": {
       "type": "string",
       "minLength": 1,

@@ -98,6 +98,30 @@ class _AsyncDoc:
         return False
 
 
+class _SlowAsyncDoc:
+    def __init__(
+        self,
+        doc: _Doc,
+        *,
+        entered: asyncio.Event,
+        release: asyncio.Event,
+        exits: list[type[BaseException] | None],
+    ) -> None:
+        self.doc = doc
+        self.entered = entered
+        self.release = release
+        self.exits = exits
+
+    async def __aenter__(self):
+        self.entered.set()
+        await self.release.wait()
+        return self.doc
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self.exits.append(exc_type)
+        return False
+
+
 class _MetaCtx:
     async def __aenter__(self):
         return {}
@@ -583,6 +607,8 @@ async def test_voice_chat_not_obtained_routes_active_dialog_followup(monkeypatch
     assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
     assert calls[0][2]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    scheduled_at = calls[0][2]["_meta"].pop("_router_tool_scheduled_at")
+    assert isinstance(scheduled_at, float)
     assert calls[0][2]["_meta"] == {
         "route_id": "voice_chat",
         "webspace_id": webspace_id,
@@ -713,6 +739,57 @@ async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> Non
     assert dialog["active_agent"]["label"] == "Домашний ассистент"
     assert dialog["active_agent"]["voice_profile"]["gender"] == "male"
     assert [item["id"] for item in dialog["channels"][:2]] == ["general", "conversational"]
+
+
+async def test_dialog_projection_is_non_blocking_and_does_not_cancel_slow_ydoc(monkeypatch) -> None:
+    bus = LocalEventBus()
+    doc = _Doc()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    exits: list[type[BaseException] | None] = []
+    webspace_id = "dialog-slow-projection-ws"
+    monkeypatch.setenv("ADAOS_VOICE_CHAT_YJS_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "mutate_live_room", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        router_service_module,
+        "async_get_ydoc",
+        lambda *_args, **_kwargs: _SlowAsyncDoc(
+            doc,
+            entered=entered,
+            release=release,
+            exits=exits,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.publish(
+        Event(
+            type="dialog.channel.activated",
+            source="test",
+            ts=1.0,
+            payload={"webspace_id": webspace_id},
+        )
+    )
+
+    assert await bus.wait_for_idle(timeout=0.2)
+    await asyncio.wait_for(entered.wait(), timeout=0.2)
+    await asyncio.sleep(0.08)
+    assert exits == []
+    assert any(not task.done() for task in router._dialog_state_tasks.values())
+
+    release.set()
+    await _drain_voice_chat_persist(router)
+    assert exits == [None]
+    assert doc.get_map("data")["dialog"]["webspace_id"] == webspace_id
 
 
 def test_general_agent_registry_uses_subnet_alias_without_ada_alias(monkeypatch) -> None:
@@ -1162,7 +1239,7 @@ async def test_voice_chat_requested_builder_channel_refreshes_stale_active_tool(
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_when_source_exists(monkeypatch, tmp_path) -> None:
+async def test_voice_chat_requested_builder_channel_uses_authoritative_dev_runtime(monkeypatch, tmp_path) -> None:
     from adaos.services import dialog_runtime
 
     bus = LocalEventBus()
@@ -1195,11 +1272,11 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_wh
     monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
     monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
     monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == webspace_id)
 
     class _Mgr:
         def run_tool(self, skill, tool, payload, **_opts):
-            calls.append((skill, tool, dict(payload), "workspace"))
-            raise RuntimeError("no installed workspace runtime")
+            raise AssertionError("Workspace runtime must not handle a DEV-webspace dialog")
 
         def run_dev_tool(self, skill, tool, payload):
             calls.append((skill, tool, dict(payload), "dev"))
@@ -1242,9 +1319,9 @@ async def test_voice_chat_requested_builder_channel_uses_dev_runtime_fallback_wh
     await _drain_voice_chat_persist(router)
 
     assert seen_nlu == []
-    assert [call[3] for call in calls] == ["workspace", "dev"]
-    assert calls[1][0:2] == ("builder_skill", "chat")
-    assert calls[1][2]["text"] == "создадим приложение список покупок"
+    assert [call[3] for call in calls] == ["dev"]
+    assert calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "создадим приложение список покупок"
     messages = doc.get_map("data")["voice_chat"]["messages"]
     assert any(item["text"] == "dev builder handled" for item in messages)
     dialog_runtime.reset_all()
@@ -1880,6 +1957,8 @@ async def test_voice_chat_user_routes_active_dialog_directly_without_nlu(monkeyp
     assert calls[0][2]["conversation_id"] == f"conv.skill.conversation_companions.default.{webspace_id}"
     assert calls[0][2]["dialog_channel_id"] == "conversational"
     assert calls[0][2]["conversation_context"]["conversation_id"] == calls[0][2]["conversation_id"]
+    scheduled_at = calls[0][2]["_meta"].pop("_router_tool_scheduled_at")
+    assert isinstance(scheduled_at, float)
     assert calls[0][2]["_meta"] == {
         "route_id": "voice_chat",
         "voice_chat_scope": "shared",
@@ -2154,6 +2233,107 @@ async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_with
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "conversational"
+    dialog_runtime.reset_all()
+
+
+async def test_telegram_addressed_builder_uses_same_dialog_and_projects_reply(monkeypatch) -> None:
+    from adaos.services import dialog_runtime
+
+    bus = LocalEventBus()
+    doc = _Doc()
+    calls: list[tuple[str, str, dict, dict]] = []
+    outputs: list[Event] = []
+    seen_nlu: list[Event] = []
+    webspace_id = "builder-telegram-ws"
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-node",
+                subnet_id="sn-test",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=False)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    monkeypatch.setattr(router_service_module, "async_get_ydoc", lambda *_args, **_kwargs: _AsyncDoc(doc))
+    monkeypatch.setattr(router_service_module, "ystore_write_metadata", lambda **_kwargs: _MetaCtx())
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+
+    def _run_tool(skill, tool, payload, **opts):
+        calls.append((skill, tool, dict(payload), dict(opts)))
+        return {
+            "ok": True,
+            "message": "Builder: выбран проект test05_recipes.",
+            "dialog": {
+                "dialog_channel_id": "builder",
+                "conversation_id": f"conv.skill.builder_skill.default.{webspace_id}",
+                "owner": "skill:builder_skill",
+                "default_tool": "builder_skill.chat",
+                "active_agent_id": "agent:builder_skill:builder",
+                "active_agent_label": "Строитель",
+            },
+        }
+
+    monkeypatch.setattr(router_service_module, "SkillManager", lambda **_kwargs: SimpleNamespace(run_tool=_run_tool))
+    dialog_runtime.reset_all()
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("nlp.intent.detect.request", lambda event: seen_nlu.append(event))
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
+
+    bus.publish(
+        Event(
+            type="dialog.user_message",
+            source="chat_io.telegram",
+            ts=1.0,
+            payload={
+                "text": "Строитель, покажи текущий проект",
+                "webspace_id": webspace_id,
+                "_meta": {
+                    "route_id": "telegram",
+                    "io_type": "telegram",
+                    "bot_id": "main-bot",
+                    "hub_id": "sn-test",
+                    "chat_id": "42",
+                    "update_id": "100",
+                    "reply_to": 55,
+                    "idempotency_key": "transport:tg:main-bot:42:100",
+                },
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=5.0)
+    await _drain_voice_chat_persist(router)
+
+    assert seen_nlu == []
+    assert calls and calls[0][0:2] == ("builder_skill", "chat")
+    assert calls[0][2]["text"] == "покажи текущий проект"
+    assert calls[0][2]["_meta"]["route_id"] == "telegram"
+    assert calls[0][2]["_meta"]["dialog_channel_id"] == "builder"
+    assert calls[0][2]["_meta"]["_router_tool_scheduled_at"] > 0
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"] == [
+        {"type": "text", "text": "Builder: выбран проект test05_recipes."}
+    ]
+    assert outputs[0].payload["options"] == {"reply_to": 55}
+    assert outputs[0].payload["_protocol"]["operation_key"].startswith(
+        "tg-dialog:sn-test:main-bot:42:"
+    )
+    state = dialog_runtime.get_active_channel(webspace_id)
+    assert state is not None and state.channel_id == "builder"
+    assert state.route_id == "telegram"
     dialog_runtime.reset_all()
 
 
@@ -3733,3 +3913,176 @@ async def test_io_out_chat_append_writes_node_scoped_history_without_crashing(mo
 
     assert doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["messages"][0]["text"] == "hello"
     assert float(doc.get_map("data")["nodes"]["member-3"]["voice_chat"]["last_refresh_ts"]) > 0
+
+
+async def test_io_out_chat_append_projects_telegram_controls_before_local_skip(monkeypatch) -> None:
+    bus = LocalEventBus()
+    outputs: list[Event] = []
+    monkeypatch.setenv("HUB_TG_REPLY_VIA_ROOT_HTTP", "1")
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node", subnet_id="sn-test")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
+
+    bus.publish(
+        Event(
+            type="io.out.chat.append",
+            source="test",
+            ts=1.0,
+            payload={
+                "id": "interaction-message-1",
+                "from": "hub",
+                "text": "Строитель: выбран проект test05_recipes.",
+                "actions": [
+                    {
+                        "label": "Показать процесс",
+                        "token": "ia:0:builder-process",
+                    },
+                    {
+                        "label": "Открыть Preview",
+                        "action": {
+                            "type": "openUrl",
+                            "params": {"url": "https://inimatic.com/?webspace=dev1-dev"},
+                        },
+                    }
+                ],
+                "_meta": {
+                    "io_type": "telegram",
+                    "route_id": "telegram",
+                    "bot_id": "main-bot",
+                    "hub_id": "sn-test",
+                    "chat_id": "42",
+                    "reply_to": 55,
+                    "skip_voice_chat": True,
+                },
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"][0]["keyboard"]["inline_keyboard"] == [
+        [{"text": "Показать процесс", "callback_data": "ia:0:builder-process"}],
+        [{"text": "Открыть Preview", "url": "https://inimatic.com/?webspace=dev1-dev"}],
+    ]
+
+
+def test_text_fallback_does_not_edit_the_user_message() -> None:
+    assert router_service_module._telegram_interaction_consumed_projection(
+        {"interaction_id": "interaction.text", "prompt": "Choose"},
+        {
+            "response_id": "response.text",
+            "consumed_command": {"command": "builder.project.select", "label": "Choose recipes"},
+            "metadata": {
+                "io_type": "telegram",
+                "chat_id": "42",
+                "reply_to": 901,
+                "text_fallback": True,
+            },
+        },
+    ) is None
+
+
+async def test_builder_interaction_response_dispatches_to_authoritative_dev_runtime(monkeypatch) -> None:
+    bus = LocalEventBus()
+    calls: list[tuple[str, str, dict]] = []
+    outputs: list[Event] = []
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run_dev_tool(self, skill, tool, payload):
+            calls.append((skill, tool, dict(payload)))
+            return {"ok": True, "status": "handled"}
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(node_id="hub-node", subnet_id="sn-test"),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            paths=SimpleNamespace(),
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "SkillManager", _Manager)
+    monkeypatch.setattr(router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(router_service_module, "_dialog_runtime_uses_dev_webspace", lambda value: value == "dev1-dev")
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+    bus.subscribe("tg.output.", lambda event: outputs.append(event))
+    bus.publish(
+        Event(
+            type="conversation.interaction.responded",
+            source="test",
+            ts=1.0,
+            payload={
+                "interaction": {
+                    "interaction_id": "interaction.builder",
+                    "conversation_id": "conv.builder",
+                    "prompt": "Конструктор: проекты в разработке:\n- Recipes (recipes)",
+                    "metadata": {
+                        "domain": "builder",
+                        "project_ref": "scenario:builder",
+                        "source_webspace_id": "dev1",
+                        "execution_webspace_id": "dev1-dev",
+                    },
+                },
+                "response": {
+                    "response_id": "response.builder",
+                    "consumed_command": {
+                        "action_id": "select-recipes",
+                        "label": "Выбрать recipes",
+                        "command": "builder.project.select",
+                        "value": "recipes",
+                        "target_ref": {"kind": "scenario", "id": "recipes", "title": "Recipes"},
+                    },
+                    "metadata": {
+                        "io_type": "telegram",
+                        "route_id": "telegram",
+                        "bot_id": "main-bot",
+                        "hub_id": "sn-test",
+                        "chat_id": "42",
+                        "telegram_source_message_id": 900,
+                        "telegram_callback_query_id": "callback-3230",
+                    },
+                },
+                "duplicate": False,
+            },
+        )
+    )
+    assert await bus.wait_for_idle(timeout=2.0)
+
+    assert len(calls) == 1
+    assert calls[0][0:2] == ("builder_skill", "handle_interaction_response")
+    assert calls[0][2]["webspace_id"] == "dev1-dev"
+    assert calls[0][2]["_meta"]["source_webspace_id"] == "dev1"
+    assert len(outputs) == 1
+    assert outputs[0].type == "tg.output.main-bot.chat.42"
+    assert outputs[0].payload["messages"] == [
+        {
+            "type": "text",
+            "text": "Конструктор: проекты в разработке:\n- Recipes (recipes)\n\n✓ Выбрано: Recipes (recipes)",
+        }
+    ]
+    assert outputs[0].payload["options"] == {
+        "edit_message_id": 900,
+        "callback_query_id": "callback-3230",
+    }
+    assert outputs[0].payload["_protocol"]["presentation_state"] == "consumed"

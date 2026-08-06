@@ -8,6 +8,8 @@ import time
 from starlette.staticfiles import StaticFiles
 
 from adaos.services.browser_assets import publish_system_resource_descriptors, static_assets_directory
+from adaos.services.env_policy import truthy
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 class BrowserAssetStaticFiles(StaticFiles):
@@ -113,7 +115,7 @@ _runtime_log = logging.getLogger("adaos.runtime")
 
 
 def _startup_stage_logs_enabled() -> bool:
-    return str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(os.getenv("ADAOS_STARTUP_STAGE_LOGS"))
 
 
 class _StartupTimer:
@@ -169,11 +171,7 @@ def _maybe_set_windows_selector_loop() -> None:
     raw = os.getenv("ADAOS_WIN_SELECTOR_LOOP")
     enabled = False
     if raw is not None:
-        val = str(raw).strip().lower()
-        if val in ("1", "true", "on", "yes"):
-            enabled = True
-        elif val in ("0", "false", "off", "no"):
-            enabled = False
+        enabled = truthy(raw, default=False)
     # Selector loop is retained only as an opt-in diagnostic mode. Normal
     # Windows runtime should stay on the Proactor-capable asyncio default.
     if not enabled:
@@ -220,6 +218,7 @@ from adaos.services.core_update import write_status as write_core_update_status
 from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.core_slots import active_slot, active_slot_manifest, slot_status as core_slot_status
 from adaos.services.node_config import save_config
+from adaos.services.runtime_topology import supervisor_base_candidates_from_env
 from adaos.services.runtime_identity import runtime_identity_snapshot, runtime_transition_role
 from adaos.services.runtime_lifecycle import (
     is_draining,
@@ -230,7 +229,7 @@ from adaos.services.runtime_lifecycle import (
 
 
 def _truthy_value(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(value, default=False)
 
 
 def _background_boot_enabled() -> bool:
@@ -604,34 +603,8 @@ async def _core_update_countdown_worker(
         raise
 
 
-def _truthy_env(name: str) -> bool:
-    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _runtime_admin_supervisor_bases() -> list[str]:
-    explicit_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip().rstrip("/")
-    explicit_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "").strip()
-    explicit_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip()
-    if not (
-        _truthy_env("ADAOS_SUPERVISOR_ENABLED")
-        or _truthy_env("ADAOS_AUTOSTART_MANAGED")
-        or explicit_url
-        or explicit_host
-        or explicit_port
-    ):
-        return []
-    candidates: list[str] = []
-    if explicit_url:
-        candidates.append(explicit_url)
-    host = explicit_host or "127.0.0.1"
-    port = explicit_port or "8776"
-    candidates.append(f"http://{host}:{port}")
-    candidates.append("http://127.0.0.1:8776")
-    unique: list[str] = []
-    for item in candidates:
-        if item and item not in unique:
-            unique.append(item)
-    return unique
+    return supervisor_base_candidates_from_env(require_signal=True)
 
 
 def _try_forward_update_to_supervisor(
@@ -953,7 +926,7 @@ async def lifespan(app: FastAPI):
         conf = get_ctx().config
         if conf.role == "hub" and conf.subnet_id:
             ctx = _get_ctx()
-            api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
+            api_base = getattr(ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
             import requests as _requests
 
             link_url = f"{api_base.rstrip('/')}/io/tg/pair/link"
@@ -1180,6 +1153,11 @@ async def lifespan(app: FastAPI):
                 webspace_id=default_webspace_id(),
                 force=False,
                 run_tests=True,
+                # A completed core/release cutover has already materialized the
+                # authoritative WorkspaceLock.  Re-running the legacy git
+                # workspace sync here mistakes release-owned files for local
+                # edits and can fail before runtime migration starts.
+                sync_workspace=False,
             )
     except Exception:
         logging.getLogger("adaos.skill.runtime_migration").warning(
@@ -1253,7 +1231,7 @@ async def lifespan(app: FastAPI):
             ):
                 conf = get_ctx().config
                 ctx = _get_ctx()
-                api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
+                api_base = getattr(ctx.settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 try:
                     from adaos.sdk.data.i18n import _ as _t
 
@@ -1429,6 +1407,22 @@ class SetAliasRequest(BaseModel):
     webspace_id: str | None = Field(default=None, max_length=128)
 
 
+def _subnet_identity_payload() -> dict[str, Any]:
+    conf = get_ctx().config
+    subnet_id = str(getattr(conf, "subnet_id", "") or "").strip()
+    primary_name = str(load_subnet_alias(subnet_id=subnet_id) or "").strip()
+    names = [primary_name] if primary_name else []
+    return {
+        "schema": "adaos.subnet.identity.v1",
+        "subnet_id": subnet_id,
+        "subnet_names": names,
+        "primary_subnet_name": primary_name,
+        # Compatibility with the existing alias mutation response. New clients
+        # must use the explicitly subnet-scoped fields above.
+        "alias": primary_name or None,
+    }
+
+
 class ShutdownRequest(BaseModel):
     reason: str = Field(default="cli.stop", min_length=1, max_length=128)
     drain_timeout_sec: float = Field(default=_DEFAULT_SHUTDOWN_DRAIN_SEC, ge=0.0, le=30.0)
@@ -1526,55 +1520,74 @@ def _schedule_promoted_runtime_service_start(reason: str) -> dict[str, Any]:
     }
 
 
-@app.post("/api/subnet/alias")
-async def set_alias(body: SetAliasRequest, token=Depends(require_token)):
+@app.get("/api/subnet/alias")
+async def get_alias(token=Depends(require_token)):
+    return {"ok": True, **_subnet_identity_payload()}
+
+
+async def _refresh_subnet_alias_dependents(event_payload: dict[str, Any], bus: Any) -> None:
+    """Refresh derived views after the durable subnet identity is saved.
+
+    Projection materialization and local event handlers are deliberately kept
+    out of the Settings request path.  Either may wait on Yjs or perform slow
+    synchronous I/O; neither is required to acknowledge the authoritative
+    ``node.yaml`` mutation.
+    """
     try:
-        conf = get_ctx().config
+        from adaos.services import named_entity_projection
+
+        webspace_ids: list[str] = []
+        requested_webspace_id = str(event_payload.get("webspace_id") or "").strip()
+        if requested_webspace_id:
+            webspace_ids.append(requested_webspace_id)
+        default_webspace_id = named_entity_projection.default_webspace_id()
+        if default_webspace_id not in webspace_ids:
+            webspace_ids.append(default_webspace_id)
+        for webspace_id in webspace_ids:
+            await asyncio.wait_for(
+                named_entity_projection.request_named_entity_projection(
+                    webspace_id=webspace_id,
+                    reason="subnet.alias.changed",
+                    refresh=True,
+                    wait=True,
+                ),
+                timeout=2.5,
+            )
+    except Exception as exc:
+        _runtime_log.warning("subnet alias projection refresh failed error=%s", exc, exc_info=True)
+
+    try:
+        from adaos.domain import Event as _Ev
+
+        event = _Ev(
+            type="subnet.alias.changed",
+            payload=event_payload,
+            source="api",
+            ts=time.time(),
+        )
+        await asyncio.to_thread(bus.publish, event)
+    except Exception as exc:
+        _runtime_log.warning("subnet alias event publication failed error=%s", exc, exc_info=True)
+
+
+@app.post("/api/subnet/alias")
+async def set_alias(body: SetAliasRequest, background: BackgroundTasks, token=Depends(require_token)):
+    try:
+        ctx = get_ctx()
+        conf = ctx.config
         save_subnet_alias(body.alias, subnet_id=conf.subnet_id)
         event_payload = {
             "alias": body.alias,
             "subnet_id": conf.subnet_id,
             "webspace_id": body.webspace_id,
         }
-        projection_refreshed = False
-        try:
-            from adaos.services import named_entity_projection
-
-            webspace_ids: list[str] = []
-            requested_webspace_id = str(body.webspace_id or "").strip()
-            if requested_webspace_id:
-                webspace_ids.append(requested_webspace_id)
-            default_webspace_id = named_entity_projection.default_webspace_id()
-            if default_webspace_id not in webspace_ids:
-                webspace_ids.append(default_webspace_id)
-            projection_refreshed = True
-            for webspace_id in webspace_ids:
-                reconcile = await asyncio.wait_for(
-                    named_entity_projection.request_named_entity_projection(
-                        webspace_id=webspace_id,
-                        reason="subnet.alias.changed",
-                        refresh=True,
-                        wait=True,
-                    ),
-                    timeout=2.5,
-                )
-                projection_refreshed = projection_refreshed and not bool(reconcile.get("pending"))
-        except Exception:
-            projection_refreshed = False
-        # broadcast over local event bus
-        try:
-            from adaos.domain import Event as _Ev
-
-            get_ctx().bus.publish(
-                _Ev(
-                    type="subnet.alias.changed",
-                    payload=event_payload,
-                    source="api",
-                )
-            )
-        except Exception:
-            pass
-        return {"ok": True, "alias": body.alias, "projection_refreshed": projection_refreshed}
+        background.add_task(_refresh_subnet_alias_dependents, event_payload, ctx.bus)
+        return {
+            "ok": True,
+            **_subnet_identity_payload(),
+            "projection_refreshed": False,
+            "projection_refresh_scheduled": True,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

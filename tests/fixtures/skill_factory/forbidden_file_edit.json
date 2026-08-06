@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"forbidden_file_edit","operation":"complete_forbidden_path","request":{"request_id":"golden.forbidden_file_edit","target":{"type":"skill","id":"golden_forbidden"}},"input":{"changed_path":"src/adaos/core.py"},"expected":{"error":"outside the task sparse checkout"}}

@@ -1,19 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from adaos.services.env_policy import env_int as policy_env_int
+
 
 def env_int(name: str, default: int, *, minimum: int = 0) -> int:
-    try:
-        value = int(str(os.getenv(name, str(default)) or str(default)).strip() or str(default))
-    except Exception:
-        value = default
-    if value < minimum:
-        value = minimum
-    return value
+    return policy_env_int(name, default, minimum=minimum)
 
 
 def bounded_text_tail_lines(

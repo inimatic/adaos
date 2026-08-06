@@ -44,7 +44,7 @@ Invite URLs now reuse the AdaOS Connect code flow instead of carrying target
 subnet and hub endpoint parameters in the URL. The browser-visible URL shape is:
 
 ```text
-https://inimatic.com/?mode=registration&user_code=DF0B-2729&zone=ru
+https://inimatic.com/?intent=connect.register&user_code=DF0B-2729&zone=ru
 ```
 
 Root stores the invite payload in the same temporary `device_code:*` session

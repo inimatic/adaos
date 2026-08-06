@@ -191,6 +191,15 @@ For Root-routed or remote browsers:
 4. Cache invalidation is content-addressed: a new `cacheKey` creates a new cache
    entry, and stale entries can be garbage-collected independently.
 
+Until a blob is present in the Root-local cache, the hub route proxy may relay
+the member's public content-addressed store at
+`/hubs/{subnet_id}/assets/blobs/sha256/<aa>/<bb>/<digest>/<filename>`. This is a
+narrow byte-serving compatibility path, not a general member filesystem proxy:
+only `GET` and `HEAD` are accepted, both shard segments must match the digest,
+and the filename is bounded. The path is public because the source store admits
+only explicitly publishable browser resources. Private resources remain on the
+future signed URL/fetch-to-blob path.
+
 The legacy `/api/node/skills/{skill}/assets/...` endpoint is a development and
 compatibility fallback. It is not the production byte-serving target.
 

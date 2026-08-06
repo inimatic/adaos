@@ -1,0 +1,15 @@
+schema: adaos.conversational.matchers.v1
+package_id: conversational_release_skill
+matchers:
+  - id: submit_release.matcher.1
+    kind: regex
+    intent_id: submit_release
+    locale: en
+    pattern: '^submit (?:this |the )?release(?: for review)?$'
+    flags:
+      - ignore_case
+      - unicode
+    slots: {}
+    source: authored
+    provenance:
+      source: reference_package

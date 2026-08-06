@@ -511,6 +511,7 @@ async def test_voice_confirmation_yes_applies_candidate():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu import teacher_confirmation_runtime as conf
     from adaos.services.nlu.probe import probe_phrase
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
     import asyncio
     import json
@@ -622,9 +623,24 @@ async def test_voice_confirmation_yes_applies_candidate():
     assert applied
 
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
-    rules = (saved.get("nlu") or {}).get("regex_rules") or []
+    assert not ((saved.get("nlu") or {}).get("regex_rules") or [])
+    async with async_get_ydoc(webspace_id) as ydoc:
+        rules = list(((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or [])
     saved_rule = next(item for item in rules if item.get("candidate_id") == candidate["id"])
     assert saved_rule["slots"] == {"modal_id": "canonical_panel"}
+    promotion = next(
+        item
+        for item in read_store(ctx)["promotion_candidates"]
+        if item["source_overlay_id"] == f"yjs:{webspace_id}:regex:{saved_rule['id']}"
+    )
+    assert promotion["target"] == {
+        "type": "scenario",
+        "id": scenario_id,
+        "package_manifest": "conversational/manifest.yaml",
+        "source_file": "conversational/matchers.yaml",
+    }
+    assert promotion["package_patch"]["operation"] == "upsert_matcher"
+    assert "conversational/matchers.yaml" in promotion["builder_change"]["allowed_paths"]
 
     probe = await probe_phrase("open raw panel", webspace_id=webspace_id, use_rasa=False, emit_trace=False)
     assert probe["accepted"] is True
@@ -1005,3 +1021,58 @@ async def test_voice_clarification_short_answer_resolves_session():
     assert any(item.get("kind") == "clarification.answered" for item in events)
     assert answered
     assert answered[-1]["selected_answer"]["id"] == "media_indexer"
+
+
+@pytest.mark.anyio
+async def test_clarification_uses_pending_action_and_accepts_cross_channel_choice(monkeypatch):
+    from adaos.services import pending_actions
+    from adaos.services.nlu import teacher_confirmation_runtime as conf
+    from adaos.services.yjs.doc import async_get_ydoc
+
+    webspace_id = "ws-test-teacher-clarification-pending-action"
+    published: list[dict] = []
+
+    async def _publish(**payload):
+        published.append(dict(payload))
+        return {"id": payload["action_id"]}
+
+    monkeypatch.setattr(pending_actions, "publish_pending_action_async", _publish)
+    requested = await conf.request_clarification(
+        webspace_id,
+        {
+            "id": "clarify.cross.channel",
+            "request_id": "req.clarify.cross.channel",
+            "request_text": "show media",
+            "question": "Open Media Indexer or Media Server?",
+            "allowed_answers": [
+                {"id": "media_indexer", "label": "Media Indexer", "effect": "answer"},
+                {"id": "media_server", "label": "Media Server", "effect": "answer"},
+            ],
+        },
+        meta={"route_id": "telegram", "locale": "en"},
+    )
+
+    assert requested["pending_action_id"] == "nlu.teacher.clarification.clarify.cross.channel"
+    assert published[0]["kind"] == "nlu.teacher.clarification"
+    assert [item["id"] for item in published[0]["allowed_actions"]] == [
+        "media_indexer",
+        "media_server",
+        "postpone",
+    ]
+    await conf._on_pending_action_confirmation_response(
+        {
+            "webspace_id": webspace_id,
+            "response_action_id": "media_server",
+            "pending_action_id": requested["pending_action_id"],
+            "domain_ref": {
+                "webspace_id": webspace_id,
+                "clarification_id": "clarify.cross.channel",
+            },
+            "response": {"payload": {"source": "telegram"}},
+        }
+    )
+
+    async with async_get_ydoc(webspace_id) as ydoc:
+        sessions = list((ydoc.get_map("data").get("nlu_teacher") or {}).get("clarification_sessions") or [])
+    assert sessions[-1]["status"] == "answered"
+    assert sessions[-1]["selected_answer"]["id"] == "media_server"

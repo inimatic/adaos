@@ -4,6 +4,7 @@ from typing import Any, Mapping
 
 from adaos.sdk import conversation
 from adaos.services import conversation_response
+from adaos.services import conversation_interactions, conversation_store
 from adaos.services.agent_context import get_ctx
 from adaos.services.yjs.webspace import default_webspace_id
 
@@ -89,6 +90,218 @@ def ask(
         render_targets=("text_tail", "speech_text"),
         meta=question_meta,
         bus=bus,
+    )
+
+
+def request(
+    interaction: Mapping[str, Any] | str,
+    *,
+    conversation_id: str,
+    owner: str,
+    webspace_id: str | None = None,
+    channel_id: str = "general",
+    route_id: str = "dialog",
+    thread_id: str | None = None,
+    input_spec: Mapping[str, Any] | None = None,
+    actions: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
+    required_capabilities: tuple[str, ...] | list[str] = (),
+    optional_capabilities: tuple[str, ...] | list[str] = (),
+    fallbacks: tuple[str, ...] | list[str] = ("numbered_text", "plain_text", "unsupported"),
+    task_ref: Mapping[str, Any] | None = None,
+    workflow_ref: Mapping[str, Any] | None = None,
+    reply_route_ref: Mapping[str, Any] | None = None,
+    expires_at: str | None = None,
+    capability_profile: Mapping[str, Any] | None = None,
+    deep_link_base: str | None = None,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    request_id: str | None = None,
+    turn_trace_id: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+    bus: Any | None = None,
+) -> dict[str, Any]:
+    """Persist a semantic Interaction and materialize a negotiated presentation.
+
+    This call never holds a process-local waiter. The returned handle can be
+    resumed later through :func:`respond`, including after process restart.
+    """
+
+    specification = dict(interaction) if isinstance(interaction, Mapping) else {}
+    prompt = str(specification.get("prompt") or interaction or "").strip()
+    created = conversation_interactions.create_interaction(
+        interaction_id=str(specification.get("interaction_id") or "").strip() or None,
+        conversation_id=conversation_id,
+        thread_id=thread_id,
+        owner=owner,
+        prompt=prompt,
+        prompt_ref=str(specification.get("prompt_ref") or "").strip() or None,
+        locale_context=(
+            specification.get("locale_context")
+            if isinstance(specification.get("locale_context"), Mapping)
+            else None
+        ),
+        input_spec=specification.get("input_spec") if isinstance(specification.get("input_spec"), Mapping) else input_spec,
+        actions=specification.get("actions") if isinstance(specification.get("actions"), list) else actions,
+        required_capabilities=specification.get("required_capabilities") or required_capabilities,
+        optional_capabilities=specification.get("optional_capabilities") or optional_capabilities,
+        fallbacks=specification.get("fallbacks") or fallbacks,
+        task_ref=specification.get("task_ref") if isinstance(specification.get("task_ref"), Mapping) else task_ref,
+        workflow_ref=specification.get("workflow_ref") if isinstance(specification.get("workflow_ref"), Mapping) else workflow_ref,
+        reply_route_ref=specification.get("reply_route_ref") if isinstance(specification.get("reply_route_ref"), Mapping) else reply_route_ref,
+        expires_at=str(specification.get("expires_at") or expires_at or "").strip() or None,
+        metadata={**dict(specification.get("metadata") or {}), **dict(meta or {})},
+    )
+    return present(
+        created,
+        conversation_id=conversation_id,
+        owner=owner,
+        webspace_id=webspace_id,
+        channel_id=channel_id,
+        route_id=route_id,
+        thread_id=thread_id,
+        capability_profile=capability_profile,
+        deep_link_base=deep_link_base,
+        actor_id=actor_id,
+        actor_label=actor_label,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+        meta=meta,
+        bus=bus,
+    )
+
+
+def present(
+    interaction: Mapping[str, Any],
+    *,
+    conversation_id: str,
+    owner: str,
+    webspace_id: str | None = None,
+    channel_id: str = "general",
+    route_id: str = "dialog",
+    thread_id: str | None = None,
+    capability_profile: Mapping[str, Any] | None = None,
+    deep_link_base: str | None = None,
+    actor_id: str | None = None,
+    actor_label: str | None = None,
+    request_id: str | None = None,
+    turn_trace_id: str | None = None,
+    meta: Mapping[str, Any] | None = None,
+    bus: Any | None = None,
+) -> dict[str, Any]:
+    """Negotiate and materialize an already persisted semantic interaction."""
+
+    created = dict(interaction or {})
+    if str(created.get("conversation_id") or "").strip() != str(conversation_id or "").strip():
+        raise ValueError("interaction conversation does not match the requested conversation")
+    if str(created.get("owner") or "").strip() != str(owner or "").strip():
+        raise ValueError("interaction owner does not match the requested owner")
+    transport = str(dict(meta or {}).get("io_type") or ("telegram" if route_id == "telegram" else "web")).strip()
+    profile = dict(capability_profile) if isinstance(capability_profile, Mapping) else conversation_interactions.standard_capability_profile(
+        transport,
+        client=str(dict(meta or {}).get("client") or transport),
+        surface=channel_id,
+    )
+    presentation = conversation_interactions.negotiate_presentation(
+        created,
+        profile,
+        deep_link_base=deep_link_base,
+    )
+    latest = conversation_store.get_interaction(created["interaction_id"]) or created
+    response = {
+        "conversation_id": conversation_id,
+        "request_id": request_id,
+        "content": [{"type": "text", "text": presentation["prompt"]}],
+        "render_targets": ("text_tail",),
+        "actions": presentation["actions"],
+        "interaction": {
+            "interaction_id": created["interaction_id"],
+            "generation": created["generation"],
+            "presentation_id": presentation["presentation_id"],
+            "mode": presentation["mode"],
+            "supported": presentation["supported"],
+        },
+        "meta": {
+            **dict(meta or {}),
+            "dialog_act": "request",
+            "expects_reply": True,
+            "interaction_id": created["interaction_id"],
+            "interaction_generation": created["generation"],
+            "interaction_presentation_id": presentation["presentation_id"],
+        },
+    }
+    materialization = send(
+        response,
+        conversation_id=conversation_id,
+        webspace_id=webspace_id,
+        channel_id=channel_id,
+        owner=owner,
+        route_id=route_id,
+        actor_id=actor_id,
+        actor_label=actor_label,
+        request_id=request_id,
+        turn_trace_id=turn_trace_id,
+        thread_id=thread_id,
+        meta=meta,
+        bus=bus,
+    )
+    return {
+        "ok": True,
+        "handle": conversation_interactions.interaction_handle(latest).to_dict(),
+        "interaction": latest,
+        "presentation": presentation,
+        "materialization": materialization,
+    }
+
+
+def respond(
+    interaction_id: str,
+    *,
+    actor_id: str,
+    expected_generation: int,
+    idempotency_key: str,
+    values: Mapping[str, Any] | None = None,
+    text: str | None = None,
+    action_token: str | None = None,
+    intent_proposal: Mapping[str, Any] | None = None,
+    supersedes_response_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return conversation_interactions.submit_response(
+        interaction_id,
+        actor_id=actor_id,
+        expected_generation=expected_generation,
+        idempotency_key=idempotency_key,
+        values=values,
+        original_text=text,
+        action_token=action_token,
+        intent_proposal=intent_proposal,
+        supersedes_response_id=supersedes_response_id,
+        metadata=metadata,
+    )
+
+
+def accept(
+    interaction_id: str,
+    response_id: str,
+    *,
+    expected_generation: int,
+) -> dict[str, Any]:
+    return conversation_interactions.accept_response(
+        interaction_id,
+        response_id,
+        expected_generation=expected_generation,
+    )
+
+
+def pending(
+    conversation_id: str,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    return conversation_store.list_interactions(
+        conversation_id=conversation_id,
+        statuses=["created", "projected", "awaiting_input", "partially_answered", "validation_failed"],
+        limit=limit,
     )
 
 

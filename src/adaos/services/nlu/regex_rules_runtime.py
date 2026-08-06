@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
-
-import yaml
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
@@ -70,44 +66,6 @@ def _read_current_scenario_id(snapshot: dict[str, Any]) -> str | None:
     return None
 
 
-def _append_or_update_rule(existing: list[dict[str, Any]], rule: dict[str, Any]) -> list[dict[str, Any]]:
-    intent = rule.get("intent")
-    pattern = rule.get("pattern")
-    if not isinstance(intent, str) or not intent.strip():
-        return existing
-    if not isinstance(pattern, str) or not pattern.strip():
-        return existing
-
-    cleaned: list[dict[str, Any]] = []
-    for item in existing:
-        if not isinstance(item, dict):
-            continue
-        if item.get("intent") == intent and item.get("pattern") == pattern:
-            updated = dict(item)
-            # Backfill IDs on pre-existing rules to keep rule-level identity stable.
-            if updated.get("id") in (None, "") and rule.get("id"):
-                updated["id"] = rule.get("id")
-            if updated.get("created_at") is None and rule.get("created_at") is not None:
-                updated["created_at"] = rule.get("created_at")
-            if updated.get("enabled") is None:
-                updated["enabled"] = True
-            if isinstance(rule.get("slots"), Mapping):
-                merged_slots = dict(updated.get("slots") or {}) if isinstance(updated.get("slots"), Mapping) else {}
-                for key, value in rule.get("slots", {}).items():
-                    if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip():
-                        merged_slots[key.strip()] = value.strip()
-                if merged_slots:
-                    updated["slots"] = merged_slots
-            cleaned.append(updated)
-        else:
-            cleaned.append(dict(item))
-
-    if any(x.get("intent") == intent and x.get("pattern") == pattern for x in cleaned):
-        return cleaned
-    cleaned.append(rule)
-    return cleaned
-
-
 def _rule_matches_rollback(
     item: Mapping[str, Any],
     *,
@@ -143,195 +101,6 @@ def _remove_rules(
             continue
         kept.append(dict(item))
     return kept, removed
-
-
-def _remove_scenario_regex_rule(
-    *,
-    scenario_id: str,
-    rule_id: str | None,
-    candidate_id: str | None,
-    intent: str | None,
-    pattern: str | None,
-) -> int:
-    root = scenarios_loader.scenario_root(scenario_id)
-    path = root / "scenario.json"
-    if not path.exists():
-        return 0
-    try:
-        raw = path.read_text(encoding="utf-8-sig")
-        payload = json.loads(raw)
-    except Exception:
-        return 0
-    if not isinstance(payload, dict):
-        return 0
-    nlu = payload.get("nlu")
-    if not isinstance(nlu, dict):
-        return 0
-    rules = nlu.get("regex_rules")
-    if not isinstance(rules, list):
-        return 0
-    kept, removed = _remove_rules(
-        [dict(x) for x in rules if isinstance(x, dict)],
-        rule_id=rule_id,
-        candidate_id=candidate_id,
-        intent=intent,
-        pattern=pattern,
-    )
-    if not removed:
-        return 0
-    nlu["regex_rules"] = kept
-    try:
-        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        return 0
-    scenarios_loader.invalidate_cache(scenario_id=scenario_id, space="workspace")
-    return removed
-
-
-def _remove_skill_regex_rule(
-    *,
-    skill_name: str,
-    rule_id: str | None,
-    candidate_id: str | None,
-    intent: str | None,
-    pattern: str | None,
-) -> int:
-    ctx = get_ctx()
-    path = Path(ctx.paths.skills_dir()) / skill_name / "skill.yaml"
-    if not path.exists():
-        return 0
-    try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return 0
-    if not isinstance(payload, dict):
-        return 0
-    nlu = payload.get("nlu")
-    if not isinstance(nlu, dict):
-        return 0
-    rules = nlu.get("regex_rules")
-    if not isinstance(rules, list):
-        return 0
-    kept, removed = _remove_rules(
-        [dict(x) for x in rules if isinstance(x, dict)],
-        rule_id=rule_id,
-        candidate_id=candidate_id,
-        intent=intent,
-        pattern=pattern,
-    )
-    if not removed:
-        return 0
-    nlu["regex_rules"] = kept
-    try:
-        path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    except Exception:
-        return 0
-    return removed
-
-
-def _remove_workspace_regex_rules(
-    *,
-    candidate_id: str | None,
-    intent: str | None,
-    pattern: str | None,
-) -> int:
-    if not candidate_id and not (intent and pattern):
-        return 0
-    ctx = get_ctx()
-    removed = 0
-    try:
-        scenarios_root = Path(ctx.paths.scenarios_dir())
-        for item in scenarios_root.iterdir():
-            if not item.is_dir() or not (item / "scenario.json").exists():
-                continue
-            removed += _remove_scenario_regex_rule(
-                scenario_id=item.name,
-                rule_id=None,
-                candidate_id=candidate_id,
-                intent=intent,
-                pattern=pattern,
-            )
-    except Exception:
-        _log.debug("failed to scan workspace scenarios during regex rollback", exc_info=True)
-    try:
-        skills_root = Path(ctx.paths.skills_dir())
-        for item in skills_root.iterdir():
-            if not item.is_dir() or not (item / "skill.yaml").exists():
-                continue
-            removed += _remove_skill_regex_rule(
-                skill_name=item.name,
-                rule_id=None,
-                candidate_id=candidate_id,
-                intent=intent,
-                pattern=pattern,
-            )
-    except Exception:
-        _log.debug("failed to scan workspace skills during regex rollback", exc_info=True)
-    return removed
-
-
-def _write_scenario_regex_rule(*, scenario_id: str, rule: dict[str, Any]) -> bool:
-    root = scenarios_loader.scenario_root(scenario_id)
-    path = root / "scenario.json"
-    if not path.exists():
-        return False
-
-    try:
-        raw = path.read_text(encoding="utf-8-sig")
-        payload = json.loads(raw)
-    except Exception:
-        return False
-    if not isinstance(payload, dict):
-        return False
-
-    nlu = payload.get("nlu")
-    if not isinstance(nlu, dict):
-        nlu = {}
-        payload["nlu"] = nlu
-
-    rules = nlu.get("regex_rules")
-    if not isinstance(rules, list):
-        rules = []
-    nlu["regex_rules"] = _append_or_update_rule([dict(x) for x in rules if isinstance(x, dict)], rule)[-200:]
-
-    try:
-        path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    except Exception:
-        return False
-
-    scenarios_loader.invalidate_cache(scenario_id=scenario_id, space="workspace")
-    return True
-
-
-def _write_skill_regex_rule(*, skill_name: str, rule: dict[str, Any]) -> bool:
-    ctx = get_ctx()
-    skill_root = Path(ctx.paths.skills_dir()) / skill_name
-    path = skill_root / "skill.yaml"
-    if not path.exists():
-        return False
-
-    try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return False
-    if not isinstance(payload, dict):
-        return False
-
-    nlu = payload.get("nlu")
-    if not isinstance(nlu, dict):
-        nlu = {}
-        payload["nlu"] = nlu
-
-    rules = nlu.get("regex_rules")
-    if not isinstance(rules, list):
-        rules = []
-    nlu["regex_rules"] = _append_or_update_rule([dict(x) for x in rules if isinstance(x, dict)], rule)[-200:]
-
-    try:
-        path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    except Exception:
-        return False
-    return True
 
 
 def _normalize_rule(rule: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -466,32 +235,6 @@ async def _on_regex_rule_rollback(evt: Any) -> None:
                         d["status"] = "rolled_back"
                         d["rolled_back_at"] = time.time()
                     next_candidates.append(d)
-
-                if resolved_target:
-                    t_type = resolved_target.get("type")
-                    t_id = resolved_target.get("id")
-                    if t_type == "scenario" and isinstance(t_id, str) and t_id.strip():
-                        removed_owner = _remove_scenario_regex_rule(
-                            scenario_id=t_id.strip(),
-                            rule_id=rule_id,
-                            candidate_id=candidate_id,
-                            intent=intent,
-                            pattern=pattern,
-                        )
-                    elif t_type == "skill" and isinstance(t_id, str) and t_id.strip():
-                        removed_owner = _remove_skill_regex_rule(
-                            skill_name=t_id.strip(),
-                            rule_id=rule_id,
-                            candidate_id=candidate_id,
-                            intent=intent,
-                            pattern=pattern,
-                        )
-                if not removed_owner:
-                    removed_owner = _remove_workspace_regex_rules(
-                        candidate_id=candidate_id,
-                        intent=intent,
-                        pattern=pattern,
-                    )
 
                 nlu_obj = _read_nlu_obj(data_map)
                 rules = [dict(x) for x in iter_mappings(nlu_obj.get("regex_rules"))]
@@ -629,6 +372,7 @@ async def apply_regex_rule(evt: Any) -> None:
     applied_to: dict[str, Any] | None = None
     runtime_flags_update: dict[str, Any] | None = None
     applied_candidate_patch: dict[str, Any] = {}
+    promotion_candidate: dict[str, Any] | None = None
 
     try:
         async with _nlu_regex_rules_write_meta():
@@ -659,8 +403,6 @@ async def apply_regex_rule(evt: Any) -> None:
                         rule["provenance"] = provenance
                         break
 
-                # Prefer writing regex rules into scenario/skill definitions (workspace),
-                # so NLU can evolve as part of skills/scenarios rather than per-webspace state.
                 target = payload_target
                 target_type = target.get("type") if isinstance(target, Mapping) else None
                 target_id = target.get("id") if isinstance(target, Mapping) else None
@@ -669,17 +411,12 @@ async def apply_regex_rule(evt: Any) -> None:
                 token = ui_map.get("current_scenario")
                 scenario_id = token.strip() if isinstance(token, str) and token.strip() else None
 
-                applied_ok = False
                 if target_type == "scenario" and isinstance(target_id, str) and target_id.strip():
                     _set_rule_target_metadata(rule, {"type": "scenario", "id": target_id.strip()})
-                    applied_ok = _write_scenario_regex_rule(scenario_id=target_id.strip(), rule=rule)
-                    if applied_ok:
-                        applied_to = {"type": "scenario", "id": target_id.strip()}
+                    applied_to = {"type": "scenario", "id": target_id.strip()}
                 elif target_type == "skill" and isinstance(target_id, str) and target_id.strip():
                     _set_rule_target_metadata(rule, {"type": "skill", "id": target_id.strip()})
-                    applied_ok = _write_skill_regex_rule(skill_name=target_id.strip(), rule=rule)
-                    if applied_ok:
-                        applied_to = {"type": "skill", "id": target_id.strip()}
+                    applied_to = {"type": "skill", "id": target_id.strip()}
                 elif scenario_id:
                     try:
                         content = scenarios_loader.read_content(scenario_id)
@@ -688,46 +425,23 @@ async def apply_regex_rule(evt: Any) -> None:
                     intents = (content.get("nlu") or {}).get("intents") if isinstance(content, dict) else None
                     if isinstance(intents, dict) and intent.strip() in intents:
                         _set_rule_target_metadata(rule, {"type": "scenario", "id": scenario_id})
-                        applied_ok = _write_scenario_regex_rule(scenario_id=scenario_id, rule=rule)
-                        if applied_ok:
-                            applied_to = {"type": "scenario", "id": scenario_id}
+                        applied_to = {"type": "scenario", "id": scenario_id}
 
-                if not applied_ok:
+                if applied_to is None:
                     _set_rule_target_metadata(rule, {"type": "webspace", "id": webspace_id})
-                    # Backward-compatible fallback: keep per-webspace storage if we can't
-                    # resolve a skill/scenario target.
-                    nlu_obj = _read_nlu_obj(data_map)
-                    rules = nlu_obj.get("regex_rules")
-                    rules = [dict(x) for x in iter_mappings(rules)]
-                    cleaned: list[dict[str, Any]] = []
-                    for item in rules:
-                        normalized = _normalize_rule(item)
-                        if normalized:
-                            cleaned.append(normalized)
-                    cleaned.append(rule)
-                    nlu_obj["regex_rules"] = cleaned[-200:]
-                    with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "nlu", nlu_obj)
                     applied_to = {"type": "webspace", "id": webspace_id}
-                else:
-                    # Mirror applied rules into per-webspace state as a runtime cache so the
-                    # regex stage can pick them up immediately without depending on scenario
-                    # reloads. Primary source-of-truth remains scenario.json / skill.yaml.
-                    try:
-                        nlu_obj = _read_nlu_obj(data_map)
-                        rules = nlu_obj.get("regex_rules")
-                        rules = [dict(x) for x in iter_mappings(rules)]
-                        cleaned: list[dict[str, Any]] = []
-                        for item in rules:
-                            normalized = _normalize_rule(item)
-                            if normalized:
-                                cleaned.append(normalized)
-                        cleaned.append(rule)
-                        nlu_obj["regex_rules"] = cleaned[-200:]
-                        with ydoc.begin_transaction() as txn:
-                            data_map.set(txn, "nlu", nlu_obj)
-                    except Exception:
-                        pass
+
+                nlu_obj = _read_nlu_obj(data_map)
+                rules = [dict(x) for x in iter_mappings(nlu_obj.get("regex_rules"))]
+                cleaned: list[dict[str, Any]] = []
+                for item in rules:
+                    normalized = _normalize_rule(item)
+                    if normalized:
+                        cleaned.append(normalized)
+                cleaned.append(rule)
+                nlu_obj["regex_rules"] = cleaned[-200:]
+                with ydoc.begin_transaction() as txn:
+                    data_map.set(txn, "nlu", nlu_obj)
 
                 # Mark candidate as applied (if present)
                 candidates = teacher.get("candidates")
@@ -803,6 +517,23 @@ async def apply_regex_rule(evt: Any) -> None:
     except Exception:
         _log.warning("failed to apply regex rule webspace=%s intent=%s", webspace_id, intent, exc_info=True)
         return
+
+    try:
+        from adaos.services.nlu.teacher_overlay_store import create_regex_promotion_candidate
+
+        promotion_candidate = create_regex_promotion_candidate(
+            rule=rule,
+            target=dict(applied_to or {}),
+            webspace_id=webspace_id,
+            ctx=ctx,
+        )
+    except Exception:
+        _log.warning(
+            "failed to create Builder promotion candidate webspace=%s rule_id=%s",
+            webspace_id,
+            rule_id,
+            exc_info=True,
+        )
 
     try:
         from adaos.services.nlu.runtime_flags import get_runtime_flags, set_runtime_flags
@@ -967,6 +698,11 @@ async def apply_regex_rule(evt: Any) -> None:
                 raw={
                     **rule,
                     "target": dict(applied_to or {}),
+                    **(
+                        {"promotion_candidate_id": promotion_candidate["candidate_id"]}
+                        if promotion_candidate is not None
+                        else {}
+                    ),
                     **({"runtime_flags": dict(runtime_flags_update.get("flags") or {})} if runtime_flags_update else {}),
                 },
                 meta=meta,
@@ -978,7 +714,14 @@ async def apply_regex_rule(evt: Any) -> None:
     bus_emit(
         ctx.bus,
         "nlp.teacher.regex_rule.applied",
-        {"webspace_id": webspace_id, "rule": {**rule, "target": dict(applied_to or {})}, "_meta": dict(meta)},
+        {
+            "webspace_id": webspace_id,
+            "rule": {**rule, "target": dict(applied_to or {})},
+            "promotion_candidate_id": (
+                promotion_candidate.get("candidate_id") if promotion_candidate is not None else None
+            ),
+            "_meta": dict(meta),
+        },
         source="nlu.regex_rules",
     )
 

@@ -17,15 +17,41 @@ from adaos.services.chat_io import telemetry as tm
 from dataclasses import asdict
 from uuid import uuid4
 from datetime import datetime
+from pydantic import BaseModel
 
 router = APIRouter()
 
 
+class TelegramPairCreateRequest(BaseModel):
+    """Canonical body accepted from ``adaos dev telegram`` and other clients."""
+
+    code: Optional[str] = None
+    hub_id: Optional[str] = None
+    hub: Optional[str] = None
+    ttl: Optional[int] = None
+    bot_id: Optional[str] = None
+    bot: Optional[str] = None
+    webspace_id: Optional[str] = None
+
+
 @router.post("/io/tg/pair/create")
-async def tg_pair_create(hub: Optional[str] = None, ttl: Optional[int] = None, bot: Optional[str] = None):
-    ttl_sec = int(ttl or 600)
-    res = await pairing_svc.issue_pair_code(bot_id=bot or "main-bot", hub_id=hub, ttl_sec=ttl_sec)
-    return {"ok": True, **res}
+async def tg_pair_create(
+    payload: Optional[TelegramPairCreateRequest] = None,
+    hub: Optional[str] = None,
+    ttl: Optional[int] = None,
+    bot: Optional[str] = None,
+):
+    body = payload or TelegramPairCreateRequest()
+    hub_id = str(body.hub_id or body.hub or hub or "").strip() or None
+    bot_id = str(body.bot_id or body.bot or bot or "main-bot").strip() or "main-bot"
+    ttl_sec = int(body.ttl or ttl or 600)
+    res = await pairing_svc.issue_pair_code(
+        bot_id=bot_id,
+        hub_id=hub_id,
+        ttl_sec=ttl_sec,
+        webspace_id=str(body.webspace_id or "").strip() or None,
+    )
+    return {"ok": True, "hub_id": hub_id, "bot_id": bot_id, **res}
 
 
 @router.post("/io/tg/pair/confirm")

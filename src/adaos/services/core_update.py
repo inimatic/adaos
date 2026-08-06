@@ -28,7 +28,9 @@ from adaos.services.core_slots import (
     rollback_to_previous_slot,
     slot_dir,
 )
+from adaos.services.env_policy import env_bool
 from adaos.services.runtime_paths import current_base_dir, current_control_python, current_repo_root, is_core_slot_path
+from adaos.services.runtime_topology import supervisor_base_candidates_from_env
 
 
 def _base_dir() -> Path:
@@ -316,31 +318,13 @@ def build_public_update_status_payload(
 
 
 def _supervisor_public_base_candidates() -> list[str]:
-    bases: list[str] = []
-    explicit = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
-    if explicit:
-        bases.append(explicit.rstrip("/"))
-    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-    bases.append(f"http://{host}:{port}")
-    if host not in {"localhost", "127.0.0.1"}:
-        bases.append(f"http://127.0.0.1:{port}")
-        bases.append(f"http://localhost:{port}")
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in bases:
-        token = str(item or "").strip().rstrip("/")
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-    return deduped
+    return supervisor_base_candidates_from_env(include_localhost=True, include_default_loopback=False)
 
 
 def read_public_update_status(*, timeout_sec: float = 0.75) -> dict[str, Any]:
     fallback = build_public_update_status_payload(read_status(), served_by="runtime_fallback")
     if not (
-        str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+        env_bool("ADAOS_SUPERVISOR_ENABLED")
         or str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     ):
         return fallback

@@ -1,0 +1,1 @@
+{"schema":"adaos.skill_factory.golden_task.v1","id":"success","operation":"complete","request":{"request_id":"golden.success","target":{"type":"skill","id":"golden_success"}},"expected":{"status":"completed","ready_event":true}}

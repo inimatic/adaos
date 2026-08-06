@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.authoring_context.v1",
+  "title": "AdaOS Workflow Authoring Context",
+  "type": "object",
+  "required": [
+    "schema",
+    "context_id",
+    "context_digest",
+    "generated_at",
+    "current_definition_digest",
+    "abi_schemas",
+    "adapter_catalog",
+    "role_policy",
+    "domain_invariants",
+    "examples",
+    "limits"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.authoring_context.v1" },
+    "context_id": { "$ref": "#/$defs/id" },
+    "context_digest": { "$ref": "#/$defs/digest" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workflow_type": { "type": ["string", "null"], "maxLength": 160 },
+    "definition_version": { "type": ["string", "null"], "maxLength": 80 },
+    "current_definition_digest": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "abi_schemas": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["filename", "schema_id", "digest"],
+        "properties": {
+          "filename": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "schema_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "digest": { "$ref": "#/$defs/digest" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "adapter_catalog": {
+      "type": "array",
+      "items": { "$ref": "workflow.registry_entry.v1.schema.json" }
+    },
+    "role_policy": {
+      "type": "object",
+      "required": [
+        "roles",
+        "unknown_role_policy",
+        "unknown_permission_policy",
+        "role_self_assignment"
+      ],
+      "properties": {
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["role", "authenticated", "permission_source"],
+            "properties": {
+              "role": { "enum": ["guest", "registered"] },
+              "authenticated": { "type": "boolean" },
+              "permission_source": { "const": "verified_authority_plane" },
+              "permission_ceiling": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "unknown_role_policy": { "const": "deny" },
+        "unknown_permission_policy": { "const": "deny" },
+        "role_self_assignment": { "const": "rejected" }
+      },
+      "additionalProperties": false
+    },
+    "domain_invariants": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "severity"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "severity": { "enum": ["must", "should", "could"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "examples": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "object" }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["max_bytes", "max_depth", "max_states", "max_commands", "max_transitions"],
+      "properties": {
+        "max_bytes": { "type": "integer", "minimum": 1 },
+        "max_depth": { "type": "integer", "minimum": 1 },
+        "max_states": { "type": "integer", "minimum": 1 },
+        "max_commands": { "type": "integer", "minimum": 1 },
+        "max_transitions": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

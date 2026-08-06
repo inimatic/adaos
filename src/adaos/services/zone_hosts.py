@@ -4,6 +4,10 @@ from typing import Final
 
 CENTRAL_PUBLIC_HOST: Final[str] = "api.inimatic.com"
 RU_PUBLIC_HOST: Final[str] = "ru.api.inimatic.com"
+PUBLIC_APP_HOST: Final[str] = "inimatic.com"
+DEFAULT_PUBLIC_ZONE_ID: Final[str] = "us"
+DEFAULT_PUBLIC_ROOT_BASE_URL: Final[str] = f"https://{CENTRAL_PUBLIC_HOST}"
+DEFAULT_PUBLIC_APP_BASE_URL: Final[str] = f"https://{PUBLIC_APP_HOST}"
 CANONICAL_ZONE_IDS: Final[tuple[str, ...]] = ("us", "eu", "ru", "in", "ch")
 CENTRAL_ZONE_IDS: Final[tuple[str, ...]] = ("us", "eu", "in", "ch")
 

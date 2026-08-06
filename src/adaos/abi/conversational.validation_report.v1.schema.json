@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.validation_report.v1",
+  "title": "AdaOS Conversational Package Validation Report",
+  "type": "object",
+  "required": ["schema", "valid", "package_id", "package_digest", "diagnostics", "metrics", "story_reports"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.validation_report.v1" },
+    "valid": { "type": "boolean" },
+    "package_id": { "type": ["string", "null"], "maxLength": 160 },
+    "package_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "path", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "details": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["intents", "entities", "examples", "matchers", "affordances", "repair_policies", "outputs", "stories", "locales", "workflow_commands_referenced", "workflow_transitions_referenced"],
+      "properties": {
+        "intents": { "type": "integer", "minimum": 0 },
+        "entities": { "type": "integer", "minimum": 0 },
+        "examples": { "type": "integer", "minimum": 0 },
+        "matchers": { "type": "integer", "minimum": 0 },
+        "affordances": { "type": "integer", "minimum": 0 },
+        "repair_policies": { "type": "integer", "minimum": 0 },
+        "outputs": { "type": "integer", "minimum": 0 },
+        "stories": { "type": "integer", "minimum": 0 },
+        "locales": { "type": "integer", "minimum": 0 },
+        "workflow_commands_referenced": { "type": "integer", "minimum": 0 },
+        "workflow_transitions_referenced": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "story_reports": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["story_id", "valid", "steps", "final_state", "diagnostics", "timeline"],
+        "properties": {
+          "story_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "runner_version": { "type": "integer", "minimum": 1 },
+          "valid": { "type": "boolean" },
+          "steps": { "type": "integer", "minimum": 0 },
+          "final_state": { "type": ["string", "null"], "maxLength": 160 },
+          "diagnostics": { "type": "array", "items": { "type": "object" } },
+          "timeline": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

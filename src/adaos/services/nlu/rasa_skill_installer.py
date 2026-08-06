@@ -15,6 +15,7 @@ import yaml
 
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.agent_context import get_ctx
+from adaos.services.env_policy import DISABLE_VALUES, ENABLE_VALUES, policy_bool
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
@@ -26,8 +27,6 @@ _LEGACY_MANAGED_META = ".adaos-managed.json"
 _SOURCE_FINGERPRINT_KEY = "source_fingerprint"
 _RASA_PORT_SUBMODULE = Path("src/adaos/integrations/rasa-port")
 _DEFAULT_RASA_PORT_REQUIREMENT = "adaos-rasa-nlu @ git+https://github.com/inimatic/rasa-port.git@main"
-_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
-_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
 _log = logging.getLogger("adaos.nlu.rasa.install")
 
 
@@ -81,14 +80,7 @@ def _env_value(*keys: str) -> str | None:
 
 def env_flag(name: str, *, default: bool, aliases: tuple[str, ...] = ()) -> bool:
     raw = _env_value(name, *aliases)
-    if raw is None:
-        return default
-    value = raw.strip().lower()
-    if value in _FALSE_VALUES:
-        return False
-    if value in _TRUE_VALUES:
-        return True
-    return default
+    return policy_bool(raw, default=default, true_values=ENABLE_VALUES, false_values=DISABLE_VALUES)
 
 
 def is_rasa_nlu_enabled() -> bool:

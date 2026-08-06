@@ -1,7 +1,7 @@
 # Pending Actions
 
-Status: target architecture with an initial core service, SDK helper slice,
-browser global surface, and NLU Teacher candidate-confirmation migration.
+Status: implemented core contract with SDK helpers, browser global surface,
+and current cross-channel producer migrations.
 
 Pending Actions are the AdaOS core mechanism for asking a human to choose an
 action later, possibly through a different channel than the one that created the
@@ -51,10 +51,15 @@ Current implemented slice:
   recovery handler.
 - [x] Builder draft and patch review publish Pending Actions with
   conversation/thread/source refs before browser apply/approve flows.
-- [ ] NLU Teacher clarification sessions still use the legacy chat-local flow
-  and should be migrated separately if they need cross-channel response.
-- [ ] Builder runtime apply/release responses, pairing, broader runtime
-  recovery, capability elevation, and guarded skill-action producer migrations.
+- [x] NLU Teacher clarification sessions publish localized choice actions and
+  accept the same durable response from browser, Telegram, or Voice.
+- [x] Builder release/delete, ReDevice LAN admission, service-supervisor
+  recovery, skill setup, memory proposal, Skill Factory User Hub admission, and
+  eval-repair decisions use Pending Actions at their deferred/cross-channel
+  authority boundaries.
+- [x] Keep immediate same-turn workflow confirmation distinct from Pending
+  Actions. A guarded local action only creates a Pending Action when the choice
+  must survive the turn, cross a channel, or await another authority.
 - [ ] Full Pending Actions workbench/modal with filtering, history, and direct
   links to source evidence.
 - [ ] Notification deep links to Pending Actions without making notifications

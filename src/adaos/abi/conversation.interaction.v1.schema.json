@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction.v1",
+  "title": "AdaOS Conversation Interaction",
+  "type": "object",
+  "required": [
+    "schema", "interaction_id", "conversation_id", "owner", "prompt",
+    "input_spec", "actions", "requirements", "required_capabilities", "optional_capabilities",
+    "fallbacks", "status", "generation", "task_ref", "workflow_ref",
+    "reply_route_ref", "expires_at", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction.v1" },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "conversation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "thread_id": { "type": ["string", "null"], "maxLength": 240 },
+    "owner": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "prompt_ref": { "type": ["string", "null"], "maxLength": 160 },
+    "locale_context": { "type": ["object", "null"] },
+    "input_spec": {
+      "type": "object",
+      "required": ["kind", "required_fields", "choices", "sensitive"],
+      "properties": {
+        "kind": { "enum": ["text", "choice", "multi_choice", "form", "confirmation"] },
+        "required_fields": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+        "choices": {
+          "type": "array", "maxItems": 100,
+          "items": {
+            "type": "object", "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "description": { "type": ["string", "null"], "maxLength": 1000 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sensitive": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "actions": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object", "required": ["action_id", "label", "command", "value", "risk", "confirmation_required", "target_ref", "expected_generation", "principal_scope", "command_context_ref"],
+        "properties": {
+          "action_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "label_ref": { "type": ["string", "null"], "maxLength": 160 },
+          "command": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "value": {},
+          "risk": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "confirmation_required": { "type": "boolean" },
+          "target_ref": { "type": ["object", "null"] },
+          "expected_generation": { "type": "integer", "minimum": 0 },
+          "principal_scope": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+          "command_context_ref": { "type": ["object", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "requirements": { "type": "object" },
+    "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+    "optional_capabilities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+    "fallbacks": { "type": "array", "uniqueItems": true, "items": { "enum": ["plain_text", "numbered_text", "deep_link", "web_view", "miniapp", "unsupported"] } },
+    "status": { "enum": ["created", "projected", "awaiting_input", "partially_answered", "answered", "accepted", "completed", "validation_failed", "expired", "cancelled", "superseded"] },
+    "generation": { "type": "integer", "minimum": 0 },
+    "task_ref": { "type": ["object", "null"] },
+    "workflow_ref": { "type": ["object", "null"] },
+    "reply_route_ref": { "type": ["object", "null"] },
+    "expires_at": { "type": ["string", "null"], "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": ["string", "null"], "format": "date-time" },
+    "metadata": { "type": "object" },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "trace": { "type": ["object", "null"] }
+  },
+  "additionalProperties": false
+}

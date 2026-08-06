@@ -18,8 +18,17 @@ from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.skills.runtime_runner import execute_tool as execute_skill_tool
+from adaos.services.scenario.workflow_translation import (
+    LegacyWorkflowTranslationError,
+    shadow_compare_legacy_workflow,
+    translate_legacy_scenario_workflow,
+)
 
 _log = logging.getLogger("adaos.scenario.workflow")
+
+
+class GovernedScenarioWorkflowRequired(RuntimeError):
+    """Manifest-bound workflows must use the shared governed resolver."""
 
 
 def _workflow_write_meta():
@@ -274,9 +283,28 @@ class ScenarioWorkflowRuntime:
             return
         content = scenarios_loader.read_content(scenario_id)
         wf = (content.get("workflow") or {}) if isinstance(content, dict) else {}
+        if isinstance(wf, dict) and wf.get("manifest") == "workflow.json":
+            raise GovernedScenarioWorkflowRequired(
+                f"scenario {scenario_id} declares workflow.json; legacy next_state mutation is disabled"
+            )
         states = wf.get("states") or {}
         if not isinstance(states, dict) or not states:
             return
+        try:
+            translated = translate_legacy_scenario_workflow(wf, scenario_id=scenario_id)
+            shadow = shadow_compare_legacy_workflow(
+                wf,
+                translated,
+                scenario_id=scenario_id,
+            )
+        except LegacyWorkflowTranslationError as exc:
+            raise GovernedScenarioWorkflowRequired(
+                f"legacy workflow cannot be safely shadowed: {exc}"
+            ) from exc
+        if shadow["status"] != "match":
+            raise GovernedScenarioWorkflowRequired(
+                "legacy/governed shadow comparison diverged; transition is blocked"
+            )
         states = self._states_with_automation(scenario_id, states)
 
         # Determine current state from Yjs or fallback to initial_state.

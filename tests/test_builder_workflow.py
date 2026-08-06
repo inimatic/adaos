@@ -6,10 +6,78 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+from adaos.services.builder.governed import builder_change_definition
 from adaos.services.builder.workflow import BuilderWorkflowError, BuilderWorkflowService, _replace_path
 
 
 ABI_ROOT = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
+
+
+def _apply_evidence(*, draft_id: str = "draft.recipes") -> dict[str, object]:
+    return {
+        "draft_ref": {"draft_id": draft_id, "revision": "ui:001"},
+        "validation_evidence": [{"type": "test_run", "id": "tests:passed", "status": "passed"}],
+        "approval": {
+            "approval_id": "pa.builder.publish.1",
+            "actor_id": "user:owner",
+            "actor_type": "user",
+            "approved_at": "2026-08-05T00:00:00+00:00",
+            "policy_evidence": [{"policy": "builder.publish", "decision": "allow"}],
+        },
+        "activation": {
+            "operation_id": "activate.1",
+            "runtime_slot": "B",
+            "health_receipt": {"status": "passed"},
+        },
+        "rollback": {"mode": "slot_switch", "operation_ref": "activate.1:rollback"},
+    }
+
+
+def _confirmed(metadata: dict[str, object] | None = None) -> dict[str, object]:
+    return {**dict(metadata or {}), "confirmed": True}
+
+
+def _prepare_candidate(
+    service: BuilderWorkflowService,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    current = service.describe("scenario", "recipes")
+    delivery = dict(current.get("delivery") or {})
+    if delivery.get("status") != "checkpoint":
+        service.transition(
+            "scenario",
+            "recipes",
+            "checkpoint_recorded",
+            metadata=_confirmed(
+                {
+                    "change_id": "checkpoint-before-trial",
+                    "package_digest": str(metadata.get("package_digest") or "sha256:" + "c" * 64),
+                    "source_revision": "c" * 40,
+                }
+            ),
+        )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_preparation_started",
+        metadata=_confirmed({"activity_attempt_id": "trial-attempt:test"}),
+    )
+    return service.transition(
+        "scenario", "recipes", "candidate_prepared", metadata=metadata
+    )["workflow"]
+
+
+def _publish_candidate(
+    service: BuilderWorkflowService,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"activity_attempt_id": "publication-attempt:test"}),
+    )
+    return service.transition("scenario", "recipes", "publish", metadata=metadata)["workflow"]
 
 
 @pytest.fixture
@@ -38,6 +106,108 @@ def workflow_project(tmp_path: Path) -> tuple[BuilderWorkflowService, Path]:
         dev_scenarios_root=scenarios,
         state_dir=tmp_path / "state",
     ), root
+
+
+def _write_json_yaml(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def _write_minimal_conversational_package(root: Path) -> None:
+    (root / "scenario.yaml").write_text(
+        "id: recipes\nversion: 0.1.0\nworkflow:\n  manifest: workflow.json\nconversational:\n  manifest: conversational/manifest.yaml\n",
+        encoding="utf-8",
+    )
+    (root / "workflow.json").write_text(json.dumps(builder_change_definition()), encoding="utf-8")
+    conv = root / "conversational"
+    _write_json_yaml(
+        conv / "manifest.yaml",
+        {
+            "schema": "adaos.conversational.package_manifest.v1",
+            "package_id": "recipes",
+            "package_kind": "scenario",
+            "owner_ref": {"kind": "scenario", "id": "recipes"},
+            "version": "0.1.0",
+            "workflow_refs": [
+                {
+                    "workflow_type": "builder.change",
+                    "definition_ref": "../workflow.json",
+                    "definition_version": "1.0.0",
+                    "definition_digest": None,
+                }
+            ],
+            "files": {
+                "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
+                "affordances": "affordances.yaml",
+                "repair": "repair.yaml",
+                "output": "output.yaml",
+                "stories": [],
+                "locales": ["locale.en.yaml"],
+            },
+            "locales": ["en"],
+            "default_locale": "en",
+            "privacy_defaults": {
+                "source_scope": "scenario",
+                "runtime_overlay_scope": "user",
+                "public_promotion": "requires_review",
+            },
+            "compiled_outputs": [],
+            "compatibility_aliases": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "input.yaml",
+        {
+            "schema": "adaos.conversational.input.v1",
+            "package_id": "recipes",
+            "intents": [],
+            "policy": {
+                "default_confidence": 0.8,
+                "abstain_below": 0.55,
+                "protected_action_confirmation": True,
+            },
+        },
+    )
+    _write_json_yaml(
+        conv / "entities.yaml",
+        {"schema": "adaos.conversational.entities.v1", "package_id": "recipes", "entities": []},
+    )
+    _write_json_yaml(
+        conv / "examples.yaml",
+        {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "recipes",
+            "examples": [],
+            "hard_negatives": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "affordances.yaml",
+        {
+            "schema": "adaos.conversational.affordances.v1",
+            "package_id": "recipes",
+            "affordances": [],
+        },
+    )
+    _write_json_yaml(
+        conv / "repair.yaml",
+        {"schema": "adaos.conversational.repair.v1", "package_id": "recipes", "policies": []},
+    )
+    _write_json_yaml(
+        conv / "output.yaml",
+        {"schema": "adaos.conversational.output.v1", "package_id": "recipes", "outputs": []},
+    )
+    _write_json_yaml(
+        conv / "locale.en.yaml",
+        {
+            "schema": "adaos.conversational.locale.v1",
+            "package_id": "recipes",
+            "locale": "en",
+            "messages": {},
+        },
+    )
 
 
 def test_atomic_replace_retries_transient_windows_lock(monkeypatch, tmp_path: Path) -> None:
@@ -148,6 +318,94 @@ def test_interaction_frame_projects_risk_actions_and_independent_context(
     assert frame["context"]["preview_target"] == "prototype:recipes:001"
     assert all(item["expected_generation"] == frame["generation"] for item in frame["actions"])
     assert {item["risk"] for item in frame["actions"]} >= {"read", "local_reversible", "isolated_write"}
+    assert all(item["risk_policy"]["risk_class"] == item["risk"] for item in frame["actions"])
+    assert next(
+        item for item in frame["actions"] if item["command"] == "builder.prototype.approve"
+    )["risk_policy"]["inline_callback"] == "confirm"
+
+
+def test_conversation_interaction_uses_localized_shared_action_registry(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-conversation-surface",
+            "request": "Уточнить интерфейс карточки.",
+            "issues": [
+                {
+                    "issue_id": "card-layout",
+                    "title": "Уточнить интерфейс карточки",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["Карточка соответствует согласованному прототипу."],
+                }
+            ],
+        },
+    )
+
+    interaction = service.conversation_interaction(
+        "scenario",
+        "recipes",
+        conversation_id="conversation.builder.surface",
+        principal_id="skill:builder_skill",
+        command_context_id="thread.builder.surface",
+        locale="ru-RU",
+    )
+
+    commands = [item["command"] for item in interaction["actions"]]
+    values = [item["value"] for item in interaction["actions"]]
+    assert values[0] == "builder.change.extend"
+    assert "builder.prototype.approve" in values
+    assert commands[values.index("builder.prototype.approve")] == "accept_prototype"
+    assert values[-4:] == [
+        "builder.process.inspect",
+        "builder.project.list",
+        "builder.preview.link",
+        "builder.help",
+    ]
+    assert interaction["locale_context"]["locale"] == "ru"
+    assert interaction["actions"][0]["label_ref"] == "builder.action.change_extend"
+    assert interaction["actions"][0]["label"] == "Дополнить изменение"
+
+
+def test_dependent_surface_exposes_only_registered_canonical_continuation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-automation-bridge",
+            "request": "Implement deterministic recipe export.",
+            "issues": [
+                {
+                    "issue_id": "recipe-export",
+                    "title": "Implement recipe export",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Export is covered by a test."],
+                }
+            ],
+        },
+    )
+
+    described = service.describe("scenario", "recipes")
+    frame = service.interaction_frame("scenario", "recipes")
+    continuation = next(
+        item
+        for item in frame["actions"]
+        if item["command"] == "builder.implementation.start"
+    )
+
+    assert continuation["workflow_command"] == "start_automation"
+    assert continuation["workflow_generation"] == described["governed"]["generation"]
+    assert continuation["target_ref"] == "change:CH-automation-bridge"
+    assert continuation["risk"] == "isolated_write"
+    assert described["workflow_description"]["executor_readiness"]["blocked"] == 0
 
 
 def test_interaction_context_rejects_stale_generation_without_mutation(
@@ -173,6 +431,205 @@ def test_interaction_context_rejects_stale_generation_without_mutation(
     current = service.describe("scenario", "recipes")
     assert current["interaction"]["inspected_ref"] == "issue:first"
     assert current["interaction"]["preview_target"] is None
+
+
+def test_issue_split_and_merge_preserve_structural_lineage(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    planned = service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "request": "Improve the recipe form and its saving behavior.",
+            "issues": [
+                {
+                    "issue_id": "ambiguous",
+                    "title": "Improve the form",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The resulting form is approved."],
+                }
+            ],
+        },
+    )["workflow"]
+    split = service.transition(
+        "scenario",
+        "recipes",
+        "change_issue_split",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "issue_id": "ambiguous",
+            "issues": [
+                {
+                    "issue_id": "layout",
+                    "title": "Arrange form fields",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The field order is approved."],
+                },
+                {
+                    "issue_id": "save",
+                    "title": "Persist the recipe",
+                    "lane": "automation",
+                    "acceptance_criteria": ["Saving is covered by a functional test."],
+                },
+            ],
+        },
+        expected_generation=planned["generation"],
+    )["workflow"]
+    issues = {item["issue_id"]: item for item in split["change"]["issues"]}
+    assert issues["ambiguous"]["structural_status"] == "split"
+    assert issues["ambiguous"]["superseded_by_issue_ids"] == ["layout", "save"]
+    assert issues["layout"]["derived_from_issue_ids"] == ["ambiguous"]
+    assert split["change"]["gate"] == "prototype"
+
+    merged = service.transition(
+        "scenario",
+        "recipes",
+        "change_issues_merged",
+        metadata={
+            "change_set_id": "CH-ambiguous-layout",
+            "issue_ids": ["layout", "save"],
+            "issue": {
+                "issue_id": "form-delivery",
+                "title": "Deliver the approved recipe form",
+                "lane": "prototype",
+                "acceptance_criteria": ["The approved form saves a recipe."],
+            },
+        },
+        expected_generation=split["generation"],
+    )["workflow"]
+    issues = {item["issue_id"]: item for item in merged["change"]["issues"]}
+    assert issues["layout"]["structural_status"] == "merged"
+    assert issues["save"]["superseded_by_issue_ids"] == ["form-delivery"]
+    assert issues["form-delivery"]["derived_from_issue_ids"] == ["layout", "save"]
+    assert service.describe("scenario", "recipes")["change"]["issues"] == merged["change"]["issues"]
+
+
+def test_context_packet_bounds_conversation_memory_and_pending_action_refs(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-context",
+            "request": "Refine the recipe card.",
+            "issues": [
+                {
+                    "issue_id": "card",
+                    "title": "Refine the recipe card",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The card is easier to scan."],
+                }
+            ],
+        },
+    )
+    from adaos.services.builder.repair import BuilderRepairService
+
+    BuilderRepairService(state_dir=service.state_dir).report(
+        project_id="recipes",
+        signal_type="test_failure",
+        summary="Recipe card regression failed",
+        context={"test": "test_recipe_card", "artifact_id": "recipes"},
+    )
+
+    packet = service.build_context_packet(
+        "scenario",
+        "recipes",
+        conversation_context={
+            "schema": "adaos.context.packet.v1",
+            "conversation_id": "conv.builder.recipes",
+            "thread_id": "thread.recipes",
+            "messages": [
+                {
+                    "id": "message-1",
+                    "seq": 1,
+                    "role": "user",
+                    "text": "Keep the card compact.",
+                    "source_ref": {"type": "conversation_message", "message_id": "message-1"},
+                    "secret_transport_field": "must not cross the Builder boundary",
+                }
+            ],
+            "segments": [],
+            "memory": [
+                {
+                    "id": "memory-1",
+                    "scope": "conversation",
+                    "owner": "skill:builder_skill",
+                    "text": "The user prefers compact cards.",
+                    "visibility": "owner_only",
+                }
+            ],
+            "diagnostics": {"fallbacks": ["fts_unavailable"], "raw_debug": "omit me"},
+            "raw_transcript": "must not cross the Builder boundary",
+        },
+        pending_action_refs=[
+            {
+                "id": "pending-1",
+                "kind": "builder.prototype.review",
+                "status": "pending",
+                "domain_ref": {"object_type": "scenario", "object_id": "recipes"},
+                "payload": {"secret": "omit me"},
+                "allowed_actions": ["approve", "reject"],
+            }
+        ],
+        persist=True,
+    )
+
+    assert packet["conversation"]["messages"][0]["text"] == "Keep the card compact."
+    assert "secret_transport_field" not in packet["conversation"]["messages"][0]
+    assert "raw_transcript" not in packet["conversation"]
+    assert packet["conversation"]["memory"][0]["id"] == "memory-1"
+    assert packet["pending_actions"][0]["id"] == "pending-1"
+    assert "payload" not in packet["pending_actions"][0]
+    assert packet["budget"]["conversation_message_count"] == 1
+    assert packet["budget"]["pending_action_ref_count"] == 1
+    assert packet["facets"]["workflow_definition"]["status"] == "missing"
+    assert packet["facets"]["workflow_definition"]["inspection_status"] == "not_declared"
+    assert packet["facets"]["repair_context"]["active_count"] == 1
+    assert packet["facets"]["repair_context"]["tasks"][0]["signal_type"] == "test_failure"
+    assert packet["budget"]["active_repair_count"] == 1
+    assert service.describe("scenario", "recipes")["context_packet"]["digest"] == packet["digest"]
+
+
+def test_context_packet_surfaces_valid_conversational_static_report(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, root = workflow_project
+    _write_minimal_conversational_package(root)
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CH-conversation-valid",
+            "request": "Admit the conversation package.",
+            "issues": [
+                {
+                    "issue_id": "conversation",
+                    "title": "Admit the conversation package",
+                    "lane": "prototype",
+                    "acceptance_criteria": ["The package passes admission."],
+                }
+            ],
+        },
+    )
+
+    packet = service.build_context_packet("scenario", "recipes")
+
+    workflow_facet = packet["facets"]["workflow_definition"]
+    conversational_facet = packet["facets"]["conversational_definition"]
+    assert conversational_facet["status"] == "present"
+    assert conversational_facet["valid"] is True
+    assert conversational_facet["diagnostics"] == []
+    assert conversational_facet["package_digest"].startswith("sha256:")
+    assert conversational_facet["static_report"]["schema"] == "adaos.workflow.static_report.v1"
+    assert conversational_facet["static_report"]["definition_digest"] == workflow_facet["definition_digest"]
+    assert conversational_facet["static_report"]["coverage"]["states_declared"]
 
 
 def test_change_set_routes_interface_work_through_prototype_first(
@@ -216,7 +673,7 @@ def test_change_set_routes_interface_work_through_prototype_first(
         "scenario",
         "recipes",
         "stabilize_prototype",
-        metadata={"revision": "001"},
+        metadata=_confirmed({"revision": "001"}),
     )["workflow"]
     assert approved["change_set"]["status"] == "approved"
     assert approved["change_set"]["gate"] == "automation"
@@ -270,7 +727,7 @@ def test_change_set_projects_one_canonical_change_and_transition_runs(
         "recipes",
         "stabilize_prototype",
         actor="builder.ui",
-        metadata={"revision": "001", "run_id": "RUN-approve-search"},
+        metadata=_confirmed({"revision": "001", "run_id": "RUN-approve-search"}),
         expected_generation=planned["generation"],
     )["workflow"]
 
@@ -539,7 +996,9 @@ def test_change_set_routes_functional_work_directly_to_automation(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+        metadata=_confirmed(
+            {"task_id": "task.sync", "change_id": "change-sync-implementation"}
+        ),
     )["workflow"]
     assert started["active_phase"] == "automation"
     assert started["change_set"]["status"] == "in_progress"
@@ -578,7 +1037,7 @@ def test_change_set_rejects_transport_corrupted_new_text(
 def test_change_set_advances_through_automation_trial_and_publication(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
-    service, _root = workflow_project
+    service, root = workflow_project
     service.transition(
         "scenario",
         "recipes",
@@ -600,7 +1059,9 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.sync", "change_id": "change-sync-implementation"},
+        metadata=_confirmed(
+            {"task_id": "task.sync", "change_id": "change-sync-implementation"}
+        ),
     )
     completed = service.transition(
         "scenario",
@@ -611,47 +1072,76 @@ def test_change_set_advances_through_automation_trial_and_publication(
     assert completed["change_set"]["status"] == "implemented"
     assert completed["change_set"]["gate"] == "trial"
     assert completed["change_set"]["issues"][0]["status"] == "resolved"
+    task_runs = [
+        item for item in completed["change"]["runs"] if item["run_id"] == "task.sync"
+    ]
+    assert len(task_runs) == 1
+    assert task_runs[0]["status"] == "succeeded"
+    assert task_runs[0]["activity"] == "automation_completed"
+    assert not any(
+        item["activity"] == "automation_started" and item["status"] == "running"
+        for item in completed["change"]["runs"]
+    )
 
     checkpointed = service.transition(
         "scenario",
         "recipes",
         "checkpoint_recorded",
-        metadata={
+        metadata=_confirmed({
             "change_id": "checkpoint-sync",
             "package_digest": "sha256:" + "1" * 64,
             "source_revision": "a" * 40,
-        },
+        }),
     )["workflow"]
     assert checkpointed["change_set"]["status"] == "checkpointed"
     assert "checkpoint-sync" in checkpointed["change_set"]["member_change_ids"]
 
-    trial = service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    trial = _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-sync",
             "release_digest": "sha256:" + "2" * 64,
             "package_digest": "sha256:" + "3" * 64,
         },
-    )["workflow"]
+    )
     assert trial["change_set"]["status"] == "trial"
 
     service.transition(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "candidate-sync"},
+        metadata={
+            "candidate_id": "candidate-sync",
+            "candidate_digest": "sha256:" + "3" * 64,
+        },
     )
-    published = service.transition(
-        "scenario",
-        "recipes",
-        "publish",
-        metadata={"candidate_id": "candidate-sync", "version": "0.2.0"},
-    )["workflow"]
+    published = _publish_candidate(
+        service,
+        {
+            "candidate_id": "candidate-sync",
+            "candidate_digest": "sha256:" + "3" * 64,
+            "version": "0.2.0",
+            "apply_evidence": _apply_evidence(),
+        },
+    )
     assert published["change_set"]["status"] == "published"
     assert published["change_set"]["gate"] == "complete"
+    assert published["governed"]["state"] == "published"
     assert published["capabilities"]["can_plan_change_set"] is True
+    persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
+    persisted["workflow"].pop("governed", None)
+    (root / "prompt_state.json").write_text(
+        json.dumps(persisted, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    hydrated = service.describe("scenario", "recipes")
+    assert hydrated["governed"]["state"] == "published"
+    explanation = service.compact_explanation("scenario", "recipes")
+    assert explanation["state"] == "published"
+    assert explanation["next_commands"] == ["builder.change.plan"]
+    frame = service.interaction_frame("scenario", "recipes")
+    assert frame["message"] == explanation["text"]
+    assert any(item["command"] == "builder.change.plan" for item in frame["actions"])
 
 
 def test_active_change_set_requires_explicit_supersession(
@@ -715,13 +1205,13 @@ def test_followup_request_extends_active_change_set_and_invalidates_trial(
             ],
         },
     )
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-1",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -767,7 +1257,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"source_prototype_revision": "UI 001", "task_id": "task.1"},
+        metadata=_confirmed({"source_prototype_revision": "UI 001", "task_id": "task.1"}),
     )["workflow"]
     assert handed_off["active_phase"] == "automation"
     assert handed_off["prototype"]["status"] == "frozen"
@@ -784,11 +1274,9 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
     assert completed["capabilities"]["can_prepare_candidate"] is True
     assert completed["capabilities"]["can_publish"] is False
 
-    trial = service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    trial = _prepare_candidate(
+        service,
+        {
             "candidate_id": "recipes-0-1-1-abc",
             "release": "recipes@0.1.1",
             "release_digest": "sha256:" + "1" * 64,
@@ -796,7 +1284,7 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
             "base_release": "recipes@0.1.0",
             "trial_workspace": "trials/recipes/workspace",
         },
-    )["workflow"]
+    )
     assert trial["delivery"]["status"] == "trial"
     assert trial["capabilities"]["can_decide_candidate"] is True
 
@@ -804,32 +1292,44 @@ def test_only_active_phase_is_mutable_and_publication_is_a_snapshot(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "recipes-0-1-1-abc"},
+        metadata={
+            "candidate_id": "recipes-0-1-1-abc",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
     )["workflow"]
     assert accepted["delivery"]["status"] == "accepted"
     assert accepted["capabilities"]["can_publish"] is True
 
-    published = service.transition(
-        "scenario",
-        "recipes",
-        "publish",
-        metadata={
+    published = _publish_candidate(
+        service,
+        {
             "version": "0.1.1",
             "task_id": "task.1",
             "candidate_id": "recipes-0-1-1-abc",
+            "candidate_digest": "sha256:" + "2" * 64,
+            "apply_evidence": _apply_evidence(),
         },
-    )["workflow"]
+    )
     assert published["active_phase"] == "automation"
     assert published["publication"]["current_version"] == "0.1.1"
     assert published["publication"]["status"] == "published"
+    release_record = published["publication"]["release_record"]
+    assert release_record["approval"]["actor_id"] == "user:owner"
+    assert release_record["activation"]["runtime_slot"] == "B"
+    Draft202012Validator(
+        json.loads((ABI_ROOT / "builder.applied_release.v1.schema.json").read_text(encoding="utf-8"))
+    ).validate(release_record)
 
     persisted = json.loads((root / "prompt_state.json").read_text(encoding="utf-8"))
     assert persisted["workflow_state"] == "automation"
     assert [item["action"] for item in persisted["workflow"]["history"]] == [
         "automation_started",
         "automation_completed",
+        "checkpoint_recorded",
+        "candidate_preparation_started",
         "candidate_prepared",
         "candidate_accepted",
+        "publication_started",
         "publish",
     ]
 
@@ -841,6 +1341,121 @@ def test_invalid_cross_phase_transition_is_rejected(
 
     with pytest.raises(BuilderWorkflowError, match="requires active automation"):
         service.transition("scenario", "recipes", "publish", metadata={"version": "0.1.1"})
+
+
+def test_unknown_publication_requires_explicit_evidenced_reconciliation(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "plan_change_set",
+        metadata={
+            "change_set_id": "CS-publication-recovery",
+            "request": "Publish the verified recipe change.",
+            "issues": [
+                {
+                    "issue_id": "I-publication-recovery",
+                    "title": "Publish the verified recipe change",
+                    "lane": "automation",
+                    "status": "resolved",
+                    "acceptance_criteria": ["The accepted candidate is published once."],
+                }
+            ],
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_started",
+        metadata=_confirmed({"task_id": "task.recovery"}),
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_completed",
+        metadata={"task_id": "task.recovery", "version": "0.1.1"},
+    )
+    _prepare_candidate(
+        service,
+        {
+            "candidate_id": "recipes-0-1-1-recovery",
+            "release": "recipes@0.1.1",
+            "release_digest": "sha256:" + "1" * 64,
+            "package_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "candidate_accepted",
+        metadata={
+            "candidate_id": "recipes-0-1-1-recovery",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
+    )
+    service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed(),
+    )
+    unknown = service.transition(
+        "scenario",
+        "recipes",
+        "publication_unknown",
+        metadata={"error": "activation result needs reconciliation"},
+    )["workflow"]
+
+    assert unknown["governed"]["state"] == "reconciliation_required"
+    assert unknown["delivery"]["status"] == "unknown"
+    recovered = service.transition(
+        "scenario",
+        "recipes",
+        "reconcile_publication",
+        metadata={
+            "evidence_refs": [
+                "activation:failed-and-rolled-back",
+                "activation-recovery:admitted",
+            ],
+            "idempotency_key": "reconcile-publication:1",
+        },
+    )["workflow"]
+
+    assert recovered["governed"]["state"] == "publication_ready"
+    assert recovered["delivery"]["status"] == "accepted"
+    assert recovered["publication"]["status"] == "ready"
+    assert recovered["reconciliation_history"][-1]["previous_error"] == (
+        "activation result needs reconciliation"
+    )
+    resumed = service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"idempotency_key": "publish-after-recovery:1"}),
+    )["workflow"]
+    assert resumed["governed"]["state"] == "publication_waiting"
+    assert resumed["delivery"]["status"] == "publication_waiting"
+
+    # Model a crash after the compatibility mutation was durable but before
+    # the canonical transition result was persisted.  A new, explicitly
+    # versioned attempt must repair only that local projection.
+    state_path = _root / "prompt_state.json"
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    persisted["workflow"]["governed"] = {
+        **persisted["workflow"]["governed"],
+        "state": "publication_ready",
+    }
+    state_path.write_text(json.dumps(persisted), encoding="utf-8")
+    repaired = service.transition(
+        "scenario",
+        "recipes",
+        "publication_started",
+        metadata=_confirmed({"idempotency_key": "publish-after-recovery:2"}),
+    )["workflow"]
+    assert repaired["governed"]["state"] == "publication_waiting"
+    assert repaired["delivery"]["status"] == "publication_waiting"
 
 
 def test_new_automation_iteration_reopens_a_terminal_result(
@@ -908,7 +1523,9 @@ def test_return_to_prototype_marks_checkpoint_delivery_stale(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
+    service.transition(
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
     service.transition(
         "scenario",
         "recipes",
@@ -970,13 +1587,13 @@ def test_new_automation_work_invalidates_an_unpublished_candidate(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-1",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1030,13 +1647,13 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
     service, _root = workflow_project
-    service.transition("scenario", "recipes", "automation_started", metadata={"task_id": "task.1"})
-    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
     service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )
+    service.transition("scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"})
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-obsolete",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1066,6 +1683,35 @@ def test_checkpoint_discards_candidate_stale_only_because_automation_changed(
     assert checkpoint["delivery"]["rebase_plan"] is None
 
 
+def test_checkpoint_rejects_same_semantic_version_with_different_bytes(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    service.transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "change_id": "change-1",
+            "version": "0.1.0",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+    with pytest.raises(BuilderWorkflowError, match="semantic version already maps to different bytes"):
+        service.transition(
+            "scenario",
+            "recipes",
+            "checkpoint_recorded",
+            metadata={
+                "change_id": "change-2",
+                "version": "0.1.0",
+                "package_digest": "sha256:" + "2" * 64,
+                "source_revision": "b" * 40,
+            },
+        )
+
+
 def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:
@@ -1074,7 +1720,7 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "scenario",
         "recipes",
         "automation_started",
-        metadata={"task_id": "task.initial", "source_prototype_revision": "001"},
+        metadata=_confirmed({"task_id": "task.initial", "source_prototype_revision": "001"}),
     )
     service.transition(
         "scenario",
@@ -1082,11 +1728,9 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "automation_completed",
         metadata={"task_id": "task.initial", "version": "0.1.0"},
     )
-    service.transition(
-        "scenario",
-        "recipes",
-        "candidate_prepared",
-        metadata={
+    _prepare_candidate(
+        service,
+        {
             "candidate_id": "candidate-stale",
             "release_digest": "sha256:" + "1" * 64,
             "package_digest": "sha256:" + "2" * 64,
@@ -1096,7 +1740,10 @@ def test_stale_candidate_rebase_plan_survives_automation_and_checkpoint(
         "scenario",
         "recipes",
         "candidate_accepted",
-        metadata={"candidate_id": "candidate-stale"},
+        metadata={
+            "candidate_id": "candidate-stale",
+            "candidate_digest": "sha256:" + "2" * 64,
+        },
     )
     stale = service.transition(
         "scenario",

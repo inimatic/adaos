@@ -6,13 +6,12 @@ import time
 from typing import Any, Mapping
 
 from adaos.sdk.core.decorators import subscribe
+from adaos.services.env_policy import DISABLE_VALUES, ENABLE_VALUES, coerce_bool
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
 
 _log = logging.getLogger("adaos.nlu.runtime_flags")
 
-_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
-_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled", "none"}
 _FLAG_KEYS = {
     "regex": "regex_enabled",
     "regexp": "regex_enabled",
@@ -66,11 +65,7 @@ def _coerce_bool(value: Any) -> bool | None:
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
-        token = value.strip().lower()
-        if token in _TRUE_VALUES:
-            return True
-        if token in _FALSE_VALUES:
-            return False
+        return coerce_bool(value, true_values=ENABLE_VALUES, false_values=DISABLE_VALUES)
     return None
 
 

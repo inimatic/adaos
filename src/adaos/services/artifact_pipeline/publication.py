@@ -17,6 +17,7 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services.artifact_pipeline.activation import (
+    ActivationError,
     ActivationResult,
     WorkspaceActivationManager,
 )
@@ -68,10 +69,17 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.conversational_pipeline import compile_conversational_package
+from adaos.services.workflow_artifacts import load_manifest_bound_workflow
+from adaos.services.workflow_metrics import (
+    workflow_metrics_evidence,
+    workflow_metrics_report,
+)
 from adaos.services.workspace_registry import (
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
 )
+from adaos.services.skill.setup_plan import publication_setup_evidence
 
 
 PUSHED_SOURCE_SCHEMA = "adaos.artifact.pushed_source.v1"
@@ -327,6 +335,41 @@ class ArtifactPublicationService:
             state_root=self.state_root,
             workspace_root=self.workspace_root,
             remote=self.remote,
+        )
+
+    def _record_builder_repair(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        from adaos.services.builder.repair import BuilderRepairService
+
+        return BuilderRepairService(state_dir=self.state_root).report(
+            project_id=str(payload.get("project_id") or "unknown"),
+            signal_type=str(payload.get("signal_type") or "post_activation"),
+            summary=str(payload.get("summary") or "Post-activation verification failed"),
+            source_refs=tuple(
+                dict(item)
+                for item in payload.get("source_refs") or []
+                if isinstance(item, Mapping)
+            ),
+            context=(
+                dict(payload.get("context"))
+                if isinstance(payload.get("context"), Mapping)
+                else {}
+            ),
+        )
+
+    def get_candidate_release(self, candidate_id: str) -> ReleasePlan:
+        """Return the immutable release plan bound to one candidate.
+
+        Runtime activation callers use this read-only projection to constrain
+        reload and health checks to the candidate dependency closure.  A
+        merged WorkspaceLock may contain unrelated, independently managed
+        projects whose runtime versions are intentionally newer than their
+        last package-lock projection.
+        """
+
+        candidate = self.candidate_store.load(str(candidate_id or "").strip())
+        return self.release_cache.get_release(
+            candidate.project_id,
+            candidate.release_digest,
         )
 
     def _workspace_slot_id(
@@ -741,6 +784,7 @@ class ArtifactPublicationService:
             permission_decision=permission_decision,
             migration_executor=migration_executor,
             migration_rollback=migration_rollback,
+            repair_reporter=self._record_builder_repair,
             expected_lock_digest=prepared.activation_plan.get("observed_lock_digest"),
         )
         self.release_cache.put_release(plan)
@@ -1143,6 +1187,68 @@ class ArtifactPublicationService:
                 "rebase DEV on the installed/stable release before creating a trial"
             )
 
+    @staticmethod
+    def _trial_workflow_metrics(
+        artifact_dir: Path,
+        *,
+        kind: str,
+        validation_evidence: Mapping[str, Any],
+        generated_at: str,
+    ) -> dict[str, Any] | None:
+        manifest_name = "skill.yaml" if kind == "skill" else "scenario.yaml"
+        workflow = load_manifest_bound_workflow(
+            artifact_dir,
+            manifest_name=manifest_name,
+            allow_legacy_inline=False,
+        )
+        if workflow is None:
+            return None
+        manifest = yaml.safe_load(
+            (Path(artifact_dir) / manifest_name).read_text(encoding="utf-8")
+        ) or {}
+        story_reports: tuple[Mapping[str, Any], ...] = tuple(
+            dict(item)
+            for item in validation_evidence.get("story_reports") or []
+            if isinstance(item, Mapping)
+        )
+        if isinstance(manifest, Mapping) and isinstance(
+            manifest.get("conversational"), Mapping
+        ):
+            conversational = compile_conversational_package(
+                artifact_dir,
+                manifest_name=manifest_name,
+                run_stories=True,
+                build_static_report=False,
+                require_operation_catalog=False,
+            )
+            story_reports = tuple(
+                dict(item)
+                for item in conversational.validation.report.get("story_reports") or []
+                if isinstance(item, Mapping)
+            )
+        context_packet = (
+            dict(validation_evidence["context_packet"])
+            if isinstance(validation_evidence.get("context_packet"), Mapping)
+            else None
+        )
+        measurement = (
+            dict(validation_evidence["workflow_measurement"])
+            if isinstance(validation_evidence.get("workflow_measurement"), Mapping)
+            else None
+        )
+        return workflow_metrics_evidence(
+            workflow_metrics_report(
+                workflow.compiled,
+                story_reports=story_reports,
+                context_packet=context_packet,
+                measurement=measurement,
+                report_id=(
+                    f"workflow-metrics:trial:{kind}:{workflow.definition_digest[-24:]}"
+                ),
+                generated_at=generated_at,
+            )
+        )
+
     def prepare_candidate(
         self,
         *,
@@ -1157,6 +1263,12 @@ class ArtifactPublicationService:
         data_ref: str | None = None,
         data_isolation_evidence: Mapping[str, Any] | None = None,
     ) -> PreparedCandidate:
+        effective_validation_evidence = dict(validation_evidence)
+        if kind == "skill":
+            effective_validation_evidence["setup_publication_gate"] = publication_setup_evidence(
+                artifact_dir,
+                validation_evidence=validation_evidence,
+            )
         record = self.load_pushed_source(kind, artifact_id)
         built = self._verify_current_source(record, artifact_dir)
         if not record.source_tree:
@@ -1198,7 +1310,7 @@ class ArtifactPublicationService:
             components=(built.ref,),
             catalog=catalog,
             requirements_by_package=requirements_by_package,
-            validation_evidence=(validation_evidence,),
+            validation_evidence=(effective_validation_evidence,),
         )
         self.release_cache.put_release(plan)
         self.remote.put_release(
@@ -1214,7 +1326,7 @@ class ArtifactPublicationService:
             change_ids=change_ids,
             source_tree=record.source_tree,
         )
-        candidate = record_validation(candidate, validation_evidence, now=_now())
+        candidate = record_validation(candidate, effective_validation_evidence, now=_now())
 
         trial_workspace = self.state_root / "trials" / candidate_id / "workspace"
         trial_manager = WorkspaceActivationManager(
@@ -1252,17 +1364,24 @@ class ArtifactPublicationService:
                 "mode": "empty",
                 "reason": "isolated trial Workspace has no seeded data",
             }
+        trial_started_at = _now()
         candidate = begin_trial(
             candidate,
             trial_id=f"trial-{candidate_id}",
             audience=audience,
             data_mode=data_mode,  # type: ignore[arg-type]
             lock_digest=trial_activation.workspace_lock.to_dict()["lock_digest"],
-            now=_now(),
+            now=trial_started_at,
             data_ref=data_ref,
             isolation_evidence=isolation_evidence,
             reload_receipt=trial_operation.get("reload_receipt"),
             health_receipt=trial_operation.get("health_receipt"),
+            workflow_metrics=self._trial_workflow_metrics(
+                artifact_dir,
+                kind=kind,
+                validation_evidence=effective_validation_evidence,
+                generated_at=trial_started_at,
+            ),
         )
         self.candidate_store.save(candidate)
         return PreparedCandidate(candidate, plan, trial_workspace)
@@ -1324,6 +1443,14 @@ class ArtifactPublicationService:
                 replace_with_retry(archive, trial_workspace)
             raise
         return candidate
+
+    def get_candidate(self, candidate_id: str) -> CandidateRecord:
+        """Return one immutable-identity candidate without changing its trial."""
+
+        token = str(candidate_id or "").strip()
+        if not token:
+            raise PublicationError("candidate_id is required")
+        return self.candidate_store.load(token)
 
     def prepare_rebased_candidate(
         self,
@@ -1414,6 +1541,34 @@ class ArtifactPublicationService:
         operation = self.load_promotion(candidate_id)
         if operation is not None and operation.get("release_digest") != candidate.release_digest:
             raise PublicationError("promotion operation is bound to another release digest")
+        terminal_receipts = {
+            "channel_moved",
+            "workspace_activated",
+            "projection_recorded",
+            "subscription_saved",
+        }
+        operation_receipts = (
+            operation.get("receipts")
+            if isinstance(operation, Mapping)
+            and isinstance(operation.get("receipts"), Mapping)
+            else {}
+        )
+        terminal_receipts_complete = terminal_receipts.issubset(operation_receipts)
+        if operation is not None and (
+            operation.get("status") == "completed"
+            or (
+                operation.get("phase") == "completed"
+                and bool(operation.get("completed_at"))
+                and terminal_receipts_complete
+            )
+        ):
+            if operation.get("status") != "completed":
+                operation["status"] = "completed"
+                operation["reconciled_at"] = _now()
+                operation.pop("error", None)
+                operation.pop("paused_at", None)
+                self._write_promotion(operation)
+            return self._completed_promotion_result(candidate, plan, operation)
 
         if operation is None:
             stable = self.current_stable(candidate.project_id)
@@ -1493,6 +1648,45 @@ class ArtifactPublicationService:
         self._write_promotion(operation)
         receipts = operation.setdefault("receipts", {})
         try:
+            activation_manager = WorkspaceActivationManager(
+                workspace_root=self.workspace_root,
+                package_store=self.package_store,
+                state_root=self.state_root / "activation",
+                attestation_admission=self.attestation_admission,
+            )
+            slot_id = self._workspace_slot_id(
+                candidate.project_id,
+                activation_manager=activation_manager,
+            )
+            workflow_receipt = receipts.get("workflow_admitted")
+            try:
+                if isinstance(workflow_receipt, Mapping):
+                    raw_admission = workflow_receipt.get("admission")
+                    if not isinstance(raw_admission, Mapping):
+                        raise PublicationError(
+                            "promotion workflow admission receipt has no admission record"
+                        )
+                    activation_manager.validate_release_admission(
+                        plan,
+                        raw_admission,
+                        slot_id=slot_id,
+                    )
+                else:
+                    admission = activation_manager.admit_release_candidate(
+                        plan,
+                        slot_id=slot_id,
+                        fetch_package=self.remote.fetch_package,
+                    )
+                    self._promotion_receipt(
+                        operation,
+                        "workflow_admitted",
+                        {"admission": admission},
+                    )
+            except ActivationError as exc:
+                raise PublicationError(
+                    f"workflow publication admission failed: {exc}"
+                ) from exc
+
             published_result: AttestationPublicationResult | None = None
             attestation_receipt = receipts.get("attestations_published")
             if isinstance(attestation_receipt, Mapping):
@@ -1647,12 +1841,6 @@ class ArtifactPublicationService:
                     idempotent_replay=True,
                 )
             else:
-                activation_manager = WorkspaceActivationManager(
-                    workspace_root=self.workspace_root,
-                    package_store=self.package_store,
-                    state_root=self.state_root / "activation",
-                    attestation_admission=self.attestation_admission,
-                )
                 activation_key = f"stable:{candidate.release_digest}"
                 recovery_receipt = receipts.get("activation_recovered")
                 if isinstance(recovery_receipt, Mapping):
@@ -1666,10 +1854,7 @@ class ArtifactPublicationService:
                 activation = activation_manager.activate(
                     plan,
                     idempotency_key=activation_key,
-                    slot_id=self._workspace_slot_id(
-                        candidate.project_id,
-                        activation_manager=activation_manager,
-                    ),
+                    slot_id=slot_id,
                     fetch_package=self.remote.fetch_package,
                     reload_runtime=reload_runtime,
                     health_check=health_check,
@@ -1678,6 +1863,7 @@ class ArtifactPublicationService:
                     permission_decision=permission_decision,
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
+                    repair_reporter=self._record_builder_repair,
                 )
                 activation_operation = json.loads(
                     activation_manager.operation_path(activation.operation_id).read_text(
@@ -1735,6 +1921,76 @@ class ArtifactPublicationService:
             operation["paused_at"] = _now()
             self._write_promotion(operation)
             raise
+
+    def _completed_promotion_result(
+        self,
+        candidate: CandidateRecord,
+        plan: ReleasePlan,
+        operation: Mapping[str, Any],
+    ) -> PromotionResult:
+        """Materialize a terminal promotion exclusively from durable receipts.
+
+        A completed promotion is immutable.  Revalidating its pre-activation
+        admission against a later merged WorkspaceLock can manufacture drift
+        (notably after an explicit activation recovery) and must never cause a
+        second registry write or activation.  We instead verify that the
+        currently installed lock still contains the exact promoted dependency
+        closure and return the recorded terminal result.
+        """
+
+        receipts = operation.get("receipts")
+        if not isinstance(receipts, Mapping):
+            raise PublicationError("completed promotion has no durable receipts")
+        channel_receipt = receipts.get("channel_moved")
+        activation_receipt = receipts.get("workspace_activated")
+        subscription_receipt = receipts.get("subscription_saved")
+        if not isinstance(channel_receipt, Mapping):
+            raise PublicationError("completed promotion has no channel receipt")
+        if not isinstance(activation_receipt, Mapping):
+            raise PublicationError("completed promotion has no activation receipt")
+        if not isinstance(subscription_receipt, Mapping):
+            raise PublicationError("completed promotion has no subscription receipt")
+        raw_lock = activation_receipt.get("workspace_lock")
+        raw_subscription = subscription_receipt.get("subscription")
+        if not isinstance(raw_lock, Mapping):
+            raise PublicationError("completed promotion activation receipt has no WorkspaceLock")
+        if not isinstance(raw_subscription, Mapping):
+            raise PublicationError("completed promotion receipt has no stable subscription")
+        recorded_lock = WorkspaceLock.from_mapping(raw_lock)
+        manager = WorkspaceActivationManager(
+            workspace_root=self.workspace_root,
+            package_store=self.package_store,
+            state_root=self.state_root / "activation",
+            attestation_admission=self.attestation_admission,
+        )
+        active_lock = manager.load_lock()
+        active_components = {
+            item.key: item for item in (active_lock.components if active_lock else ())
+        }
+        missing_or_changed = [
+            package.key
+            for package in plan.packages
+            if package.key not in active_components
+            or active_components[package.key].digest != package.digest
+        ]
+        if missing_or_changed:
+            raise PublicationError(
+                "completed promotion dependency closure is no longer active: "
+                + ", ".join(sorted(missing_or_changed))
+            )
+        return PromotionResult(
+            candidate,
+            plan,
+            ChannelPointer.from_mapping(channel_receipt["pointer"]),
+            ActivationResult(
+                operation_id=str(activation_receipt.get("operation_id") or ""),
+                status="completed",
+                workspace_lock=recorded_lock,
+                release_digest=candidate.release_digest,
+                idempotent_replay=True,
+            ),
+            StableSubscription.from_mapping(raw_subscription),
+        )
 
     def _record_workspace_projection(self, plan: ReleasePlan) -> None:
         component = next(

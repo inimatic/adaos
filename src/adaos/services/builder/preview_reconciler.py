@@ -19,6 +19,11 @@ _TASKS: dict[tuple[int, str], asyncio.Task[dict[str, Any]]] = {}
 _LOCK_REGISTRY_GUARD = threading.Lock()
 _APPLY_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS: dict[str, threading.RLock] = {}
+_TERMINAL_STATUSES = frozenset({"ready", "failed", "superseded", "drifted"})
+# The durable record is a current projection, not an audit log.  Transition
+# events carry the long history; retaining a small diagnostic tail prevents a
+# frequently switched Preview from becoming a large browser projection.
+_HISTORY_LIMIT = 24
 
 
 def _source_lock(registry: dict[str, Any], source_webspace_id: str, factory: Callable[[], Any]) -> Any:
@@ -125,6 +130,31 @@ class BuilderPreviewReconciler:
                 return current, True
 
             now = time.time()
+            history = [dict(item) for item in current.get("history") or [] if isinstance(item, Mapping)]
+            previous_status = str(current.get("status") or "idle")
+            if int(current.get("generation") or 0) > 0:
+                previous = {
+                    key: current.get(key)
+                    for key in (
+                        "generation",
+                        "operation_id",
+                        "preview_webspace_id",
+                        "selected_project",
+                        "desired_scenario",
+                        "observed_scenario",
+                        "status",
+                        "requested_at",
+                        "started_at",
+                        "completed_at",
+                        "updated_at",
+                        "error",
+                    )
+                }
+                if previous_status not in _TERMINAL_STATUSES:
+                    previous["status"] = "superseded"
+                    previous["completed_at"] = now
+                    previous["superseded_by_generation"] = int(current.get("generation") or 0) + 1
+                history.append(previous)
             record = {
                 **current,
                 "schema": "adaos.builder.preview_runtime.v1",
@@ -140,8 +170,11 @@ class BuilderPreviewReconciler:
                 "completed_at": None,
                 "updated_at": now,
                 "error": None,
+                "drift": None,
+                "history": history[-_HISTORY_LIMIT:],
             }
             _write_json(self.state_path(source), record)
+            self._publish_transition(record, event="desired")
             return record, False
 
     def _update_if_current(
@@ -158,7 +191,79 @@ class BuilderPreviewReconciler:
             current.update(changes)
             current["updated_at"] = time.time()
             _write_json(self.state_path(source_webspace_id), current)
+            self._publish_transition(current, event="transition")
             return current, True
+
+    def observe(
+        self,
+        *,
+        source_webspace_id: str,
+        preview_webspace_id: str,
+        observed_scenario: str | None,
+        observed_version: str | None = None,
+        reason: str = "runtime_observed",
+    ) -> dict[str, Any]:
+        """Record runtime truth without silently changing desired state."""
+
+        source = str(source_webspace_id or "").strip()
+        preview = str(preview_webspace_id or "").strip()
+        observed = str(observed_scenario or "").strip() or None
+        if not source or not preview:
+            raise ValueError("source and preview webspace are required")
+        state_lock = _source_lock(_STATE_LOCKS, source, threading.RLock)
+        with state_lock:
+            current = self.describe(source)
+            configured_preview = str(current.get("preview_webspace_id") or "").strip()
+            if configured_preview and configured_preview != preview:
+                return current
+            desired = str(current.get("desired_scenario") or "").strip() or None
+            matches = bool(desired and observed and desired == observed)
+            now = time.time()
+            current["observed_scenario"] = observed
+            current["observed_version"] = str(observed_version or "").strip() or None
+            current["observed_at"] = now
+            current["updated_at"] = now
+            current["error"] = None
+            if matches:
+                current["status"] = "ready"
+                current["completed_at"] = current.get("completed_at") or now
+                current["drift"] = None
+            elif desired:
+                current["status"] = "drifted"
+                current["drift"] = {
+                    "reason": str(reason or "runtime_observed"),
+                    "desired_scenario": desired,
+                    "observed_scenario": observed,
+                    "detected_at": now,
+                    "reconcile_required": True,
+                }
+            _write_json(self.state_path(source), current)
+            self._publish_transition(current, event="observed")
+            return current
+
+    @staticmethod
+    def _publish_transition(record: Mapping[str, Any], *, event: str) -> None:
+        try:
+            from adaos.domain.project_events import BUILDER_PREVIEW_TRANSITIONED
+            from adaos.sdk.data.events import publish
+
+            publish(
+                BUILDER_PREVIEW_TRANSITIONED,
+                {
+                    "source_webspace_id": record.get("source_webspace_id"),
+                    "preview_webspace_id": record.get("preview_webspace_id"),
+                    "desired_scenario": record.get("desired_scenario"),
+                    "observed_scenario": record.get("observed_scenario"),
+                    "generation": record.get("generation"),
+                    "operation_id": record.get("operation_id"),
+                    "status": record.get("status"),
+                    "drift": record.get("drift"),
+                    "event": event,
+                },
+                source="builder.preview_reconciler",
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _publish_observed(record: Mapping[str, Any]) -> None:
@@ -239,6 +344,7 @@ class BuilderPreviewReconciler:
                     started_at=time.time(),
                     completed_at=None,
                     error=None,
+                    drift=None,
                 )
                 if not current:
                     continue
@@ -268,6 +374,7 @@ class BuilderPreviewReconciler:
                         completed_at=time.time(),
                         error=None,
                         result=result,
+                        drift=None,
                     )
                     if current:
                         return accepted_record
@@ -280,6 +387,7 @@ class BuilderPreviewReconciler:
                     completed_at=time.time(),
                     error=None,
                     result=result,
+                    drift=None,
                 )
                 if current:
                     self._publish_observed(ready)

@@ -1,10 +1,83 @@
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from uuid import uuid4
 
+import pytest
+from jsonschema import Draft202012Validator
+
 from adaos.services.agent_context import get_ctx
-from adaos.services import conversation_context, conversation_store
+from adaos.services import conversation_context, conversation_store, conversation_transport
+
+
+def test_conversation_store_claims_transport_ingress_without_automatic_replay() -> None:
+    key = f"transport:test:{uuid4().hex}"
+    first = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-1",
+        payload={"text": "Добавь раздел избранного"},
+        meta={"policy": "no_automatic_retry"},
+    )
+    duplicate = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-1",
+        payload={"text": "Добавь раздел избранного"},
+    )
+    conflict = conversation_store.claim_transport_ingress(
+        idempotency_key=key,
+        transport="telegram",
+        event_id="event-2",
+        payload={"text": "Удалить проект"},
+    )
+    dispatched = conversation_store.mark_transport_ingress_dispatched(key)
+
+    assert first["claimed"] is True
+    assert first["durable"] is True
+    assert duplicate["claimed"] is False
+    assert duplicate["duplicate"] is True
+    assert conflict["claimed"] is False
+    assert conflict["conflict"] is True
+    assert dispatched and dispatched["status"] == "dispatched"
+
+
+def test_transport_inspector_requires_a_new_explicit_recovery_operation() -> None:
+    suffix = uuid4().hex
+    original_key = f"transport:interrupted:{suffix}"
+    conversation_store.claim_transport_ingress(
+        idempotency_key=original_key,
+        transport="telegram",
+        event_id=f"event:{suffix}",
+        payload={"text": "Publish the candidate"},
+        meta={"channel": "builder"},
+    )
+
+    inspection = conversation_transport.inspect_ingress(status="claimed", limit=1000)
+    original = next(item for item in inspection["items"] if item["idempotency_key"] == original_key)
+    assert original["payload_available"] is False
+    assert original["automatic_replay_allowed"] is False
+
+    recovery = conversation_transport.request_recovery(
+        original_key,
+        actor_id="operator:test",
+        reason="Inspect current candidate before a new publication command",
+        operation_id=f"transport:recovery:{suffix}",
+    )
+
+    assert recovery["replayed"] is False
+    assert recovery["status"] == "inspection_required"
+    assert recovery["original"]["status"] == "claimed"
+    assert recovery["claim"]["transport"] == "operator"
+    with pytest.raises(conversation_transport.ConversationTransportRecoveryError):
+        conversation_transport.request_recovery(
+            original_key,
+            actor_id="operator:test",
+            reason="Duplicate recovery identity",
+            operation_id=f"transport:recovery:{suffix}",
+        )
 
 
 def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
@@ -47,6 +120,101 @@ def test_conversation_store_appends_messages_with_monotonic_seq() -> None:
     assert projection["has_more_before"] is True
     older = conversation_store.list_projection("conv.test", before_cursor=projection["before_cursor"], limit=1)
     assert [item["id"] for item in older["messages"]] == ["msg.1", "msg.2"]
+
+
+def test_job_progress_updates_one_durable_message_without_reexecuting_the_job() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.job.{suffix}"
+    job_id = f"builder-job-{suffix}"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+    accepted = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="accepted",
+        terminal=False,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Change accepted",
+    )
+    progress = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="tests_running",
+        terminal=False,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Tests are running",
+    )
+    terminal = conversation_store.upsert_job_message(
+        job_id=job_id,
+        phase="completed",
+        terminal=True,
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Change completed",
+        payload={"result_ref": "builder-run:1"},
+    )
+
+    assert accepted["id"] == progress["id"] == terminal["id"]
+    assert terminal["seq"] == accepted["seq"]
+    assert terminal["job_phase"] == "completed"
+    assert terminal["job_terminal"] is True
+    assert terminal["result_ref"] == "builder-run:1"
+    messages = conversation_store.list_messages(conversation_id, limit=20)
+    assert len([item for item in messages if item.get("job_id") == job_id]) == 1
+
+
+def test_projected_progress_uses_stable_job_message_across_delivery_phases() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.projected-job.{suffix}"
+    job_id = f"builder-projected-job-{suffix}"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+
+    accepted = conversation_store.materialize_message(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Accepted",
+        payload={"from": "hub"},
+        meta={"progress_group_id": job_id, "progress_phase": "accepted"},
+        actor_id="agent:builder_skill:builder",
+    )
+    completed = conversation_store.materialize_message(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="builder",
+        text="Completed",
+        payload={"from": "hub", "result_ref": "builder-run:2"},
+        meta={"progress_group_id": job_id, "progress_phase": "completed"},
+        actor_id="agent:builder_skill:builder",
+    )
+
+    assert accepted and completed
+    assert accepted["id"] == completed["id"]
+    assert accepted["seq"] == completed["seq"]
+    assert completed["job_terminal"] is True
+    assert completed["result_ref"] == "builder-run:2"
+    assert completed["active_agent_id"] == "agent:builder_skill:builder"
+    assert len(conversation_store.list_messages(conversation_id, limit=20)) == 1
 
 
 def test_conversation_store_merges_legacy_builder_conversation_and_tracks_change() -> None:
@@ -102,6 +270,79 @@ def test_conversation_store_merges_legacy_builder_conversation_and_tracks_change
         artifact_kind="scenario",
         artifact_id=suffix,
     )[0]["commit_refs"] == [{"commit": "abc123"}]
+
+
+def test_conversation_store_links_runs_to_one_canonical_change() -> None:
+    suffix = uuid4().hex[:10]
+    conversation_id = f"conv.builder.runs.{suffix}"
+    change_id = f"CH-{suffix}"
+    run_id = f"RUN-{suffix}"
+    topic_id = f"prompt-project:scenario:{suffix}"
+    conversation_store.upsert_development_change(
+        change_id=change_id,
+        conversation_id=conversation_id,
+        thread_id=topic_id,
+        topic_id=topic_id,
+        status="active",
+        artifact_refs=[{"kind": "scenario", "id": suffix}],
+        summary="Add recipe search",
+    )
+
+    queued = conversation_store.upsert_development_run(
+        run_id=run_id,
+        change_id=change_id,
+        conversation_id=conversation_id,
+        thread_id=topic_id,
+        topic_id=topic_id,
+        activity="prototype.generate",
+        executor="builder.llm",
+        status="queued",
+        context_packet_digest=f"sha256:{'a' * 64}",
+        input_refs=["message:1"],
+        started_at="2026-07-29T12:00:00+00:00",
+    )
+    completed = conversation_store.upsert_development_run(
+        run_id=run_id,
+        change_id=change_id,
+        conversation_id=conversation_id,
+        activity="prototype.generate",
+        executor="builder.llm",
+        status="succeeded",
+        output_refs=["prototype:001"],
+        evidence_refs=["evaluation:layout"],
+        completed_at="2026-07-29T12:01:00+00:00",
+    )
+
+    assert queued and queued["schema"] == "adaos.builder.run.v1"
+    assert completed and completed["change_id"] == change_id
+    assert completed["run_id"] == run_id
+    assert completed["status"] == "succeeded"
+    assert completed["input_refs"] == ["message:1"]
+    assert completed["output_refs"] == ["prototype:001"]
+    assert completed["evidence_refs"] == ["evaluation:layout"]
+    assert conversation_store.get_development_run(run_id) == completed
+    assert conversation_store.list_development_runs(change_id=change_id) == [completed]
+    assert len(conversation_store.list_development_changes(topic_id=topic_id)) == 1
+    run_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "adaos"
+            / "abi"
+            / "builder.run.v1.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    Draft202012Validator(run_schema).validate(completed)
+
+    with pytest.raises(ValueError, match="terminal Builder Run"):
+        conversation_store.upsert_development_run(
+            run_id=run_id,
+            change_id=change_id,
+            conversation_id=conversation_id,
+            activity="prototype.generate",
+            executor="builder.llm",
+            status="running",
+        )
 
 
 def test_conversation_store_keeps_agent_registry_and_memory() -> None:
@@ -829,6 +1070,44 @@ def test_conversation_store_hard_deletes_conversation_bundle() -> None:
     assert conversation_store.export_conversation("conv.delete", include_redacted=True)["messages"] == []
     audit = conversation_store.list_audit_events(conversation_id="conv.delete", action="hard_delete_conversation")
     assert audit and audit[0]["counts"]["conversation"] == 1
+
+
+def test_conversation_store_redacts_only_selected_messages() -> None:
+    conversation_store.ensure_schema()
+    conversation_store.upsert_conversation(
+        conversation_id="conv.message-redaction",
+        webspace_id="desktop",
+        owner="skill:test",
+    )
+    for message_id, text in (("keep.msg.1", "keep me"), ("redact.msg.1", "redact me")):
+        conversation_store.append_message(
+            conversation_id="conv.message-redaction",
+            webspace_id="desktop",
+            channel_id="general",
+            owner="skill:test",
+            role="user",
+            text=text,
+            payload={"id": message_id, "from": "user", "text": text},
+        )
+
+    result = conversation_store.redact_messages(
+        ["redact.msg.1", "missing.msg.1"],
+        reason="test_message_redaction",
+    )
+
+    assert result["ok"] is True
+    assert result["counts"] == {"messages": 1, "requested": 2, "found": 1}
+    assert [
+        message["id"] for message in conversation_store.export_conversation("conv.message-redaction")["messages"]
+    ] == ["keep.msg.1"]
+    exported = conversation_store.export_conversation("conv.message-redaction", include_redacted=True)
+    assert [message["id"] for message in exported["messages"]] == ["keep.msg.1", "redact.msg.1"]
+    assert exported["messages"][1]["redaction_reason"] == "test_message_redaction"
+    audit = conversation_store.list_audit_events(
+        conversation_id="conv.message-redaction",
+        action="redact_messages",
+    )
+    assert audit and audit[0]["counts"] == {"messages": 1, "requested": 2, "found": 1}
 
 
 def test_conversation_store_persists_active_dialog_channel() -> None:

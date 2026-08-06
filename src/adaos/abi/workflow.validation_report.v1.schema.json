@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.validation_report.v1",
+  "title": "AdaOS Workflow Validation Report",
+  "type": "object",
+  "required": ["schema", "valid", "definition_digest", "raw_digest", "diagnostics", "metrics", "graph_diff"],
+  "properties": {
+    "schema": { "const": "adaos.workflow.validation_report.v1" },
+    "valid": { "type": "boolean" },
+    "workflow_type": { "type": ["string", "null"], "maxLength": 160 },
+    "definition_version": { "type": ["string", "null"], "maxLength": 80 },
+    "definition_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "raw_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "path", "message"],
+        "properties": {
+          "code": { "$ref": "#/$defs/id" },
+          "severity": { "enum": ["error", "warning", "info"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "details": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["bytes", "depth", "states", "commands", "transitions", "terminal_states", "adapter_refs"],
+      "properties": {
+        "bytes": { "type": "integer", "minimum": 0 },
+        "depth": { "type": "integer", "minimum": 0 },
+        "states": { "type": "integer", "minimum": 0 },
+        "commands": { "type": "integer", "minimum": 0 },
+        "transitions": { "type": "integer", "minimum": 0 },
+        "terminal_states": { "type": "integer", "minimum": 0 },
+        "adapter_refs": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "graph_diff": {
+      "type": "object",
+      "required": ["baseline_digest", "states", "commands", "transitions"],
+      "properties": {
+        "baseline_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+        "states": { "$ref": "#/$defs/change_set" },
+        "commands": { "$ref": "#/$defs/change_set" },
+        "transitions": { "$ref": "#/$defs/change_set" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" },
+    "change_set": {
+      "type": "object",
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "removed": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "changed": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

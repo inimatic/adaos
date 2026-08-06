@@ -77,8 +77,14 @@ Design rules:
   response into text tail/speech targets and appends the assistant message to
   the ledger.
 - `ask(prompt, conversation_id, owner, ...)` is a bounded question helper. It
-  marks the response as expecting a reply and should be paired with a
-  DialogFrame/form policy in the skill manifest.
+  marks the response as expecting an immediate/process-bounded reply and must
+  not be kept alive across a task or process restart.
+- `request(interaction, conversation_id, owner, ...)` persists a semantic
+  `ConversationInteraction`, negotiates a Web/Telegram/text presentation, and
+  returns an `InteractionHandle`; it never holds a process-local waiter.
+- `respond(...)` appends a generation-bound, idempotent
+  `InteractionResponse`. `accept(...)` records that the owning workflow
+  consumed the answer, while `pending(...)` exposes resumable requests.
 - `history(...)`, `context(...)`, and `start_thread(...)` are convenience
   wrappers over `adaos.sdk.conversation`.
 

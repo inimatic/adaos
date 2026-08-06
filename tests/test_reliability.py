@@ -3124,6 +3124,120 @@ def test_hub_browser_quality_treats_bounded_sync_observed_as_informational() -> 
     assert quality["blockers"] == []
 
 
+def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+
+    def _unexpected_full(*args, **kwargs):
+        raise AssertionError("runtime summary must not build the full reliability payload")
+
+    def _unexpected_status(*args, **kwargs):
+        raise AssertionError("runtime summary must not read the status registry")
+
+    monkeypatch.setattr(node_api, "current_reliability_payload", _unexpected_full)
+    monkeypatch.setattr(node_api, "_current_status_registry_snapshot", _unexpected_status)
+    monkeypatch.setattr(
+        node_api,
+        "_thin_sidecar_runtime_fields",
+        lambda: {
+            "sidecarEnablement": {"enabled": False, "source": "role_default", "role": "hub"},
+            "sidecarContinuity": {"currentSupport": "not_applicable"},
+            "sidecarProgress": {},
+            "routeTunnel": {},
+            "browserWsHandoffReady": False,
+            "browserYwsHandoffReady": False,
+            "browserWsHandoffState": "disabled",
+            "browserYwsHandoffState": "disabled",
+        },
+    )
+    monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api,
+        "yjs_sync_runtime_snapshot",
+        lambda **_: {
+            "available": True,
+            "assessment": {"state": "nominal", "reason": ""},
+            "transport": {"server_ready": True, "active_yws_connections": 1},
+            "selected_webspace_id": "desktop",
+            "selected_webspace": {
+                "rebuild": {"materialization": {"ready": True}},
+                "gateway_room": {"ready": True, "open_total": 1},
+            },
+        },
+    )
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(paths=SimpleNamespace()))
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    client = TestClient(app)
+
+    response = client.get("/api/node/reliability/runtime?webspace_id=desktop")
+    assert response.status_code == 200
+    assert response.headers["x-adaos-summary-mode"] == "runtime"
+    payload = response.json()
+    assert payload["schema"] == "adaos.reliability_summary.runtime.v1"
+    assert payload["observer"]["domain"] == "hub_browser"
+    assert payload["observer"]["authority"] == "local_runtime_only"
+    assert "root_browser" in payload["observer"]["doesNotImply"]
+    assert "statusPlane" not in payload
+    assert "memberAvailability" not in payload
+
+    unchanged = client.get(
+        "/api/node/reliability/runtime?webspace_id=desktop",
+        headers={"If-None-Match": response.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+
+
+def test_node_reliability_summary_details_adds_on_demand_diagnostics(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.node_api import require_token, router
+    from adaos.services.status import StatusRegistry
+
+    monkeypatch.setattr(
+        node_api,
+        "current_reliability_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("details summary must not build the full reliability payload")
+        ),
+    )
+    monkeypatch.setattr(
+        node_api,
+        "_current_compact_member_availability",
+        lambda: {"source": "hub_member_connection_state", "total": 2, "online": 1},
+    )
+    registry = StatusRegistry()
+    registry.publish(
+        {
+            "id": "runtime",
+            "owner": "skill:infrastate_skill",
+            "kind": "runtime",
+            "scope": "infrastate",
+            "status": "ready",
+            "summary": "ready",
+            "webspace_id": "desktop",
+        }
+    )
+    monkeypatch.setattr(
+        node_api,
+        "get_ctx",
+        lambda: SimpleNamespace(status_registry=registry, paths=SimpleNamespace()),
+    )
+
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(router, prefix="/api/node")
+    payload = TestClient(app).get(
+        "/api/node/reliability/details?webspace_id=desktop"
+    ).json()
+
+    assert payload["mode"] == "details"
+    assert payload["statusPlane"]["total"] == 1
+    assert payload["memberAvailability"]["total"] == 2
+    assert payload["memberAvailability"]["online"] == 1
+
+
 def test_node_reliability_summary_thin_mode_uses_status_plane_etag(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router

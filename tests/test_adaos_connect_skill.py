@@ -90,8 +90,8 @@ def test_browser_current_uses_zone_and_new_app_domain(monkeypatch, tmp_path: Pat
             )
             return {
                 "user_code": "PAIR1234",
-                "verification_uri": "https://inimatic.web.app/?mode=registration",
-                "verification_uri_complete": "https://inimatic.web.app/?mode=registration&user_code=PAIR1234&zone=ru",
+                "verification_uri": "https://inimatic.com/?intent=connect.register",
+                "verification_uri_complete": "https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=PAIR1234",
                 "expires_at": expires_at,
             }
 
@@ -110,8 +110,17 @@ def test_browser_current_uses_zone_and_new_app_domain(monkeypatch, tmp_path: Pat
     ]
     assert current["status"] == "ready"
     assert current["app_base_url"] == "https://inimatic.com"
-    assert current["link"] == "https://inimatic.com/?mode=registration&user_code=PAIR1234&zone=ru"
+    assert current["link"] == (
+        "https://inimatic.com/?intent=connect.register&zone=ru&subnet_id=sn_test&user_code=PAIR1234"
+    )
     assert current["qr_text"] == current["link"]
+    assert current["navigation_destination"] == {
+        "schema": "adaos.navigation.destination.v1",
+        "intent": "connect.register",
+        "zone": "ru",
+        "subnet_id": "sn_test",
+        "user_code": "PAIR1234",
+    }
     assert current["expires_at_epoch"] == expires_at
     assert current["expires_at"] == mod._format_expiry_iso(expires_at)
     assert current["expires_at_display"] == mod._format_expiry_display(expires_at)

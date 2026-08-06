@@ -8,6 +8,7 @@ WebRTC DataChannel instead of a FastAPI WebSocket.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import struct
@@ -42,13 +43,40 @@ _CHUNK_HEADER = struct.Struct("!BBIII")
 _MAX_CHUNKS_PER_MESSAGE = (_MAX_MESSAGE_BYTES + max(1, _CHUNK_PAYLOAD_BYTES) - 1) // max(1, _CHUNK_PAYLOAD_BYTES) + 1
 
 
+def _message_kind(payload: bytes) -> str:
+    """Return a bounded protocol label without decoding document content."""
+    if not payload:
+        return "empty"
+    # Yjs/y-websocket message and sync discriminators are varuint values.  All
+    # currently supported values fit in one byte; unknown/multi-byte values
+    # deliberately remain opaque instead of invoking a full decoder here.
+    outer = int(payload[0])
+    if outer == 0 and len(payload) > 1:
+        sync_names = {0: "sync_step1", 1: "sync_step2", 2: "sync_update"}
+        return sync_names.get(int(payload[1]), f"sync_{int(payload[1])}")
+    if outer == 1:
+        return "awareness"
+    return f"message_{outer}"
+
+
 class DataChannelYjsAdapter:
     """ypy-websocket ``Websocket`` interface backed by a WebRTC DataChannel."""
 
-    def __init__(self, dc: RTCDataChannel, webspace_id: str, *, device_id: str | None = None) -> None:
+    def __init__(
+        self,
+        dc: RTCDataChannel,
+        webspace_id: str,
+        *,
+        device_id: str | None = None,
+        peer_id: str | None = None,
+    ) -> None:
         self._dc = dc
         self._path = webspace_id
         self._device_id = str(device_id or "").strip() or "webrtc"
+        # One device may have several browser tabs.  The peer identity is the
+        # lifecycle key for a single RTCPeerConnection/Yjs adapter, while the
+        # stable device identity remains available for presence and policy.
+        self._peer_id = str(peer_id or self._device_id).strip() or self._device_id
         self._recv_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._queued_bytes = 0
         self._closed = False
@@ -84,6 +112,12 @@ class DataChannelYjsAdapter:
             raise StopAsyncIteration()
 
     async def send(self, message: bytes) -> None:
+        if self._closed:
+            raise RuntimeError("webrtc_yjs_adapter_closed")
+        channel_state = str(getattr(self._dc, "readyState", "") or "").strip().lower()
+        if channel_state and channel_state != "open":
+            self.close()
+            raise RuntimeError(f"webrtc_yjs_datachannel_not_open:{channel_state}")
         payload = bytes(message or b"")
         if len(payload) > _MAX_MESSAGE_BYTES:
             self._close_for_pressure(
@@ -113,8 +147,9 @@ class DataChannelYjsAdapter:
     async def _send_frame(self, payload: bytes) -> None:
         try:
             self._dc.send(payload)
-        except Exception:
-            return
+        except Exception as exc:
+            self.close()
+            raise RuntimeError("webrtc_yjs_datachannel_send_failed") from exc
 
     async def _send_chunked(self, payload: bytes) -> None:
         chunk_size = max(1, _CHUNK_PAYLOAD_BYTES)
@@ -130,8 +165,12 @@ class DataChannelYjsAdapter:
         chunk_id = self._next_chunk_id
         self._next_chunk_id = 1 if self._next_chunk_id >= 0x7FFFFFFF else self._next_chunk_id + 1
         _log.info(
-            "sending chunked yjs datachannel message webspace=%s bytes=%s chunks=%s chunk_bytes=%s",
+            "sending chunked yjs datachannel message webspace=%s device=%s peer=%s kind=%s digest=%s bytes=%s chunks=%s chunk_bytes=%s",
             self._path,
+            self._device_id,
+            self._peer_id,
+            _message_kind(payload),
+            hashlib.sha256(payload).hexdigest()[:16],
             len(payload),
             total,
             chunk_size,
@@ -368,13 +407,14 @@ class DataChannelYjsAdapter:
             _log.info("yjs datachannel disabled by ADAOS_WEBRTC_YJS_CHANNEL_ENABLED webspace=%s", self._path)
             return
         await yjs_gateway.start_y_server()
+        room = None
         try:
             acquire_room = getattr(yjs_gateway, "_acquire_yws_room", None)
             if callable(acquire_room):
                 room = await acquire_room(
                     self._path,
                     self._device_id,
-                    yws_attempt_id=f"webrtc-yjs:{self._device_id}",
+                    yws_attempt_id=f"webrtc-yjs:{self._peer_id}",
                 )
                 await room.serve(self)
             else:  # pragma: no cover - compatibility with older gateway modules.
@@ -385,4 +425,20 @@ class DataChannelYjsAdapter:
         except Exception:
             _log.debug("yjs datachannel serve ended with error webspace=%s", self._path, exc_info=True)
         finally:
-            _log.info("yjs datachannel closed webspace=%s", self._path)
+            # ``Peer._close_yjs_binding`` cancels this task after closing the
+            # adapter.  ypy-websocket's YRoom.serve removes a client only on
+            # its normal/Exception path; asyncio cancellation is a
+            # BaseException and used to strand the adapter in ``room.clients``.
+            # Every later room update was then fanned out to every leaked
+            # adapter (170 copies of one ~296 KiB payload were observed).  Make
+            # membership cleanup an adapter-owned invariant as well.
+            clients = getattr(room, "clients", None) if room is not None else None
+            if isinstance(clients, list):
+                room.clients = [client for client in clients if client is not self]
+            self.close()
+            _log.info(
+                "yjs datachannel closed webspace=%s device=%s peer=%s",
+                self._path,
+                self._device_id,
+                self._peer_id,
+            )

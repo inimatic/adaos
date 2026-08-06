@@ -137,7 +137,7 @@ def test_root_draft_archive_replaces_existing_artifact_transactionally(tmp_path)
     assert not list(tmp_path.glob(".artifact.backup-*"))
 
 
-def test_root_draft_archive_keeps_existing_artifact_when_backup_rename_fails(tmp_path, monkeypatch) -> None:
+def test_root_draft_archive_uses_file_atomic_fallback_when_backup_rename_fails(tmp_path, monkeypatch) -> None:
     target = tmp_path / "artifact"
     target.mkdir()
     (target / "previous.txt").write_text("previous", encoding="utf-8")
@@ -153,17 +153,13 @@ def test_root_draft_archive_keeps_existing_artifact_when_backup_rename_fails(tmp
 
     monkeypatch.setattr(type(target), "replace", locked_replace)
 
-    try:
-        _extract_zip_bytes(buffer.getvalue(), target)
-    except PermissionError as exc:
-        assert "target is locked" in str(exc)
-    else:
-        raise AssertionError("locked target must reject the update")
+    _extract_zip_bytes(buffer.getvalue(), target)
 
-    assert (target / "previous.txt").read_text(encoding="utf-8") == "previous"
-    assert not (target / "current.txt").exists()
+    assert not (target / "previous.txt").exists()
+    assert (target / "current.txt").read_text(encoding="utf-8") == "current"
     assert not list(tmp_path.glob(".artifact.update-*"))
     assert not list(tmp_path.glob(".artifact.backup-*"))
+    assert not list(tmp_path.glob(".artifact.rollback-*"))
 
 
 def test_root_draft_archive_rolls_back_when_staged_activation_fails(tmp_path, monkeypatch) -> None:
@@ -248,34 +244,84 @@ def test_candidate_promotion_requires_workspace_runtime_convergence_callbacks() 
     )
     promoted = SimpleNamespace(
         plan=SimpleNamespace(release=SimpleNamespace(components=[component])),
-        candidate=SimpleNamespace(project_id="builder"),
+        candidate=SimpleNamespace(
+            candidate_id="candidate-1",
+            project_id="builder",
+            source_ref=SimpleNamespace(revision="revision-1"),
+            validation_evidence=({"status": "passed", "validator": "test"},),
+            trials=(
+                SimpleNamespace(
+                    status="accepted",
+                    observations=({"actor": "user:test", "decision": "accepted"},),
+                ),
+            ),
+            updated_at="2026-08-05T12:00:00+00:00",
+        ),
         pointer=SimpleNamespace(release="builder@1.2.3", release_digest="sha256:" + "b" * 64),
         activation=SimpleNamespace(
-            workspace_lock=SimpleNamespace(to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64})
+            operation_id="activation-1",
+            workspace_lock=SimpleNamespace(
+                lock_revision=7,
+                slots=(SimpleNamespace(slot_id="builder", project_id="builder"),),
+                to_dict=lambda: {"lock_digest": "sha256:" + "c" * 64},
+            ),
         ),
         subscription=SimpleNamespace(to_dict=lambda: {"project_id": "builder"}),
     )
 
     class _Publication:
+        def get_candidate_release(self, candidate_id: str):
+            assert candidate_id == "candidate-1"
+            return SimpleNamespace(
+                packages=(
+                    SimpleNamespace(key="scenario:builder"),
+                    SimpleNamespace(key="skill:builder_skill"),
+                )
+            )
+
         def promote(self, candidate_id: str, **kwargs):
             captured["candidate_id"] = candidate_id
             captured.update(kwargs)
             return promoted
 
+        def load_promotion(self, candidate_id: str):
+            assert candidate_id == "candidate-1"
+            return {
+                "receipts": {
+                    "workspace_activated": {
+                        "health_receipt": {"status": "healthy"},
+                        "reload_receipt": {"status": "completed"},
+                    }
+                }
+            }
+
     service = object.__new__(RootDeveloperService)
     service._load_config = lambda: SimpleNamespace()
     service._artifact_publication_service = lambda _cfg: _Publication()
-    service._reload_published_workspace_runtime = lambda _lock: {"status": "completed"}
-    service._health_published_workspace_runtime = lambda _lock: {"status": "healthy"}
+    reload_scopes: list[frozenset[str] | None] = []
+    health_scopes: list[frozenset[str] | None] = []
+    service._reload_published_workspace_runtime = lambda _lock, component_keys=None: (
+        reload_scopes.append(component_keys) or {"status": "completed"}
+    )
+    service._health_published_workspace_runtime = lambda _lock, component_keys=None: (
+        health_scopes.append(component_keys) or {"status": "healthy"}
+    )
 
     result = service.promote_artifact_candidate("candidate-1")
 
     assert result["ok"] is True
     assert captured["candidate_id"] == "candidate-1"
-    assert captured["reload_runtime"] is service._reload_published_workspace_runtime
-    assert captured["health_check"] is service._health_published_workspace_runtime
+    assert callable(captured["reload_runtime"])
+    assert callable(captured["health_check"])
+    captured["reload_runtime"](SimpleNamespace())
+    captured["health_check"](SimpleNamespace())
+    expected_scope = frozenset({"scenario:builder", "skill:builder_skill"})
+    assert reload_scopes == [expected_scope]
+    assert health_scopes == [expected_scope]
     assert "reload_policy" not in captured
     assert "health_policy" not in captured
+    assert result["apply_evidence"]["activation"]["operation_id"] == "activation-1"
+    assert result["apply_evidence"]["approval"]["actor_id"] == "user:test"
 
 
 def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
@@ -340,6 +386,85 @@ def test_workspace_runtime_callbacks_reload_and_verify_exact_lock(
     ]
     assert healthy["status"] == "healthy"
     assert all(check["ok"] for check in healthy["checks"])
+
+
+def test_workspace_runtime_callbacks_ignore_unrelated_retained_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario_root = tmp_path / "scenarios"
+    dashboard_root = scenario_root / "dashboard"
+    dashboard_root.mkdir(parents=True)
+    (dashboard_root / "scenario.yaml").write_text(
+        "id: dashboard\nversion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    manager = SimpleNamespace(
+        runtime_status=lambda skill_id: {
+            "ready": True,
+            "active_slot": "B",
+            "version": "1.0.0" if skill_id == "dashboard_skill" else "9.9.9",
+        }
+    )
+    refresh_calls: list[str] = []
+    monkeypatch.setattr(root_service_module, "_get_skill_manager", lambda _ctx: manager)
+    monkeypatch.setattr(
+        root_service_module,
+        "refresh_skill_runtime",
+        lambda _manager, skill_id, **_kwargs: (
+            refresh_calls.append(skill_id)
+            or {
+                "active_version_after": "1.0.0",
+                "active_slot_after": "B",
+                "runtime_migrated": True,
+            }
+        ),
+    )
+    service = object.__new__(RootDeveloperService)
+    service.ctx = SimpleNamespace(
+        paths=SimpleNamespace(scenarios_dir=lambda: scenario_root)
+    )
+    lock = SimpleNamespace(
+        lock_revision=10,
+        components=[
+            SimpleNamespace(
+                kind="scenario",
+                key="scenario:dashboard",
+                artifact_id="dashboard",
+                version="1.0.0",
+            ),
+            SimpleNamespace(
+                kind="skill",
+                key="skill:dashboard_skill",
+                artifact_id="dashboard_skill",
+                version="1.0.0",
+            ),
+            SimpleNamespace(
+                kind="skill",
+                key="skill:unrelated_skill",
+                artifact_id="unrelated_skill",
+                version="0.1.0",
+            ),
+        ],
+    )
+    scope = frozenset({"scenario:dashboard", "skill:dashboard_skill"})
+
+    reloaded = service._reload_published_workspace_runtime(
+        lock,
+        component_keys=scope,
+    )
+    healthy = service._health_published_workspace_runtime(
+        lock,
+        component_keys=scope,
+    )
+
+    assert refresh_calls == ["dashboard_skill"]
+    assert reloaded["component_keys"] == sorted(scope)
+    assert healthy["component_keys"] == sorted(scope)
+    assert {check["artifact_id"] for check in healthy["checks"]} == {
+        "dashboard",
+        "dashboard_skill",
+    }
 
 
 def test_subscription_activation_exposes_operation_identity() -> None:
@@ -421,14 +546,21 @@ class _UnusedPublicationRemote:
         raise AssertionError(f"publication remote must not be called: {name}")
 
 
-def _checkpoint_service(tmp_path: Path):
+def _checkpoint_service(tmp_path: Path, *, kind: str = "skills"):
     workspace = tmp_path / "dev"
-    skill = workspace / "skills" / "recipe_skill"
-    skill.mkdir(parents=True)
-    (skill / "skill.yaml").write_text(
-        "name: recipe_skill\nversion: 1.0.0\ndependencies: []\n",
-        encoding="utf-8",
-    )
+    artifact_id = "recipe_skill" if kind == "skills" else "recipes"
+    artifact = workspace / kind / artifact_id
+    artifact.mkdir(parents=True)
+    if kind == "skills":
+        (artifact / "skill.yaml").write_text(
+            "name: recipe_skill\nversion: 1.0.0\ndependencies: []\n",
+            encoding="utf-8",
+        )
+    else:
+        (artifact / "scenario.yaml").write_text(
+            "id: recipes\nversion: 1.0.0\ndependencies: []\n",
+            encoding="utf-8",
+        )
     publication = ArtifactPublicationService(
         state_root=tmp_path / "state",
         workspace_root=tmp_path / "installed",
@@ -446,7 +578,7 @@ def _checkpoint_service(tmp_path: Path):
     service._validate_artifact_preflight = lambda *_args: None
     service._artifact_publication_service = lambda _cfg: publication
     service._mtls_material_for_role = lambda *_args: ("cert", "key", True)
-    return service, publication, skill, workspace
+    return service, publication, artifact, workspace
 
 
 def test_checkpoint_reuses_completed_change_without_version_bump_or_remote_write(tmp_path) -> None:
@@ -609,6 +741,56 @@ def test_checkpoint_reconciles_unknown_remote_outcome_without_second_write(tmp_p
     assert result.commit == "4" * 40
     assert recorded.source_tree == "5" * 40
     assert "version: 1.0.1" in (skill / "skill.yaml").read_text(encoding="utf-8")
+
+
+def test_scenario_checkpoint_reconciles_timeout_without_duplicate_forge_commit(tmp_path) -> None:
+    service, publication, scenario, _workspace = _checkpoint_service(
+        tmp_path,
+        kind="scenarios",
+    )
+    change_id = "builder-scenario-checkpoint-timeout"
+    state: dict[str, object] = {"pushes": 0}
+
+    class _CommitThenTimeoutClient:
+        def get_draft_info(self, **_kwargs):
+            receipt = state.get("receipt")
+            if isinstance(receipt, dict):
+                return receipt
+            raise FileNotFoundError("no previous checkpoint")
+
+        def push_scenario_draft(self, **kwargs):
+            state["pushes"] = int(state["pushes"]) + 1
+            state["receipt"] = {
+                "stored_path": "subnets/dev/nodes/node/scenarios/recipes",
+                "commit": "a" * 40,
+                "tree_sha": "b" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+            raise TimeoutError("response was lost after scenario commit")
+
+    service._client = lambda _cfg: _CommitThenTimeoutClient()
+
+    with pytest.raises(TimeoutError, match="lost after scenario commit"):
+        service._push_artifact(
+            "scenarios",
+            "recipes",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    result = service._push_artifact(
+        "scenarios",
+        "recipes",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    recorded = publication.load_pushed_source("scenario", "recipes")
+    assert state["pushes"] == 1
+    assert result.commit == "a" * 40
+    assert recorded.source_tree == "b" * 40
+    assert "version: 1.0.1" in (scenario / "scenario.yaml").read_text(encoding="utf-8")
 
 
 def test_checkpoint_replays_prepared_archive_when_remote_receipt_is_unchanged(tmp_path) -> None:

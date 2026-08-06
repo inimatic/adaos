@@ -127,15 +127,29 @@ def test_background_discovery_reports_quarantine_without_retrying_it(monkeypatch
     ]
 
 
+def test_background_discovery_does_not_retry_behind_quarantine(monkeypatch, tmp_path):
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path, skills_workspace_dir=lambda: tmp_path / "skills"))
+    skill_dir = tmp_path / "skills" / "infrastate_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: ["infrastate_skill"])
+    monkeypatch.setattr(worker, "_registry_versions", lambda _ctx: {})
+    monkeypatch.setattr(worker, "_workspace_skill_source", lambda _ctx, name: tmp_path / "skills" / name)
+    monkeypatch.setattr(worker, "_read_local_artifact_version", lambda _path: "0.75.60")
+
+    assert worker.migration_candidates(
+        ctx,
+        _FakeManager({"infrastate_skill": "0.75.59"}, deactivated={"infrastate_skill"}),
+    ) == []
+
+
 def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch, tmp_path):
     ctx = SimpleNamespace()
     refresh_calls: list[dict] = []
 
     class _Manager:
         def deactivate_runtime(self, name: str, **kwargs):
-            assert name == "infrastate_skill"
-            assert kwargs["reason"] == "runtime_migration_in_progress"
-            return {"deactivated": True, "transient": True}
+            raise AssertionError("migration must not disable the active runtime before prepare")
 
         def run_skill_tests(self, name: str, *, source: str):
             assert (name, source) == ("infrastate_skill", "installed")
@@ -182,9 +196,45 @@ def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch
     assert result["state"] == "succeeded"
     assert result["quarantined_total"] == 0
     assert result["skills"][0]["deactivation_cleared"] is True
+    assert result["skills"][0]["disabled_for_migration"] is False
     assert result["skills"][0]["tests"] == {"pytest": {"status": "passed", "detail": ""}}
     assert len(refresh_calls) == 1
+    assert refresh_calls[0]["ensure_installed"] is False
     assert refresh_calls[0]["retry_deactivated"] is True
+
+
+def test_noop_migration_skips_webspace_rebuild(monkeypatch):
+    rebuild_calls: list[dict] = []
+
+    monkeypatch.setattr(worker, "_manager", lambda _ctx: object())
+    monkeypatch.setattr(worker, "migration_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(worker, "quarantined_runtimes", lambda *_args: [])
+    monkeypatch.setattr(
+        worker,
+        "rebuild_webspace_projection_sync",
+        lambda **kwargs: rebuild_calls.append(dict(kwargs)) or {"ok": True},
+    )
+    monkeypatch.setattr(worker, "_write_status", lambda _ctx, payload: dict(payload))
+
+    result = worker._run_migration_sync(
+        SimpleNamespace(),
+        operation_id="skill-migrate-noop",
+        webspace_id="desktop",
+        force=False,
+        run_tests=True,
+        name=None,
+        sync_workspace=False,
+    )
+
+    assert result["ok"] is True
+    assert result["state"] == "succeeded"
+    assert result["webspace_rebuild"] == {
+        "ok": True,
+        "skipped": True,
+        "reason": "no_runtime_changes",
+        "webspace_id": "desktop",
+    }
+    assert rebuild_calls == []
 
 
 def test_read_status_marks_stale_refresh_runtime_as_prepare_stall(monkeypatch, tmp_path):

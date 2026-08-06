@@ -17,7 +17,10 @@ from adaos.domain.artifact_release import (
     WorkspaceSlot,
     canonical_payload_digest,
 )
-from adaos.services.artifact_pipeline.packages import ContentAddressedPackageStore
+from adaos.services.artifact_pipeline.packages import (
+    ContentAddressedPackageStore,
+    PackageVerificationError,
+)
 from adaos.services.artifact_pipeline.attestations import (
     ArtifactAttestationAdmission,
     ArtifactAttestationVerificationError,
@@ -29,15 +32,22 @@ from adaos.services.artifact_pipeline.storage import (
     mutation_lock,
     replace_with_retry,
 )
+from adaos.services.workflow_admission import (
+    WorkflowAdmissionError,
+    workflow_admission_record,
+)
+from adaos.services.governed_workflow import validate_workflow_record
 
 
 ACTIVATION_OPERATION_SCHEMA = "adaos.artifact.activation_operation.v1"
 DELAYED_VERIFICATION_SCHEMA = "adaos.artifact.delayed_verification.v1"
 LOCK_HISTORY_STATUS_SCHEMA = "adaos.artifact.lock_history_status.v1"
+WORKFLOW_PUBLICATION_ADMISSION_SCHEMA = "adaos.workflow.publication_admission.v1"
 ACTIVATION_PHASES = (
     "resolve",
     "fetch",
     "verify",
+    "workflow-bind",
     "dependency-plan",
     "permission-plan",
     "migration-plan",
@@ -670,6 +680,171 @@ class WorkspaceActivationManager:
         }
 
     @staticmethod
+    def _workflow_candidate_plan(
+        current: WorkspaceLock | None,
+        desired: WorkspaceLock,
+        release: ProjectRelease,
+        *,
+        candidate_keys: set[str],
+    ) -> dict[str, Any]:
+        try:
+            return workflow_admission_record(
+                current=current,
+                desired=desired,
+                release=release,
+                candidate_keys=candidate_keys,
+            )
+        except WorkflowAdmissionError as exc:
+            raise ActivationError(str(exc)) from exc
+
+    @staticmethod
+    def _release_admission_record(
+        *,
+        current: WorkspaceLock | None,
+        desired: WorkspaceLock,
+        plan: ReleasePlan,
+        slot_id: str,
+        verified_packages: tuple[ArtifactPackageRef, ...],
+    ) -> dict[str, Any]:
+        expected = {item.key: item for item in plan.packages}
+        verified = {item.key: item for item in verified_packages}
+        if verified != expected:
+            raise ActivationError(
+                "verified package references differ from the release candidate"
+            )
+        workflow_admission = WorkspaceActivationManager._workflow_candidate_plan(
+            current,
+            desired,
+            plan.release,
+            candidate_keys=set(expected),
+        )
+        unsigned = {
+            "schema": WORKFLOW_PUBLICATION_ADMISSION_SCHEMA,
+            "release_digest": plan.release.release_digest
+            or plan.release.computed_digest(),
+            "slot_id": slot_id,
+            "observed_lock_digest": WorkspaceActivationManager._lock_digest(current),
+            "desired_lock_digest": desired.to_dict()["lock_digest"],
+            "desired_lock_updated_at": desired.updated_at,
+            "packages": [
+                {
+                    "component": package.key,
+                    "package_digest": package.digest,
+                    "manifest_digest": package.manifest_digest,
+                    "definition_digest": (
+                        package.workflow_lock.digest
+                        if package.workflow_lock is not None
+                        else None
+                    ),
+                    "validation_digest": (
+                        package.workflow_validation_lock.digest
+                        if package.workflow_validation_lock is not None
+                        else None
+                    ),
+                    "binding_digest": package.workflow_binding_digest,
+                    "role_policy_digest": package.workflow_role_policy_digest,
+                }
+                for package in sorted(verified_packages, key=lambda item: item.key)
+            ],
+            "workflow_admission": workflow_admission,
+        }
+        record = {
+            **unsigned,
+            "admission_digest": canonical_payload_digest(unsigned),
+            "status": "admitted",
+        }
+        validate_workflow_record(WORKFLOW_PUBLICATION_ADMISSION_SCHEMA, record)
+        return record
+
+    def admit_release_candidate(
+        self,
+        plan: ReleasePlan,
+        *,
+        slot_id: str = "primary",
+        audience: str | None = None,
+        data_mode: str | None = None,
+        data_ref: str | None = None,
+        fetch_package: Callable[[ArtifactPackageRef], bytes] | None = None,
+        desired_lock_updated_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify code and workflow policy as one pre-publication gate."""
+
+        self._assert_plan(plan)
+        verified: list[ArtifactPackageRef] = []
+        for package in plan.packages:
+            try:
+                if not self.package_store.has(package.digest):
+                    if fetch_package is None:
+                        raise ActivationError(
+                            f"package is not present in local store: {package.digest}"
+                        )
+                    self.package_store.put(
+                        fetch_package(package),
+                        expected_digest=package.digest,
+                    )
+                observed = self.package_store.verify(package.digest)
+            except (FileNotFoundError, PackageVerificationError) as exc:
+                raise ActivationError(
+                    f"release admission package verification failed: {exc}"
+                ) from exc
+            if observed.ref != package:
+                raise ActivationError(
+                    f"verified package reference differs from release: {package.key}"
+                )
+            verified.append(observed.ref)
+        current = self.load_lock()
+        desired = self._desired_lock(
+            current=current,
+            plan=plan,
+            slot_id=slot_id,
+            audience=audience,
+            data_mode=data_mode,
+            data_ref=data_ref,
+            updated_at=desired_lock_updated_at,
+        )
+        return self._release_admission_record(
+            current=current,
+            desired=desired,
+            plan=plan,
+            slot_id=slot_id,
+            verified_packages=tuple(verified),
+        )
+
+    def validate_release_admission(
+        self,
+        plan: ReleasePlan,
+        record: Mapping[str, Any],
+        *,
+        slot_id: str = "primary",
+    ) -> dict[str, Any]:
+        persisted = dict(record)
+        validate_workflow_record(WORKFLOW_PUBLICATION_ADMISSION_SCHEMA, persisted)
+        current = self.load_lock()
+        current_digest = self._lock_digest(current)
+        if current_digest == persisted.get("desired_lock_digest"):
+            if persisted.get("release_digest") != (
+                plan.release.release_digest or plan.release.computed_digest()
+            ) or persisted.get("slot_id") != slot_id:
+                raise ActivationError("workflow publication admission targets another release")
+            for package in plan.packages:
+                verified = self.package_store.verify(package.digest)
+                if verified.ref != package:
+                    raise ActivationError(
+                        f"verified package reference differs from release: {package.key}"
+                    )
+            return persisted
+        observed = self.admit_release_candidate(
+            plan,
+            slot_id=slot_id,
+            desired_lock_updated_at=str(persisted["desired_lock_updated_at"]),
+        )
+        if observed != persisted:
+            raise ActivationError(
+                "workflow publication admission no longer matches Workspace or package state"
+            )
+        return persisted
+
+    @staticmethod
     def _approved_skip(policy: Mapping[str, Any] | None, *, phase: str) -> dict[str, Any]:
         if not isinstance(policy, Mapping) or str(policy.get("mode") or "") != "skip":
             raise ActivationError(
@@ -740,6 +915,7 @@ class WorkspaceActivationManager:
         audience: str | None,
         data_mode: str | None,
         data_ref: str | None,
+        updated_at: str | None = None,
     ) -> WorkspaceLock:
         release_digest = plan.release.release_digest or plan.release.computed_digest()
         slots = {item.slot_id: item for item in (current.slots if current else ())}
@@ -814,7 +990,7 @@ class WorkspaceActivationManager:
             return WorkspaceLock(
                 lock_revision=revision,
                 previous_lock_revision=current.lock_revision if current else None,
-                updated_at=_now_iso(),
+                updated_at=updated_at or _now_iso(),
                 slots=tuple(slots.values()),
                 components=tuple(components.values()),
                 bindings=tuple(bindings.values()),
@@ -878,10 +1054,21 @@ class WorkspaceActivationManager:
             audience=audience,
             data_mode=data_mode,
             data_ref=data_ref,
+            updated_at=(
+                current.updated_at
+                if current is not None
+                else "1970-01-01T00:00:00+00:00"
+            ),
         )
         current_release = self._active_release(current, slot_id=slot_id)
         permission_plan = self._permission_plan(current_release, plan.release)
         migration_plan = self._migration_plan(plan.release)
+        workflow_plan = self._workflow_candidate_plan(
+            current,
+            desired,
+            plan.release,
+            candidate_keys={item.key for item in plan.packages},
+        )
         migration_locks = {item.lock_id: item.digest for item in plan.release.migration_locks}
         for entry in migration_plan["entries"]:
             entry["digest"] = migration_locks.get(str(entry["id"]))
@@ -946,6 +1133,7 @@ class WorkspaceActivationManager:
             "permissions": permission_plan,
             "schemas": schema_plan,
             "migrations": migration_plan,
+            "workflows": workflow_plan,
             "rollback": {
                 "available": rollback_available,
                 "reason": (
@@ -1031,6 +1219,7 @@ class WorkspaceActivationManager:
         migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
+        repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         self._assert_plan(plan)
@@ -1065,6 +1254,7 @@ class WorkspaceActivationManager:
                     migration_executor=migration_executor,
                     migration_rollback=migration_rollback,
                     phase_hook=phase_hook,
+                    repair_reporter=repair_reporter,
                     expected_lock_digest=expected_lock_digest,
                 )
         except MutationLockTimeout as exc:
@@ -1093,6 +1283,7 @@ class WorkspaceActivationManager:
         migration_executor: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         migration_rollback: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         phase_hook: Callable[[str], None] | None = None,
+        repair_reporter: Callable[[Mapping[str, Any]], Any] | None = None,
         expected_lock_digest: str | None | object = _CAPTURE_CURRENT_LOCK,
     ) -> ActivationResult:
         operation_id = self.operation_id(idempotency_key)
@@ -1197,6 +1388,7 @@ class WorkspaceActivationManager:
             stage_root.mkdir(parents=True, exist_ok=False)
             staged: dict[str, Path] = {}
             verified_packages: list[dict[str, Any]] = []
+            verified_package_refs: list[ArtifactPackageRef] = []
             for package in plan.packages:
                 path = stage_root / package.kind / package.artifact_id
                 verified = self.package_store.extract_to_directory(package.digest, path)
@@ -1205,6 +1397,7 @@ class WorkspaceActivationManager:
                         f"stored package reference differs from release: {package.key}"
                     )
                 staged[package.key] = path
+                verified_package_refs.append(verified.ref)
                 verified_packages.append(
                     {
                         "package": package.key,
@@ -1229,6 +1422,28 @@ class WorkspaceActivationManager:
                 data_ref=data_ref,
             )
             operation["desired_lock"] = desired.to_dict()
+            release_admission = self._release_admission_record(
+                current=current,
+                desired=desired,
+                plan=plan,
+                slot_id=slot_id,
+                verified_packages=tuple(verified_package_refs),
+            )
+            operation["publication_admission"] = release_admission
+            workflow_plan = release_admission["workflow_admission"]
+            operation["workflow_candidate"] = workflow_plan
+            self._phase(
+                operation,
+                "workflow-bind",
+                phase_hook=phase_hook,
+                evidence={
+                    "status": workflow_plan["status"],
+                    "candidate_generation_digest": workflow_plan[
+                        "candidate_generation_digest"
+                    ],
+                    "workflow_count": len(workflow_plan["workflows"]),
+                },
+            )
             component_plan = self._component_plan(current, desired)
             operation["component_plan"] = component_plan
             self._phase(
@@ -1526,6 +1741,34 @@ class WorkspaceActivationManager:
                 delayed_verification_id=delayed_verification_id,
             )
         except Exception as exc:
+            if repair_reporter is not None and str(operation.get("phase") or "") in {
+                "reload",
+                "health-verify",
+                "commit",
+            }:
+                try:
+                    repair_reporter(
+                        {
+                            "project_id": plan.release.project_id,
+                            "signal_type": "post_activation",
+                            "summary": f"Post-activation {operation.get('phase')} failed: {exc}",
+                            "source_refs": [
+                                {
+                                    "type": "activation_operation",
+                                    "operation_id": operation_id,
+                                    "release_digest": release_digest,
+                                    "phase": operation.get("phase"),
+                                }
+                            ],
+                            "context": {
+                                "artifact_id": plan.release.project_id,
+                                "release_digest": release_digest,
+                                "runtime_slot": slot_id,
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
             migration_state = operation.get("migration_execution")
             if isinstance(migration_state, Mapping) and migration_state.get("status") == "completed":
                 rollback_request = {

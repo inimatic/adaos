@@ -350,31 +350,46 @@ def device_upsert_hub(
 
 # ---- Pairing (pair_codes) and bindings (chat_bindings) ---------------------------------
 
-def pair_issue(bot_id: str, hub_id: str | None, *, ttl_sec: int = 600) -> dict:
-    """Create one-time pair code with TTL. Returns {code, bot_id, hub_id, expires_at}."""
+def pair_issue(
+    bot_id: str,
+    hub_id: str | None,
+    *,
+    ttl_sec: int = 600,
+    webspace_id: str | None = None,
+) -> dict:
+    """Create one-time pair code with an optional trusted webspace route."""
     sql = get_ctx().sql
     now = int(time.time())
     expires_at = now + max(1, int(ttl_sec))
     # generate simple base32-like uppercase code 8-10 chars using new_id
     raw = new_id().replace("-", "").upper()
     code = raw[:10]
+    ensure_schema(sql)
     with sql.connect() as con:
         con.execute(
             """
-            INSERT INTO pair_codes(code, bot_id, hub_id, expires_at, state, created_at, note)
-            VALUES(?, ?, ?, ?, 'issued', ?, NULL)
+            INSERT INTO pair_codes(code, bot_id, hub_id, webspace_id, expires_at, state, created_at, note)
+            VALUES(?, ?, ?, ?, ?, 'issued', ?, NULL)
             """,
-            (code, bot_id, hub_id, expires_at, now),
+            (code, bot_id, hub_id, webspace_id, expires_at, now),
         )
         con.commit()
-    return {"code": code, "bot_id": bot_id, "hub_id": hub_id, "expires_at": expires_at, "state": "issued"}
+    return {
+        "code": code,
+        "bot_id": bot_id,
+        "hub_id": hub_id,
+        "webspace_id": webspace_id,
+        "expires_at": expires_at,
+        "state": "issued",
+    }
 
 
 def pair_get(code: str) -> dict | None:
     sql = get_ctx().sql
+    ensure_schema(sql)
     with sql.connect() as con:
         cur = con.execute(
-            "SELECT code, bot_id, hub_id, expires_at, state, created_at FROM pair_codes WHERE code=?",
+            "SELECT code, bot_id, hub_id, webspace_id, expires_at, state, created_at FROM pair_codes WHERE code=?",
             (code,),
         )
         row = cur.fetchone()
@@ -384,9 +399,10 @@ def pair_get(code: str) -> dict | None:
         "code": row[0],
         "bot_id": row[1],
         "hub_id": row[2],
-        "expires_at": int(row[3]) if row[3] is not None else None,
-        "state": row[4],
-        "created_at": int(row[5]) if row[5] is not None else None,
+        "webspace_id": row[3],
+        "expires_at": int(row[4]) if row[4] is not None else None,
+        "state": row[5],
+        "created_at": int(row[6]) if row[6] is not None else None,
     }
 
 
@@ -420,22 +436,32 @@ def pair_revoke(code: str) -> bool:
         return cur.rowcount > 0
 
 
-def binding_upsert(platform: str, user_id: str, bot_id: str, *, hub_id: str | None, ada_user_id: str | None = None) -> dict:
+def binding_upsert(
+    platform: str,
+    user_id: str,
+    bot_id: str,
+    *,
+    hub_id: str | None,
+    webspace_id: str | None = None,
+    ada_user_id: str | None = None,
+) -> dict:
     """Upsert chat binding and return the record."""
     sql = get_ctx().sql
     now = int(time.time())
     ada_user_id = ada_user_id or new_id()
+    ensure_schema(sql)
     with sql.connect() as con:
         con.execute(
             """
-            INSERT INTO chat_bindings(platform, user_id, bot_id, ada_user_id, hub_id, created_at, last_seen)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_bindings(platform, user_id, bot_id, ada_user_id, hub_id, webspace_id, created_at, last_seen)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(platform, user_id, bot_id) DO UPDATE SET
               hub_id=excluded.hub_id,
+              webspace_id=excluded.webspace_id,
               ada_user_id=COALESCE(chat_bindings.ada_user_id, excluded.ada_user_id),
               last_seen=excluded.last_seen
             """,
-            (platform, user_id, bot_id, ada_user_id, hub_id, now, now),
+            (platform, user_id, bot_id, ada_user_id, hub_id, webspace_id, now, now),
         )
         con.commit()
     return get_binding_by_user(platform, user_id, bot_id) or {
@@ -444,6 +470,7 @@ def binding_upsert(platform: str, user_id: str, bot_id: str, *, hub_id: str | No
         "bot_id": bot_id,
         "ada_user_id": ada_user_id,
         "hub_id": hub_id,
+        "webspace_id": webspace_id,
         "created_at": now,
         "last_seen": now,
     }
@@ -511,10 +538,11 @@ def durable_state_delete(namespace: str, key: str) -> None:
 
 def get_binding_by_user(platform: str, user_id: str, bot_id: str) -> dict | None:
     sql = get_ctx().sql
+    ensure_schema(sql)
     with sql.connect() as con:
         cur = con.execute(
             """
-            SELECT platform, user_id, bot_id, ada_user_id, hub_id, created_at, last_seen
+            SELECT platform, user_id, bot_id, ada_user_id, hub_id, webspace_id, created_at, last_seen
             FROM chat_bindings WHERE platform=? AND user_id=? AND bot_id=?
             """,
             (platform, user_id, bot_id),
@@ -528,6 +556,7 @@ def get_binding_by_user(platform: str, user_id: str, bot_id: str) -> dict | None
         "bot_id": row[2],
         "ada_user_id": row[3],
         "hub_id": row[4],
-        "created_at": int(row[5]) if row[5] is not None else None,
-        "last_seen": int(row[6]) if row[6] is not None else None,
+        "webspace_id": row[5],
+        "created_at": int(row[6]) if row[6] is not None else None,
+        "last_seen": int(row[7]) if row[7] is not None else None,
     }

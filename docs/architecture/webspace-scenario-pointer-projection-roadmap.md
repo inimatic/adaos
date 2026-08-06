@@ -18,6 +18,21 @@ ownership model, see:
 - [UI Addressing](ui-addressing.md)
 - [Web UI Architecture](web-ui-architecture.md)
 
+## Roadmap Ownership
+
+This roadmap owns:
+
+- pointer-first scenario switching and materialization identity
+- semantic rebuild/reconcile ownership
+- compatibility-cache migration and removal criteria
+- YStore/browser generation-aware CRDT checkpoint sequencing
+
+[Webspace Evolution](webspace-evolution-roadmap.md) owns source and manifest
+evolution, client readiness, structure-first rendering, focused/deferred
+hydration, and overlay scopes. Runtime module decomposition is shared enabling
+work; it must not redesign completed pointer-switch semantics unless new
+evidence explicitly reopens that contract.
+
 ## Status
 
 - Current implementation: `pointer_only` switch by default; semantic rebuild
@@ -995,6 +1010,40 @@ Use this checklist as the authoritative progress tracker for the migration.
   ordinary scenario switching now has one atomic live-commit contract.
 - [x] Update architecture and operator docs to describe the new ownership
   model.
+
+### 7. Runtime Ownership Decomposition
+
+This is implementation cleanup, not a new scenario-switch design.
+
+- [x] Replace module-level task and cache aliases with owner APIs that control
+  mutation, TTL/LRU policy, coalescing, cancellation, and invalidation.
+- [x] Add a semantic recovery coordinator for reload, reset, restore, switch,
+  and post-restore reconcile; keep transport resync separate.
+- [x] Make projection refresh an explicit lifecycle dependency rather than a
+  hidden side effect of rebuild.
+- [x] Put materialization execution and pointer switching behind typed services
+  while preserving the atomic pointer contract.
+- [x] Reduce `webspace_runtime.py` to composition and compatibility exports;
+  new components must not call back into its private globals.
+- [x] Preserve public commands and events, no-op branch identity, partial
+  readiness, and bounded fanout in component tests and `.30` stand evidence.
+
+The 2026-08-06 ownership tranche removed mutable task/cache aliases, introduced
+the recovery coordinator, made projection refresh explicit, and transferred
+materialization subprocess plus scenario-switch task execution to typed
+owners. The compatibility module still contains pure transformation helpers
+and public entry points; it is no longer an alternate mutable-state owner.
+Local characterization and component coverage passed before rollout.
+
+The bounded `.30` checkpoint completed on 2026-08-06 at core commit
+`5422f6c7` (`0.1.679+1.5422f6c`, slot `B`). Root promotion and runtime
+validation completed with update state `succeeded`; the refactored component
+imports, webspace catalog/runtime/materialization reads, and active `desktop`
+state-sync path remained available. The thin reliability surface reported
+`semanticState=ready`, `freshnessState=fresh`, materialization `ready`, and
+`requiredUpstreamLink.transportState=ready`. The target identity also remained
+subnet-scoped: `/api/subnet/alias` returned `sn_92ffc943` / `ruhub`, while the
+Settings header payload returned `current_subnet=sn_92ffc943`.
 
 ## Builder Materialization PoC: First Iteration
 

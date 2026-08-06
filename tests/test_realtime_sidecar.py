@@ -90,6 +90,11 @@ class _FakeNormalCloseRemoteWS(_FakeRemoteWS):
         raise ConnectionClosedOK("normal close")
 
 
+class _FakeAbnormalCloseRemoteWS(_FakeRemoteWS):
+    async def recv(self) -> bytes:
+        raise ConnectionResetError("remote connection reset")
+
+
 class _FakeAuthRemoteWS(_FakeRemoteWS):
     def __init__(self) -> None:
         super().__init__()
@@ -1076,6 +1081,66 @@ async def test_realtime_sidecar_treats_normal_remote_ws_close_as_session_close(
 
 
 @pytest.mark.asyncio
+async def test_realtime_sidecar_closes_broken_local_session_and_accepts_reconnect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    broken_ws = _FakeAbnormalCloseRemoteWS()
+    recovered_ws = _FakeRemoteWS()
+    remote_sessions = [broken_ws, recovered_ws]
+    attempts = 0
+
+    async def _fake_connect(*args, **kwargs):
+        nonlocal attempts
+        session = remote_sessions[min(attempts, len(remote_sessions) - 1)]
+        attempts += 1
+        return session
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_remote_quarantine_until", {})
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    await server.start()
+    first_writer = second_writer = None
+    try:
+        first_reader, first_writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        assert await asyncio.wait_for(first_reader.read(), timeout=1.0) == b""
+
+        for _ in range(50):
+            if not server._live_session_tasks():
+                break
+            await asyncio.sleep(0.01)
+        assert not server._live_session_tasks()
+
+        _second_reader, second_writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        second_writer.write(b"PING\r\n")
+        await second_writer.drain()
+        for _ in range(50):
+            if recovered_ws.sent:
+                break
+            await asyncio.sleep(0.01)
+
+        assert attempts == 2
+        assert broken_ws.closed is True
+        assert recovered_ws.sent == [b"PING\r\n"]
+        assert server._stats.session_open_total == 2
+        assert server._stats.remote_quarantine_total == 1
+        assert server._stats.active_session is True
+    finally:
+        for writer in (first_writer, second_writer):
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_realtime_sidecar_remote_connect_uses_ws_ping_and_tcp_keepalive(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -1266,6 +1331,7 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
 ) -> None:
     popen_env: dict[str, str] = {}
     popen_args: list[str] = []
+    popen_creationflags = 0
 
     class _FakeProc:
         def poll(self):
@@ -1284,9 +1350,10 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
         raise AssertionError("subprocess startup must not open the NATS listener as a health probe")
 
     def _fake_popen(*args, **kwargs):
-        nonlocal popen_args, popen_env
+        nonlocal popen_args, popen_creationflags, popen_env
         popen_args = list(args[0])
         popen_env = dict(kwargs["env"])
+        popen_creationflags = int(kwargs.get("creationflags") or 0)
         return _FakeProc()
 
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
@@ -1307,6 +1374,235 @@ async def test_realtime_sidecar_subprocess_forces_dedicated_direct_path(
     assert popen_env["ADAOS_REALTIME_ALLOW_API_FALLBACK"] == "0"
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
     assert popen_env["ADAOS_BASE_DIR"] == str(tmp_path / "base")
+    if realtime_sidecar_mod.os.name == "nt":
+        assert popen_creationflags & int(realtime_sidecar_mod.subprocess.CREATE_NEW_PROCESS_GROUP)
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_requests_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[object] = []
+
+    class _FakeProc:
+        exit_code = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, signum) -> None:
+            sent.append(signum)
+            self.exit_code = 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.killed = True
+            self.exit_code = 2
+
+    proc = _FakeProc()
+    graceful_signal = object()
+    async def _request_control_shutdown(*, timeout_s: float = 2.0) -> bool:
+        proc.exit_code = 0
+        return True
+
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _request_control_shutdown,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: graceful_signal)
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert sent == []
+    assert proc.terminated is False
+    assert proc.killed is False
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_uses_signal_when_control_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[object] = []
+
+    class _FakeProc:
+        exit_code = None
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, signum) -> None:
+            sent.append(signum)
+            self.exit_code = 0
+
+        def terminate(self) -> None:
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.exit_code = 2
+
+    async def _control_unavailable(*, timeout_s: float = 2.0) -> bool:
+        return False
+
+    proc = _FakeProc()
+    graceful_signal = object()
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _control_unavailable,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: graceful_signal)
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert sent == [graceful_signal]
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_subprocess_falls_back_when_graceful_signal_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProc:
+        exit_code = None
+        terminated = False
+        killed = False
+
+        def poll(self):
+            return self.exit_code
+
+        def send_signal(self, _signum) -> None:
+            raise OSError("signal unavailable")
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.exit_code = 1
+
+        def kill(self) -> None:
+            self.killed = True
+            self.exit_code = 2
+
+    proc = _FakeProc()
+    async def _control_unavailable(*, timeout_s: float = 2.0) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_request_realtime_sidecar_graceful_shutdown",
+        _control_unavailable,
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_sidecar_shutdown_signal", lambda: object())
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: None)
+
+    await realtime_sidecar_mod.stop_realtime_sidecar_subprocess(proc)
+
+    assert proc.terminated is True
+    assert proc.killed is False
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_local_control_accepts_graceful_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    nats_port = _free_port()
+    control_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_PORT", str(nats_port))
+    monkeypatch.setenv("ADAOS_REALTIME_CONTROL_PORT", str(control_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "sidecar.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    server = RealtimeSidecarServer(host="127.0.0.1", port=nats_port)
+    await server.start()
+
+    try:
+        accepted = await realtime_sidecar_mod._request_realtime_sidecar_graceful_shutdown()
+        await asyncio.wait_for(server._shutdown_requested.wait(), timeout=1.0)
+    finally:
+        await server.close()
+
+    assert accepted is True
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_control_shutdown_sends_normal_websocket_close(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    websockets = pytest.importorskip("websockets")
+    remote_port = _free_port()
+    nats_port = _free_port()
+    control_port = _free_port()
+    remote_connected = asyncio.Event()
+    remote_closed = asyncio.Event()
+    close_codes: list[int | None] = []
+
+    async def _remote(websocket, _path=None):
+        remote_connected.set()
+        try:
+            async for _message in websocket:
+                pass
+        finally:
+            close_codes.append(getattr(websocket, "close_code", None))
+            remote_closed.set()
+
+    upstream = await websockets.serve(
+        _remote,
+        "127.0.0.1",
+        remote_port,
+        max_size=None,
+        compression=None,
+    )
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_PORT", str(nats_port))
+    monkeypatch.setenv("ADAOS_REALTIME_CONTROL_PORT", str(control_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", f"ws://127.0.0.1:{remote_port}/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "sidecar.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    run_task = asyncio.create_task(
+        realtime_sidecar_mod.run_realtime_sidecar(host="127.0.0.1", port=nats_port)
+    )
+    reader = None
+    writer = None
+
+    try:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while writer is None and asyncio.get_running_loop().time() < deadline:
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", nats_port)
+            except OSError:
+                await asyncio.sleep(0.02)
+        assert reader is not None and writer is not None
+        writer.write(b"PING\r\n")
+        await writer.drain()
+        await asyncio.wait_for(remote_connected.wait(), timeout=1.0)
+
+        accepted = await realtime_sidecar_mod._request_realtime_sidecar_graceful_shutdown()
+        await asyncio.wait_for(run_task, timeout=2.0)
+        await asyncio.wait_for(remote_closed.wait(), timeout=1.0)
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        if not run_task.done():
+            run_task.cancel()
+            with contextlib.suppress(BaseException):
+                await run_task
+        upstream.close()
+        await upstream.wait_closed()
+
+    assert accepted is True
+    assert close_codes == [1000]
 
 
 @pytest.mark.asyncio
@@ -1399,11 +1695,15 @@ async def test_realtime_sidecar_subprocess_replaces_stale_listener(
     assert popen_env["ADAOS_REALTIME_WIN_LOOP"] == "proactor"
 
 
-def test_realtime_sidecar_nats_keepalive_defaults_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_sidecar_never_injects_nats_keepalive_into_byte_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_NATS_PING_S", raising=False)
     monkeypatch.delenv("ADAOS_REALTIME_UPSTREAM_NATS_PING_S", raising=False)
+    assert realtime_sidecar_mod._realtime_nats_ping_interval_s() is None
 
-    assert realtime_sidecar_mod._realtime_nats_ping_interval_s() == 15.0
+    monkeypatch.setenv("ADAOS_REALTIME_NATS_PING_S", "5")
+    assert realtime_sidecar_mod._realtime_nats_ping_interval_s() is None
 
 
 def test_realtime_sidecar_filters_quarantined_remote_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1457,7 +1757,7 @@ def test_realtime_cli_applies_loop_policy_before_asyncio_run(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_realtime_sidecar_sends_own_nats_keepalive_and_swallows_pong(
+async def test_realtime_sidecar_does_not_insert_ping_between_pub_payload_fragments(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     fake_ws = _FakeRemoteWS()
@@ -1468,33 +1768,37 @@ async def test_realtime_sidecar_sends_own_nats_keepalive_and_swallows_pong(
     import websockets  # type: ignore
 
     monkeypatch.setattr(websockets, "connect", _fake_connect)
-    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_nats_ping_interval_s", lambda: 0.05)
     monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
     monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_NATS_PING_S", "0.01")
 
     server = RealtimeSidecarServer(host="127.0.0.1", port=0)
     await server.start()
     try:
-        reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
-        for _ in range(20):
-            if fake_ws.sent:
+        _reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
+        payload = b'{"enabled":false,"items":[' + (b'"x",' * 20_000) + b'"end"]}'
+        header = f"PUB state.snapshot {len(payload)}\r\n".encode("ascii")
+        midpoint = len(payload) // 2
+        first = header + payload[:midpoint]
+        second = payload[midpoint:] + b"\r\n"
+
+        writer.write(first)
+        await writer.drain()
+        await asyncio.sleep(0.1)
+        writer.write(second)
+        await writer.drain()
+        for _ in range(50):
+            if sum(map(len, fake_ws.sent)) >= len(first) + len(second):
                 break
             await asyncio.sleep(0.01)
 
-        assert fake_ws.sent
-        assert fake_ws.sent[0] == b"PING\r\n"
-
-        await fake_ws.recv_queue.put(b"PONG\r\n")
-        await asyncio.sleep(0.01)
-
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(reader.read(1), timeout=0.05)
-
-        assert server._stats.sidecar_nats_pings_tx >= 1
-        assert server._stats.sidecar_nats_pongs_rx == 1
-        assert server._stats.sidecar_nats_pings_outstanding in {0, 1}
+        assert b"".join(fake_ws.sent) == first + second
+        assert server._stats.sidecar_nats_ping_interval_s is None
+        assert server._stats.sidecar_nats_pings_tx == 0
+        assert server._stats.sidecar_nats_pongs_rx == 0
+        assert server._stats.sidecar_nats_pings_outstanding == 0
         writer.close()
         await writer.wait_closed()
     finally:
@@ -1502,7 +1806,7 @@ async def test_realtime_sidecar_sends_own_nats_keepalive_and_swallows_pong(
 
 
 @pytest.mark.asyncio
-async def test_realtime_sidecar_matches_pongs_to_sidecar_and_client_pings_in_order(
+async def test_realtime_sidecar_forwards_runtime_nats_ping_pong_end_to_end(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     fake_ws = _FakeRemoteWS()
@@ -1513,7 +1817,6 @@ async def test_realtime_sidecar_matches_pongs_to_sidecar_and_client_pings_in_ord
     import websockets  # type: ignore
 
     monkeypatch.setattr(websockets, "connect", _fake_connect)
-    monkeypatch.setattr(realtime_sidecar_mod, "_realtime_nats_ping_interval_s", lambda: None)
     monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
     monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
@@ -1523,30 +1826,21 @@ async def test_realtime_sidecar_matches_pongs_to_sidecar_and_client_pings_in_ord
     await server.start()
     try:
         reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
-        await asyncio.sleep(0.05)
-        server._stats.sidecar_nats_pings_outstanding = 1
-        server._pending_ping_sources.append("sidecar")
-
         writer.write(b"PING\r\n")
         await writer.drain()
-        await asyncio.sleep(0.05)
-
-        assert fake_ws.sent == [b"PING\r\n"]
-
-        await fake_ws.recv_queue.put(b"PONG\r\n")
-        await asyncio.sleep(0.05)
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(reader.read(1), timeout=0.05)
-
-        assert server._stats.sidecar_nats_pings_outstanding == 0
-        assert server._stats.client_nats_pings_outstanding == 1
+        for _ in range(50):
+            if fake_ws.sent:
+                break
+            await asyncio.sleep(0.01)
 
         await fake_ws.recv_queue.put(b"PONG\r\n")
         data = await asyncio.wait_for(reader.readexactly(len(b"PONG\r\n")), timeout=1.0)
 
+        assert fake_ws.sent == [b"PING\r\n"]
         assert data == b"PONG\r\n"
         assert server._stats.local_nats_pings_tx == 1
         assert server._stats.client_nats_pings_outstanding == 0
+        assert server._stats.sidecar_nats_pings_tx == 0
         writer.close()
         await writer.wait_closed()
     finally:

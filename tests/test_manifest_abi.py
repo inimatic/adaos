@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 from jsonschema import Draft202012Validator, Draft7Validator, ValidationError
+from referencing import Registry, Resource
+
+from adaos.services.builder.governed import builder_change_definition
 
 
 def _load_schema(name: str) -> dict:
@@ -28,16 +31,71 @@ def _load_service_skill_schema() -> dict:
 @pytest.mark.parametrize(
     "schema_name",
     [
+        "conversation.output.v1.schema.json",
+        "conversation.action_policy.v1.schema.json",
+        "skill.invocation.v1.schema.json",
+        "conversational.package_manifest.v1.schema.json",
+        "conversational.input.v1.schema.json",
+        "conversational.entities.v1.schema.json",
+        "conversational.examples.v1.schema.json",
+        "conversational.matchers.v1.schema.json",
+        "conversational.locale.v1.schema.json",
+        "conversational.affordances.v1.schema.json",
+        "conversational.repair.v1.schema.json",
+        "conversational.output.v1.schema.json",
+        "conversational.story.v1.schema.json",
+        "conversational.validation_report.v1.schema.json",
+        "nlu.teacher_overlay_store.v1.schema.json",
+        "nlu.teacher_promotion_candidate.v1.schema.json",
         "builder.issue.v1.schema.json",
         "builder.change.v1.schema.json",
         "builder.run.v1.schema.json",
         "builder.context_packet.v1.schema.json",
+        "builder.action_risk.v1.schema.json",
         "builder.interaction_frame.v1.schema.json",
         "builder.semantic_ui_change.v1.schema.json",
         "builder.review_anchor.v1.schema.json",
+        "builder.acceptance_constraint.v1.schema.json",
+        "builder.context_ref.v1.schema.json",
     ],
 )
-def test_conversational_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
+    Draft202012Validator.check_schema(_load_schema(schema_name))
+
+
+def test_workflow_validation_report_schema_is_valid_draft_2020_12() -> None:
+    Draft202012Validator.check_schema(_load_schema("workflow.validation_report.v1.schema.json"))
+
+
+def test_workflow_definition_schema_resolves_transition_refs_from_abi_files() -> None:
+    abi_root = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
+    registry = Registry()
+    for path in sorted(abi_root.glob("workflow.*.schema.json")):
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        resource = Resource.from_contents(schema)
+        registry = registry.with_resource(path.name, resource)
+        registry = registry.with_resource(str(schema["$id"]), resource)
+
+    Draft202012Validator(
+        _load_schema("workflow.definition.v1.schema.json"),
+        registry=registry,
+    ).validate(builder_change_definition())
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        "workflow.adapter_contract.v1.schema.json",
+        "workflow.registry_entry.v1.schema.json",
+        "workflow.binding.v1.schema.json",
+        "workflow.principal.v1.schema.json",
+        "workflow.definition_artifact.v1.schema.json",
+        "workflow.admission.v1.schema.json",
+        "workflow.authoring_context.v1.schema.json",
+        "workflow.authoring_attempt.v1.schema.json",
+    ],
+)
+def test_workflow_registry_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
     Draft202012Validator.check_schema(_load_schema(schema_name))
 
 
@@ -60,6 +118,30 @@ def test_skill_schema_accepts_runtime_activation_policy() -> None:
                 },
             },
         },
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
+def test_skill_schema_accepts_conversational_package_manifest_ref() -> None:
+    schema = _load_schema("skill.schema.json")
+    payload = {
+        "name": "conversation_ready_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
+def test_scenario_schema_accepts_conversational_package_manifest_ref() -> None:
+    schema = _load_schema("scenario.schema.json")
+    payload = {
+        "id": "conversation_ready_scenario",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
     }
 
     Draft7Validator(schema).validate(payload)
@@ -189,6 +271,18 @@ def test_runtime_skill_validator_schema_accepts_data_routes() -> None:
                 "guard_visibility": "show degraded status and log suppression count",
             }
         ],
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_runtime_skill_validator_schema_accepts_conversational_package_ref() -> None:
+    schema = _load_service_skill_schema()
+    payload = {
+        "name": "conversation_ready_skill",
+        "version": "0.1.0",
+        "workflow": {"manifest": "workflow.json"},
+        "conversational": {"manifest": "conversational/manifest.yaml"},
     }
 
     Draft202012Validator(schema).validate(payload)
@@ -475,6 +569,23 @@ def test_scenario_schema_accepts_default_builder_template_manifest() -> None:
     )
 
     Draft7Validator(schema).validate(payload)
+
+
+def test_skill_and_scenario_schemas_accept_single_workflow_manifest() -> None:
+    skill = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
+    scenario = {"id": "demo_scenario", "version": "0.1.0", "workflow": {"manifest": "workflow.json"}}
+
+    Draft7Validator(_load_schema("skill.schema.json")).validate(skill)
+    Draft202012Validator(_load_service_skill_schema()).validate(skill)
+    Draft7Validator(_load_schema("scenario.schema.json")).validate(scenario)
+
+
+@pytest.mark.parametrize("manifest", ["workflows/main.json", "workflow.yaml", "WORKFLOW.json"])
+def test_manifest_schemas_reject_noncanonical_workflow_path(manifest: str) -> None:
+    payload = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": manifest}}
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(_load_schema("skill.schema.json")).validate(payload)
 
 
 def test_default_scenario_template_exposes_a_valid_empty_builder_canvas() -> None:

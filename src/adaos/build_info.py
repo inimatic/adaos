@@ -94,13 +94,16 @@ def _active_slot_manifest() -> dict | None:
 
 
 def base_version(repo_root: Path | str | None = None) -> str:
-    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
-    if explicit:
-        return explicit
     root = Path(repo_root).expanduser().resolve() if repo_root is not None else _repo_root()
     pyproject_version = _pyproject_version(root)
     if pyproject_version:
         return pyproject_version
+    # A checkout or core slot with pyproject.toml owns its build identity.
+    # ADAOS_BASE_VERSION may survive in a shared operational dotenv for years;
+    # only use it for packaged layouts that do not carry source metadata.
+    explicit = str(os.getenv("ADAOS_BASE_VERSION") or "").strip()
+    if explicit:
+        return explicit
     if repo_root is None:
         manifest = _active_slot_manifest()
         if manifest:
@@ -114,6 +117,14 @@ def _compute_version() -> str:
     explicit = os.getenv("ADAOS_BUILD_VERSION")
     if explicit:
         return explicit
+    # A slot is an immutable prepared runtime.  Its manifest is the identity
+    # authority; probing Git from a slot directory nested below a development
+    # checkout can otherwise escape upward and report the parent's HEAD.
+    manifest = _active_slot_manifest()
+    if manifest:
+        manifest_version = str(manifest.get("build_version") or "").strip()
+        if manifest_version:
+            return manifest_version
     base = base_version()
 
     rev_count = _git("rev-list", "--count", "HEAD")
@@ -124,12 +135,6 @@ def _compute_version() -> str:
             suffix += f".{short_sha}"
         return f"{base}{suffix}"
 
-    manifest = _active_slot_manifest()
-    if manifest:
-        manifest_version = str(manifest.get("build_version") or "").strip()
-        if manifest_version:
-            return manifest_version
-
     return base
 
 
@@ -138,15 +143,15 @@ def _compute_build_date() -> str:
     if explicit:
         return explicit
 
-    commit_ts = _git("show", "-s", "--format=%cI", "HEAD")
-    if commit_ts:
-        return commit_ts
-
     manifest = _active_slot_manifest()
     if manifest:
         manifest_date = str(manifest.get("build_date") or "").strip()
         if manifest_date:
             return manifest_date
+
+    commit_ts = _git("show", "-s", "--format=%cI", "HEAD")
+    if commit_ts:
+        return commit_ts
 
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -156,15 +161,16 @@ def _compute_git_commit() -> str:
     if explicit:
         return explicit
 
-    commit = str(_git("rev-parse", "HEAD") or "").strip()
-    if commit:
-        return commit
-
     manifest = _active_slot_manifest()
     if manifest:
         manifest_commit = str(manifest.get("git_commit") or "").strip()
         if manifest_commit:
             return manifest_commit
+
+    commit = str(_git("rev-parse", "HEAD") or "").strip()
+    if commit:
+        return commit
+
     return ""
 
 

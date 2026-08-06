@@ -35,6 +35,34 @@ If the UI shows `????`, treat it as a data-path bug until proven otherwise:
 check the source file bytes, the API payload, stream/Yjs projection, and the
 browser rendering payload separately.
 
+Redirected Windows process logs need the same care. A valid UTF-8 payload can
+look corrupted when a child writes through the active Windows code page and
+`Get-Content -Encoding UTF8` reads that file later. Before diagnosing transport
+damage, inspect the original JSON bytes and decode a small log sample with the
+encoding actually used by the child. For repository-local acceptance runs,
+start Python with `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`, then read the log
+explicitly as UTF-8. Log rendering is evidence about the logger boundary, not
+proof that persisted request bytes were corrupted.
+
+For HTTP acceptance, keep the request as a UTF-8 file and send its bytes rather
+than a PowerShell object/string conversion:
+
+```powershell
+curl.exe -H "Content-Type: application/json; charset=utf-8" `
+  --data-binary '@request.json' `
+  http://127.0.0.1:8777/io/bus/tg.input.<hub-id>
+```
+
+Do not use `Invoke-RestMethod -Body $string` or an interpolated remote shell
+command as evidence for a non-ASCII ingress contract. Use a
+repository-reviewed UTF-8 fixture and `curl.exe --data-binary @file`, then
+verify persisted code points before evaluating the downstream response. A
+2026-07-31 signed Telegram diagnostic also demonstrated why redirected logs
+are not authoritative: `tg.input` log rendering contained `U+FFFD`, while the
+durable SQLite message held the exact Russian code points and Builder produced
+the correct response plus five actions. Diagnose the log sink separately; do
+not rewrite or reject valid durable input based only on console/file rendering.
+
 For `adaos dev skill run`, never pass user-authored Unicode as inline JSON on
 Windows. Store the payload as UTF-8 and use `--json-file`; reserve `--json` for
 short ASCII-only payloads:
@@ -127,6 +155,19 @@ npm run build
 ```
 
 ## Workspace Skills
+
+First identify the source plane. A project under
+`.adaos/dev/<node>/skills/<name>` is a DEV/Forge artifact and must be
+checkpointed with:
+
+```powershell
+.venv\Scripts\python.exe -m adaos dev skill push <name> -m "message"
+```
+
+Do not substitute `adaos skill push`: that command writes the stable
+`.adaos/workspace` registry checkout and can create an unintended Publication
+commit. The corresponding distinction for scenarios is `adaos dev scenario
+push` versus `adaos scenario push`.
 
 Workspace skills are runtime artifacts, not plain source folders. Do not rely on
 `git push` alone to make a workspace skill available to the local runtime.

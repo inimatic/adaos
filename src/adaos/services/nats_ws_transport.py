@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import ParseResult
 
+from adaos.services.env_policy import truthy
 from adaos.services.nats_errors import is_transient_nats_error, nats_error_summary
 
 _ORIG_NATS_WS_TRANSPORT: Any | None = None
@@ -681,19 +682,10 @@ def _route_tx_trace_line(url: str | None, subj: str | None, payload: bytes, pend
 
 
 def _tcp_keepalive_enabled() -> bool:
-    try:
-        raw = os.getenv("HUB_NATS_TCP_KEEPALIVE")
-    except Exception:
-        raw = None
-    if raw is None:
-        return os.name == "nt"
-    try:
-        val = str(raw).strip().lower()
-    except Exception:
-        val = ""
-    if not val:
-        return os.name == "nt"
-    return val not in {"0", "false", "off", "no"}
+    raw = os.getenv("HUB_NATS_TCP_KEEPALIVE")
+    if raw is None or not str(raw).strip():
+        return True
+    return truthy(raw, default=False)
 
 
 def _tcp_keepalive_params() -> tuple[float, float, int]:

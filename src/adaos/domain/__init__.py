@@ -110,6 +110,7 @@ from .artifact_release import (
     SubscriptionPolicy,
     WorkspaceLock,
     WorkspaceSlot,
+    WorkflowAdapterLock,
 )
 
 __all__ = [
@@ -213,4 +214,5 @@ __all__ = [
     "SubscriptionPolicy",
     "WorkspaceLock",
     "WorkspaceSlot",
+    "WorkflowAdapterLock",
 ]

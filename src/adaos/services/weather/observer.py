@@ -1,3 +1,4 @@
+# TODO : This module is deprecated and will be removed in a future release. Use the Yjs observers in adaos.services.yjs.observers instead.
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +13,7 @@ import y_py as Y
 from adaos.services.agent_context import get_ctx
 from adaos.domain import Event as DomainEvent
 from adaos.services.eventbus import emit as bus_emit
+from adaos.services.env_policy import truthy
 
 _log = logging.getLogger("adaos.weather.observer")
 
@@ -30,7 +32,7 @@ _AUTO_REGISTERED = False
 
 
 def _truthy_env(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(value, default=False)
 
 
 def _ydoc_observer_auto_register_enabled() -> bool:
@@ -447,9 +449,7 @@ try:
         register_room_observer(_room_observer)
         _AUTO_REGISTERED = True
     else:
-        _log.info(
-            "weather YDoc observer auto-registration disabled; set ADAOS_WEATHER_YDOC_OBSERVER=1 to enable legacy city-change observation"
-        )
+        _log.info("weather YDoc observer auto-registration disabled; set ADAOS_WEATHER_YDOC_OBSERVER=1 to enable legacy city-change observation")
 except Exception:
     # Do not break boot if Yjs observers are not available.
     pass
@@ -471,4 +471,3 @@ def forget_weather_room_observer(webspace_id: str, ydoc_id: int | None = None) -
             _LAST_CITY_TARGET_NODE.pop(key, None)
             _LAST_NO_CITY_LOG_AT.pop(key, None)
     _LAST_DOC_CHECK_AT.pop(key, None)
-

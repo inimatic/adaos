@@ -894,7 +894,29 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
         "target": {"type": "skill", "id": "demo"},
         "realize_request": {
             "target": {"type": "skill", "id": "demo"},
-            "artifacts": {"implementation_brief": "Keep Russian text intact."},
+            "artifacts": {
+                "implementation_brief": "Keep Russian text intact.",
+                "context_packet": {
+                    "schema": "adaos.builder.context_packet.v1",
+                    "digest": "sha256:" + "a" * 64,
+                    "project": {"ref": "skill:demo"},
+                    "change": {
+                        "change_id": "change.demo",
+                        "intent": "Correct the declarative workflow.",
+                        "issues": [
+                            {
+                                "issue_id": "issue.workflow",
+                                "title": "Keep the workflow definition data-driven",
+                                "lane": "automation",
+                                "status": "open",
+                                "acceptance_criteria": ["workflow.json validates"],
+                            }
+                        ],
+                    },
+                    "facets": {"execution_authority": {"status": "present"}},
+                    "coverage": {"ready": True},
+                },
+            },
         },
         "forge": {"sparse_paths": ["skills/demo/"]},
     }
@@ -904,11 +926,62 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
 
     worker._build_packet(assignment, workspace, input_dir)
     prompt = (input_dir / "task.md").read_text(encoding="utf-8")
+    packet = json.loads((input_dir / "packet.json").read_text(encoding="utf-8"))
 
     assert "ADAOS_PYTHON" in prompt
     assert "authoritative SDK" in prompt
     assert "PowerShell string pipeline" in prompt
     assert "UTF-8" in prompt
+    assert "Governed Change context" in prompt
+    assert "change.demo" in prompt
+    assert "workflow.json validates" in prompt
+    assert "complete TransitionDescriptor contract" in prompt
+    assert packet["context_packet_digest"] == "sha256:" + "a" * 64
+    assert packet["context_packet"]["change"]["change_id"] == "change.demo"
+
+
+def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "workspace"
+    skill = _core_created_skill_fixture(repo_root, workspace / "skills", "demo")
+    manifest_path = skill / "skill.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["workflow"] = {"manifest": "workflow.json"}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    workflow_path = skill / "workflow.json"
+    workflow_path.write_text("{}\n", encoding="utf-8")
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=repo_root,
+        dev_skills_root=workspace / "skills",
+        dev_scenarios_root=workspace / "scenarios",
+        runs_root=tmp_path / "runs",
+    )
+    assignment = {
+        "target": {"type": "skill", "id": "demo"},
+        "forge": {"sparse_paths": ["skills/demo/"]},
+    }
+
+    invalid = worker._validate_workspace(assignment, workspace)
+
+    assert invalid["ok"] is False
+    assert any("workflow definition" in error for error in invalid["errors"])
+
+    workflow_path.write_text(
+        (repo_root / "src" / "adaos" / "services" / "builder" / "builder_change.workflow.json").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+
+    valid = worker._validate_workspace(assignment, workspace)
+
+    assert valid["ok"] is True, valid["errors"]
+    workflow_check = next(
+        item for item in valid["checks"] if item.get("kind") == "workflow.definition.v1"
+    )
+    assert workflow_check["path"] == "skills/demo/workflow.json"
+    assert workflow_check["definition_digest"].startswith("sha256:")
 
 
 def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Path) -> None:

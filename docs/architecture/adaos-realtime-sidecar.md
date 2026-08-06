@@ -202,6 +202,41 @@ Success criteria:
 - [x] `[must]` Hub-root sidecar NATS avoids `UnexpectedEOF`, remote
   quarantine, and connect-failure churn during the target-stand acceptance
   window.
+- [x] `[must]` Treat an abnormal remote-session close as loss of the current
+  byte-relay session: close the matching local NATS socket and let the hub
+  runtime recreate `CONNECT` and every `SUB` on a new session. The sidecar must
+  not reconnect its remote WebSocket transparently behind an already-open
+  local socket because it cannot reconstruct NATS protocol state.
+- [x] `[must]` Never inject sidecar-originated NATS `PING` bytes into the
+  transparent relay. A relay read boundary is not a NATS frame boundary, so a
+  timer can insert `PING\r\n` inside a fragmented `PUB` payload and invalidate
+  its declared size. Runtime-owned NATS keepalive and WebSocket control
+  ping/pong provide liveness without modifying the relayed byte stream.
+- [x] `[must]` Request graceful sidecar process shutdown before forced
+  termination. Managed restart gives each live relay time to close its remote
+  WebSocket with a close frame; the peer must not observe synthetic `1006`
+  merely because an operator requested a restart. Forced termination remains
+  a bounded fallback when the child does not acknowledge the loopback control
+  request or the following shutdown signal.
+- [x] `[must]` Keep the hub-root bridge supervisor alive when a child transport
+  cleanup surfaces `CancelledError`, while still propagating cancellation
+  requested by shutdown or an explicit rearm.
+- [x] `[must]` Rearm an unexpectedly missing hub-root bridge from an independent
+  runtime watchdog. Automatic sidecar-to-direct-WSS failover after a transient
+  remote EOF is disabled by default; direct fallback remains available when
+  the local sidecar listener is unavailable and transient failover remains an
+  explicit emergency opt-in.
+- [ ] `[should]` Complete a target-stand soak that injects abnormal WS close,
+  proves automatic bridge recreation and subscription restoration, and
+  observes no sidecar/direct-WSS oscillation. The 2026-08-04 local incident was
+  recovered manually and is covered by regression tests, but the patched
+  runtime still requires deployed soak evidence.
+- [x] `[must]` Local managed-restart acceptance on 2026-08-04 closed remote
+  session `rt-60c8c88921` with WebSocket `1000`, opened replacement session
+  `rt-02f4d1481b`, restored route subscriptions on the next one-second sample,
+  kept public ingress at the expected unauthenticated `401`, and produced no
+  new Root NATS parser error. This validates controlled restart; the abnormal
+  close and long-duration target-stand soak above remains open.
 - [x] `[must]` No `nats keepalive pong missing` caused by hub-local WS stalls
   during the target-stand acceptance window.
 - [x] `[must]` Operators can see that sidecar owns transport only and can

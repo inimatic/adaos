@@ -61,6 +61,25 @@ def test_scenario_validation_resolves_declared_dev_skill_tools(tmp_path: Path) -
     assert report.errors == []
 
 
+def test_scenario_validation_admits_declared_conversational_package(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    scenario = _write_scenario(
+        tmp_path,
+        "smoke",
+        depends=["smoke_skill"],
+        route="smoke_skill.check",
+    )
+    manifest_path = scenario / "scenario.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["conversational"] = {"manifest": "conversational/manifest.yaml"}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    assert "conversational.manifest.missing" in {issue.code for issue in report.issues}
+
+
 def test_scenario_validation_rejects_undeclared_or_missing_routes(tmp_path: Path) -> None:
     scenario = _write_scenario(
         tmp_path,

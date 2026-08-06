@@ -240,6 +240,11 @@ def test_conversation_eval_replays_initial_golden_datasets() -> None:
         "conversation_companions_agent_handoff.json",
         "builder_review_handoff.json",
         "builder_first_idea_preview_correction.json",
+        "builder_clarification.json",
+        "builder_validation_failure.json",
+        "builder_review_approval.json",
+        "builder_review_rejection.json",
+        "builder_repair.json",
         "teacher_candidate_repair.json",
     ]
     for name in fixture_names:
@@ -270,6 +275,11 @@ def test_conversation_eval_golden_migration_gate_passes_initial_suite() -> None:
         "conversation_companions_agent_handoff",
         "builder_review_handoff",
         "builder_first_idea_preview_correction",
+        "builder_clarification",
+        "builder_validation_failure",
+        "builder_review_approval",
+        "builder_review_rejection",
+        "builder_repair",
         "teacher_candidate_repair",
     }.issubset({item["dataset_id"] for item in result["datasets"]})
 
@@ -348,3 +358,24 @@ def test_conversation_eval_skips_pending_action_for_passed_gate(monkeypatch) -> 
     assert result["published"] is False
     assert result["reason"] == "eval_passed"
     assert published == []
+
+
+def test_approved_conversation_eval_materializes_repair_with_backlinks(tmp_path: Path) -> None:
+    gate = conversation_eval.run_golden_migration_gate(
+        fixture_paths=[FIXTURE_DIR / "general_no_match_repair.json"],
+        required_dataset_ids=["general_no_match_repair", "builder_review_handoff"],
+    )
+    from adaos.services.builder.repair import BuilderRepairService
+
+    service = BuilderRepairService(state_dir=tmp_path)
+    result = conversation_eval.create_eval_repair_tasks(
+        gate,
+        project_id="builder",
+        repair_service=service,
+    )
+
+    assert result["created"]
+    task = result["created"][0]
+    assert task["signal_type"] == "conversation_eval"
+    assert task["context"]["validation_report"]["schema"] == gate["schema"]
+    assert any(ref["type"] == "conversation_eval_dataset" for ref in task["source_refs"])

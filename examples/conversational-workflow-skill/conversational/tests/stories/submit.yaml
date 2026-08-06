@@ -1,0 +1,51 @@
+schema: adaos.conversational.story.v1
+id: release.submit.en.happy_path
+title: Submit a release for review
+story_kind: workflow
+workflow_type: example.release
+locale: en
+channel: web
+actor:
+  id: user:local
+  permissions:
+    - release.submit
+  roles: []
+start:
+  instance_id: release:reference
+  state: draft
+  generation: 0
+  context: {}
+steps:
+  - user: Submit this release for review
+    given:
+      proposal:
+        kind: workflow_command
+        intent_id: submit_release
+        command: submit
+        skill_id: null
+        operation_id: null
+        arguments: {}
+        confidence: 0.96
+        action_policy:
+          schema: adaos.conversation.action_policy.v1
+          risk_class: isolated_write
+          side_effect: reversible
+          confirmation: none
+      event: null
+      skill_result: null
+      output_ref: release_submitted
+    expect:
+      proposal:
+        kind: workflow_command
+        command: submit
+        confidence_at_least: 0.9
+      command: submit
+      transition_id: submit_release
+      state: review
+      reason_code: null
+      output:
+        kind: result
+        output_ref: release_submitted
+        summary: Release submitted for review.
+        actions: []
+        next_expected_input: none

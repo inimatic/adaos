@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/skill_factory.user_hub_submission.v1.schema.json",
+  "title": "AdaOS Skill Factory User Hub Submission v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "submission_id", "task_id", "source_url", "source_digest", "status",
+    "result", "validation", "pending_action_id", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.skill_factory.user_hub_submission.v1" },
+    "submission_id": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "source_url": { "type": "string", "minLength": 1 },
+    "source_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "status": { "enum": ["approval_pending", "accepted", "rejected", "invalid"] },
+    "result": { "type": "object" },
+    "validation": { "type": "object" },
+    "pending_action_id": { "type": "string", "minLength": 1 },
+    "decision": { "type": ["object", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from adaos.services.env_policy import truthy
 from adaos.services.runtime_paths import current_base_dir, current_logs_dir
 
 
@@ -31,23 +32,30 @@ DEFAULT_POLICY: dict[str, Any] = {
     "system_tmp_max_age": "3d",
     "logs_rotate_size": "100M",
     "logs_rotate_keep": 7,
+    "full_hygiene_on_calendar": "Sun *-*-* 05:20:00 UTC",
+    "full_hygiene_randomized_delay": "30min",
     "managed_backup_keep_days": 7,
     "managed_backup_keep_latest": 3,
 }
 
-_TRUTHY = {"1", "true", "yes", "on"}
 _GLOBAL_TMP_PATTERNS = (
     "pip-unpack-*",
     "pip-install-*",
     "pip-metadata-*",
     "pip-ephem-wheel-cache-*",
     "pip-build-tracker-*",
+    "pip-target-*",
+    "pip-build-env-*",
+    "pip-modern-metadata-*",
+    "adaos-rasa-nlu-*",
+    "model*.crfsuite",
+    "tmp*.wav",
 )
 _GLOBAL_TMP_LARGE_FILE_PATTERNS = ("tmp*",)
 
 
 def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in _TRUTHY
+    return truthy(value, default=False)
 
 
 def _policy(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -225,12 +233,16 @@ def _logrotate_config(logs_dir: Path, policy: dict[str, Any]) -> str:
     )
 
 
-def _systemd_service(base_dir: Path) -> str:
+def _linux_cli_shim() -> str:
     cli_raw = str(os.getenv("ADAOS_LINUX_CLI_SHIM_PATH") or "/usr/local/bin/adaos").strip()
     # Keep the canonical Linux path intact when Linux rendering is tested from
     # a Windows development host.
     cli_text = cli_raw if cli_raw.startswith("/") else str(Path(cli_raw).expanduser().resolve())
-    cli = f'"{cli_text}"' if " " in cli_text or "\t" in cli_text else cli_text
+    return f'"{cli_text}"' if " " in cli_text or "\t" in cli_text else cli_text
+
+
+def _systemd_service(base_dir: Path) -> str:
+    cli = _linux_cli_shim()
     return (
         MANAGED_HEADER
         + "[Unit]\n"
@@ -250,6 +262,35 @@ def _systemd_timer() -> str:
         + "[Timer]\n"
         + "OnBootSec=15min\n"
         + "OnUnitActiveSec=1d\n"
+        + "Persistent=true\n\n"
+        + "[Install]\n"
+        + "WantedBy=timers.target\n"
+    )
+
+
+def _systemd_full_service(base_dir: Path) -> str:
+    cli = _linux_cli_shim()
+    return (
+        MANAGED_HEADER
+        + "[Unit]\n"
+        + "Description=AdaOS full cache hygiene\n\n"
+        + "[Service]\n"
+        + "Type=oneshot\n"
+        + f"Environment=ADAOS_BASE_DIR={base_dir}\n"
+        + f"ExecStart={cli} maintenance run --json\n"
+    )
+
+
+def _systemd_full_timer(policy: dict[str, Any]) -> str:
+    on_calendar = str(policy["full_hygiene_on_calendar"])
+    randomized_delay = str(policy["full_hygiene_randomized_delay"])
+    return (
+        MANAGED_HEADER
+        + "[Unit]\n"
+        + "Description=Run full AdaOS cache hygiene weekly\n\n"
+        + "[Timer]\n"
+        + f"OnCalendar={on_calendar}\n"
+        + f"RandomizedDelaySec={randomized_delay}\n"
         + "Persistent=true\n\n"
         + "[Install]\n"
         + "WantedBy=timers.target\n"
@@ -332,6 +373,8 @@ def apply_retention_policy(
                 [
                     (systemd_root / "adaos-hygiene.service", _systemd_service(base)),
                     (systemd_root / "adaos-hygiene.timer", _systemd_timer()),
+                    (systemd_root / "adaos-hygiene-full.service", _systemd_full_service(base)),
+                    (systemd_root / "adaos-hygiene-full.timer", _systemd_full_timer(effective)),
                 ]
             )
         failed: list[dict[str, Any]] = []
@@ -347,6 +390,7 @@ def apply_retention_policy(
         if enable_timer and not failed and shutil.which("systemctl") and system_etc_dir is None and systemd_dir is None:
             commands.append(_run_command(["systemctl", "daemon-reload"], dry_run=dry_run))
             commands.append(_run_command(["systemctl", "enable", "--now", "adaos-hygiene.timer"], dry_run=dry_run))
+            commands.append(_run_command(["systemctl", "enable", "--now", "adaos-hygiene-full.timer"], dry_run=dry_run))
         os_policy = {
             "ok": not failed and all(bool(cmd.get("ok", True)) for cmd in commands),
             "supported": True,

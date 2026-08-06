@@ -435,6 +435,11 @@ def test_browser_device_settings_schema_separates_device_and_endpoint_names(monk
                     "volume": True,
                     "mute": True,
                 },
+                "route_status": {
+                    "level": "warning",
+                    "reason": "device_changed",
+                    "recent_device_change": True,
+                },
             },
             "services": {
                 "audio_input_endpoint": {"controls": {"select_device": True}},
@@ -485,6 +490,7 @@ def test_browser_device_settings_schema_separates_device_and_endpoint_names(monk
     }
     assert settings["media_control"]["volume"] == 0.25
     assert settings["media_control"]["muted"] is False
+    assert settings["media_control"]["route_status"]["reason"] == "device_changed"
     assert settings["media_control"]["set"] == {
         "enabled": True,
         "target": "browsers_skill.set_browser_media_control",
@@ -662,6 +668,12 @@ def test_touch_browser_session_can_clear_selected_audio_output(monkeypatch) -> N
         media_audio_output_label="Desk speakers",
         media_volume=0.4,
         media_muted=False,
+        media_route_status_level="warning",
+        media_route_status_state="degraded",
+        media_route_status_reason="device_changed",
+        media_route_recent_device_change=True,
+        media_route_bluetooth_profile_hint="true",
+        media_route_output_routed="false",
     )
 
     assert saved is not None
@@ -669,6 +681,11 @@ def test_touch_browser_session_can_clear_selected_audio_output(monkeypatch) -> N
     assert saved["media_control"]["selected_audio_output"]["label"] == "Desk speakers"
     assert saved["media_control"]["volume"] == 0.4
     assert saved["media_control"]["muted"] is False
+    assert saved["media_control"]["route_status"]["level"] == "warning"
+    assert saved["media_control"]["route_status"]["reason"] == "device_changed"
+    assert saved["media_control"]["route_status"]["recent_device_change"] is True
+    assert saved["media_control"]["route_status"]["bluetooth_profile_hint"] is True
+    assert saved["media_control"]["route_status"]["output_routed"] is False
 
     cleared = access_links.touch_browser_session(
         "dev-browser",
@@ -681,6 +698,7 @@ def test_touch_browser_session_can_clear_selected_audio_output(monkeypatch) -> N
     assert cleared["media_control"]["selected_audio_output"]["label"] is None
     assert cleared["media_control"]["volume"] == 0.4
     assert cleared["media_control"]["muted"] is False
+    assert cleared["media_control"]["route_status"]["reason"] == "device_changed"
 
 
 def test_device_settings_schema_preserves_disabled_policy_actions(monkeypatch) -> None:

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.process_projection.v1",
+  "title": "AdaOS Builder Process Projection",
+  "type": "object",
+  "required": [
+    "schema",
+    "project_ref",
+    "workflow_state",
+    "generation",
+    "nodes",
+    "preview_options",
+    "allowed_commands",
+    "blockers"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.process_projection.v1" },
+    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
+    "workflow_state": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "nodes": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["ref", "kind", "parent_ref", "label", "status"],
+        "properties": {
+          "ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "kind": { "enum": ["change", "prototype", "automation", "trial", "publication"] },
+          "parent_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "status": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "workflow_state": { "type": "string", "maxLength": 120 },
+          "source_ref": { "type": ["string", "null"], "maxLength": 500 },
+          "preview": { "type": ["string", "null"], "maxLength": 500 },
+          "candidate_digest": { "type": ["string", "null"], "maxLength": 200 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "conversation_focus": { "type": ["string", "null"], "maxLength": 300 },
+    "inspected_ref": { "type": ["string", "null"], "maxLength": 300 },
+    "preview_target": { "type": ["string", "null"], "maxLength": 300 },
+    "data_mode": { "enum": ["mock", "fixture", "sandbox", "live_readonly", "live"] },
+    "preview_options": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["kind", "ref", "label"],
+        "properties": {
+          "kind": { "enum": ["prototype", "automation", "publication"] },
+          "ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "label": { "type": "string", "pattern": "^(proto|active|public):" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allowed_commands": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
+    "blockers": { "type": "array", "maxItems": 100, "items": { "type": "object" } }
+  },
+  "additionalProperties": false
+}

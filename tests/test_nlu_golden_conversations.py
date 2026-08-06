@@ -145,7 +145,9 @@ async def test_gate1_golden_conversation_learn_replay_rollback():
         assert rollback_pointer["target"] == {"type": "scenario", "id": scenario_id}
 
         saved = json.loads(scenario_json.read_text(encoding="utf-8"))
-        rules = (saved.get("nlu") or {}).get("regex_rules") or []
+        assert (saved.get("nlu") or {}).get("regex_rules") is None
+        async with async_get_ydoc(webspace_id) as ydoc:
+            rules = list(((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or [])
         saved_rule = next(item for item in rules if item.get("candidate_id") == candidate_id)
         assert re.match(r"^rx\.[0-9a-f-]{36}$", saved_rule["id"])
 
@@ -194,7 +196,8 @@ async def test_gate1_golden_conversation_learn_replay_rollback():
             events = list(teacher.get("events") or [])
 
         assert candidate["status"] == "rolled_back"
-        assert candidate["rollback"]["removed_owner"] == 1
+        assert candidate["rollback"]["removed_owner"] == 0
+        assert candidate["rollback"]["removed_runtime"] == 1
         assert any(item.get("kind") == "regex_rule.rolled_back" for item in events)
 
         intent, slots, via, _raw = await _try_regex_intent(utterance, webspace_id=webspace_id)

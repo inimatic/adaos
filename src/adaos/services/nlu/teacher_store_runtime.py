@@ -171,7 +171,11 @@ async def _persist_now(webspace_id: str) -> None:
         teacher = await _read_teacher_from_ydoc(webspace_id)
         if not teacher:
             return
-        save_teacher_state(webspace_id=webspace_id, teacher=teacher)
+        await asyncio.to_thread(
+            save_teacher_state,
+            webspace_id=webspace_id,
+            teacher=teacher,
+        )
     except Exception:
         _log.debug("persist failed webspace=%s", webspace_id, exc_info=True)
 
@@ -188,23 +192,46 @@ def _schedule_persist(webspace_id: str) -> None:
     _pending[webspace_id] = asyncio.create_task(_job())
 
 
+def _prepare_rehydration(
+    *,
+    current: dict[str, Any],
+    saved: dict[str, Any],
+    reconcile_ledger: bool,
+) -> tuple[dict[str, Any], bool, bool, bool]:
+    history = _merge_teacher_history(current=current, saved=saved)
+    has_history = bool(history.get("events") or history.get("llm_logs"))
+    needs_backfill = has_history and not teacher_ledger_backfill_completed(history)
+    needs_ledger_reconcile = has_history and (needs_backfill or reconcile_ledger)
+    needs_compaction = teacher_projection_needs_compaction(current) or teacher_projection_needs_compaction(
+        history
+    )
+    return history, needs_backfill, needs_ledger_reconcile, needs_compaction
+
+
+def _finalize_rehydration(
+    *,
+    history: dict[str, Any],
+    current: dict[str, Any],
+    saved: dict[str, Any],
+) -> tuple[dict[str, Any], bool, bool]:
+    merged = _merge_teacher(current=history, saved={})
+    return merged, merged != current, merged != saved
+
+
 async def _rehydrate_teacher_projection(evt: Any, *, reconcile_ledger: bool = False) -> None:
     payload = _payload(evt)
     webspace_id = _resolve_webspace_id(payload)
 
     async with _rehydrate_lock:
         try:
-            saved = load_teacher_state(webspace_id=webspace_id) or {}
+            saved = await asyncio.to_thread(load_teacher_state, webspace_id=webspace_id)
+            saved = saved or {}
             current = await _read_teacher_from_ydoc(webspace_id)
-            history = _merge_teacher_history(current=current, saved=saved)
-            needs_backfill = bool(history.get("events") or history.get("llm_logs")) and not teacher_ledger_backfill_completed(
-                history
-            )
-            needs_ledger_reconcile = bool(history.get("events") or history.get("llm_logs")) and (
-                needs_backfill or reconcile_ledger
-            )
-            needs_compaction = teacher_projection_needs_compaction(current) or teacher_projection_needs_compaction(
-                history
+            history, needs_backfill, needs_ledger_reconcile, needs_compaction = await asyncio.to_thread(
+                _prepare_rehydration,
+                current=current,
+                saved=saved,
+                reconcile_ledger=reconcile_ledger,
             )
             if not saved and not needs_compaction and not needs_ledger_reconcile:
                 return
@@ -236,12 +263,20 @@ async def _rehydrate_teacher_projection(evt: Any, *, reconcile_ledger: bool = Fa
                         marker.get("elapsed_ms"),
                     )
 
-            merged = _merge_teacher(current=history, saved={})
-            changed = merged != current
+            merged, changed, save_changed = await asyncio.to_thread(
+                _finalize_rehydration,
+                history=history,
+                current=current,
+                saved=saved,
+            )
             if changed:
                 await _write_teacher_to_ydoc(webspace_id, merged)
-            if merged != saved:
-                save_teacher_state(webspace_id=webspace_id, teacher=merged)
+            if save_changed:
+                await asyncio.to_thread(
+                    save_teacher_state,
+                    webspace_id=webspace_id,
+                    teacher=merged,
+                )
             _log.info(
                 "rehydrated bounded nlu_teacher projection webspace=%s saved=%s changed=%s compacted=%s "
                 "backfilled=%s removed_legacy_events=%s limits=%s",

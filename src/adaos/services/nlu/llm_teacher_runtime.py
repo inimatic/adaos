@@ -18,6 +18,7 @@ import yaml
 
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.agent_context import get_ctx
+from adaos.services.env_policy import DISABLE_VALUES, ENABLE_VALUES, coerce_bool
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.nlu.teacher_events import (
     append_event,
@@ -38,6 +39,7 @@ from adaos.services.reliability import (
 )
 from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.root.client import RootHttpClient, RootHttpError
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.yjs.webspace import default_webspace_id
@@ -52,19 +54,9 @@ from .voice_surface import (
 
 _log = logging.getLogger("adaos.nlu.teacher.llm")
 
-_TRUE_VALUES = {"1", "true", "yes", "on", "enable", "enabled"}
-_FALSE_VALUES = {"0", "false", "no", "off", "disable", "disabled"}
-
 
 def _env_enabled(value: str | None) -> bool | None:
-    token = str(value or "").strip().lower()
-    if not token:
-        return None
-    if token in _TRUE_VALUES:
-        return True
-    if token in _FALSE_VALUES:
-        return False
-    return None
+    return coerce_bool(value, true_values=ENABLE_VALUES, false_values=DISABLE_VALUES)
 
 
 def _env_csv(value: str | None) -> tuple[str, ...]:
@@ -115,8 +107,6 @@ _SLOT_GROUP_ALIASES = {
     "skill": "skill_id",
     "webspace": "webspace_id",
 }
-_BACKGROUND_TRUE_VALUES = {"1", "true", "yes", "on"}
-_BACKGROUND_FALSE_VALUES = {"0", "false", "no", "off"}
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 _BACKGROUND_INFLIGHT: set[str] = set()
 _BACKGROUND_SEMAPHORE: asyncio.Semaphore | None = None
@@ -2636,7 +2626,7 @@ def _root_base_url_for_ctx(ctx: Any, cfg: Any | None = None) -> str:
         or getattr(ctx.settings, "api_base", None)
         or ""
     ).strip()
-    return base.rstrip("/") or "https://api.inimatic.com"
+    return base.rstrip("/") or DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 def _current_node_config(ctx: Any) -> Any | None:
@@ -3073,15 +3063,15 @@ def _root_llm_base_urls(primary: RootHttpClient) -> list[str]:
     primary_url = _normalize_root_base_url(getattr(primary, "base_url", None))
     if (
         primary_url
-        and primary_url != "https://api.inimatic.com"
+        and primary_url != DEFAULT_PUBLIC_ROOT_BASE_URL
         and primary_url.endswith(".api.inimatic.com")
     ):
         # A zone root can be the right MCP/control endpoint while direct OpenAI
         # egress from that host is unavailable. Keep MCP on the zone root and
         # retry only the LLM proxy through the global root if root policy allows it.
-        add("https://api.inimatic.com")
+        add(DEFAULT_PUBLIC_ROOT_BASE_URL)
 
-    return urls or ["https://api.inimatic.com"]
+    return urls or [DEFAULT_PUBLIC_ROOT_BASE_URL]
 
 
 def _root_http_error_code(exc: RootHttpError) -> str:
@@ -4906,9 +4896,10 @@ async def _handle_teacher_request(evt: Any) -> None:
 
 def _background_teacher_enabled() -> bool:
     raw = str(os.getenv("ADAOS_NLU_LLM_TEACHER_BACKGROUND", "1") or "1").strip().lower()
-    if raw in _BACKGROUND_FALSE_VALUES:
+    resolved = coerce_bool(raw)
+    if resolved is False:
         return False
-    if raw in _BACKGROUND_TRUE_VALUES:
+    if resolved is True:
         return "PYTEST_CURRENT_TEST" not in os.environ
     return True
 

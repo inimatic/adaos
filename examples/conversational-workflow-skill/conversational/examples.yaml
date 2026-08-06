@@ -1,0 +1,14 @@
+schema: adaos.conversational.examples.v1
+package_id: conversational_release_skill
+examples:
+  - id: submit_release.example.1
+    intent_id: submit_release
+    text: Submit this release for review
+    locale: en
+    source: authored
+    entities: []
+hard_negatives:
+  - id: submit_release.negative.status
+    text: Show the current release status
+    locale: en
+    reason: A read-only status request must not submit the release.

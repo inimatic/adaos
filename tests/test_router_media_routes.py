@@ -4,7 +4,11 @@ import os
 import sys
 from types import SimpleNamespace
 
-from adaos.services.router.media_routes import resolve_media_route_intent
+from adaos.services.router.media_routes import (
+    build_media_route_refresh_payload,
+    resolve_media_route_intent,
+    resolve_media_route_state,
+)
 
 
 def test_resolve_media_route_intent_prefers_member_browser_direct_when_admitted() -> None:
@@ -76,6 +80,77 @@ def test_resolve_media_route_intent_falls_back_to_hub_webrtc_when_member_route_n
     assert route["degradation_reason"] == "member_browser_direct_not_admitted"
     assert route["attempt"]["active_route"] == "hub_webrtc_loopback"
     assert route["attempt"]["degradation_reason"] == "member_browser_direct_not_admitted"
+
+
+def test_resolve_media_route_state_records_member_switch() -> None:
+    previous = resolve_media_route_intent(
+        need="live_stream",
+        direct_local_ready=False,
+        root_routed_ready=True,
+        hub_webrtc_ready=True,
+        producer_preference="member",
+        preferred_member_id="member-old",
+        candidate_member_ids=["member-old"],
+        member_browser_direct_possible=True,
+        member_browser_direct_admitted=True,
+        candidate_member_total=1,
+        browser_session_total=1,
+    )
+    next_route = resolve_media_route_intent(
+        need="live_stream",
+        direct_local_ready=False,
+        root_routed_ready=True,
+        hub_webrtc_ready=True,
+        producer_preference="member",
+        preferred_member_id="member-new",
+        candidate_member_ids=["member-new"],
+        member_browser_direct_possible=True,
+        member_browser_direct_admitted=True,
+        candidate_member_total=1,
+        browser_session_total=1,
+    )
+
+    resolved = resolve_media_route_state(
+        {
+            "route": next_route,
+            "preferred_member_id": "member-new",
+            "candidate_member_ids": ["member-new"],
+            "refresh_cause": "subnet.member.snapshot.changed",
+            "ts": 123.0,
+        },
+        webspace_id="alpha",
+        browser_session_totals=(1, 1),
+        previous_route_state=previous,
+    )
+
+    assert resolved is not None
+    assert resolved["preferred_member_id"] == "member-new"
+    assert resolved["attempt"]["sequence"] == 2
+    assert resolved["attempt"]["switch_total"] == 1
+    assert resolved["attempt"]["previous_member_id"] == "member-old"
+    assert resolved["attempt"]["refresh_cause"] == "subnet.member.snapshot.changed"
+
+
+def test_build_media_route_refresh_payload_preserves_monitoring_failure() -> None:
+    route = resolve_media_route_intent(
+        need="live_stream",
+        direct_local_ready=False,
+        root_routed_ready=True,
+        hub_webrtc_ready=True,
+        member_browser_direct_admitted=False,
+        observed_failure="browser_session_closed",
+    )
+
+    payload = build_media_route_refresh_payload(
+        route,
+        cause="browser.session.changed",
+        browser_session_totals=(3, 2),
+    )
+
+    assert payload["browser_session_total"] == 3
+    assert payload["connected_browser_session_total"] == 2
+    assert payload["refresh_cause"] == "browser.session.changed"
+    assert payload["observed_failure"] == "browser_session_closed"
 
 
 def test_media_runtime_snapshot_exposes_member_browser_direct_foundation(monkeypatch, tmp_path) -> None:

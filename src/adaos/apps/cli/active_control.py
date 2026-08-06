@@ -7,18 +7,16 @@ from typing import Any
 
 import requests
 from adaos.services.settings import _parse_env_file
+from adaos.services.runtime_topology import (
+    DEFAULT_RUNTIME_PORT,
+    http_base,
+    is_loopback_http_url,
+    runtime_fallback_http_bases,
+)
 
 
 def _is_local_url(url: str | None) -> bool:
-    if not url:
-        return False
-    try:
-        from urllib.parse import urlparse
-
-        host = (urlparse(str(url)).hostname or "").lower()
-    except Exception:
-        return False
-    return host in {"127.0.0.1", "localhost", "::1"}
+    return is_loopback_http_url(url)
 
 
 def _normalize_url(raw: str | None) -> str | None:
@@ -278,23 +276,10 @@ def resolve_control_base_url(
     _append_candidate(candidates, seen, _autostart_control_url())
     for raw in _pidfile_control_urls():
         _append_candidate(candidates, seen, raw)
-    fallback_bases = (
-        "http://127.0.0.1:8777",
-        "http://127.0.0.1:8778",
-        "http://127.0.0.1:8779",
-        "http://localhost:8777",
-        "http://localhost:8778",
-        "http://localhost:8779",
-    )
     if role == "member" and prefer_local:
-        fallback_bases = (
-            "http://127.0.0.1:8778",
-            "http://localhost:8778",
-            "http://127.0.0.1:8777",
-            "http://localhost:8777",
-            "http://127.0.0.1:8779",
-            "http://localhost:8779",
-        )
+        fallback_bases = runtime_fallback_http_bases(prefer_member=True, include_localhost=True)
+    else:
+        fallback_bases = runtime_fallback_http_bases(include_localhost=True, order="host")
     for raw in fallback_bases:
         _append_candidate(candidates, seen, raw)
 
@@ -309,7 +294,7 @@ def resolve_control_base_url(
                 if ":8778" in str(candidate):
                     return candidate
         return candidates[0]
-    return "http://127.0.0.1:8777"
+    return http_base(port=DEFAULT_RUNTIME_PORT)
 
 
 def resolve_control_token(*, explicit: str | None = None, base_url: str | None = None) -> str:

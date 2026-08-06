@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adaos.dev/abi/builder.repair_task.v1.schema.json",
+  "title": "AdaOS Builder Repair Task v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "repair_id", "project_id", "status", "signal_type", "summary",
+    "dedup_key", "occurrence_count", "source_refs", "acceptance", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.repair_task.v1" },
+    "repair_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["open", "in_progress", "resolved", "superseded", "not_design_time_fixable"] },
+    "signal_type": {
+      "enum": ["guard", "quarantine", "post_activation", "test_failure", "import_error", "route_pressure", "memory_growth", "nlu_miss", "conversation_eval", "other"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "dedup_key": { "type": "string", "minLength": 1 },
+    "occurrence_count": { "type": "integer", "minimum": 1 },
+    "source_refs": { "type": "array", "items": { "type": "object" } },
+    "context": { "type": "object" },
+    "supersedes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "superseded_by": { "type": ["string", "null"] },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_works", "regression_free", "evidence_refs"],
+      "properties": {
+        "capability_works": { "type": "boolean" },
+        "regression_free": { "type": "boolean" },
+        "evidence_refs": { "type": "array", "items": { "type": "object" } },
+        "recorded_at": { "type": ["string", "null"], "format": "date-time" },
+        "actor": { "type": ["string", "null"] }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

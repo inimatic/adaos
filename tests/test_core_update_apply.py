@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def test_checkout_target_version_ignores_non_sha(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
@@ -514,6 +516,17 @@ def test_strip_repo_vcs_metadata_removes_git_dir(tmp_path: Path) -> None:
     assert not git_dir.exists()
 
 
+def test_strip_repo_vcs_metadata_fails_closed_when_cleanup_survives(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    git_dir = tmp_path / "repo" / ".git"
+    git_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "_force_remove_tree", lambda _path: None)
+
+    with pytest.raises(RuntimeError, match="retains VCS metadata"):
+        mod._strip_repo_vcs_metadata(tmp_path / "repo")
+
+
 def test_clone_local_repo_copy_mode_skips_git_metadata(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
@@ -846,6 +859,22 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/domain/workspace_manifest.py" in critical
     assert "src/adaos/interpreter_data/rasa_nlu_service_skill/skill.yaml" in critical
     assert "src/adaos/services/core_update_policy.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/update_execution.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/update_reconciliation.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/monitoring.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/status.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/boot_sequence.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/nats_credentials.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/nats_root_runtime.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/nats_transport_runtime.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/route_tunnel_runtime.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/cache.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/materialization_runtime.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/rebuild.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/resolution.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/skill_catalog.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/state.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/task_scheduling.py" in critical
     assert "src/adaos/services/nlu/rasa_skill_installer.py" in critical
     assert "src/adaos/services/runtime_refresh.py" in critical
     assert "src/adaos/services/self_hygiene.py" in critical

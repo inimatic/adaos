@@ -26,10 +26,12 @@ from adaos.services.node_config import load_config
 from adaos.services.root.client import RootHttpClient
 from adaos.services.root.service import create_zip_bytes
 from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
 from adaos.services.yjs.webspace import default_webspace_id
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 from adaos.sdk.scenarios.runtime import ScenarioRuntime, ensure_runtime_context, load_scenario
 
 app = typer.Typer(help=_("cli.help_scenario"))
@@ -320,7 +322,7 @@ def status(
             )
         else:
             cfg = load_config()
-            base_url = getattr(getattr(cfg, "root_settings", None), "base_url", None) or "https://api.inimatic.com"
+            base_url = getattr(getattr(cfg, "root_settings", None), "base_url", None) or DEFAULT_PUBLIC_ROOT_BASE_URL
             node_id = getattr(getattr(cfg, "node_settings", None), "id", None) or getattr(cfg, "node_id", None) or "hub"
             ca_path = cfg.ca_cert_path()
             cert_path = cfg.hub_cert_path()
@@ -612,21 +614,33 @@ def validate_cmd(
     else:
         scenario_path = ctx.paths.scenarios_workspace_dir()
     scenario_path = scenario_path / scenario_id
-    model = load_scenario(scenario_path)
-    runtime = ScenarioRuntime()
-    errors = runtime.validate(model)
+    report = validate_scenario_path(scenario_path)
+    errors = report.errors
 
     if json_output:
-        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        payload = {
+            "ok": report.ok,
+            "errors": errors,
+            "scenario_id": report.scenario_id,
+            "issues": [
+                {
+                    "level": issue.level,
+                    "code": issue.code,
+                    "message": issue.message,
+                    "where": issue.where,
+                }
+                for issue in report.issues
+            ],
+        }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        raise typer.Exit(0 if not errors else 1)
+        raise typer.Exit(0 if report.ok else 1)
 
     if errors:
         typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
         for err in errors:
             typer.echo(_("cli.scenario.validate.error_item", error=str(err)))
         raise typer.Exit(code=1)
-    typer.secho(_("cli.scenario.validate.success", scenario_id=model.id), fg=typer.colors.GREEN)
+    typer.secho(_("cli.scenario.validate.success", scenario_id=report.scenario_id), fg=typer.colors.GREEN)
 
 
 def _collect_scenario_tests(scenario_id: Optional[str]) -> list[Path]:

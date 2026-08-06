@@ -60,7 +60,9 @@ STUN_CONFIG = RTCConfiguration(
     ]
 )
 
-# Active peers keyed by device_id.
+# Active peers keyed by the page-scoped RTC peer identity.  ``device_id`` is
+# intentionally stable across browser tabs and therefore cannot identify one
+# RTCPeerConnection without making tabs replace each other.
 _peers: dict[str, HubPeer] = {}
 _pending_remote_ice: dict[tuple[str, str], list[tuple[float, dict[str, Any]]]] = {}
 _EVENT_CHANNEL_SUBSCRIPTIONS_LOCK = threading.RLock()
@@ -602,8 +604,10 @@ class HubPeer:
         webspace_id: str,
         send_ice_cb: Callable[[dict[str, Any]], Awaitable[None]],
         generation_id: str | None = None,
+        peer_id: str | None = None,
     ) -> None:
         self.device_id = device_id
+        self.peer_id = str(peer_id or device_id or "unknown").strip() or "unknown"
         self.webspace_id = webspace_id
         self._send_ice = send_ice_cb
         self.generation_id = str(generation_id or "").strip() or None
@@ -631,7 +635,12 @@ class HubPeer:
         @self.pc.on("datachannel")
         def on_datachannel(channel) -> None:  # type: ignore[no-untyped-def]
             self._touch()
-            _log.info("datachannel opened: label=%s device=%s", channel.label, self.device_id)
+            _log.info(
+                "datachannel opened: label=%s device=%s peer=%s",
+                channel.label,
+                self.device_id,
+                self.peer_id,
+            )
             if channel.label == "events":
                 self._setup_events_channel(channel)
             elif channel.label == "yjs":
@@ -656,7 +665,12 @@ class HubPeer:
             state = self._connection_state()
             self._touch()
             self._last_state_change_at = time.time()
-            _log.info("peer %s connectionState=%s", self.device_id, state)
+            _log.info(
+                "peer device=%s peer=%s connectionState=%s",
+                self.device_id,
+                self.peer_id,
+                state,
+            )
             self._emit_state_event(reason=f"connection_state:{state}")
             if state == "connected":
                 self._cancel_scheduled_close()
@@ -1018,7 +1032,12 @@ class HubPeer:
         self._touch()
         if previous_channel is not None and previous_channel is not channel:
             self._close_data_channel(previous_channel)
-        self._yjs_adapter = DataChannelYjsAdapter(channel, self.webspace_id, device_id=self.device_id)
+        self._yjs_adapter = DataChannelYjsAdapter(
+            channel,
+            self.webspace_id,
+            device_id=self.device_id,
+            peer_id=self.peer_id,
+        )
         self._yjs_task = asyncio.ensure_future(
             self._yjs_adapter.serve(),
             # name kwarg is py3.11+ for asyncio.ensure_future but Task() accepts it.
@@ -1416,8 +1435,12 @@ class HubPeer:
         )
         return {
             "device_id": self.device_id,
+            "peer_id": self.peer_id,
             "webspace_id": str(getattr(self, "webspace_id", "") or ""),
             "generation_id": self.generation_id,
+            "browser_session_id": str(getattr(self, "browser_session_id", "") or "") or None,
+            "client_build_id": str(getattr(self, "client_build_id", "") or "") or None,
+            "client_build_version": str(getattr(self, "client_build_version", "") or "") or None,
             "connection_state": connection_state,
             "events_channel_state": events_state,
             "yjs_channel_state": yjs_state,
@@ -1452,8 +1475,8 @@ class HubPeer:
         if scheduled is not None and scheduled is not current and not scheduled.done():
             scheduled.cancel()
         self._scheduled_close_task = None
-        if _peers.get(self.device_id) is self:
-            del _peers[self.device_id]
+        if _peers.get(self.peer_id) is self:
+            del _peers[self.peer_id]
         pc = self.pc
         loopbacks = list(self._loopback_tracks.values())
         for loopback in loopbacks:
@@ -1503,7 +1526,7 @@ class HubPeer:
                 pass
         self._emit_state_event(reason="peer.closed")
         # Only remove ourselves — a replacement peer may already be registered.
-        _log.info("peer closed device=%s", self.device_id)
+        _log.info("peer closed device=%s peer=%s", self.device_id, self.peer_id)
 
 
 # -- Public API ---------------------------------------------------------------
@@ -1545,7 +1568,8 @@ async def _apply_pending_remote_ice(peer: HubPeer) -> int:
     if not generation_id:
         return 0
     _prune_pending_remote_ice()
-    entries = _pending_remote_ice.pop((peer.device_id, generation_id), [])
+    peer_id = str(getattr(peer, "peer_id", None) or peer.device_id).strip()
+    entries = _pending_remote_ice.pop((peer_id, generation_id), [])
     applied = 0
     for _created_at, candidate in entries:
         try:
@@ -1569,6 +1593,10 @@ async def handle_rtc_offer(
     send_ice_cb: Callable[[dict[str, Any]], Awaitable[None]],
     generation_id: str | None = None,
     negotiation_mode: str | None = None,
+    peer_id: str | None = None,
+    browser_session_id: str | None = None,
+    client_build_id: str | None = None,
+    client_build_version: str | None = None,
 ) -> dict[str, str]:
     """
     Called from ``gateway_ws.py`` when browser sends ``rtc.offer``.
@@ -1577,7 +1605,11 @@ async def handle_rtc_offer(
     """
     incoming_generation = _clean_generation_id(generation_id)
     mode = _clean_negotiation_mode(negotiation_mode)
-    existing = _peers.get(device_id)
+    peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
+    browser_session_key = str(browser_session_id or "").strip()[:128] or None
+    build_id = str(client_build_id or "").strip()[:96] or None
+    build_version = str(client_build_version or "").strip()[:128] or None
+    existing = _peers.get(peer_key)
     if existing:
         state = existing._connection_state() if hasattr(existing, "_connection_state") else str(getattr(existing.pc, "connectionState", "") or "").strip().lower()
         existing_generation = _clean_generation_id(getattr(existing, "generation_id", None))
@@ -1602,6 +1634,9 @@ async def handle_rtc_offer(
         if reusable:
             state_emitted = existing._set_webspace_id(webspace_id, reason="offer.renegotiate")
             existing._send_ice = send_ice_cb
+            existing.browser_session_id = browser_session_key
+            existing.client_build_id = build_id
+            existing.client_build_version = build_version
             if incoming_generation:
                 existing.generation_id = incoming_generation
             if not state_emitted:
@@ -1612,8 +1647,9 @@ async def handle_rtc_offer(
                 answer["generation_id"] = incoming_generation
             return answer
         _log.info(
-            "replacing peer for device=%s on new offer state=%s mode=%s generation_changed=%s",
+            "replacing peer for device=%s peer=%s on new offer state=%s mode=%s generation_changed=%s",
             device_id,
+            peer_key,
             state or "unknown",
             mode,
             generation_changed,
@@ -1635,7 +1671,22 @@ async def handle_rtc_offer(
             )
 
     peer = HubPeer(device_id, webspace_id, send_ice_cb, generation_id=incoming_generation)
-    _peers[device_id] = peer
+    # Assign after construction to preserve compatibility with embedders and
+    # tests that provide a legacy HubPeer factory without the new keyword.
+    peer.peer_id = peer_key
+    peer.browser_session_id = browser_session_key
+    peer.client_build_id = build_id
+    peer.client_build_version = build_version
+    _peers[peer_key] = peer
+    _log.info(
+        "accepted peer device=%s peer=%s browser_session=%s webspace=%s build=%s version=%s",
+        device_id,
+        peer_key,
+        browser_session_key or "-",
+        webspace_id,
+        build_id or "-",
+        build_version or "-",
+    )
     peer._emit_state_event(reason="offer.accepted")
     answer = await peer.handle_offer(offer_sdp, offer_type)
     await _apply_pending_remote_ice(peer)
@@ -1648,26 +1699,30 @@ async def handle_remote_ice(
     device_id: str,
     candidate: dict[str, Any] | None,
     generation_id: str | None = None,
+    peer_id: str | None = None,
 ) -> None:
     """Called from ``gateway_ws.py`` when browser sends ``rtc.ice``."""
     incoming_generation = _clean_generation_id(generation_id)
-    peer = _peers.get(device_id)
+    peer_key = str(peer_id or device_id or "unknown").strip()[:160] or "unknown"
+    peer = _peers.get(peer_key)
     if not peer:
         if incoming_generation and candidate:
-            _queue_pending_remote_ice(device_id, incoming_generation, candidate)
+            _queue_pending_remote_ice(peer_key, incoming_generation, candidate)
             _log.debug(
-                "rtc.ice buffered before offer device=%s generation=%s",
+                "rtc.ice buffered before offer device=%s peer=%s generation=%s",
                 device_id,
+                peer_key,
                 incoming_generation,
             )
             return
-        _log.debug("rtc.ice for unknown device=%s (ignored)", device_id)
+        _log.debug("rtc.ice for unknown device=%s peer=%s (ignored)", device_id, peer_key)
         return
     peer_generation = _clean_generation_id(getattr(peer, "generation_id", None))
     if incoming_generation and peer_generation != incoming_generation:
         _log.debug(
-            "stale rtc.ice ignored device=%s generation=%s active_generation=%s",
+            "stale rtc.ice ignored device=%s peer=%s generation=%s active_generation=%s",
             device_id,
+            peer_key,
             incoming_generation,
             peer_generation,
         )
@@ -1713,8 +1768,9 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
         if hasattr(peer, "is_stale") and bool(peer.is_stale(now_ts=now))
     ]
     for peer in stale_peers:
-        if _peers.get(getattr(peer, "device_id", None)) is peer:
-            del _peers[peer.device_id]
+        peer_key = str(getattr(peer, "peer_id", None) or getattr(peer, "device_id", "")).strip()
+        if _peers.get(peer_key) is peer:
+            del _peers[peer_key]
         schedule_close = getattr(peer, "_schedule_close", None)
         if callable(schedule_close):
             try:
@@ -1733,7 +1789,7 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
     incoming_video_tracks = 0
     loopback_audio_tracks = 0
     loopback_video_tracks = 0
-    for device_id, peer in list(_peers.items()):
+    for peer_id, peer in list(_peers.items()):
         state = peer._connection_state() if hasattr(peer, "_connection_state") else str(getattr(peer.pc, "connectionState", "") or "unknown").strip().lower() or "unknown"
         connection_states[state] = int(connection_states.get(state) or 0) + 1
 
@@ -1775,9 +1831,13 @@ def webrtc_peer_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
         loopback_video_tracks += peer_loopback_video
         peers.append(
             {
-                "device_id": device_id,
+                "device_id": str(getattr(peer, "device_id", "") or ""),
+                "peer_id": peer_id,
                 "webspace_id": str(getattr(peer, "webspace_id", "") or ""),
                 "generation_id": _clean_generation_id(getattr(peer, "generation_id", None)),
+                "browser_session_id": str(getattr(peer, "browser_session_id", "") or "") or None,
+                "client_build_id": str(getattr(peer, "client_build_id", "") or "") or None,
+                "client_build_version": str(getattr(peer, "client_build_version", "") or "") or None,
                 "connection_state": state,
                 "events_channel_state": events_state,
                 "yjs_channel_state": yjs_state,

@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.637"
+version = "0.1.682"
 
 authors = [
   {name = "AdaOS Team"},
@@ -80,6 +80,7 @@ adaos = [
   "scenario_templates/**/*.json",
   "scenario_templates/**/*.md",
   "abi/*.json",
+  "services/builder/*.json",
   "services/skill/*.json",
   "system_assets/**/*",
   "locales/*.json",

@@ -308,7 +308,8 @@ Phase is complete when:
 
 ### `NLUAuthoring-4`. Safe apply
 
-- [ ] save confirmed Rasa examples into scenario/skill training content
+- [x] save confirmed Rasa/Neural examples into scoped runtime overlays and
+  produce Builder promotion candidates for reusable scenario/skill packages
 - [ ] support `nlu.preview_template_patch` and `nlu.apply_template_patch` with `template_id` and `base_fingerprint`
 - [ ] save regex candidates only after explicit confirmation
 - [ ] store neural labels/masked examples as disabled future-training metadata

@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.project.v1",
+  "title": "AdaOS Builder Project Coordination Aggregate",
+  "type": "object",
+  "required": [
+    "schema", "project_id", "project_ref", "object_type", "identity", "policy",
+    "accepted_prototype_ref", "accepted_implementation_ref", "issue_refs",
+    "component_refs", "changes", "conflicts", "dependencies", "change_edges",
+    "active_candidate_refs", "trials", "focus_by_context", "workflow_versions",
+    "workflow_definition_version", "archived", "lifecycle", "explanation",
+    "generation", "artifact_generation", "view_generation", "updated_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.project.v1" },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
+    "object_type": { "enum": ["scenario", "skill"] },
+    "identity": {
+      "type": "object",
+      "required": ["stable_id", "kind", "project_ref"],
+      "properties": {
+        "stable_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "enum": ["scenario", "skill"] },
+        "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" }
+      },
+      "additionalProperties": false
+    },
+    "source_ref": { "type": ["object", "null"] },
+    "stable_release_ref": { "type": ["object", "null"] },
+    "installed_release_ref": { "type": ["object", "null"] },
+    "dev_ref": { "type": ["object", "null"] },
+    "candidate_ref": { "type": ["object", "null"] },
+    "accepted_prototype_ref": { "type": ["object", "null"] },
+    "accepted_implementation_ref": { "type": ["object", "null"] },
+    "issue_refs": { "$ref": "#/$defs/refs" },
+    "policy": {
+      "type": "object",
+      "required": [
+        "parallel_changes", "unknown_conflict_scope", "prototype_data_modes",
+        "risk_policy", "approval_policy_refs", "allowed_executors"
+      ],
+      "properties": {
+        "parallel_changes": { "type": "boolean" },
+        "unknown_conflict_scope": { "enum": ["project", "reject"] },
+        "prototype_data_modes": {
+          "type": "array", "uniqueItems": true,
+          "items": { "enum": ["mock", "fixture", "sandbox", "live_readonly"] }
+        },
+        "risk_policy": {
+          "type": "object",
+          "required": ["default_class", "fail_closed"],
+          "properties": {
+            "default_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+            "fail_closed": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "approval_policy_refs": { "$ref": "#/$defs/refs" },
+        "allowed_executors": { "$ref": "#/$defs/refs" }
+      },
+      "additionalProperties": false
+    },
+    "component_refs": { "$ref": "#/$defs/refs" },
+    "changes": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": [
+          "change_id", "change_ref", "status", "gate", "base_generation",
+          "affected_refs", "issue_refs", "depends_on_change_ids",
+          "workflow_instance_ref", "mutation_status", "updated_at"
+        ],
+        "properties": {
+          "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "change_ref": { "type": "string", "pattern": "^change:" },
+          "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "gate": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "base_generation": { "type": "integer", "minimum": 0 },
+          "affected_refs": { "$ref": "#/$defs/refs" },
+          "issue_refs": { "$ref": "#/$defs/refs" },
+          "depends_on_change_ids": { "$ref": "#/$defs/refs" },
+          "workflow_instance_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "workflow_state": { "type": ["string", "null"], "maxLength": 120 },
+          "mutation_status": { "enum": ["idle", "active", "outcome_unknown"] },
+          "updated_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "conflicts": {
+      "type": "array", "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["left_change_id", "right_change_id", "affected_refs", "kind"],
+        "properties": {
+          "left_change_id": { "type": "string", "minLength": 1 },
+          "right_change_id": { "type": "string", "minLength": 1 },
+          "affected_refs": { "$ref": "#/$defs/refs" },
+          "kind": { "enum": ["direct", "component_dependency"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "type": "array", "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["from_ref", "to_ref", "kind"],
+        "properties": {
+          "from_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "to_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "kind": { "enum": ["requires", "conflicts", "derives", "promotes"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "change_edges": {
+      "type": "array", "maxItems": 2000,
+      "items": {
+        "type": "object",
+        "required": ["from_ref", "to_ref", "relation"],
+        "properties": {
+          "from_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "to_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "relation": { "enum": ["contains_issue", "alternative", "supersedes", "depends", "blocks", "related"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "active_candidate_refs": {
+      "type": "array", "maxItems": 100, "items": { "type": "object" }
+    },
+    "trials": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["trial_ref", "candidate_ref", "status", "workspace_ref", "started_at", "decided_at"],
+        "properties": {
+          "trial_ref": { "type": "string", "pattern": "^trial:" },
+          "candidate_ref": { "type": "object" },
+          "status": { "enum": ["ready", "trial", "accepted", "rejected", "stale", "published"] },
+          "workspace_ref": { "type": ["string", "null"], "maxLength": 500 },
+          "started_at": { "type": ["string", "null"], "format": "date-time" },
+          "decided_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "focus_by_context": {
+      "type": "object", "maxProperties": 200,
+      "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "workflow_versions": {
+      "type": "object",
+      "required": ["project", "change"],
+      "properties": {
+        "project": { "type": "string", "minLength": 1 },
+        "change": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "workflow_definition_version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "archived": { "type": "boolean" },
+    "lifecycle": {
+      "type": "object",
+      "required": ["status", "archived_at", "restored_at", "reason"],
+      "properties": {
+        "status": { "enum": ["active", "archived"] },
+        "archived_at": { "type": ["string", "null"], "format": "date-time" },
+        "restored_at": { "type": ["string", "null"], "format": "date-time" },
+        "reason": { "type": ["string", "null"], "maxLength": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "explanation": {
+      "type": "object",
+      "required": ["status", "summary", "blockers", "next_commands"],
+      "properties": {
+        "status": { "enum": ["ready", "active", "conflicted", "trial", "published", "archived"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "blockers": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+        "next_commands": { "$ref": "#/$defs/refs" }
+      },
+      "additionalProperties": false
+    },
+    "generation": { "type": "integer", "minimum": 0 },
+    "artifact_generation": { "type": "integer", "minimum": 0 },
+    "view_generation": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "refs": {
+      "type": "array", "maxItems": 500, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    }
+  },
+  "additionalProperties": false
+}

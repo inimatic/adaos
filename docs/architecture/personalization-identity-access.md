@@ -460,7 +460,7 @@ Current implementation note: the browser header/settings panel now consume the
 current-user settings API for profile, locale, timezone, theme, membership, and
 device context. AdaOS Connect also exposes the owner/admin join, device pairing,
 recovery, grant, and revoke surface. Guest/targeted links extend the AdaOS
-Connect `mode=registration&user_code=...&zone=...` flow: root stores invite
+Connect `intent=connect.register&user_code=...&zone=...` flow: root stores invite
 parameters in a temporary purpose-tagged code session, and the URL carries only
 code and zone. Deeper privacy-zone enforcement and skill/tool SDK enforcement
 remain separate roadmap phases.

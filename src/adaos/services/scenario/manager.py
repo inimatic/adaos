@@ -33,6 +33,7 @@ from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.skill.manager import SkillManager
 from adaos.services.semver import bump_version
 from adaos.services.workspace_registry import upsert_workspace_registry_entry
+from adaos.services.component_manifest_versioning import write_component_version_atomically
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
 _log = logging.getLogger("adaos.scenario.manager")
@@ -833,7 +834,12 @@ class ScenarioManager:
         payload["version"] = bump_version(existing_version, 2)
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
-        manifest_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n", encoding="utf-8")
+        write_component_version_atomically(
+            manifest_path,
+            payload,
+            previous_version=existing_version,
+            next_version=str(payload["version"]),
+        )
         return str(payload.get("version") or "")
 
     def publish(self, name: str, *, bump: Literal["major", "minor", "patch"] = "patch", force: bool = False, dry_run: bool = False, signoff: bool = False) -> ArtifactPublishResult:

@@ -89,6 +89,34 @@ when the effective path is only partially direct. That row summarizes what the
 user should expect to be missing, for example relay-only commands, stale state
 sync, root-routed media, incomplete sidecar handoff, or unavailable members.
 
+### Runtime And Detail Delivery
+
+The header and client behavior consume
+`/api/node/reliability/runtime`. This ETag-enabled beacon contains
+only route, state-sync, WebRTC Yjs, sidecar handoff, runtime-fault, and compact
+quality evidence. It must not read the status-card registry, enumerate members,
+or build the full reliability snapshot.
+
+Opening the availability panel requests
+`/api/node/reliability/details`. The details response adds the
+status-plane cards and canonical member aggregate on demand. It is exposed on a
+separate client stream and must not replace the runtime beacon used by header
+state or recovery decisions. `mode=thin`, `mode=full`, and the legacy runtime
+endpoint remain compatibility and operator-diagnostic surfaces.
+
+The runtime beacon is event-driven. It is requested once when the effective
+browser session or WS/YJS connectivity state changes; it is not polled on a
+background interval. Rapid state changes may restart browser observables, but
+requests remain single-flight and subject to a short retrigger cooldown. The
+header primarily projects the browser's local transport and YJS state between
+those boundary probes.
+
+Materialization HTTP snapshots are also fallback-only. A ready YJS document
+must render directly without a snapshot request. When YJS is incomplete, the
+client may request one snapshot for the current webspace, expected scenario,
+sync state, and materialization fingerprint. An unchanged gap must not create
+periodic or transaction-driven snapshot traffic.
+
 ## Mobile Rule
 
 The mobile header has room for at most one compact availability affordance.
@@ -129,11 +157,11 @@ keep the hub in `Limited`. `knownTotal` can still expose the raw inventory size
 for diagnostics.
 
 Canonical `memberAvailability` is volatile runtime evidence, not a stable
-status-plane card. A browser may use the thin reliability summary ETag to avoid
-unneeded downloads, but it must periodically refresh the compact full summary
-even when the thin ETag returns `304 Not Modified`; otherwise one browser can
-keep an old `members=0` view while another browser has already fetched the
-current hub `member_total=1` state.
+status-plane card. It is loaded with the details projection while the user is
+inspecting availability. The background runtime beacon must not periodically
+refresh a compact full summary solely to keep this diagnostic aggregate fresh.
+Header state may use the Yjs `data.nodes` aggregate as best-effort local
+evidence; canonical member details come from an explicit details request.
 
 ## Update Integration
 

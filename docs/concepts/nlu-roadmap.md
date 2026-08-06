@@ -22,6 +22,12 @@ is the master-detail entry point for controlled evolution: each implementation
 slice should close a replayable user loop before broadening the surface. This
 document remains the detailed technical checklist behind those gates.
 
+[Conversational Control Interface](../architecture/conversational-interface.md)
+owns the cross-domain conversational input/output contract, NLU data boundary,
+Teacher-to-Builder promotion path, and conversation-story test model. This NLU
+roadmap owns provider/runtime and Teacher implementation work inside that
+contract.
+
 The existing API remains the implementation backend. Root MCP should wrap or
 proxy governed NLU authoring capabilities; it should not become a second source
 of truth for templates, candidates, or dispatch behavior.
@@ -123,6 +129,15 @@ clarification loop over a deterministic AdaOS runtime:
     transport, STT backend choice, dialog/dictation ownership, response
     routing, and retention are owned by shared endpoint infrastructure, not by
     NLU templates or ReDevice-specific skills.
+11. **Conversational artifact plane**: reusable NLU input data, output
+    templates, repair policy, affordances, examples, locales, and conversation
+    stories live in a git-versioned `conversational/` package beside the
+    owning skill/scenario. Runtime provider indexes and model caches are
+    compiled outputs, not source.
+12. **Builder design-time plane**: Teacher can submit candidates with evidence,
+    but Builder/SDK validation, story tests, review, and release decide whether
+    runtime learning becomes design-time package source or a public catalog
+    candidate.
 
 Core invariant: AdaOS acts deterministically when understanding is sufficient,
 and uses LLM dialog only to reduce uncertainty or improve the domain model.
@@ -247,6 +262,26 @@ below remain useful for tracking existing implementation work.
 
 ### A. Contracts and State Model
 
+- [ ] `[must]` Align NLU proposal records with the
+  [Conversational Control Interface](../architecture/conversational-interface.md):
+  NLU outputs `IntentProposal` evidence, not protected effects or direct source
+  mutations. Pure proposal/invocation builders exist, but the legacy event
+  pipeline still emits `nlp.intent.detected` directly and must be migrated.
+- [x] `[must]` Define the NLU-owned subset of the `conversational/` package:
+  intents, entities, examples, optional deterministic matchers, affordances,
+  repair rules, locale files, output references, and story assertions relevant
+  to understanding.
+- [x] `[must]` Keep runtime specialization and Teacher candidate storage
+  separate from git-versioned package source; promotion requires Builder
+  validation and evidence. Teacher Apply writes runtime overlays and bounded
+  promotion candidates, never package source.
+- [ ] `[must]` Map Teacher candidates to the shared lifecycle: observed,
+  proposed, scoped, previewed, confirmed, local overlay applied, replay
+  verified, promotion candidate, Builder Change, package patch validated,
+  trialed, released/rejected/quarantined/rolled back.
+- [ ] `[must]` Treat every provider build artifact as compiled output with
+  source package digest, provider/runtime compatibility, build parameters,
+  active version, previous version, and rollback ref.
 - [x] `[must]` Define first-class `action_candidate` records separate from
   `template_candidate` records: candidate id, class, planned action/intent,
   slots, owner, side-effect class, action-preview status, dispatch status,
@@ -534,8 +569,22 @@ below remain useful for tracking existing implementation work.
 
 ### F. Persistence, Promotion, and Publication
 
-- [ ] `[must]` Separate local learned overlays from repo-owned skill/scenario
-  artifacts and public reusable templates.
+- [x] `[must]` Separate local learned overlays from repo-owned skill/scenario
+  artifacts and public reusable templates. Runtime examples and promotion
+  evidence use `adaos.nlu.teacher_overlay_store.v1`; active matcher overlays
+  remain scoped in Yjs.
+- [ ] `[must]` Route reusable Teacher candidates through Builder Changes that
+  patch `conversational/` package source, run validation/story tests, and
+  attach provenance before repository push or catalog publication. Example and
+  matcher candidates already carry bounded patch requests, allowed paths, and
+  acceptance evidence, but durable Change creation/execution remains open.
+- [ ] `[must]` Treat runtime NLU provider artifacts, embeddings, indexes,
+  prompt caches, and model bundles as derived outputs with source digest and
+  rollback pointer, not as independently edited truth.
+- [ ] `[must]` Require reusable candidate promotion to include at least one
+  conversation story or regression story proving the target behavior and one
+  hard-negative case when the behavior can trigger a mutating or protected
+  command.
 - [x] `[must]` Implementation slice: LLM-created candidates, accepted regex
   rules, governed training examples, and plan/development candidates now carry
   a local learned promotion envelope. Public export is blocked by default until
@@ -665,15 +714,19 @@ below remain useful for tracking existing implementation work.
 
 ### J. Skill and Scenario Developer Workflow
 
-- [ ] `[must]` Define `nlu_hints` / `llm_hints` schema for skills and
-  scenarios: user-facing actions, aliases, examples, slots, entities, owner,
-  side-effect class, preview method, and public/private scope.
-- [ ] `[must]` Generate a conversational-interface skeleton when creating a
-  skill or scenario, so NLU Teacher can reason over capabilities without code
-  access.
-- [ ] `[must]` Add validation/lint checks for hints during skill/scenario push:
-  malformed examples, missing side-effect class, ambiguous aliases, unknown
-  action ids, and unsafe public/private scope.
+- [x] `[must]` Define provider-neutral conversational source schemas for skills
+  and scenarios: intents, aliases/entities, examples, slots, affordances,
+  side-effect policy, repair, outputs, locales, matchers, and stories. Legacy
+  `nlu_hints` / `llm_hints` remain compatibility descriptors.
+- [x] `[must]` Provide a design-time SDK generator for the conversational
+  skeleton. `scaffold_package` is non-destructive, workflow-aware, and runs the
+  canonical validator immediately.
+- [ ] `[must]` Invoke conversational scaffold generation automatically from
+  skill/scenario creation flows; direct SDK use is available now.
+- [x] `[must]` Add validation/lint checks for conversational sources during
+  package admission: malformed examples, unknown workflow/action/output refs,
+  missing side-effect policy, locale mismatch, unsafe paths, and package
+  cardinality.
 - [ ] `[should]` Add generated NLU/MCP descriptor docs for each skill/scenario
   so humans and LLMs see the same capability surface.
 - [ ] `[deferred]` Auto-generate rich phrase sets for new skills/scenarios;
@@ -1223,13 +1276,17 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` M4 implementation slice: existing candidate/example Apply now calls the
   template preview gate before durable mutation and stores validation evidence
   on the candidate.
-- [ ] `[deferred]` Durable apply writes only through owner services/APIs: skill, scenario, system-action feedback, or named-entity alias source.
+- [x] `[must]` Runtime Apply writes only scoped overlays and promotion evidence;
+  git-versioned owner source can be changed only by Builder/package APIs.
 - [ ] `[deferred]` Add rollback pointers and audit records for every applied patch.
 - [x] `[must]` M4 implementation slice: duplicate-template detection and simple
   overbroad-regex blast-radius guard run before durable candidate Apply.
 - [ ] `[deferred]` Add golden-phrase impact preview before durable apply and
   expand blast-radius checks beyond simple overbroad-pattern guards.
-- [ ] `[deferred]` Decide migration policy for legacy `data.nlu.regex_rules[]` mirrors versus owner-authored scenario/skill artifacts.
+- [x] `[must]` Fix the matcher migration boundary: Yjs
+  `data.nlu.regex_rules[]` is active runtime specialization,
+  `conversational/matchers.yaml` is reusable design-time source, and legacy
+  scenario/skill regex fields are read-only compatibility baselines.
 
 ### 5e: Development Task Candidates
 
@@ -1533,8 +1590,9 @@ below remain useful for tracking existing implementation work.
   default desktop commands such as modal open, scenario switch, app install toggle, webspace reload, and webspace reset.
 - `adaos interpreter export-neural-training` writes a curated Neural training bundle from skill, scenario, and system-action
   examples under `state/interpreter/neural_training` without mutating active provider artifacts.
-- `nlp.teacher.example.save` and `POST /api/nlu/teacher/{webspace_id}/example/save` now save operator-approved examples
-  into scenario/skill artifacts or a system-action feedback overlay with audit metadata.
+- `nlp.teacher.example.save` and `POST /api/nlu/teacher/{webspace_id}/example/save`
+  now save operator-approved examples into scoped runtime overlays with audit
+  metadata and create Builder promotion candidates for reusable owner packages.
 - `adaos interpreter neural-reindex` now reloads active Neural artifacts through service `/reindex`; `--from-curated`
   dry-runs the curated bundle and `--from-curated --apply` is guarded so active examples are replaced only when all
   curated labels already exist in the active model.

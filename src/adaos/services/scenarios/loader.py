@@ -138,25 +138,49 @@ def read_manifest(scenario_id: str, *, space: str = "workspace") -> Dict[str, An
 
 def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any]:
     """
-    Read scenario.json for a given scenario id. Returns {} if missing/invalid.
+    Resolve runtime content from the canonical scenario manifest.
+
+    ``scenario.yaml`` is authoritative. When it references ``ui.manifest``,
+    the adjacent descriptor is resolved from that reference. ``scenario.json``
+    remains a compatibility fallback only for older packages whose YAML does
+    not declare a UI descriptor.
 
     When ``space="dev"`` the loader looks under ``dev_scenarios_dir``.
     """
     key = (str(scenario_id), str(space))
     for root in _candidate_roots(scenario_id, space):
-        path = root / "scenario.json"
-        if not path.exists():
-            continue
-        _log.debug("reading scenario '%s' content from %s", scenario_id, path)
-        content = _read_cached_mapping_file(
-            cache=_CONTENT_CACHE,
-            key=key,
-            path=path,
-            reader=json.loads,
-            encoding="utf-8-sig",
-        )
-        return _resolve_ui_manifest(content, scenario_root=root)
-    _log.debug("scenario '%s' has no scenario.json in any candidate roots", scenario_id)
+        manifest_path = root / "scenario.yaml"
+        manifest: Dict[str, Any] = {}
+        if manifest_path.is_file():
+            manifest = _read_cached_mapping_file(
+                cache=_CONTENT_CACHE,
+                key=key,
+                path=manifest_path,
+                reader=yaml.safe_load,
+                encoding="utf-8",
+            )
+            manifest_ui = manifest.get("ui") if isinstance(manifest.get("ui"), dict) else {}
+            if str(manifest_ui.get("manifest") or "").strip():
+                _log.debug("reading scenario '%s' UI from YAML manifest %s", scenario_id, manifest_path)
+                return _resolve_ui_manifest(manifest, scenario_root=root)
+
+        # Compatibility only: older scenarios stored their complete runtime
+        # descriptor in scenario.json. New packages use scenario.yaml as the
+        # source of truth and reference the adjacent webui.json from there.
+        content_path = root / "scenario.json"
+        if content_path.is_file():
+            _log.debug("reading legacy scenario '%s' content from %s", scenario_id, content_path)
+            content = _read_cached_mapping_file(
+                cache=_CONTENT_CACHE,
+                key=key,
+                path=content_path,
+                reader=json.loads,
+                encoding="utf-8-sig",
+            )
+            return _resolve_ui_manifest(content, scenario_root=root)
+        if manifest:
+            return _resolve_ui_manifest(manifest, scenario_root=root)
+    _log.debug("scenario '%s' has no canonical manifest in any candidate roots", scenario_id)
     _CONTENT_CACHE.pop(key, None)
     return {}
 
@@ -181,24 +205,33 @@ def scenario_source_fingerprint(scenario_id: str, *, space: str = "workspace") -
             stamp = _safe_file_stamp(root / name)
             if stamp is not None:
                 files.append(stamp)
+        manifest_name = ""
+        yaml_path = root / "scenario.yaml"
+        if yaml_path.is_file():
+            try:
+                raw = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                raw = {}
+            ui = raw.get("ui") if isinstance(raw, dict) and isinstance(raw.get("ui"), dict) else {}
+            manifest_name = str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
         content_path = root / "scenario.json"
-        if content_path.is_file():
+        if not manifest_name and content_path.is_file():
             try:
                 raw = json.loads(content_path.read_text(encoding="utf-8-sig") or "{}")
             except Exception:
                 raw = {}
             ui = raw.get("ui") if isinstance(raw, dict) and isinstance(raw.get("ui"), dict) else {}
             manifest_name = str(ui.get("manifest") or "").strip() if isinstance(ui, dict) else ""
-            if manifest_name:
-                try:
-                    manifest_path = (root / manifest_name).resolve()
-                    root_resolved = root.resolve()
-                    if manifest_path.parent == root_resolved:
-                        stamp = _safe_file_stamp(manifest_path)
-                        if stamp is not None:
-                            files.append(stamp)
-                except Exception:
-                    pass
+        if manifest_name:
+            try:
+                manifest_path = (root / manifest_name).resolve()
+                root_resolved = root.resolve()
+                if manifest_path.parent == root_resolved:
+                    stamp = _safe_file_stamp(manifest_path)
+                    if stamp is not None:
+                        files.append(stamp)
+            except Exception:
+                pass
         if files:
             break
     if not files:
@@ -280,9 +313,9 @@ def scenario_exists(scenario_id: str, *, space: str = "workspace") -> bool:
 
 def invalidate_cache(*, scenario_id: str | None = None, space: str | None = None) -> None:
     """
-    Invalidate in-memory scenario.json cache. This is required for workflows
-    like desktop.webspace.reload which expect updated UI/NLU definitions to be
-    picked up without restarting the hub process.
+    Invalidate cached canonical manifests and resolved runtime content. This is
+    required for workflows like desktop.webspace.reload which expect updated
+    UI/NLU definitions to be picked up without restarting the hub process.
     """
     keys = list(_CONTENT_CACHE.keys())
     for key in keys:

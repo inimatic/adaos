@@ -647,6 +647,10 @@ def conversation_contract_snapshot() -> dict[str, Any]:
             "DialogPolicyState",
             "ResponseEnvelope",
             "TurnTrace",
+            "ConversationInteraction",
+            "InteractionResponse",
+            "ChannelCapabilityProfile",
+            "InteractionPresentation",
         ],
         "actor_id_patterns": {
             "core": "core:<surface>",

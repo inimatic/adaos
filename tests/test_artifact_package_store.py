@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
-from adaos.domain.artifact_release import ArtifactSourceRef, canonical_json_bytes, sha256_digest
+from adaos.domain.artifact_release import (
+    ArtifactSourceRef,
+    ProjectRelease,
+    WorkspaceLock,
+    canonical_json_bytes,
+    sha256_digest,
+)
 from adaos.services.artifact_pipeline import (
     ContentAddressedPackageStore,
     PackageBuildError,
@@ -16,6 +24,7 @@ from adaos.services.artifact_pipeline import (
     build_artifact_package,
     verify_artifact_package,
 )
+from adaos.services.builder.governed import builder_change_definition
 
 
 def _source() -> ArtifactSourceRef:
@@ -46,6 +55,91 @@ def _scenario(root: Path) -> Path:
     (scenario / "ui_revisions" / "001.json").write_text('{}\n', encoding="utf-8")
     (scenario / "__pycache__" / "generated.pyc").write_bytes(b"cache")
     return scenario
+
+
+def _add_empty_conversational_package(scenario: Path) -> None:
+    manifest_path = scenario / "scenario.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["conversational"] = {"manifest": "conversational/manifest.yaml"}
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    package = scenario / "conversational"
+    package.mkdir()
+    sources = {
+        "manifest.yaml": {
+            "schema": "adaos.conversational.package_manifest.v1",
+            "package_id": "recipes",
+            "package_kind": "scenario",
+            "owner_ref": {"kind": "scenario", "id": "recipes"},
+            "version": "1.2.3",
+            "workflow_refs": [],
+            "default_locale": "en",
+            "files": {
+                "input": "input.yaml",
+                "entities": "entities.yaml",
+                "examples": "examples.yaml",
+                "affordances": "affordances.yaml",
+                "repair": "repair.yaml",
+                "output": "output.yaml",
+                "stories": [],
+                "locales": ["locale.en.yaml"],
+            },
+            "locales": ["en"],
+            "privacy_defaults": {
+                "source_scope": "scenario",
+                "runtime_overlay_scope": "user",
+                "public_promotion": "requires_review",
+            },
+            "compiled_outputs": [],
+            "compatibility_aliases": [],
+        },
+        "input.yaml": {
+            "schema": "adaos.conversational.input.v1",
+            "package_id": "recipes",
+            "intents": [],
+            "policy": {
+                "default_confidence": 0.8,
+                "abstain_below": 0.5,
+                "protected_action_confirmation": True,
+            },
+        },
+        "entities.yaml": {
+            "schema": "adaos.conversational.entities.v1",
+            "package_id": "recipes",
+            "entities": [],
+        },
+        "examples.yaml": {
+            "schema": "adaos.conversational.examples.v1",
+            "package_id": "recipes",
+            "examples": [],
+            "hard_negatives": [],
+        },
+        "affordances.yaml": {
+            "schema": "adaos.conversational.affordances.v1",
+            "package_id": "recipes",
+            "affordances": [],
+        },
+        "repair.yaml": {
+            "schema": "adaos.conversational.repair.v1",
+            "package_id": "recipes",
+            "policies": [],
+        },
+        "output.yaml": {
+            "schema": "adaos.conversational.output.v1",
+            "package_id": "recipes",
+            "outputs": [],
+        },
+        "locale.en.yaml": {
+            "schema": "adaos.conversational.locale.v1",
+            "package_id": "recipes",
+            "locale": "en",
+            "messages": {},
+        },
+    }
+    for name, value in sources.items():
+        (package / name).write_text(
+            yaml.safe_dump(value, sort_keys=False),
+            encoding="utf-8",
+        )
 
 
 def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -> None:
@@ -97,6 +191,210 @@ def test_package_persists_builder_target_and_packaged_schema_identity(tmp_path: 
     assert verified.package_manifest["schema_locks"] == [
         built.ref.schema_locks[0].to_dict()
     ]
+
+
+def test_package_locks_and_revalidates_conversational_sources(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _add_empty_conversational_package(scenario)
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.conversational_lock is not None
+    assert built.ref.conversational_lock.lock_id == "conversational:scenario:recipes@1.2.3"
+    assert built.package_manifest["conversational_lock"] == (
+        built.ref.conversational_lock.to_dict()
+    )
+    assert verified.ref == built.ref
+
+
+def test_package_includes_manifest_bound_conversational_stories(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    _add_empty_conversational_package(scenario)
+    package = scenario / "conversational"
+    manifest_path = package / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["stories"] = ["tests/stories/no-match.yaml"]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    repair_path = package / "repair.yaml"
+    repair = yaml.safe_load(repair_path.read_text(encoding="utf-8"))
+    repair["policies"] = [
+        {
+            "id": "no_match",
+            "kind": "no_match",
+            "max_attempts": 2,
+            "output_ref": "repair_no_match",
+            "terminal_outcome": "clarification",
+        }
+    ]
+    repair_path.write_text(yaml.safe_dump(repair, sort_keys=False), encoding="utf-8")
+    output_path = package / "output.yaml"
+    output = yaml.safe_load(output_path.read_text(encoding="utf-8"))
+    output["outputs"] = [
+        {
+            "id": "repair_no_match",
+            "kind": "repair",
+            "audience": "user",
+            "risk_level": "none",
+            "reason_code": "no_match",
+            "explanation": "The request did not match.",
+            "summary": "Please rephrase the request.",
+            "content_parts": [],
+            "details": [],
+            "actions": [],
+            "next_expected_input": "text",
+            "handoff_target": None,
+        }
+    ]
+    output_path.write_text(yaml.safe_dump(output, sort_keys=False), encoding="utf-8")
+    story = {
+        "schema": "adaos.conversational.story.v1",
+        "id": "recipes.no_match.en",
+        "story_kind": "dialog",
+        "workflow_type": None,
+        "locale": "en",
+        "channel": "text",
+        "actor": {"id": "user:local", "permissions": [], "roles": []},
+        "start": None,
+        "steps": [
+            {
+                "user": "Show the weather",
+                "given": {
+                    "proposal": {
+                        "kind": "unrelated",
+                        "intent_id": None,
+                        "command": None,
+                        "skill_id": None,
+                        "operation_id": None,
+                        "arguments": {},
+                        "confidence": 0.99,
+                        "action_policy": {
+                            "schema": "adaos.conversation.action_policy.v1",
+                            "risk_class": "read",
+                            "side_effect": "none",
+                            "confirmation": "none",
+                        },
+                    },
+                    "event": None,
+                    "skill_result": None,
+                    "output_ref": "repair_no_match",
+                },
+                "expect": {
+                    "proposal": {
+                        "kind": "unrelated",
+                        "command": None,
+                        "confidence_at_least": 0.99,
+                    },
+                    "command": None,
+                    "transition_id": None,
+                    "state": None,
+                    "reason_code": None,
+                    "output": {
+                        "kind": "repair",
+                        "output_ref": "repair_no_match",
+                        "summary": "Please rephrase the request.",
+                        "actions": [],
+                        "next_expected_input": "text",
+                    },
+                    "repair": {
+                        "reason_code": "no_match",
+                        "next_expected_input": "text",
+                    },
+                },
+            }
+        ],
+    }
+    story_path = package / "tests" / "stories" / "no-match.yaml"
+    story_path.parent.mkdir(parents=True)
+    story_path.write_text(yaml.safe_dump(story, sort_keys=False), encoding="utf-8")
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert "conversational/tests/stories/no-match.yaml" in verified.file_names
+    assert "tests/test_contract.py" not in verified.file_names
+
+
+def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path) -> None:
+    scenario = _scenario(tmp_path)
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (scenario / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    built = build_artifact_package(scenario, kind="scenario", source_ref=_source())
+    verified = verify_artifact_package(built.archive_bytes)
+
+    assert built.ref.workflow_lock is not None
+    assert built.ref.workflow_lock.lock_id == (
+        f"workflow:builder.change@{builder_change_definition()['definition_version']}"
+    )
+    assert built.ref.workflow_validation_lock is not None
+    assert built.ref.workflow_binding_digest is not None
+    assert built.ref.workflow_role_policy_digest is not None
+    assert {item.adapter_id for item in built.ref.workflow_adapter_locks} == {
+        "always",
+        "builder.codex.run",
+        "builder.codex.run.compensate",
+        "builder.prototype.derive",
+        "builder.prototype.derive.compensate",
+        "builder.trial.activate",
+        "builder.publication.publish",
+    }
+    assert built.package_manifest["workflow_lock"] == built.ref.workflow_lock.to_dict()
+    assert built.package_manifest["workflow_validation_lock"] == (
+        built.ref.workflow_validation_lock.to_dict()
+    )
+    assert built.package_manifest["workflow_binding_digest"] == (
+        built.ref.workflow_binding_digest
+    )
+    assert built.package_manifest["workflow_role_policy_digest"] == (
+        built.ref.workflow_role_policy_digest
+    )
+    assert verified.ref == built.ref
+
+    release = ProjectRelease(
+        project_id="recipes",
+        version="1.2.3",
+        source_ref=_source(),
+        components=(built.ref,),
+    ).seal()
+    restored_release = ProjectRelease.from_mapping(release.to_dict())
+    assert restored_release.components[0].workflow_lock == built.ref.workflow_lock
+    assert restored_release.components[0].workflow_binding_digest == (
+        built.ref.workflow_binding_digest
+    )
+
+    workspace_lock = WorkspaceLock(
+        lock_revision=1,
+        updated_at="2026-07-31T00:00:00+00:00",
+        components=(built.ref,),
+    )
+    restored_lock = WorkspaceLock.from_mapping(workspace_lock.to_dict())
+    assert restored_lock.components[0].workflow_lock == built.ref.workflow_lock
+    assert restored_lock.components[0].workflow_adapter_locks == (
+        built.ref.workflow_adapter_locks
+    )
+
+
+def test_package_verifier_rejects_bound_workflow_without_exact_lock() -> None:
+    definition = json.dumps(builder_change_definition()).encode("utf-8")
+    archive = _package_archive_with_files(
+        [
+            (
+                "scenario.yaml",
+                b"id: recipes\nversion: 1.2.3\nworkflow:\n  manifest: workflow.json\n",
+            ),
+            ("workflow.json", definition),
+        ]
+    )
+
+    with pytest.raises(PackageVerificationError, match="workflow_lock does not match"):
+        verify_artifact_package(archive)
 
 
 def test_package_accepts_zero_byte_files(tmp_path: Path) -> None:

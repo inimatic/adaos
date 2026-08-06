@@ -109,6 +109,28 @@ def ping():
     assert conversation_codes == set()
 
 
+def test_skill_validation_admits_declared_conversational_package(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "conversational:",
+            "  manifest: conversational/manifest.yaml",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "conversational.manifest.missing" in {issue.code for issue in report.issues}
+
+
 def test_skill_validation_enforces_opt_in_sdk_only_imports(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,
@@ -571,3 +593,20 @@ def ping():
 
     assert report.ok is False
     assert "data_routes.tool_snapshot_policy" in {issue.code for issue in report.issues}
+
+
+def test_public_builder_generated_conversation_skill_is_release_quality() -> None:
+    skill_dir = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "builder-generated-conversation-skill"
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
+    webui_issues = validate_webui_file_contract(
+        skill_dir,
+        skill_name="builder_generated_preferences_skill",
+    )
+
+    assert report.ok is True, [(item.code, item.message) for item in report.issues]
+    assert webui_issues == []

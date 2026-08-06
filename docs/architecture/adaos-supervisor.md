@@ -302,6 +302,65 @@ The realtime sidecar remains the authority only for:
 
 It must not absorb supervisor responsibilities.
 
+## Implementation decomposition boundary
+
+The standalone supervisor exists, but its implementation boundary is complete
+only when state ownership has moved into explicit components:
+
+- the process supervisor owns active/candidate handles, adoption, signals,
+  termination, and listener lifecycle
+- the update state machine owns validation, persisted attempts,
+  countdown/cutover, and terminal commits
+- recovery owns boot reconciliation, interrupted attempts, timeout handling,
+  and watchdog decisions
+- the memory controller owns policy, mutable session/baseline state,
+  telemetry, and launch-mode convergence
+- the FastAPI adapter only validates requests, delegates operations, and maps
+  responses
+- `SupervisorManager` remains a composition coordinator and status assembler,
+  not a second state owner
+
+Compatibility functions may remain temporarily. New components must not add
+synchronized globals or callbacks into private manager state. This tranche is
+complete when dependencies are one-way, component tests cover each owner, and
+the public API and persisted attempt contract remain unchanged through restart,
+A/B cutover, recovery, and profiling flows.
+
+Implementation status, 2026-08-06:
+
+- `ProcessSupervisor` owns active/candidate/sidecar handles, desired lifecycle,
+  the monitor task, listener discovery, launch-spec construction, listener
+  adoption, signals, and the bounded graceful/TERM/KILL ladder
+- `UpdateStateMachine` owns update task/cancellation lifecycle and persists
+  causally linked status/attempt transitions; update cutover execution and
+  durable reconciliation are separate runtime components
+- `RuntimeRecoveryPolicy` owns the unhealthy window, watchdog decisions, last
+  decision, and evidence; the monitoring loop is a separate scheduler owner
+- `MemoryProfilingService` owns mutable profile session, baseline, suspicion,
+  telemetry collection/status surfaces, incident evidence, and critical-memory
+  state in addition to policy
+- `SupervisorApiAdapter` is now the registered FastAPI handler surface and only
+  validates/maps/delegates
+- duplicate module-level FastAPI handlers and unused compatibility helpers
+  have been removed; compatibility properties remain only where existing
+  callers inspect historical manager fields
+- `SupervisorManager` now delegates process launch/adoption, monitoring,
+  update execution/reconciliation, recovery decisions, memory operations, and
+  status projection to explicit owners. The compatibility module decreased
+  from about 10.7k to 7.9k lines without changing persisted or HTTP contracts
+
+The component suites and supervisor regressions cover the delegated paths with
+the public API and persisted attempt shapes unchanged. Remaining physical
+reduction is limited to smaller compatibility helpers and orchestration; it is
+not an alternate mutable-state implementation.
+
+Target-stand evidence, 2026-08-06: `.30` accepted commit `5422f6c7`, built
+slot `B` as `0.1.679+1.5422f6c`, completed root promotion, restarted the root
+supervisor, and reached terminal update state `succeeded` / attempt state
+`completed`. The replacement supervisor API, active slot runtime, and the
+pre-existing realtime sidecar each ran as one process; direct imports of the
+process/update/recovery/memory/API owners succeeded from the promoted root.
+
 ## Local control surfaces
 
 The target local APIs are:
@@ -517,7 +576,10 @@ Rules:
   iteration exception is recorded and retried with bounded exponential backoff
   against durable status/attempt guards; status exposes the monitor heartbeat,
   last failure, and recovery count so a dead control scheduler cannot remain a
-  silent partial failure
+  silent partial failure. The exception boundary also advances the independent
+  live-but-unresponsive runtime watchdog. An auxiliary monitor defect therefore
+  cannot indefinitely prevent listener/API self-heal from restarting a child
+  process that is alive but no longer serving requests
 - a slot runtime may validate its application boot, but only the supervisor
   control plane may commit `root_promoted` as a completed root restart. The
   promotion receipt records the immutable supervisor instance id and PID that
@@ -527,6 +589,12 @@ Rules:
   receipt after service restart and source-parity validation, so neither an old
   surviving runtime nor the pre-restart supervisor can turn a failed or merely
   scheduled restart into false success
+- a `root_restart_timeout` remains a durable failure while the promoted runtime
+  is unavailable. If the supervisor later self-heals that runtime, the active
+  slot manifest still matches the immutable requested target, and the runtime
+  API becomes ready, reconciliation may commit the same attempt as validated.
+  This does not replay the update and does not broaden the fast rollback path
+  for bootstrap/root changes
 - terminal reconciliation treats `subsequent_transition_request` as the durable
   execution authority. A carried boolean without that request is an orphaned
   diagnostic marker: the supervisor clears it instead of displaying or replaying
@@ -752,6 +820,18 @@ stop cannot leave orphan runtime processes indefinitely.
 This makes warm-switch a strict availability boundary. Constrained or
 unhealthy cases remain on the proven old runtime until a candidate can pass the
 barrier, unless an operator explicitly accepts a cold cutover.
+
+Candidate readiness is slow-start tolerant but bounded. Each readiness pass
+waits up to 60 seconds by default (`ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC`),
+and a still-starting candidate receives the same bounded refresh window before
+the supervisor decides. Strict warm-switch mode allows one automatic deferral
+by default (`ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS`). The durable attempt
+records the current and maximum deferral counts. If the candidate still cannot
+become ready, or repeatedly exceeds the memory gate, the update terminates as
+`failed / prewarm` with a stable reason and cleanup evidence. It does not loop
+through slot preparation indefinitely and it does not silently downgrade to a
+cold cutover. An operator may explicitly change the cutover policy and start a
+new attempt after examining that evidence.
 
 Recommended per-skill diagnostic fields:
 

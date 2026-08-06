@@ -56,6 +56,7 @@ from adaos.services.skill.resolver import SkillPathResolver
 from adaos.services.capacity import install_skill_in_capacity, uninstall_skill_from_capacity
 from adaos.services.semver import bump_version
 from adaos.services.skill.version_policy import RESERVED_DATA_MIGRATION_FILE, bump_index, effective_skill_bump
+from adaos.services.component_manifest_versioning import write_component_version_atomically
 import ast
 
 _name_re = re.compile(r"^[a-zA-Z0-9_\-\/]+$")
@@ -115,6 +116,21 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return str(value).strip().lower() in {"1", "true", "yes", "on", "write", "mutate"}
+
+
+def _dev_tool_requires_caller_thread(tool_spec: Mapping[str, Any] | None) -> bool:
+    """Keep thread-affine UI/Yjs state on the CLI one-shot caller thread."""
+
+    if str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() != "oneshot":
+        return False
+    spec = _mapping_or_empty(tool_spec)
+    side_effects = str(
+        spec.get("side_effects")
+        or spec.get("sideEffects")
+        or _mapping_or_empty(spec.get("yjs_governance") or spec.get("yjs")).get("side_effects")
+        or ""
+    ).strip().lower()
+    return side_effects == "ui_navigation"
 
 
 def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
@@ -307,6 +323,26 @@ def _append_skill_quarantine_log(skill_memory_path: Path, event: Mapping[str, An
         payload = dict(event)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)[:32768] + "\n")
+        try:
+            from adaos.services.builder.repair import BuilderRepairService
+
+            BuilderRepairService(state_dir=base).report(
+                project_id=str(event.get("scenario_id") or event.get("skill") or "unknown"),
+                signal_type="quarantine",
+                summary=(
+                    f"Skill {event.get('skill')} tool {event.get('blocked_tool')} was quarantined: "
+                    f"{event.get('reason')}"
+                ),
+                source_refs=[{"type": "skill_quarantine", **dict(event)}],
+                context={
+                    "artifact_id": event.get("skill"),
+                    "component": event.get("blocked_tool"),
+                    "route": event.get("channel"),
+                },
+                design_time_fixable=True,
+            )
+        except Exception:
+            _log.debug("failed to route skill quarantine to Builder repair", exc_info=True)
     except Exception:
         _log.debug("failed to append skill quarantine log skill_memory=%s", skill_memory_path, exc_info=True)
 
@@ -1677,9 +1713,11 @@ class SkillManager:
         payload["version"] = bump_version(existing_version, bump_index(effective_bump))
         payload["updated_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         self._stamp_core_compatibility_for_push(payload)
-        skill_yaml.write_text(
-            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False) + "\n",
-            encoding="utf-8",
+        write_component_version_atomically(
+            skill_yaml,
+            payload,
+            previous_version=existing_version,
+            next_version=str(payload["version"]),
         )
         return str(payload.get("version") or "")
 
@@ -3031,7 +3069,7 @@ class SkillManager:
         try:
             os.environ["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
             os.environ["ADAOS_SKILL_MEMORY_PATH"] = str(skill_memory_path)
-            if execution_timeout:
+            if execution_timeout and not _dev_tool_requires_caller_thread(tool_spec):
                 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
                 from contextvars import copy_context
 

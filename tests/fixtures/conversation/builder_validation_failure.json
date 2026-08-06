@@ -1,0 +1,14 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_validation_failure",
+  "conversation_id": "conv.golden.builder.validation_failure",
+  "description": "Builder preserves the current revision and explains a validation failure.",
+  "messages": [
+    {"id": "golden.builder.validation.1", "conversation_id": "conv.golden.builder.validation_failure", "seq": 1, "from": "user", "text": "Apply the proposed prototype.", "dialog_channel_id": "builder"},
+    {"id": "golden.builder.validation.2", "conversation_id": "conv.golden.builder.validation_failure", "seq": 2, "from": "hub", "text": "Validation failed. The current prototype was not changed; review the reported WebUI contract error.", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"}
+  ],
+  "turn_traces": [
+    {"turn_trace_id": "trace.golden.builder.validation.1", "conversation_id": "conv.golden.builder.validation_failure", "channel_id": "builder", "agent_id": "agent:builder_skill:builder", "selected_tool": "builder_skill.update_current_scenario", "policy_decision": {"reason": "webui_validation_failed", "artifact_mutated": false, "repair_state": "proposed"}, "renderer": {"projection": "builder.validation_evidence"}, "status": "completed", "created_at": 1310.0, "completed_at": 1310.7}
+  ],
+  "expectations": {"required_text": ["Validation failed", "was not changed"], "forbidden_text": ["published successfully"], "required_agents": ["agent:builder_skill:builder"], "required_channels": ["builder"], "min_success_rate": 1.0, "max_fallback_rate": 1.0, "max_latency_ms_p95": 1200}
+}

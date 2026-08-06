@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction_presentation.v1",
+  "title": "AdaOS Negotiated Interaction Presentation",
+  "type": "object",
+  "required": ["schema", "presentation_id", "interaction_id", "interaction_generation", "profile_id", "profile_version", "plan", "mode", "supported", "reason_code", "prompt", "actions", "action_tokens", "deep_link", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction_presentation.v1" },
+    "presentation_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "interaction_generation": { "type": "integer", "minimum": 0 },
+    "profile_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "profile_version": { "type": "integer", "minimum": 1 },
+    "plan": { "type": "object" },
+    "mode": { "enum": ["rich_form", "buttons", "numbered_text", "plain_text", "deep_link", "web_view", "miniapp", "unsupported"] },
+    "supported": { "type": "boolean" },
+    "reason_code": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "locale_context": { "type": ["object", "null"] },
+    "actions": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
+    "action_tokens": { "type": "object", "additionalProperties": { "type": "string" } },
+    "deep_link": { "type": ["string", "null"], "maxLength": 2000 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  },
+  "additionalProperties": false
+}

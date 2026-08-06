@@ -38,6 +38,7 @@ from adaos.services.bootstrap import (
     switch_role,
 )
 from adaos.services.node_display import node_display_from_config
+from adaos.services.env_policy import env_bool
 from adaos.services.io_web.desktop import WebDesktopInstalled, WebDesktopService, WebDesktopSnapshot
 from adaos.services.media_library import (
     ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
@@ -56,12 +57,14 @@ from adaos.services.media_indexer_library import (
 from adaos.services.node_config import set_node_names as save_node_names_config
 from adaos.services.reliability import (
     _state_sync_snapshot,
+    hub_member_connection_state_snapshot,
     media_plane_runtime_snapshot,
     reliability_snapshot,
     sidecar_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.operations import submit_install_operation
+from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.scenario.webspace_runtime import (
     WebspaceService,
     describe_webspace_operational_state,
@@ -1007,6 +1010,7 @@ def _json_response_with_etag(
     if_none_match: str | None = None,
     mode: str,
     started_at: float | None = None,
+    endpoint: str | None = None,
 ) -> Response:
     etag = _summary_etag(payload)
     cache_hit = _etag_matches(if_none_match, etag)
@@ -1028,7 +1032,7 @@ def _json_response_with_etag(
         etag=etag,
     )
     _record_runtime_endpoint_metric(
-        endpoint=f"/api/node/reliability/summary:{mode}",
+        endpoint=str(endpoint or f"/api/node/reliability/summary:{mode}"),
         duration_ms=duration_ms,
         status_code=304 if cache_hit else 200,
         body_bytes=body_bytes,
@@ -1046,39 +1050,79 @@ def _json_response_with_etag(
     return JSONResponse(content=payload, headers=headers)
 
 
+def _runtime_reliability_observer(role: str | None) -> dict[str, Any]:
+    role = str(role or "unknown").strip().lower() or "unknown"
+    domain = {
+        "root": "root_browser",
+        "hub": "hub_browser",
+        "member": "member_browser",
+    }.get(role, "node_browser")
+    all_domains = {"root_browser", "hub_root", "hub_browser", "browser_hub_direct"}
+    return {
+        "schema": "adaos.runtime_observer.v1",
+        "domain": domain,
+        "role": role,
+        "nodeId": None,
+        "authority": "local_runtime_only",
+        "doesNotImply": sorted(all_domains - {domain}),
+    }
+
+
+def _current_compact_member_availability() -> dict[str, Any]:
+    try:
+        conf = load_config()
+        role = str(getattr(conf, "role", "") or "").strip().lower()
+        route_mode, connected = route_info(role)
+        snapshot = hub_member_connection_state_snapshot(
+            role=role,
+            route_mode=route_mode,
+            connected_to_hub=connected,
+            node_id=str(getattr(conf, "node_id", "") or "").strip(),
+            node_names=list(getattr(conf, "node_names", []) or []),
+        )
+        return _compact_member_availability(snapshot)
+    except Exception:
+        return _compact_member_availability({})
+
+
 def _thin_runtime_reliability_payload(
-    status_registry: dict[str, Any],
+    status_registry: dict[str, Any] | None,
     *,
     webspace_id: str | None = None,
+    mode: str = "thin",
 ) -> dict[str, Any]:
     resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+    requested_mode = str(mode or "thin").strip().lower()
+    include_status_plane = requested_mode in {"thin", "details"}
     incidents = _current_incident_registry_snapshot()
     runtime_fault = _runtime_fault_from_incidents(incidents)
-    if str(runtime_fault.get("state") or "").strip().lower() == "degraded":
+    if include_status_plane and str(runtime_fault.get("state") or "").strip().lower() == "degraded":
         status_registry = _with_derived_status_cards(
-            status_registry,
+            status_registry or {},
             guard_status_cards_from_runtime(
                 {"incident_registry": incidents},
                 webspace_id=resolved_webspace_id,
             ),
         )
-    status_plane = _compact_status_registry_payload(
-        status_registry,
-        webspace_id=resolved_webspace_id,
-        limit=50,
-        source="api.node.reliability.summary.status_plane",
-    )
-    diagnostics = _coerce_dict(status_plane.get("diagnostics"))
-    status_plane["diagnostics"] = {
-        "cardCount": int(diagnostics.get("cardCount") or 0),
-        "staleCount": int(diagnostics.get("staleCount") or 0),
-        "derivedCardCount": int(diagnostics.get("derivedCardCount") or 0),
-        "maxCardBytes": _coerce_optional_int(diagnostics.get("maxCardBytes")),
-        "maxCardBytesObserved": int(diagnostics.get("maxCardBytesObserved") or 0),
-        "oversizedCardTotal": int(diagnostics.get("oversizedCardTotal") or 0),
-        "lastOversizedCard": _coerce_dict(diagnostics.get("lastOversizedCard")),
-        "lastChangedAt": diagnostics.get("lastChangedAt"),
-    }
+    status_plane: dict[str, Any] | None = None
+    if include_status_plane:
+        status_plane = _compact_status_registry_payload(
+            status_registry or {},
+            webspace_id=resolved_webspace_id,
+            limit=50,
+            source="api.node.reliability.summary.status_plane",
+        )
+        diagnostics = _coerce_dict(status_plane.get("diagnostics"))
+        status_plane["diagnostics"] = {
+            "cardCount": int(diagnostics.get("cardCount") or 0),
+            "staleCount": int(diagnostics.get("staleCount") or 0),
+            "derivedCardCount": int(diagnostics.get("derivedCardCount") or 0),
+            "maxCardBytes": _coerce_optional_int(diagnostics.get("maxCardBytes")),
+            "maxCardBytesObserved": int(diagnostics.get("maxCardBytesObserved") or 0),
+            "oversizedCardTotal": int(diagnostics.get("oversizedCardTotal") or 0),
+            "lastOversizedCard": _coerce_dict(diagnostics.get("lastOversizedCard")),
+            "lastChangedAt": diagnostics.get("lastChangedAt"),
+        }
     sidecar_fields = _thin_sidecar_runtime_fields()
     sync_runtime: dict[str, Any] = {}
     try:
@@ -1174,15 +1218,14 @@ def _thin_runtime_reliability_payload(
         compact_state_sync["materialization"] = compact_materialization
     compact_state_sync = _apply_runtime_fault_to_state_sync(compact_state_sync, runtime_fault)
     compact_webrtc_yjs = _compact_webrtc_yjs_runtime(sync_runtime)
-    return {
+    payload = {
         "ok": True,
-        "available": bool(status_plane.get("available", True)),
-        "schema": "adaos.reliability_summary.thin.v1",
+        "available": bool(status_plane.get("available", True)) if status_plane else True,
+        "schema": f"adaos.reliability_summary.{requested_mode}.v1",
         "source": "api.node.reliability.summary",
-        "mode": "thin",
+        "mode": requested_mode,
         "webspaceId": resolved_webspace_id,
-        "updatedAt": status_plane.get("updatedAt"),
-        "statusPlane": status_plane,
+        "observer": _runtime_reliability_observer(sidecar_enablement.get("role")),
         **sidecar_fields,
         "connectivity": connectivity,
         "stateSync": compact_state_sync,
@@ -1195,6 +1238,8 @@ def _thin_runtime_reliability_payload(
             runtime_fault=runtime_fault,
         ),
         "detailsRef": {
+            "runtimeBeacon": "/api/node/reliability/runtime",
+            "summaryDetails": "/api/node/reliability/details",
             "summaryFull": "/api/node/reliability/summary?mode=full",
             "runtime": "/api/node/reliability",
         },
@@ -1203,6 +1248,12 @@ def _thin_runtime_reliability_payload(
             "ifNoneMatch": True,
         },
     }
+    if status_plane is not None:
+        payload["updatedAt"] = status_plane.get("updatedAt")
+        payload["statusPlane"] = status_plane
+    if requested_mode == "details":
+        payload["memberAvailability"] = _current_compact_member_availability()
+    return payload
 
 
 def _webrtc_yjs_env_enabled() -> tuple[bool, str | None, str]:
@@ -2128,24 +2179,18 @@ def _compact_runtime_reliability_payload(
 
 
 def _env_flag_enabled(name: str) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool(name)
 
 
 def _supervisor_enabled() -> bool:
-    raw = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    return env_bool("ADAOS_SUPERVISOR_ENABLED")
 
 
 def _supervisor_base_url() -> str | None:
     raw = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip()
     if raw:
         return raw.rstrip("/")
-    host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776"
-    return f"http://{host}:{port}"
+    return supervisor_base_from_env()
 
 
 async def _proxy_supervisor_json(
@@ -3980,6 +4025,48 @@ async def node_reliability() -> Response:
         raise
 
 
+@router.get("/reliability/runtime", dependencies=[Depends(require_token)])
+async def node_reliability_runtime(
+    webspace_id: str | None = None,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    started_at = time.time()
+    payload = _thin_runtime_reliability_payload(
+        None,
+        webspace_id=webspace_id,
+        mode="runtime",
+    )
+    return _json_response_with_etag(
+        payload,
+        if_none_match=if_none_match,
+        mode="runtime",
+        started_at=started_at,
+        endpoint="/api/node/reliability/runtime",
+    )
+
+
+@router.get("/reliability/details", dependencies=[Depends(require_token)])
+async def node_reliability_details(
+    webspace_id: str | None = None,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    started_at = time.time()
+    resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+    status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
+    payload = _thin_runtime_reliability_payload(
+        status_registry,
+        webspace_id=resolved_webspace_id,
+        mode="details",
+    )
+    return _json_response_with_etag(
+        payload,
+        if_none_match=if_none_match,
+        mode="details",
+        started_at=started_at,
+        endpoint="/api/node/reliability/details",
+    )
+
+
 @router.get("/reliability/summary", dependencies=[Depends(require_token)])
 async def node_reliability_summary(
     webspace_id: str | None = None,
@@ -3988,6 +4075,34 @@ async def node_reliability_summary(
 ) -> Response:
     started_at = time.time()
     requested_mode = str(mode or "compat").strip().lower()
+    if requested_mode in {"runtime", "beacon"}:
+        payload = _thin_runtime_reliability_payload(
+            None,
+            webspace_id=webspace_id,
+            mode="runtime",
+        )
+        return _json_response_with_etag(
+            payload,
+            if_none_match=if_none_match,
+            mode="runtime",
+            started_at=started_at,
+        )
+
+    if requested_mode in {"details", "detail"}:
+        resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+        status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
+        payload = _thin_runtime_reliability_payload(
+            status_registry,
+            webspace_id=resolved_webspace_id,
+            mode="details",
+        )
+        return _json_response_with_etag(
+            payload,
+            if_none_match=if_none_match,
+            mode="details",
+            started_at=started_at,
+        )
+
     if requested_mode in {"thin", "status", "status_plane"}:
         resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
         status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)

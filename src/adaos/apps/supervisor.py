@@ -8,8 +8,8 @@ import hashlib
 import json
 import logging
 import os
+import re
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -28,13 +28,32 @@ except Exception:  # pragma: no cover - optional dependency in some environments
 
 import requests
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi import HTTPException
 
-from adaos.apps.api.auth import require_token
 from adaos.apps.bootstrap import init_ctx
-from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
+from adaos.apps.supervisor_runtime import (
+    AdoptedProcess,
+    MemoryProfilingOperations,
+    MemoryProfilingService,
+    ProcessSupervisor,
+    ProcessSupervisorOperations,
+    RuntimeRecoveryFacts,
+    RuntimeRecoveryOperations,
+    RuntimeRecoveryPolicy,
+    SupervisorApiAdapter,
+    SupervisorMonitoringOperations,
+    SupervisorMonitoringService,
+    SupervisorStatusOperations,
+    SupervisorStatusService,
+    SupervisorUpdateExecution,
+    SupervisorUpdateExecutionOperations,
+    UpdateReconciliationOperations,
+    UpdateReconciliationService,
+    UpdateStateMachine,
+    create_supervisor_app,
+    create_supervisor_routes,
+)
+from adaos.apps.cli.commands.api import _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
 from adaos.services.bounded_io import bounded_jsonl_tail, bounded_text_tail_lines, path_size_snapshot
@@ -78,7 +97,15 @@ from adaos.services.root.memory_profile_sync import (
     memory_profile_artifact_source_api_path,
     report_hub_memory_profile,
 )
+from adaos.services.env_policy import env_int, env_text
 from adaos.services.runtime_paths import current_base_dir, current_repo_root
+from adaos.services.runtime_topology import (
+    DEFAULT_LOOPBACK_HOST,
+    DEFAULT_RUNTIME_PORT,
+    DEFAULT_SUPERVISOR_PORT,
+    supervisor_base_from_env,
+)
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 from adaos.services.supervisor_memory import (
     DEFAULT_PROFILER_ADAPTER,
     IMPLEMENTED_PROFILE_CONTROL_ACTIONS,
@@ -99,7 +126,6 @@ from adaos.services.supervisor_memory import (
     supervisor_memory_session_artifacts_dir,
     supervisor_memory_session_operations_path,
     supervisor_memory_sessions_index_path,
-    supervisor_memory_state_dir,
     supervisor_memory_telemetry_path,
     write_memory_session_index,
     write_memory_session_summary,
@@ -108,16 +134,56 @@ from adaos.services.supervisor_memory import (
 
 
 _SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
-_DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024
 _LOG = logging.getLogger("adaos.supervisor")
 _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
+_PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
+_UPDATE_STATE_MACHINE = UpdateStateMachine()
+_UPDATE_RECONCILIATION = UpdateReconciliationService()
+_MEMORY_PROFILING = MemoryProfilingService()
+
+
+def _update_reconciliation_operations() -> UpdateReconciliationOperations:
+    return UpdateReconciliationOperations(
+        active_slot_target_mismatch_status=_active_slot_target_mismatch_status,
+        attempt_transition_at=_attempt_transition_at,
+        clear_core_update_plan=clear_core_update_plan,
+        clear_orphaned_subsequent_transition_status=_clear_orphaned_subsequent_transition_status,
+        compact_public_runtime_self_heal=_compact_public_runtime_self_heal,
+        compact_watchdog_required_link=_compact_watchdog_required_link,
+        complete_update_attempt=_complete_update_attempt,
+        fail_root_restart_attempt=_fail_root_restart_attempt,
+        finalize_runtime_boot_status_from_supervisor=_finalize_runtime_boot_status_from_supervisor,
+        is_root_restart_completed_status=_is_root_restart_completed_status,
+        is_root_restart_pending_attempt=_is_root_restart_pending_attempt,
+        is_terminal_update_status=_is_terminal_update_status,
+        read_core_update_status=read_core_update_status,
+        read_update_attempt=_read_update_attempt,
+        reconcile_failed_attempt_after_terminal_success=_reconcile_failed_attempt_after_terminal_success,
+        reconcile_failed_root_restart_after_runtime_recovery=(
+            _reconcile_failed_root_restart_after_runtime_recovery
+        ),
+        reconcile_failed_target_mismatch_after_active_switch=(
+            _reconcile_failed_target_mismatch_after_active_switch
+        ),
+        recover_active_attempt_target_already_active=_recover_active_attempt_target_already_active,
+        revoke_prepare_lease=_revoke_prepare_lease,
+        rollback_installed_skill_runtimes=rollback_installed_skill_runtimes,
+        rollback_to_previous_slot=rollback_to_previous_slot,
+        runtime_ready_for_boot_status_finalize=_runtime_ready_for_boot_status_finalize,
+        status_updated_at=_status_updated_at,
+        terminal_status_belongs_to_attempt=_terminal_status_belongs_to_attempt,
+        update_attempt_contract_version=UPDATE_ATTEMPT_CONTRACT_VERSION,
+        update_status_timeout_sec=_update_status_timeout_sec,
+        update_transition_timed_out=_update_transition_timed_out,
+        write_core_update_status=write_core_update_status,
+    )
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AdaOS supervisor")
-    parser.add_argument("--host", default="127.0.0.1", help="Managed runtime host")
-    parser.add_argument("--port", type=int, default=8777, help="Managed runtime port")
+    parser.add_argument("--host", default=DEFAULT_LOOPBACK_HOST, help="Managed runtime host")
+    parser.add_argument("--port", type=int, default=DEFAULT_RUNTIME_PORT, help="Managed runtime port")
     parser.add_argument("--token", default=None)
     return parser.parse_known_args()[0]
 
@@ -133,18 +199,15 @@ def _resolved_token(raw_token: str | None = None) -> str | None:
 
 
 def _supervisor_host() -> str:
-    return str(os.getenv("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    return env_text("ADAOS_SUPERVISOR_HOST", DEFAULT_LOOPBACK_HOST).strip() or DEFAULT_LOOPBACK_HOST
 
 
 def _supervisor_port() -> int:
-    try:
-        return int(str(os.getenv("ADAOS_SUPERVISOR_PORT") or "8776").strip() or "8776")
-    except Exception:
-        return 8776
+    return env_int("ADAOS_SUPERVISOR_PORT", DEFAULT_SUPERVISOR_PORT)
 
 
 def _supervisor_base_url() -> str:
-    return f"http://{_supervisor_host()}:{_supervisor_port()}"
+    return supervisor_base_from_env()
 
 
 def _supervisor_state_dir() -> Path:
@@ -195,197 +258,87 @@ def _write_prepare_lease(path: Path, *, token: str, state: str, reason: str, **e
 
 
 def _memory_profiler_adapter() -> str:
-    token = str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILER") or "").strip().lower()
-    return token or DEFAULT_PROFILER_ADAPTER
+    return _MEMORY_PROFILING.profiler_adapter(DEFAULT_PROFILER_ADAPTER)
 
 
 def _memory_telemetry_interval_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_TELEMETRY_SEC") or "15").strip()))
-    except Exception:
-        return 15.0
+    return _MEMORY_PROFILING.telemetry_interval_sec()
 
 
 def _memory_telemetry_window_sec() -> float:
-    try:
-        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_WINDOW_SEC") or "180").strip()))
-    except Exception:
-        return 180.0
+    return _MEMORY_PROFILING.telemetry_window_sec()
 
 
 def _memory_baseline_warmup_sec() -> float:
-    try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_WARMUP_SEC") or "300").strip()))
-    except Exception:
-        return 300.0
+    return _MEMORY_PROFILING.baseline_warmup_sec()
 
 
 def _memory_baseline_maturity_slope_bytes_per_min() -> float:
-    try:
-        return max(
-            0.0,
-            float(
-                str(
-                    os.getenv("ADAOS_SUPERVISOR_MEMORY_BASELINE_MATURITY_SLOPE_BYTES_PER_MIN")
-                    or str(32 * 1024 * 1024)
-                ).strip()
-            ),
-        )
-    except Exception:
-        return float(32 * 1024 * 1024)
+    return _MEMORY_PROFILING.baseline_maturity_slope_bytes_per_min()
 
 
 def _memory_suspicion_growth_threshold_bytes() -> int:
-    default_value = 1024 * 1024 * 1024
-    total_memory = _total_memory_bytes()
-    if total_memory and total_memory > 0:
-        default_value = min(
-            1024 * 1024 * 1024,
-            max(256 * 1024 * 1024, int(float(total_memory) * 0.20)),
-        )
-    try:
-        return max(
-            32 * 1024 * 1024,
-            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_GROWTH_BYTES") or str(default_value)).strip()),
-        )
-    except Exception:
-        return default_value
+    return _MEMORY_PROFILING.suspicion_growth_threshold_bytes(psutil_module=psutil)
 
 
 def _memory_suspicion_family_rss_threshold_bytes() -> int | None:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_FAMILY_RSS_BYTES")
-    if raw is None or not str(raw).strip():
-        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
-    if str(raw).strip().lower() in {"0", "false", "no", "off", "disabled", "none"}:
-        return None
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return _DEFAULT_MEMORY_SUSPICION_FAMILY_RSS_THRESHOLD_BYTES
-    return max(32 * 1024 * 1024, value)
+    return _MEMORY_PROFILING.suspicion_family_rss_threshold_bytes()
 
 
 def _memory_suspicion_slope_threshold_bytes_per_min() -> float:
-    try:
-        return max(
-            float(8 * 1024 * 1024),
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_SLOPE_BYTES_PER_MIN") or str(128 * 1024 * 1024)).strip()),
-        )
-    except Exception:
-        return float(128 * 1024 * 1024)
+    return _MEMORY_PROFILING.suspicion_slope_threshold_bytes_per_min()
 
 
 def _memory_auto_profile_cooldown_sec() -> float:
-    try:
-        return max(60.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_COOLDOWN_SEC") or "86400").strip()))
-    except Exception:
-        return 86400.0
+    return _MEMORY_PROFILING.auto_profile_cooldown_sec()
 
 
 def _memory_policy_profile_restarts_enabled() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_POLICY_PROFILE_RESTARTS")
-    if raw is None:
-        return True
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _MEMORY_PROFILING.policy_profile_restarts_enabled()
 
 
 def _memory_auto_profile_min_uptime_sec() -> float:
-    try:
-        return max(
-            0.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC") or "300").strip()),
-        )
-    except Exception:
-        return 300.0
+    return _MEMORY_PROFILING.auto_profile_min_uptime_sec()
 
 
 def _memory_auto_profile_browser_live_ttl_sec() -> float:
-    try:
-        return max(
-            5.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_BROWSER_LIVE_TTL_SEC") or "45").strip()),
-        )
-    except Exception:
-        return 45.0
+    return _MEMORY_PROFILING.auto_profile_browser_live_ttl_sec()
 
 
 def _memory_auto_profile_allow_browser_sessions() -> bool:
-    raw = os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_ALLOW_BROWSER_SESSIONS")
-    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+    return _MEMORY_PROFILING.auto_profile_allow_browser_sessions()
 
 
 def _memory_auto_profile_circuit_window_sec() -> float:
-    try:
-        return max(300.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_WINDOW_SEC") or "1800").strip()))
-    except Exception:
-        return 1800.0
+    return _MEMORY_PROFILING.auto_profile_circuit_window_sec()
 
 
 def _memory_auto_profile_circuit_limit() -> int:
-    try:
-        return max(1, int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_PROFILE_CIRCUIT_LIMIT") or "3").strip()))
-    except Exception:
-        return 3
+    return _MEMORY_PROFILING.auto_profile_circuit_limit()
 
 
 def _available_memory_bytes() -> int | None:
-    if psutil is None:
-        return None
-    try:
-        vm = psutil.virtual_memory()
-    except Exception:
-        return None
-    try:
-        return int(vm.available)
-    except Exception:
-        return None
+    return _MEMORY_PROFILING.available_memory_bytes(psutil_module=psutil)
 
 
 def _total_memory_bytes() -> int | None:
-    if psutil is None:
-        return None
-    try:
-        vm = psutil.virtual_memory()
-    except Exception:
-        return None
-    try:
-        return int(vm.total)
-    except Exception:
-        return None
+    return _MEMORY_PROFILING.total_memory_bytes(psutil_module=psutil)
 
 
 def _memory_critical_available_percent_threshold() -> float:
-    try:
-        return max(
-            1.0,
-            min(25.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT") or "5").strip())),
-        )
-    except Exception:
-        return 5.0
+    return _MEMORY_PROFILING.critical_available_percent_threshold()
 
 
 def _memory_critical_available_bytes_threshold() -> int:
-    try:
-        return max(
-            64 * 1024 * 1024,
-            int(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES") or str(256 * 1024 * 1024)).strip()),
-        )
-    except Exception:
-        return 256 * 1024 * 1024
+    return _MEMORY_PROFILING.critical_available_bytes_threshold()
 
 
 def _memory_critical_duration_sec() -> float:
-    try:
-        return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC") or "20").strip()))
-    except Exception:
-        return 20.0
+    return _MEMORY_PROFILING.critical_duration_sec()
 
 
 def _memory_critical_restart_cooldown_sec() -> float:
-    try:
-        return max(30.0, float(str(os.getenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_RESTART_COOLDOWN_SEC") or "120").strip()))
-    except Exception:
-        return 120.0
+    return _MEMORY_PROFILING.critical_restart_cooldown_sec()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -850,9 +803,9 @@ def _warm_switch_rss_multiplier() -> float:
 
 def _warm_switch_candidate_ready_timeout_sec() -> float:
     try:
-        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC") or "12").strip()))
+        return max(0.0, float(str(os.getenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC") or "60").strip()))
     except Exception:
-        return 12.0
+        return 60.0
 
 
 def _warm_switch_strict_cutover_enabled() -> bool:
@@ -879,6 +832,16 @@ def _warm_switch_defer_sec() -> float:
         return max(5.0, float(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_DEFER_SEC") or "60").strip()))
     except Exception:
         return 60.0
+
+
+def _warm_switch_max_deferrals() -> int:
+    try:
+        return max(
+            0,
+            int(str(os.getenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS") or "1").strip()),
+        )
+    except Exception:
+        return 1
 
 
 def _sidecar_code_change_debounce_sec() -> float:
@@ -1094,10 +1057,6 @@ def _post_recovery_member_hub_refresh_cooldown_sec() -> float:
         return 60.0
 
 
-def _terminal_update_states() -> set[str]:
-    return {"failed", "validated", "succeeded", "rolled_back", "expired", "cancelled", "idle"}
-
-
 UPDATE_ATTEMPT_CONTRACT_VERSION = "1"
 
 
@@ -1152,6 +1111,14 @@ def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] 
         "candidate_prewarm_state": str(source.get("candidate_prewarm_state") or "").strip() or None,
         "candidate_prewarm_message": str(source.get("candidate_prewarm_message") or "").strip() or None,
         "candidate_prewarm_ready_at": _epoch(source.get("candidate_prewarm_ready_at")) or None,
+        "candidate_prewarm_deferral_count": max(
+            0,
+            int(_epoch(source.get("candidate_prewarm_deferral_count"))),
+        ),
+        "candidate_prewarm_max_deferrals": max(
+            0,
+            int(_epoch(source.get("candidate_prewarm_max_deferrals"))),
+        ),
         "prepare_lease_path": str(source.get("prepare_lease_path") or "").strip() or None,
         "prepare_lease_token": str(source.get("prepare_lease_token") or "").strip() or None,
         "prepare_timeout_sec": _epoch(source.get("prepare_timeout_sec")) or None,
@@ -1208,10 +1175,11 @@ def _attempt_transition_at(payload: dict[str, Any]) -> float:
 
 
 def _update_transition_timed_out(*, status_age: float, transition_age: float, timeout_sec: float) -> bool:
-    ages = [age for age in (status_age, transition_age) if age > 0.0]
-    if not ages:
-        return False
-    return min(ages) >= float(timeout_sec)
+    return _UPDATE_STATE_MACHINE.transition_timed_out(
+        status_age=status_age,
+        transition_age=transition_age,
+        timeout_sec=timeout_sec,
+    )
 
 
 def _prepare_lease_ref_from_payloads(*payloads: dict[str, Any] | None) -> tuple[str, str]:
@@ -1266,107 +1234,42 @@ def _revoke_prepare_lease(
 
 
 def _is_terminal_update_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    if _is_root_promotion_pending_status(payload) or _is_root_restart_pending_status(payload):
-        return False
-    return str(payload.get("state") or "").strip().lower() in _terminal_update_states()
+    return _UPDATE_STATE_MACHINE.is_terminal(payload)
 
 
 def _is_root_restart_pending_attempt(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    return str(payload.get("state") or "").strip().lower() == "awaiting_root_restart"
+    return _UPDATE_STATE_MACHINE.is_root_restart_pending_attempt(payload)
 
 
 def _is_root_restart_completed_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "succeeded" and phase == "validate" and float(payload.get("root_restart_completed_at") or 0.0) > 0.0
+    return _UPDATE_STATE_MACHINE.is_root_restart_completed_status(payload)
 
 
 def _is_root_promotion_pending_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "validated" and phase == "root_promotion_pending"
+    return _UPDATE_STATE_MACHINE.is_root_promotion_pending_status(payload)
 
 
 def _is_root_restart_pending_status(payload: dict[str, Any] | None) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    state = str(payload.get("state") or "").strip().lower()
-    phase = str(payload.get("phase") or "").strip().lower()
-    return state == "succeeded" and phase == "root_promoted"
-
-
-def _root_promotion_owner_instance(payload: dict[str, Any] | None) -> str:
-    data = payload if isinstance(payload, dict) else {}
-    return str(
-        data.get("root_promotion_supervisor_instance_id")
-        or data.get("restart_requested_by_instance_id")
-        or ""
-    ).strip()
+    return _UPDATE_STATE_MACHINE.is_root_restart_pending_status(payload)
 
 
 def _root_restart_crossed_supervisor_generation(payload: dict[str, Any] | None) -> bool:
-    owner_instance = _root_promotion_owner_instance(payload)
-    # Legacy receipts did not carry a process generation. Preserve their
-    # existing recovery path, while every newly written receipt is gated by
-    # the immutable per-process instance id below.
-    return not owner_instance or owner_instance != _SUPERVISOR_INSTANCE_ID
+    return _UPDATE_STATE_MACHINE.crossed_supervisor_generation(
+        payload,
+        current_instance_id=_SUPERVISOR_INSTANCE_ID,
+    )
 
 
 def _is_transition_in_progress(status: dict[str, Any] | None, attempt: dict[str, Any] | None) -> bool:
-    status_map = status if isinstance(status, dict) else {}
-    attempt_map = attempt if isinstance(attempt, dict) else {}
-    state = str(status_map.get("state") or "").strip().lower()
-    phase = str(status_map.get("phase") or "").strip().lower()
-    attempt_state = str(attempt_map.get("state") or "").strip().lower()
-    if attempt_state in {"active", "awaiting_root_restart"}:
-        return True
-    if state in {"preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
-        return True
-    if state == "validated" and phase == "root_promotion_pending":
-        return True
-    if state == "succeeded" and phase == "root_promoted":
-        return True
-    return False
+    return _UPDATE_STATE_MACHINE.transition_in_progress(status, attempt)
 
 
 def _runtime_ready_for_boot_status_finalize(status: dict[str, Any] | None, runtime: dict[str, Any] | None) -> bool:
-    if not isinstance(status, dict) or not isinstance(runtime, dict):
-        return False
-    state = str(status.get("state") or "").strip().lower()
-    phase = str(status.get("phase") or "").strip().lower()
-    if state == "succeeded" and phase == "validate":
-        return False
-    if state == "validated" and phase == "root_promotion_pending":
-        return False
-    if state == "succeeded" and phase == "root_promoted" and not _root_restart_crossed_supervisor_generation(status):
-        return False
-    finalizable = state in {"restarting", "applying", "validated"} or (
-        state == "succeeded" and phase in {"", "apply", "launch", "shutdown", "root_promoted"}
+    return _UPDATE_STATE_MACHINE.runtime_ready_for_boot_finalize(
+        status,
+        runtime,
+        current_instance_id=_SUPERVISOR_INSTANCE_ID,
     )
-    if not finalizable:
-        return False
-    runtime_state = str(runtime.get("runtime_state") or "").strip().lower()
-    runtime_ready = runtime_state == "ready" or (
-        bool(runtime.get("listener_running")) and bool(runtime.get("runtime_api_ready"))
-    )
-    if not runtime_ready:
-        return False
-    target_slot = str(status.get("target_slot") or "").strip().upper()
-    manifest = status.get("manifest")
-    if not target_slot and isinstance(manifest, dict):
-        target_slot = str(manifest.get("slot") or "").strip().upper()
-    active_runtime_slot = str(runtime.get("active_slot") or "").strip().upper()
-    if target_slot and active_runtime_slot and target_slot != active_runtime_slot:
-        return False
-    return True
 
 
 def _transition_request_payload(
@@ -1394,7 +1297,7 @@ def _transition_request_payload(
 
 def _request_from_attempt(attempt: dict[str, Any] | None) -> dict[str, Any]:
     data = attempt if isinstance(attempt, dict) else {}
-    return _transition_request_payload(
+    payload = _transition_request_payload(
         action=str(data.get("action") or "update"),
         target_rev=str(data.get("target_rev") or ""),
         target_version=str(data.get("target_version") or ""),
@@ -1404,6 +1307,16 @@ def _request_from_attempt(attempt: dict[str, Any] | None) -> dict[str, Any]:
         signal_delay_sec=float(data.get("signal_delay_sec") or 0.25),
         requested_at=_epoch(data.get("requested_at")) or time.time(),
     )
+    try:
+        candidate_prewarm_deferral_count = max(
+            0,
+            int(data.get("candidate_prewarm_deferral_count") or 0),
+        )
+    except Exception:
+        candidate_prewarm_deferral_count = 0
+    if candidate_prewarm_deferral_count:
+        payload["candidate_prewarm_deferral_count"] = candidate_prewarm_deferral_count
+    return payload
 
 
 def _subsequent_transition_request(attempt: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1444,38 +1357,15 @@ def _clear_orphaned_subsequent_transition_status(
 
 
 def _target_version_matches(left: Any, right: Any) -> bool:
-    a = str(left or "").strip()
-    b = str(right or "").strip()
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    return len(a) >= 7 and len(b) >= 7 and (a.startswith(b) or b.startswith(a))
-
-
-def _looks_like_git_sha(value: Any) -> bool:
-    text = str(value or "").strip()
-    return 7 <= len(text) <= 40 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+    return _UPDATE_STATE_MACHINE.target_version_matches(left, right)
 
 
 def _transition_request_has_resolved_target(request: dict[str, Any] | None) -> bool:
-    req = request if isinstance(request, dict) else {}
-    if str(req.get("action") or "update").strip().lower() != "update":
-        return True
-    if str(req.get("target_rev") or "").strip():
-        return True
-    return _looks_like_git_sha(req.get("target_version"))
+    return _UPDATE_STATE_MACHINE.transition_request_has_resolved_target(request)
 
 
 def _manifest_matches_target_version(manifest: dict[str, Any] | None, target_version: Any) -> bool:
-    expected = str(target_version or "").strip()
-    if not expected:
-        return True
-    data = manifest if isinstance(manifest, dict) else {}
-    for key in ("target_version", "build_version", "git_commit", "git_short_commit"):
-        if _target_version_matches(expected, data.get(key)):
-            return True
-    return False
+    return _UPDATE_STATE_MACHINE.manifest_matches_target_version(manifest, target_version)
 
 
 def _terminal_status_belongs_to_attempt(status: dict[str, Any], attempt: dict[str, Any]) -> bool:
@@ -1670,6 +1560,22 @@ def _build_attempt_payload(*, action: str, request: dict[str, Any], status: dict
             request.get("candidate_prewarm_message") or current_status.get("candidate_prewarm_message") or ""
         ).strip()
         or None,
+        "candidate_prewarm_deferral_count": max(
+            0,
+            int(
+                request.get("candidate_prewarm_deferral_count")
+                or current_status.get("candidate_prewarm_deferral_count")
+                or 0
+            ),
+        ),
+        "candidate_prewarm_max_deferrals": max(
+            0,
+            int(
+                request.get("candidate_prewarm_max_deferrals")
+                or current_status.get("candidate_prewarm_max_deferrals")
+                or 0
+            ),
+        ),
         "last_status": current_status,
         "updated_at": now,
     }
@@ -1911,6 +1817,82 @@ def _reconcile_failed_target_mismatch_after_active_switch(
     )
 
 
+def _reconcile_failed_root_restart_after_runtime_recovery(
+    *,
+    status: dict[str, Any] | None,
+    attempt: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Commit a promoted target once its replacement runtime becomes ready.
+
+    A root restart timeout is not proof that promotion failed: systemd may
+    restart successfully while the promoted runtime is temporarily unhealthy.
+    Root updates intentionally stay out of the fast slot-rollback path, so a
+    later supervisor self-heal must be able to validate the already-active
+    target and close the durable attempt.
+    """
+    status_map = status if isinstance(status, dict) else {}
+    attempt_map = attempt if isinstance(attempt, dict) else {}
+    if str(attempt_map.get("state") or "").strip().lower() != "failed":
+        return None
+    if str(attempt_map.get("action") or "update").strip().lower() != "update":
+        return None
+    timed_out = (
+        str(attempt_map.get("completion_reason") or "").strip().lower() == "root restart timeout"
+        or (
+            str(status_map.get("phase") or "").strip().lower() == "root_restart_timeout"
+            and bool(status_map.get("supervisor_timeout_at"))
+        )
+    )
+    if not timed_out or not _runtime_payload_ready(runtime):
+        return None
+    target_version = str(attempt_map.get("target_version") or status_map.get("target_version") or "").strip()
+    if not target_version:
+        return None
+    try:
+        manifest = active_slot_manifest()
+    except Exception:
+        manifest = None
+    if not _manifest_matches_target_version(manifest, target_version):
+        return None
+
+    now = time.time()
+    slot = str((manifest or {}).get("slot") or active_slot() or "").strip().upper()
+    recovered_status = write_core_update_status(
+        {
+            **status_map,
+            "state": "succeeded",
+            "phase": "validate",
+            "action": "update",
+            "target_rev": str(attempt_map.get("target_rev") or status_map.get("target_rev") or ""),
+            "target_version": target_version,
+            "target_slot": slot,
+            "reason": "supervisor.root_restart_runtime_recovered",
+            "message": (
+                f"runtime boot validated on slot {slot} after root restart timeout"
+                if slot
+                else "runtime boot validated after root restart timeout"
+            ),
+            "manifest": manifest if isinstance(manifest, dict) else {},
+            "root_restart_timeout_reconciled": True,
+            "root_restart_timeout_reconciled_at": now,
+            "validated_at": now,
+            "finished_at": now,
+            "scheduled_for": None,
+            "candidate_prewarm_state": None,
+            "candidate_prewarm_message": None,
+            "candidate_prewarm_ready_at": None,
+        }
+    )
+    with contextlib.suppress(Exception):
+        clear_core_update_plan()
+    return _complete_update_attempt(
+        state="completed",
+        status=recovered_status,
+        reason="root restart timeout reconciled after runtime recovery",
+    )
+
+
 def _fail_root_restart_attempt(
     *,
     status: dict[str, Any],
@@ -1966,181 +1948,10 @@ def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
 
 
 def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
-    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
-    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-    if _runtime_ready_for_boot_status_finalize(status, runtime):
-        finalized_status = _finalize_runtime_boot_status_from_supervisor()
-        if isinstance(finalized_status, dict):
-            status = finalized_status
-            payload["status"] = finalized_status
-            payload["_served_by"] = "supervisor_runtime_ready_finalize"
-    attempt = _read_update_attempt()
-    mismatch_status = _active_slot_target_mismatch_status(status, attempt if isinstance(attempt, dict) else None)
-    if isinstance(mismatch_status, dict):
-        status = mismatch_status
-        payload["status"] = mismatch_status
-        payload["_served_by"] = "supervisor_target_mismatch_recovery"
-    if not isinstance(attempt, dict):
-        return payload
-
-    cleaned_status = _clear_orphaned_subsequent_transition_status(status, attempt)
-    if cleaned_status != status:
-        status = cleaned_status
-        payload["status"] = cleaned_status
-        payload["_served_by"] = "supervisor_orphaned_subsequent_recovery"
-    payload["attempt"] = dict(attempt)
-    recovered_status = _recover_active_attempt_target_already_active(
-        status=status,
-        attempt=attempt,
-        runtime=runtime,
+    return _UPDATE_RECONCILIATION.reconcile(
+        _update_reconciliation_operations(),
+        payload,
     )
-    if isinstance(recovered_status, dict):
-        payload["status"] = recovered_status
-        payload["attempt"] = _read_update_attempt() or payload["attempt"]
-        payload["_served_by"] = "supervisor_active_target_recovery"
-        return payload
-    recovered_attempt = _reconcile_failed_target_mismatch_after_active_switch(
-        status=status,
-        attempt=attempt,
-        runtime=runtime,
-    )
-    if isinstance(recovered_attempt, dict):
-        payload["status"] = read_core_update_status() or status
-        payload["attempt"] = recovered_attempt
-        payload["_served_by"] = "supervisor_failed_target_mismatch_reconciled"
-        return payload
-
-    now = time.time()
-    timeout_sec = _update_status_timeout_sec(status)
-    status_age = max(0.0, now - _status_updated_at(status)) if _status_updated_at(status) > 0.0 else 0.0
-    transition_age = max(0.0, now - _attempt_transition_at(attempt)) if _attempt_transition_at(attempt) > 0.0 else 0.0
-    if bool(status.get("active_slot_target_mismatch")):
-        payload["attempt"] = _complete_update_attempt(
-            state="failed",
-            status=status,
-            reason="active slot target mismatch",
-        )
-        return payload
-    if _is_root_restart_pending_attempt(attempt):
-        if _is_root_restart_completed_status(status):
-            payload["attempt"] = _complete_update_attempt(
-                state="completed",
-                status=status,
-                reason="root restart completed",
-            )
-        elif _update_transition_timed_out(
-            status_age=status_age,
-            transition_age=transition_age,
-            timeout_sec=timeout_sec,
-        ):
-            # If a new runtime is already serving status, let it finalize a stale
-            # root-promoted marker before declaring the update failed.
-            finalized_status = (
-                _finalize_runtime_boot_status_from_supervisor()
-                if _runtime_ready_for_boot_status_finalize(status, runtime)
-                else None
-            )
-            if _is_root_restart_completed_status(finalized_status):
-                payload["status"] = finalized_status
-                payload["attempt"] = _complete_update_attempt(
-                    state="completed",
-                    status=finalized_status,
-                    reason="root restart completed",
-                )
-                payload["_served_by"] = "supervisor_timeout_finalize"
-                return payload
-            failed_attempt = _fail_root_restart_attempt(
-                status=status,
-                attempt=attempt,
-                timeout_sec=timeout_sec,
-                now=now,
-            )
-            payload["status"] = read_core_update_status()
-            payload["attempt"] = failed_attempt
-            payload["_served_by"] = "supervisor_timeout_recovery"
-        return payload
-
-    if str(attempt.get("state") or "").strip().lower() != "active":
-        reconciled_attempt = _reconcile_failed_attempt_after_terminal_success(
-            status=status,
-            attempt=attempt,
-        )
-        if isinstance(reconciled_attempt, dict):
-            payload["attempt"] = reconciled_attempt
-            payload["_served_by"] = "supervisor_failed_attempt_success_reconciled"
-        return payload
-
-    if _is_terminal_update_status(status):
-        if not _terminal_status_belongs_to_attempt(status, attempt):
-            payload["_served_by"] = "supervisor_stale_terminal_status_ignored"
-            return payload
-        if bool(status.get("active_slot_target_mismatch")):
-            payload["attempt"] = _complete_update_attempt(
-                state="failed",
-                status=status,
-                reason="active slot target mismatch",
-            )
-            return payload
-        payload["attempt"] = _complete_update_attempt(state="completed", status=status, reason="terminal core update status")
-        return payload
-
-    if not _update_transition_timed_out(
-        status_age=status_age,
-        transition_age=transition_age,
-        timeout_sec=timeout_sec,
-    ):
-        return payload
-
-    action = str(status.get("action") or attempt.get("action") or "update")
-    prepare_lease_revocation = _revoke_prepare_lease(
-        status=status,
-        attempt=attempt,
-        reason="supervisor.timeout_recovery",
-    )
-    failed_payload: dict[str, Any] = {
-        "state": "failed",
-        "phase": str(status.get("phase") or "restart_timeout"),
-        "action": action,
-        "target_rev": str(status.get("target_rev") or attempt.get("target_rev") or ""),
-        "target_version": str(status.get("target_version") or attempt.get("target_version") or ""),
-        "reason": str(status.get("reason") or attempt.get("reason") or "supervisor.timeout"),
-        "message": f"supervisor timed out waiting for runtime to finish {status.get('state') or 'update transition'}",
-        "supervisor_timeout_sec": timeout_sec,
-        "supervisor_timeout_at": now,
-        "supervisor_previous_status": status,
-    }
-    if prepare_lease_revocation is not None:
-        failed_payload["prepare_lease_revocation"] = prepare_lease_revocation
-    if action == "update":
-        target_slot = str(status.get("target_slot") or attempt.get("target_slot") or "").strip().upper()
-        restored = rollback_to_previous_slot()
-        skill_runtime_rollback = rollback_installed_skill_runtimes() if restored else {}
-        if restored:
-            failed_payload["restored_slot"] = restored
-            failed_payload["rollback"] = {"ok": True, "slot": restored}
-            failed_payload["message"] += f"; rolled back to slot {restored}"
-        if target_slot:
-            # Timeout reconciliation has no process handle and cannot prove that
-            # the target runtime has exited. Removing its slot here leaves a
-            # live process executing from a deleted interpreter/source tree.
-            failed_payload["slot_cleanup"] = {
-                "ok": True,
-                "removed": False,
-                "deferred": True,
-                "slot": target_slot,
-                "reason": "runtime_stop_not_confirmed",
-            }
-        if skill_runtime_rollback:
-            failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
-            if restored and not bool(skill_runtime_rollback.get("ok")):
-                failed_payload["message"] += " | some skill runtime rollbacks failed"
-    failed_status = write_core_update_status(failed_payload)
-    with contextlib.suppress(Exception):
-        clear_core_update_plan()
-    payload["status"] = failed_status
-    payload["attempt"] = _complete_update_attempt(state="failed", status=failed_status, reason="restart/apply timeout")
-    payload["_served_by"] = "supervisor_timeout_recovery"
-    return payload
 
 
 def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -2183,121 +1994,14 @@ def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str,
 
 
 def _public_update_status_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    source = dict(payload or {})
-    status = source.get("status") if isinstance(source.get("status"), dict) else {}
-    runtime = source.get("runtime") if isinstance(source.get("runtime"), dict) else {}
-    attempt = source.get("attempt") if isinstance(source.get("attempt"), dict) else {}
-    runtime_self_heal = runtime.get("runtime_self_heal") if isinstance(runtime.get("runtime_self_heal"), dict) else {}
-    sidecar = runtime.get("sidecar") if isinstance(runtime.get("sidecar"), dict) else {}
-    sidecar_process = sidecar.get("process") if isinstance(sidecar.get("process"), dict) else {}
-    sidecar_health = sidecar.get("health") if isinstance(sidecar.get("health"), dict) else {}
-    sidecar_code = sidecar.get("code") if isinstance(sidecar.get("code"), dict) else {}
-    sidecar_policy = sidecar.get("restart_policy") if isinstance(sidecar.get("restart_policy"), dict) else {}
-    sidecar_sync = sidecar.get("sync") if isinstance(sidecar.get("sync"), dict) else {}
-    public_status = {
-        "action": str(status.get("action") or "").strip().lower() or None,
-        "state": str(status.get("state") or "").strip().lower() or "unknown",
-        "phase": str(status.get("phase") or "").strip().lower() or "",
-        "message": str(status.get("message") or "").strip(),
-        "target_rev": str(status.get("target_rev") or "").strip(),
-        "target_version": str(status.get("target_version") or "").strip(),
-        "planned_reason": str(status.get("planned_reason") or "").strip() or None,
-        "min_update_period_sec": status.get("min_update_period_sec"),
-        "scheduled_for": status.get("scheduled_for"),
-        "subsequent_transition": bool(status.get("subsequent_transition")),
-        "subsequent_transition_requested_at": status.get("subsequent_transition_requested_at"),
-        "candidate_prewarm_state": str(status.get("candidate_prewarm_state") or "").strip() or None,
-        "candidate_prewarm_message": str(status.get("candidate_prewarm_message") or "").strip() or None,
-        "candidate_prewarm_ready_at": status.get("candidate_prewarm_ready_at"),
-        "restart_mode": str(status.get("restart_mode") or "").strip() or None,
-        "restart_requested_at": status.get("restart_requested_at"),
-        "updated_at": status.get("updated_at"),
-    }
-    return {
-        "ok": True,
-        "status": public_status,
-        "attempt": {
-            "contract_version": str(attempt.get("contract_version") or UPDATE_ATTEMPT_CONTRACT_VERSION),
-            "authority": str(attempt.get("authority") or "supervisor"),
-            "action": str(attempt.get("action") or "").strip().lower() or None,
-            "state": str(attempt.get("state") or "").strip().lower() or None,
-            "awaiting_restart": bool(attempt.get("awaiting_restart")),
-            "planned_reason": str(attempt.get("planned_reason") or "").strip() or None,
-            "scheduled_for": attempt.get("scheduled_for"),
-            "subsequent_transition": bool(attempt.get("subsequent_transition")),
-            "subsequent_transition_requested_at": attempt.get("subsequent_transition_requested_at"),
-            "candidate_prewarm_state": str(attempt.get("candidate_prewarm_state") or "").strip() or None,
-            "candidate_prewarm_message": str(attempt.get("candidate_prewarm_message") or "").strip() or None,
-            "restart_mode": str(attempt.get("restart_mode") or "").strip() or None,
-            "restart_requested_at": attempt.get("restart_requested_at"),
-            "updated_at": attempt.get("updated_at"),
-        },
-        "runtime": {
-            "active_slot": str(runtime.get("active_slot") or "").strip() or None,
-            "runtime_state": str(runtime.get("runtime_state") or "").strip() or None,
-            "runtime_url": str(runtime.get("runtime_url") or "").strip() or None,
-            "runtime_port": runtime.get("runtime_port"),
-            "runtime_instance_id": str(runtime.get("runtime_instance_id") or "").strip() or None,
-            "transition_role": str(runtime.get("transition_role") or "").strip() or None,
-            "listener_running": bool(runtime.get("listener_running")),
-            "runtime_api_ready": bool(runtime.get("runtime_api_ready")),
-            "candidate_slot": str(runtime.get("candidate_slot") or "").strip() or None,
-            "candidate_runtime_url": str(runtime.get("candidate_runtime_url") or "").strip() or None,
-            "candidate_runtime_port": runtime.get("candidate_runtime_port"),
-            "candidate_runtime_instance_id": str(runtime.get("candidate_runtime_instance_id") or "").strip() or None,
-            "candidate_transition_role": str(runtime.get("candidate_transition_role") or "").strip() or None,
-            "candidate_listener_running": bool(runtime.get("candidate_listener_running")),
-            "candidate_runtime_api_ready": bool(runtime.get("candidate_runtime_api_ready")),
-            "candidate_runtime_state": str(runtime.get("candidate_runtime_state") or "").strip() or None,
-            "transition_mode": str(runtime.get("transition_mode") or "").strip() or None,
-            "warm_switch_supported": runtime.get("warm_switch_supported"),
-            "warm_switch_allowed": runtime.get("warm_switch_allowed"),
-            "warm_switch_reason": str(runtime.get("warm_switch_reason") or "").strip() or None,
-            "slot_ports": runtime.get("slot_ports") if isinstance(runtime.get("slot_ports"), dict) else {},
-            "required_upstream_link": _compact_watchdog_required_link(runtime.get("required_upstream_link")),
-            "root_promotion_required": bool(runtime.get("root_promotion_required")),
-            "runtime_self_heal": _compact_public_runtime_self_heal(runtime_self_heal),
-            "sidecar": {
-                "enabled": bool(sidecar.get("enabled")),
-                "role": str(sidecar.get("role") or "").strip() or None,
-                "launch_cwd": str(sidecar.get("launch_cwd") or "").strip() or None,
-                "last_start_reason": str(sidecar.get("last_start_reason") or "").strip() or None,
-                "last_restart_reason": str(sidecar.get("last_restart_reason") or "").strip() or None,
-                "listener_running": bool(sidecar_process.get("listener_running")),
-                "listener_pid": sidecar_process.get("listener_pid"),
-                "managed_pid": sidecar_process.get("managed_pid"),
-                "adopted_listener": bool(sidecar_process.get("adopted_listener")),
-                "last_probe_ok": sidecar_health.get("last_probe_ok"),
-                "last_probe_error": str(sidecar_health.get("last_probe_error") or "").strip() or None,
-                "consecutive_failures": sidecar_health.get("consecutive_failures"),
-                "code_changed": bool(
-                    sidecar_code.get("fingerprint")
-                    and sidecar_code.get("active_fingerprint")
-                    and str(sidecar_code.get("fingerprint")) != str(sidecar_code.get("active_fingerprint"))
-                ),
-                "active_fingerprint": str(sidecar_code.get("active_fingerprint") or "").strip() or None,
-                "pending_fingerprint": str(sidecar_policy.get("pending_code_fingerprint") or "").strip() or None,
-                "restart_backoff_remaining_s": sidecar_policy.get("restart_backoff_remaining_s"),
-                "circuit_open_remaining_s": sidecar_policy.get("circuit_open_remaining_s"),
-                "sync_source_mode": str(sidecar_code.get("sync_source_mode") or "").strip() or None,
-                "sync_source_slot": str(sidecar_code.get("sync_source_slot") or "").strip() or None,
-                "last_sync_at": sidecar_sync.get("last_sync_at"),
-                "last_sync_source_slot": str(sidecar_sync.get("last_sync_source_slot") or "").strip() or None,
-                "last_sync_reason": str(sidecar_sync.get("last_sync_reason") or "").strip() or None,
-                "last_sync_changed_paths": list(sidecar_sync.get("last_sync_changed_paths") or []),
-                "sync_changed": bool(sidecar_sync.get("last_sync_changed_paths")),
-            },
-        },
-        "_served_by": str(source.get("_served_by") or "").strip() or "unknown",
-    }
+    return _UPDATE_RECONCILIATION.public_payload(
+        _update_reconciliation_operations(),
+        payload,
+    )
 
 
 def _listener_running(host: str, port: int, *, timeout: float = 0.35) -> bool:
-    try:
-        with socket.create_connection((str(host or "127.0.0.1"), int(port)), timeout=max(0.05, float(timeout))):
-            return True
-    except Exception:
-        return False
+    return _PROCESS_SUPERVISOR.listener_running(host, port, timeout=timeout)
 
 
 def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.75) -> bool:
@@ -2342,236 +2046,39 @@ def _runtime_shutdown_request_timeout(*, drain_timeout_sec: float, signal_delay_
 
 
 def _runtime_profile_graceful_shutdown_timeout_sec(profile_mode: str) -> tuple[float, float, float, float]:
-    normalized = str(profile_mode or "normal").strip().lower()
-    if normalized == "normal":
-        return 5.0, 0.25, 8.0, 5.0
-    try:
-        drain_timeout = max(
-            5.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_PROFILE_DRAIN_TIMEOUT_SEC") or "20").strip()),
-        )
-    except Exception:
-        drain_timeout = 20.0
-    try:
-        signal_delay = max(
-            0.25,
-            float(str(os.getenv("ADAOS_SUPERVISOR_PROFILE_SIGNAL_DELAY_SEC") or "1").strip()),
-        )
-    except Exception:
-        signal_delay = 1.0
-    try:
-        graceful_wait = max(
-            8.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_PROFILE_GRACEFUL_WAIT_SEC") or "25").strip()),
-        )
-    except Exception:
-        graceful_wait = 25.0
-    try:
-        terminate_wait = max(
-            5.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_PROFILE_TERMINATE_WAIT_SEC") or "10").strip()),
-        )
-    except Exception:
-        terminate_wait = 10.0
-    return drain_timeout, signal_delay, graceful_wait, terminate_wait
+    return _MEMORY_PROFILING.graceful_shutdown_timeouts(profile_mode)
 
 
 def _signal_process_family(proc: subprocess.Popen[Any], sig: int) -> None:
-    if os.name != "nt":
-        pid = getattr(proc, "pid", None)
-        if pid:
-            try:
-                os.killpg(int(pid), int(sig))
-                return
-            except ProcessLookupError:
-                pass
-            except Exception:
-                pass
-    if sig == getattr(signal, "SIGKILL", 9):
-        proc.kill()
-    else:
-        proc.terminate()
+    _PROCESS_SUPERVISOR.signal_family(proc, sig)
 
 
 def _runtime_profile_finalize_wait_sec() -> float:
-    try:
-        return max(
-            2.0,
-            float(str(os.getenv("ADAOS_SUPERVISOR_PROFILE_FINALIZE_WAIT_SEC") or "8").strip()),
-        )
-    except Exception:
-        return 8.0
+    return _MEMORY_PROFILING.finalize_wait_sec()
 
 
 def _memory_profile_max_runtime_sec(profile_mode: str) -> float:
-    normalized = str(profile_mode or "normal").strip().lower()
-    if normalized == "sampled_profile":
-        raw = os.getenv("ADAOS_SUPERVISOR_SAMPLED_PROFILE_MAX_RUNTIME_SEC")
-        default = "40"
-    elif normalized == "trace_profile":
-        raw = os.getenv("ADAOS_SUPERVISOR_TRACE_PROFILE_MAX_RUNTIME_SEC")
-        default = "75"
-    else:
-        return 0.0
-    try:
-        return max(5.0, float(str(raw or default).strip()))
-    except Exception:
-        return float(default)
+    return _MEMORY_PROFILING.max_runtime_sec(profile_mode)
 
 
 def _proc_details(proc: subprocess.Popen[Any] | None, *, cwd_hint: str | None = None) -> dict[str, Any]:
-    managed_pid = None
-    managed_alive = False
-    managed_cmdline: list[str] = []
-    managed_executable = None
-    managed_cwd = None
-    if proc is None:
-        return {
-            "managed_pid": None,
-            "managed_alive": False,
-            "managed_cmdline": [],
-            "managed_executable": None,
-            "managed_cwd": None,
-        }
-    try:
-        managed_pid = int(proc.pid or 0) or None
-        managed_alive = proc.poll() is None
-        raw_args = proc.args if isinstance(proc.args, (list, tuple)) else [str(proc.args or "")]
-        managed_cmdline = [str(item) for item in raw_args if str(item or "").strip()]
-        managed_executable = managed_cmdline[0] if managed_cmdline else None
-        managed_cwd = str(cwd_hint or getattr(proc, "cwd", None) or "").strip() or None
-    except Exception:
-        managed_pid = None
-        managed_alive = False
-        managed_cmdline = []
-        managed_executable = None
-        managed_cwd = None
-    return {
-        "managed_pid": managed_pid,
-        "managed_alive": managed_alive,
-        "managed_cmdline": managed_cmdline,
-        "managed_executable": managed_executable,
-        "managed_cwd": managed_cwd,
-    }
+    return _PROCESS_SUPERVISOR.describe(proc, cwd_hint=cwd_hint)
 
 
 def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
-    if not pid or psutil is None:
-        return None, None
-    try:
-        root = psutil.Process(int(pid))
-    except Exception:
-        return None, None
-    try:
-        root_rss = int(root.memory_info().rss)
-    except Exception:
-        root_rss = None
-    family_rss = int(root_rss or 0)
-    try:
-        children = list(root.children(recursive=True))
-    except Exception:
-        children = []
-    for child in children:
-        try:
-            family_rss += int(child.memory_info().rss)
-        except Exception:
-            continue
-    return root_rss, family_rss if family_rss > 0 else root_rss
-
-
-def _process_cmdline_label(cmdline: list[str]) -> str | None:
-    parts = [Path(str(item)).name if index == 0 else str(item) for index, item in enumerate(cmdline[:4])]
-    text = " ".join(part for part in parts if part.strip()).strip()
-    return text[:240] or None
-
-
-def _process_skill_runtime_name(cmdline: list[str]) -> str | None:
-    marker = "/skills/.runtime/"
-    for item in cmdline:
-        normalized = str(item or "").replace("\\", "/")
-        if marker not in normalized:
-            continue
-        tail = normalized.split(marker, 1)[1]
-        name = tail.split("/", 1)[0].strip()
-        if name:
-            return name[:120]
-    return None
-
-
-def _process_memory_item(proc: Any) -> dict[str, Any] | None:
-    try:
-        pid = int(proc.pid)
-    except Exception:
-        return None
-    try:
-        ppid = int(proc.ppid())
-    except Exception:
-        ppid = None
-    try:
-        rss_bytes = int(proc.memory_info().rss)
-    except Exception:
-        rss_bytes = None
-    try:
-        name = str(proc.name() or "").strip() or None
-    except Exception:
-        name = None
-    try:
-        cmdline = [str(item) for item in proc.cmdline() if str(item or "").strip()]
-    except Exception:
-        cmdline = []
-    return {
-        "pid": pid,
-        "ppid": ppid,
-        "name": name,
-        "rss_bytes": rss_bytes,
-        "cmdline_label": _process_cmdline_label(cmdline),
-        "skill_runtime": _process_skill_runtime_name(cmdline),
-    }
+    return _MEMORY_PROFILING.family_rss_bytes(pid, psutil_module=psutil)
 
 
 def _process_family_memory_snapshot(pid: int | None, *, max_children: int = 12) -> dict[str, Any]:
-    if not pid:
-        return {"available": False, "reason": "pid_unavailable"}
-    if psutil is None:
-        return {"available": False, "reason": "psutil_unavailable", "pid": int(pid)}
-    try:
-        root = psutil.Process(int(pid))
-    except Exception as exc:
-        return {"available": False, "reason": f"process_unavailable:{type(exc).__name__}", "pid": int(pid)}
-    root_item = _process_memory_item(root) or {"pid": int(pid), "rss_bytes": None}
-    try:
-        raw_children = list(root.children(recursive=True))
-    except Exception:
-        raw_children = []
-    child_items = [item for child in raw_children if (item := _process_memory_item(child)) is not None]
-    child_items.sort(key=lambda item: int(item.get("rss_bytes") or 0), reverse=True)
-    child_total = sum(int(item.get("rss_bytes") or 0) for item in child_items)
-    root_rss = int(root_item.get("rss_bytes") or 0)
-    limit = max(0, min(int(max_children or 0), 64))
-    return {
-        "available": True,
-        "pid": int(pid),
-        "root": root_item,
-        "children": child_items[:limit],
-        "children_total": len(child_items),
-        "children_returned": min(len(child_items), limit),
-        "children_omitted": max(0, len(child_items) - limit),
-        "children_rss_bytes": child_total,
-        "family_rss_bytes": root_rss + child_total if root_rss or child_total else None,
-    }
+    return _MEMORY_PROFILING.process_family_snapshot(
+        pid,
+        psutil_module=psutil,
+        max_children=max_children,
+    )
 
 
 def _parse_linux_memory_stat(text: str) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for line in str(text or "").splitlines():
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        try:
-            result[str(parts[0])] = int(parts[1])
-        except Exception:
-            continue
-    return result
+    return _MEMORY_PROFILING.parse_linux_memory_stat(text)
 
 
 def _linux_cgroup_memory_snapshot(pid: int | None) -> dict[str, Any]:
@@ -2771,80 +2278,13 @@ def _positive_int_or_none(value: Any) -> int | None:
     return item if item > 0 else None
 
 
-class _AdoptedProcess:
-    """Small Popen-compatible handle for a listener inherited across supervisor restart."""
-
+class _AdoptedProcess(AdoptedProcess):
     def __init__(self, pid: int) -> None:
-        if psutil is None:
-            raise RuntimeError("psutil is required to adopt an existing process")
-        process = psutil.Process(int(pid))
-        self.pid = int(pid)
-        self._created_at = float(process.create_time())
-        try:
-            self.args = list(process.cmdline())
-        except Exception:
-            self.args = []
-        try:
-            self.cwd = str(process.cwd())
-        except Exception:
-            self.cwd = None
-
-    def _process(self) -> Any | None:
-        if psutil is None:
-            return None
-        try:
-            process = psutil.Process(self.pid)
-            if abs(float(process.create_time()) - self._created_at) > 0.001:
-                return None
-            return process
-        except Exception:
-            return None
-
-    def poll(self) -> int | None:
-        process = self._process()
-        return None if process is not None and process.is_running() else 0
-
-    def terminate(self) -> None:
-        process = self._process()
-        if process is not None:
-            process.terminate()
-
-    def kill(self) -> None:
-        process = self._process()
-        if process is not None:
-            process.kill()
+        super().__init__(pid, psutil_module=psutil)
 
 
 def _listener_owner_pid(host: str, port: int) -> int | None:
-    if psutil is None:
-        return None
-    expected_port = int(port)
-    expected_host = str(host or "127.0.0.1").strip()
-    try:
-        connections = psutil.net_connections(kind="tcp")
-    except Exception:
-        return None
-    for connection in connections:
-        if str(getattr(connection, "status", "")).upper() != "LISTEN":
-            continue
-        address = getattr(connection, "laddr", None)
-        if not address or int(getattr(address, "port", 0) or 0) != expected_port:
-            continue
-        bound_host = str(getattr(address, "ip", "") or "")
-        if expected_host not in {"0.0.0.0", "::", ""} and bound_host not in {
-            expected_host,
-            "0.0.0.0",
-            "::",
-            "::1" if expected_host == "127.0.0.1" else expected_host,
-        }:
-            continue
-        try:
-            pid = int(getattr(connection, "pid", 0) or 0)
-        except Exception:
-            pid = 0
-        if pid > 0:
-            return pid
-    return None
+    return _PROCESS_SUPERVISOR.listener_owner_pid(host, port)
 
 
 def _format_slot_value(template: str, values: dict[str, str]) -> str:
@@ -2855,11 +2295,86 @@ def _format_slot_value(template: str, values: dict[str, str]) -> str:
     return template.format(**payload)
 
 
+def _owned_field(owner_name: str, field_name: str) -> property:
+    """Expose a temporary manager-compatible view over component-owned state."""
+
+    def _get(instance: Any) -> Any:
+        return getattr(getattr(instance, owner_name), field_name)
+
+    def _set(instance: Any, value: Any) -> None:
+        setattr(getattr(instance, owner_name), field_name, value)
+
+    return property(_get, _set)
+
+
 class SupervisorManager:
+    _proc = _owned_field("_process_supervisor", "active")
+    _candidate_proc = _owned_field("_process_supervisor", "candidate")
+    _sidecar_proc = _owned_field("_process_supervisor", "sidecar")
+    _desired_running = _owned_field("_process_supervisor", "desired_running")
+    _stopping = _owned_field("_process_supervisor", "stopping")
+    _lock = _owned_field("_process_supervisor", "lock")
+    _monitor_task = _owned_field("_process_supervisor", "monitor_task")
+    _update_task = _owned_field("_update_state_machine", "task")
+    _update_task_cancel_mode = _owned_field("_update_state_machine", "cancel_mode")
+    _runtime_unhealthy_since = _owned_field("_recovery_policy", "unhealthy_since")
+    _runtime_unhealthy_kind = _owned_field("_recovery_policy", "unhealthy_kind")
+    _runtime_self_heal_last_decision = _owned_field("_recovery_policy", "last_decision")
+    _runtime_self_heal_last_evidence = _owned_field("_recovery_policy", "last_evidence")
+    _memory_profiler_adapter = _owned_field("_memory_profiling", "profiler_adapter_name")
+    _memory_profile_mode = _owned_field("_memory_profiling", "profile_mode")
+    _memory_requested_profile_mode = _owned_field("_memory_profiling", "requested_profile_mode")
+    _memory_publish_request_session_id = _owned_field("_memory_profiling", "publish_request_session_id")
+    _memory_profile_current_trigger_source = _owned_field("_memory_profiling", "profile_current_trigger_source")
+    _memory_suspicion_state = _owned_field("_memory_profiling", "suspicion_state")
+    _memory_suspicion_reason = _owned_field("_memory_profiling", "suspicion_reason")
+    _memory_suspicion_since = _owned_field("_memory_profiling", "suspicion_since")
+    _memory_active_session_id = _owned_field("_memory_profiling", "active_session_id")
+    _memory_profile_finalizing_session_id = _owned_field("_memory_profiling", "profile_finalizing_session_id")
+    _memory_last_session_id = _owned_field("_memory_profiling", "last_session_id")
+    _memory_baseline_scope_key = _owned_field("_memory_profiling", "baseline_scope_key")
+    _memory_baseline_pid = _owned_field("_memory_profiling", "baseline_pid")
+    _memory_baseline_family_rss_bytes = _owned_field("_memory_profiling", "baseline_family_rss_bytes")
+    _memory_baseline_started_at = _owned_field("_memory_profiling", "baseline_started_at")
+    _memory_baseline_matured_at = _owned_field("_memory_profiling", "baseline_matured_at")
+    _memory_baseline_phase = _owned_field("_memory_profiling", "baseline_phase")
+    _memory_baseline_last_adjusted_at = _owned_field("_memory_profiling", "baseline_last_adjusted_at")
+    _memory_baseline_last_adjustment_reason = _owned_field(
+        "_memory_profiling",
+        "baseline_last_adjustment_reason",
+    )
+    _memory_baseline_adjustment_total = _owned_field("_memory_profiling", "baseline_adjustment_total")
+    _memory_last_growth_bytes = _owned_field("_memory_profiling", "last_growth_bytes")
+    _memory_last_growth_bytes_per_min = _owned_field("_memory_profiling", "last_growth_bytes_per_min")
+    _memory_last_available_bytes = _owned_field("_memory_profiling", "last_available_bytes")
+    _memory_last_available_percent = _owned_field("_memory_profiling", "last_available_percent")
+    _memory_last_telemetry_at = _owned_field("_memory_profiling", "last_telemetry_at")
+    _memory_auto_profile_last_block_reason = _owned_field(
+        "_memory_profiling",
+        "auto_profile_last_block_reason",
+    )
+    _memory_auto_profile_last_block_at = _owned_field("_memory_profiling", "auto_profile_last_block_at")
+    _memory_critical_since = _owned_field("_memory_profiling", "critical_since")
+    _memory_critical_reason = _owned_field("_memory_profiling", "critical_reason")
+    _memory_critical_restart_last_at = _owned_field("_memory_profiling", "critical_restart_last_at")
+
     def __init__(self, *, runtime_host: str, runtime_port: int, token: str | None) -> None:
         self.runtime_host = str(runtime_host or "127.0.0.1").strip() or "127.0.0.1"
         self.runtime_port = int(runtime_port)
         self.token = str(token or "").strip() or None
+        self._process_supervisor = ProcessSupervisor(psutil)
+        self._monitoring = SupervisorMonitoringService()
+        self._status_service = SupervisorStatusService()
+        self._update_execution = SupervisorUpdateExecution()
+        self._update_state_machine = UpdateStateMachine()
+        self._update_state_machine.bind_persistence(
+            write_status=write_core_update_status,
+            write_attempt=_write_update_attempt,
+        )
+        self._recovery_policy = RuntimeRecoveryPolicy()
+        self._memory_profiling = MemoryProfilingService(
+            default_profiler_adapter=DEFAULT_PROFILER_ADAPTER,
+        )
         ensure_memory_store()
         self._proc: Any | None = None
         self._candidate_proc: Any | None = None
@@ -2971,6 +2486,136 @@ class SupervisorManager:
         self._sidecar_last_sync_source_slot: str | None = None
         self._sidecar_last_sync_reason: str | None = None
         self._sidecar_last_sync_changed_paths: list[str] = []
+
+    @staticmethod
+    def _process_operations() -> ProcessSupervisorOperations:
+        return ProcessSupervisorOperations(
+            active_slot=active_slot,
+            active_slot_manifest=active_slot_manifest,
+            adopted_process_type=_AdoptedProcess,
+            core_slot_status=core_slot_status,
+            current_base_dir=current_base_dir,
+            format_slot_value=_format_slot_value,
+            listener_owner_pid=_listener_owner_pid,
+            logger=_LOG,
+            new_runtime_instance_id=_new_runtime_instance_id,
+            proc_details=_proc_details,
+            read_json=_read_json,
+            read_memory_session_summary=read_memory_session_summary,
+            read_slot_manifest=read_slot_manifest,
+            requests_module=requests,
+            runtime_api_ready=_runtime_api_ready,
+            supervisor_runtime_state_path=_supervisor_runtime_state_path,
+        )
+
+    @staticmethod
+    def _recovery_operations() -> RuntimeRecoveryOperations:
+        return RuntimeRecoveryOperations(
+            hub_root_watchdog_cooldown_sec=_hub_root_watchdog_cooldown_sec,
+            hub_root_watchdog_enabled=_hub_root_watchdog_enabled,
+            hub_root_watchdog_reset_degraded_route_enabled=(
+                _hub_root_watchdog_reset_degraded_route_enabled
+            ),
+            member_hub_watchdog_cooldown_sec=_member_hub_watchdog_cooldown_sec,
+            member_hub_watchdog_enabled=_member_hub_watchdog_enabled,
+        )
+
+    @staticmethod
+    def _memory_operations() -> MemoryProfilingOperations:
+        return MemoryProfilingOperations(
+            default_profiler_adapter=DEFAULT_PROFILER_ADAPTER,
+            http_exception_type=HTTPException,
+            implemented_profile_control_actions=IMPLEMENTED_PROFILE_CONTROL_ACTIONS,
+            implemented_profile_control_mode=IMPLEMENTED_PROFILE_CONTROL_MODE,
+            memory_operation_contract_version=MEMORY_OPERATION_CONTRACT_VERSION,
+            profile_launch_env_keys=PROFILE_LAUNCH_ENV_KEYS,
+            top_level_operation_events=TOP_LEVEL_OPERATION_EVENTS,
+            available_memory_bytes=_available_memory_bytes,
+            memory_auto_profile_browser_live_ttl_sec=_memory_auto_profile_browser_live_ttl_sec,
+            memory_auto_profile_min_uptime_sec=_memory_auto_profile_min_uptime_sec,
+            memory_baseline_maturity_slope_bytes_per_min=_memory_baseline_maturity_slope_bytes_per_min,
+            memory_baseline_warmup_sec=_memory_baseline_warmup_sec,
+            memory_critical_available_bytes_threshold=_memory_critical_available_bytes_threshold,
+            memory_critical_available_percent_threshold=_memory_critical_available_percent_threshold,
+            memory_critical_duration_sec=_memory_critical_duration_sec,
+            memory_critical_restart_cooldown_sec=_memory_critical_restart_cooldown_sec,
+            memory_policy_profile_restarts_enabled=_memory_policy_profile_restarts_enabled,
+            memory_suspicion_family_rss_threshold_bytes=_memory_suspicion_family_rss_threshold_bytes,
+            memory_suspicion_growth_threshold_bytes=_memory_suspicion_growth_threshold_bytes,
+            memory_suspicion_slope_threshold_bytes_per_min=(
+                _memory_suspicion_slope_threshold_bytes_per_min
+            ),
+            memory_telemetry_interval_sec=_memory_telemetry_interval_sec,
+            memory_telemetry_window_sec=_memory_telemetry_window_sec,
+            positive_int_or_none=_positive_int_or_none,
+            proc_details=_proc_details,
+            process_family_rss_bytes=_process_family_rss_bytes,
+            runtime_memory_attribution_snapshot=_runtime_memory_attribution_snapshot,
+            total_memory_bytes=_total_memory_bytes,
+            active_slot=active_slot,
+            append_memory_telemetry_sample=append_memory_telemetry_sample,
+            ensure_memory_store=ensure_memory_store,
+            read_memory_session_index=read_memory_session_index,
+            read_memory_session_operations=read_memory_session_operations,
+            read_memory_session_summary=read_memory_session_summary,
+            read_memory_telemetry_tail=read_memory_telemetry_tail,
+            supervisor_memory_sessions_index_path=supervisor_memory_sessions_index_path,
+            supervisor_memory_session_artifacts_dir=supervisor_memory_session_artifacts_dir,
+            supervisor_memory_telemetry_path=supervisor_memory_telemetry_path,
+        )
+
+    @staticmethod
+    def _status_operations() -> SupervisorStatusOperations:
+        return SupervisorStatusOperations(
+            active_slot=active_slot,
+            active_slot_manifest=active_slot_manifest,
+            core_slot_status=core_slot_status,
+            listener_running=_listener_running,
+            proc_details=_proc_details,
+            read_core_update_status=read_core_update_status,
+            read_jsonl_tail=_read_jsonl_tail,
+            read_slot_manifest=read_slot_manifest,
+            read_update_attempt=_read_update_attempt,
+            realtime_sidecar_diag_path=realtime_sidecar_diag_path,
+            realtime_sidecar_local_url=realtime_sidecar_local_url,
+            resolved_root_promotion_requirement=resolved_root_promotion_requirement,
+            runtime_api_ready=_runtime_api_ready,
+            supervisor_base_url=_supervisor_base_url,
+            validate_slot_structure=validate_slot_structure,
+        )
+
+    @staticmethod
+    def _monitoring_operations() -> SupervisorMonitoringOperations:
+        return SupervisorMonitoringOperations(
+            active_slot=active_slot,
+            logger=_LOG,
+            realtime_sidecar_enabled=realtime_sidecar_enabled,
+            realtime_sidecar_listener_snapshot=realtime_sidecar_listener_snapshot,
+            restart_realtime_sidecar_subprocess=restart_realtime_sidecar_subprocess,
+            sidecar_code_change_debounce_sec=_sidecar_code_change_debounce_sec,
+        )
+
+    @staticmethod
+    def _update_execution_operations() -> SupervisorUpdateExecutionOperations:
+        return SupervisorUpdateExecutionOperations(
+            build_attempt_payload=_build_attempt_payload,
+            complete_update_attempt=_complete_update_attempt,
+            revoke_prepare_lease=_revoke_prepare_lease,
+            warm_switch_cold_fallback_enabled=_warm_switch_cold_fallback_enabled,
+            warm_switch_defer_sec=_warm_switch_defer_sec,
+            warm_switch_enabled=_warm_switch_enabled,
+            warm_switch_max_deferrals=_warm_switch_max_deferrals,
+            warm_switch_strict_cutover_enabled=_warm_switch_strict_cutover_enabled,
+            write_prepare_lease=_write_prepare_lease,
+            write_update_attempt=_write_update_attempt,
+            activate_slot=activate_slot,
+            choose_inactive_slot=choose_inactive_slot,
+            clear_core_update_plan=clear_core_update_plan,
+            prepare_pending_update=prepare_pending_update,
+            remove_inactive_slot=remove_inactive_slot,
+            write_core_update_plan=write_core_update_plan,
+            write_core_update_status=write_core_update_status,
+        )
 
     def _sidecar_repo_root(self) -> Path | None:
         def _normalize_candidate(raw: Any) -> Path | None:
@@ -3377,113 +3022,14 @@ class SupervisorManager:
         stage: str,
         details: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        token = str(session_id or "").strip()
-        if not token:
-            return None
-        summary = read_memory_session_summary(token)
-        if not isinstance(summary, dict):
-            return None
-        stage_token = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(stage or "incident"))
-        stage_token = stage_token.strip("-_") or "incident"
-        artifact_id = f"local-incident-{stage_token}"
-        now = time.time()
-        operations_tail = read_memory_session_operations(token, limit=200)
-        telemetry_tail = self._memory_session_telemetry_window(summary, limit=200)
-        yjs_pressure: dict[str, Any] = {}
-        try:
-            from adaos.services.yjs.gateway_ws import yjs_pressure_snapshot
-
-            snapshot = yjs_pressure_snapshot()
-            yjs_pressure = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            yjs_pressure = {}
-        route_diagnostics: dict[str, Any] = {}
-        try:
-            from adaos.services.reliability import channel_diagnostics_snapshot
-
-            snapshot = channel_diagnostics_snapshot()
-            route_diagnostics = (
-                dict(snapshot.get("route") or {})
-                if isinstance(snapshot, dict) and isinstance(snapshot.get("route"), dict)
-                else {}
-            )
-        except Exception:
-            route_diagnostics = {}
-        member_snapshot_rebuild: dict[str, Any] = {}
-        try:
-            from adaos.services.scenario.webspace_runtime import member_snapshot_rebuild_runtime_snapshot
-
-            snapshot = member_snapshot_rebuild_runtime_snapshot(limit=25)
-            member_snapshot_rebuild = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            member_snapshot_rebuild = {}
-        eventbus_backlog: dict[str, Any] = {}
-        try:
-            snapshot = self._ctx.bus.backlog_snapshot() if hasattr(self._ctx.bus, "backlog_snapshot") else {}
-            eventbus_backlog = dict(snapshot) if isinstance(snapshot, dict) else {}
-        except Exception:
-            eventbus_backlog = {}
-        incident_summary: dict[str, Any] = {}
-        try:
-            from adaos.services.hmg_incident_summary import build_hmg_incident_summary
-
-            incident_summary = build_hmg_incident_summary(
-                route_diagnostics=route_diagnostics,
-                yjs_pressure=yjs_pressure,
-                member_snapshot_rebuild=member_snapshot_rebuild,
-                eventbus_backlog=eventbus_backlog,
-            )
-        except Exception:
-            incident_summary = {}
-        payload = {
-            "captured_at": now,
-            "reason": str(reason or "").strip() or "memory_profile_failure",
-            "stage": stage_token,
-            "details": dict(details or {}),
-            "session": summary,
-            "runtime": self._memory_runtime_state_payload(),
-            "telemetry_tail": [dict(item) for item in telemetry_tail[-50:] if isinstance(item, dict)],
-            "operations_tail": [dict(item) for item in operations_tail[-50:] if isinstance(item, dict)],
-            "yjs_pressure": yjs_pressure,
-            "route_diagnostics": route_diagnostics,
-            "member_snapshot_rebuild": member_snapshot_rebuild,
-            "eventbus_backlog": eventbus_backlog,
-            "incident_summary": incident_summary,
-        }
-        artifact_dir = supervisor_memory_session_artifacts_dir(token)
-        path = (artifact_dir / f"{artifact_id}.json").resolve()
-        content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        path.write_bytes(content)
-        artifact_ref = {
-            "artifact_id": artifact_id,
-            "kind": "local_incident_context",
-            "path": str(path),
-            "content_type": "application/json",
-            "size_bytes": len(content),
-            "sha256": hashlib.sha256(content).hexdigest(),
-            "created_at": now,
-            "published_ref": None,
-        }
-        refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
-        summary["artifact_refs"] = [
-            dict(item)
-            for item in refs
-            if isinstance(item, dict) and str(item.get("artifact_id") or "").strip() != artifact_id
-        ] + [artifact_ref]
-        window = summary.get("operation_window") if isinstance(summary.get("operation_window"), dict) else {}
-        window = dict(window)
-        window["local_incident_artifact_id"] = artifact_id
-        window["local_incident_stage"] = stage_token
-        window["local_incident_reason"] = str(reason or "").strip() or "memory_profile_failure"
-        window["local_incident_captured_at"] = now
-        if incident_summary:
-            window["local_incident_headline"] = str(incident_summary.get("headline") or "").strip() or None
-            window["local_incident_dominant_signal"] = (
-                str(incident_summary.get("dominant_signal") or "").strip() or None
-            )
-        summary["operation_window"] = window
-        self._upsert_memory_session_summary(summary)
-        return artifact_ref
+        return self._memory_profiling.capture_local_incident_artifact(
+            self,
+            self._memory_operations(),
+            session_id,
+            reason=reason,
+            stage=stage,
+            details=details,
+        )
 
     def _fail_active_memory_session(
         self,
@@ -4049,168 +3595,10 @@ class SupervisorManager:
         await self.restart_runtime(reason=f"supervisor.memory.apply_profile_mode.{desired_mode}")
 
     def _sample_memory_telemetry(self) -> dict[str, Any] | None:
-        now = time.time()
-        interval_sec = _memory_telemetry_interval_sec()
-        if self._memory_last_telemetry_at and now - self._memory_last_telemetry_at < interval_sec:
-            return None
-        managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
-        managed_pid = managed.get("managed_pid")
-        if not managed_pid:
-            return None
-        self._ensure_memory_baseline_scope(managed_pid=managed_pid, now=now)
-        process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
-        if family_rss_bytes is None:
-            return None
-        attribution = _runtime_memory_attribution_snapshot(
-            managed_pid,
-            process_rss_bytes=process_rss_bytes,
-            family_rss_bytes=family_rss_bytes,
+        return self._memory_profiling.sample_telemetry(
+            self,
+            self._memory_operations(),
         )
-        self._memory_last_telemetry_at = now
-        self._memory_last_available_bytes = _available_memory_bytes()
-        total_memory_bytes = _total_memory_bytes()
-        self._memory_last_available_percent = (
-            ((float(self._memory_last_available_bytes) / float(total_memory_bytes)) * 100.0)
-            if self._memory_last_available_bytes is not None and total_memory_bytes not in {None, 0}
-            else None
-        )
-        family_rss_value = int(family_rss_bytes)
-        baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
-        previous_baseline_family_rss = baseline_family_rss
-        if family_rss_value > 0 and (baseline_family_rss is None or family_rss_value < baseline_family_rss):
-            baseline_family_rss = family_rss_value
-            if previous_baseline_family_rss is not None and family_rss_value < previous_baseline_family_rss:
-                self._memory_baseline_last_adjusted_at = now
-                self._memory_baseline_last_adjustment_reason = "rss_relaxed"
-                self._memory_baseline_adjustment_total += 1
-        self._memory_baseline_family_rss_bytes = baseline_family_rss
-        tail = read_memory_telemetry_tail(limit=256)
-        window_start = now - _memory_telemetry_window_sec()
-        window = [item for item in tail if float(item.get("sampled_at") or 0.0) >= window_start]
-        first = window[0] if window else None
-        slope = 0.0
-        if isinstance(first, dict):
-            first_family = int(first.get("family_rss_bytes") or family_rss_bytes)
-            first_at = float(first.get("sampled_at") or now)
-            elapsed_min = max((now - first_at) / 60.0, 1.0 / 60.0)
-            slope = max(0.0, (int(family_rss_bytes) - first_family) / elapsed_min)
-        if self._memory_baseline_started_at is None:
-            self._memory_baseline_started_at = now
-        baseline_age_sec = max(0.0, now - float(self._memory_baseline_started_at or now))
-        warmup_sec = _memory_baseline_warmup_sec()
-        maturity_slope_threshold = _memory_baseline_maturity_slope_bytes_per_min()
-        if self._memory_baseline_matured_at is not None:
-            baseline_phase = "mature"
-        elif baseline_age_sec < warmup_sec:
-            baseline_phase = "warming"
-        elif slope > maturity_slope_threshold:
-            baseline_phase = "maturity_blocked_slope"
-        else:
-            baseline_phase = "mature"
-            self._memory_baseline_matured_at = now
-            if baseline_family_rss is not None and family_rss_value > baseline_family_rss:
-                baseline_family_rss = family_rss_value
-                self._memory_baseline_family_rss_bytes = baseline_family_rss
-                self._memory_baseline_last_adjusted_at = now
-                self._memory_baseline_last_adjustment_reason = "warmup_matured"
-                self._memory_baseline_adjustment_total += 1
-        self._memory_baseline_phase = baseline_phase
-        growth_bytes = max(0, family_rss_value - baseline_family_rss) if baseline_family_rss is not None else 0
-        suspicion_state = "stable"
-        suspicion_reason: str | None = None
-        growth_threshold = _memory_suspicion_growth_threshold_bytes()
-        family_rss_threshold = _memory_suspicion_family_rss_threshold_bytes()
-        slope_threshold = _memory_suspicion_slope_threshold_bytes_per_min()
-        if family_rss_threshold is not None and family_rss_value >= family_rss_threshold:
-            suspicion_state = "suspected"
-            suspicion_reason = "family_rss_threshold"
-            if self._memory_suspicion_since is None:
-                self._memory_suspicion_since = now
-        elif growth_bytes >= growth_threshold and slope >= slope_threshold:
-            suspicion_state = "suspected"
-            suspicion_reason = "growth_and_slope_threshold"
-            if self._memory_suspicion_since is None:
-                self._memory_suspicion_since = now
-        elif growth_bytes >= growth_threshold:
-            suspicion_state = "suspected"
-            suspicion_reason = "growth_threshold"
-            if self._memory_suspicion_since is None:
-                self._memory_suspicion_since = now
-        elif slope >= slope_threshold:
-            suspicion_state = "watch"
-            suspicion_reason = "slope_threshold"
-            self._memory_suspicion_since = None
-        else:
-            self._memory_suspicion_since = None
-        self._memory_suspicion_state = suspicion_state
-        self._memory_suspicion_reason = suspicion_reason
-        self._memory_last_growth_bytes = growth_bytes
-        self._memory_last_growth_bytes_per_min = slope
-        sample = append_memory_telemetry_sample(
-            {
-                "sampled_at": now,
-                "slot": str(active_slot() or "").strip().upper() or None,
-                "runtime_instance_id": self._managed_runtime_instance_id,
-                "transition_role": self._managed_transition_role,
-                "managed_pid": managed_pid,
-                "profile_mode": self._memory_profile_mode,
-                "suspicion_state": suspicion_state,
-                "suspicion_reason": suspicion_reason,
-                "process_rss_bytes": process_rss_bytes,
-                "family_rss_bytes": family_rss_bytes,
-                "process_tree": attribution.get("process_tree") if isinstance(attribution.get("process_tree"), dict) else {},
-                "cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
-                "cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
-                "cgroup_file_bytes": attribution.get("cgroup_file_bytes"),
-                "cgroup_kernel_bytes": attribution.get("cgroup_kernel_bytes"),
-                "cgroup_slab_bytes": attribution.get("cgroup_slab_bytes"),
-                "cgroup_memory_stat": attribution.get("cgroup_memory_stat") if isinstance(attribution.get("cgroup_memory_stat"), dict) else {},
-                "available_memory_bytes": self._memory_last_available_bytes,
-                "available_memory_percent": self._memory_last_available_percent,
-                "baseline_rss_bytes": self._memory_baseline_family_rss_bytes,
-                "baseline_scope_key": self._memory_baseline_scope_key,
-                "baseline_pid": self._memory_baseline_pid,
-                "baseline_phase": self._memory_baseline_phase,
-                "baseline_started_at": self._memory_baseline_started_at,
-                "baseline_matured_at": self._memory_baseline_matured_at,
-                "baseline_age_sec": baseline_age_sec,
-                "baseline_warmup_sec": warmup_sec,
-                "baseline_maturity_slope_threshold_bytes_per_min": maturity_slope_threshold,
-                "baseline_last_adjusted_at": self._memory_baseline_last_adjusted_at,
-                "baseline_last_adjustment_reason": self._memory_baseline_last_adjustment_reason,
-                "baseline_adjustment_total": self._memory_baseline_adjustment_total,
-                "rss_growth_bytes": growth_bytes,
-                "rss_growth_bytes_per_min": slope,
-                "sample_source": "supervisor",
-            }
-        )
-        self._update_memory_session_peak(family_rss_bytes)
-        if (
-            suspicion_state == "suspected"
-            and self._desired_memory_profile_mode() == "normal"
-            and not str(self._memory_active_session_id or "").strip()
-        ):
-            auto_allowed, auto_block_reason = self._memory_policy_auto_profile_guard(now=now)
-            if auto_allowed:
-                if not _memory_policy_profile_restarts_enabled() and self._memory_profile_mode != "sampled_profile":
-                    self._record_memory_auto_profile_block("policy_profile_restart_disabled", now=now)
-                else:
-                    try:
-                        self._request_memory_profile_session(
-                            profile_mode="sampled_profile",
-                            reason=f"memory.{suspicion_reason or 'threshold'}",
-                            trigger_source="policy",
-                            trigger_threshold=(
-                                f"family_rss>={family_rss_threshold or 0}; "
-                                f"growth>={growth_threshold}; slope>={int(slope_threshold)}"
-                            ),
-                        )
-                    except HTTPException:
-                        pass
-            else:
-                self._record_memory_auto_profile_block(auto_block_reason, now=now)
-        self._persist_runtime_state()
-        return sample
 
     def _memory_profile_finalize_observed(self, session_id: str | None) -> bool:
         token = str(session_id or "").strip()
@@ -4654,7 +4042,7 @@ class SupervisorManager:
         root_base_url = str(
             os.getenv("ROOT_BASE_URL")
             or getattr(root_settings, "base_url", None)
-            or "https://api.inimatic.com"
+            or DEFAULT_PUBLIC_ROOT_BASE_URL
         ).strip().rstrip("/")
         root_token = str(
             os.getenv("ADAOS_ROOT_OWNER_TOKEN")
@@ -5086,298 +4474,10 @@ class SupervisorManager:
         )
 
     def _runtime_sidecar_runtime_payload(self) -> dict[str, Any]:
-        status = self._sidecar_status_payload()
-        process = status.get("process") if isinstance(status.get("process"), dict) else {}
-        role = str(status.get("role") or self._sidecar_role() or "").strip().lower() or None
-        enablement = process.get("enablement_policy") if isinstance(process.get("enablement_policy"), dict) else {}
-        enabled = bool(status.get("enabled"))
-        route_tunnel_contract = (
-            process.get("route_tunnel_contract")
-            if isinstance(process.get("route_tunnel_contract"), dict)
-            else {}
+        return self._status_service.sidecar_runtime_payload(
+            self,
+            self._status_operations(),
         )
-        diag_path = realtime_sidecar_diag_path()
-        record = _read_jsonl_tail(diag_path, limit=1)
-        last_diag = record[-1] if record else None
-        now_ts = time.time()
-        diag_age_s = None
-        diag_fresh = False
-        if isinstance(last_diag, dict) and isinstance(last_diag.get("ts"), (int, float)):
-            diag_age_s = round(max(0.0, now_ts - float(last_diag.get("ts"))), 3)
-            diag_fresh = float(diag_age_s) <= 10.0
-        if isinstance(last_diag, dict) and isinstance(last_diag.get("enablement_policy"), dict):
-            enablement_source = str(enablement.get("source") or "").strip().lower()
-            enablement_role = str(enablement.get("role") or "").strip().lower()
-            if not enablement or enablement_source in {"legacy_runtime", "unavailable"} or not enablement_role:
-                enablement = dict(last_diag.get("enablement_policy") or enablement or {})
-        if isinstance(last_diag, dict) and isinstance(last_diag.get("route_tunnel_contract"), dict):
-            route_tunnel_contract = dict(last_diag.get("route_tunnel_contract") or route_tunnel_contract or {})
-        listener_running = bool(process.get("listener_running"))
-        managed_alive = bool(process.get("managed_alive"))
-        status_text = "disabled"
-        summary = "realtime sidecar is disabled"
-        session_state = "disabled"
-        status_reason = str(enablement.get("reason") or "").strip() or summary
-        local_listener_state = "disabled"
-        remote_session_state = "disabled"
-        transport_ready = False
-        if enabled:
-            local_listener_state = "ready" if listener_running else "down"
-            status_text = "unknown"
-            summary = "realtime sidecar is enabled but has no diagnostics yet"
-            session_state = "starting"
-            status_reason = (
-                "sidecar process is running but has not emitted diagnostics yet"
-                if managed_alive
-                else summary
-            )
-            remote_session_state = "unknown"
-            if isinstance(last_diag, dict):
-                last_error = str(last_diag.get("last_error") or "").strip()
-                remote_connected_ago_s = last_diag.get("remote_connected_ago_s")
-                if not diag_fresh:
-                    status_text = "degraded"
-                    summary = "sidecar diagnostics are stale"
-                    session_state = "stale_diag"
-                    status_reason = summary
-                    local_listener_state = "stale" if listener_running else "down"
-                    remote_session_state = "stale"
-                elif last_error:
-                    status_text = "degraded"
-                    summary = f"sidecar reports transport error: {last_error}"
-                    session_state = "remote_connect_failed"
-                    status_reason = last_error
-                    remote_session_state = "down"
-                elif isinstance(remote_connected_ago_s, (int, float)):
-                    status_text = "ready"
-                    summary = "sidecar remote session is connected"
-                    session_state = "remote_ready"
-                    status_reason = "remote session is connected"
-                    remote_session_state = "ready"
-                    transport_ready = True
-                else:
-                    status_text = "unknown"
-                    summary = "sidecar diagnostics do not show an active session"
-                    session_state = "starting"
-                    status_reason = summary
-                    remote_session_state = "unknown"
-
-        def _route_state(kind: str) -> str:
-            entry = route_tunnel_contract.get(kind) if isinstance(route_tunnel_contract.get(kind), dict) else {}
-            if not enabled:
-                return "planned" if entry else "not_owned"
-            if bool(entry.get("handoff_ready")):
-                return "ready"
-            return "planned" if entry else "not_owned"
-
-        def _route_blocker(entry: dict[str, Any]) -> str | None:
-            return next((str(item).strip() for item in (entry.get("blockers") or []) if str(item).strip()), None)
-
-        def _handoff_step(step_id: str, title: str, entry: dict[str, Any]) -> dict[str, Any]:
-            current_owner = str(entry.get("current_owner") or "").strip().lower()
-            planned_owner = str(entry.get("planned_owner") or "").strip().lower()
-            handoff_ready = bool(entry.get("handoff_ready"))
-            listener_ready = bool(entry.get("listener_ready"))
-            blocker = _route_blocker(entry)
-            if current_owner == "sidecar" and handoff_ready:
-                status_value = "completed"
-            elif current_owner == "sidecar" or planned_owner == "sidecar":
-                status_value = "in_progress"
-            else:
-                status_value = "planned"
-            return {
-                "id": step_id,
-                "title": title,
-                "status": status_value,
-                "active_on_node": current_owner == "sidecar",
-                "ready_on_node": current_owner == "sidecar" and handoff_ready,
-                "listener_ready": listener_ready,
-                "blocker": blocker,
-                "delegation_mode": entry.get("delegation_mode"),
-                "summary": (
-                    "handoff is complete"
-                    if status_value == "completed"
-                    else (
-                        "sidecar local proxy listener is ready, but public ownership cutover is still pending"
-                        if listener_ready
-                        else blocker or "ownership handoff is not complete yet"
-                    )
-                ),
-            }
-
-        ws_entry = route_tunnel_contract.get("ws") if isinstance(route_tunnel_contract.get("ws"), dict) else {}
-        yws_entry = route_tunnel_contract.get("yws") if isinstance(route_tunnel_contract.get("yws"), dict) else {}
-        route_ready = _route_state("ws")
-        sync_ready = _route_state("yws")
-        route_handoff_ready = str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar" and bool(
-            ws_entry.get("handoff_ready")
-        )
-        sync_handoff_ready = str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar" and bool(
-            yws_entry.get("handoff_ready")
-        )
-        scope = {
-            "current": (
-                ["hub_root_transport"]
-                + (["browser_events_ws"] if route_handoff_ready else [])
-                + (["browser_yjs_ws"] if sync_handoff_ready else [])
-            ),
-            "planned_next_boundaries": [
-                item
-                for item, ready in (
-                    ("browser_events_ws", route_handoff_ready),
-                    ("browser_yjs_ws", sync_handoff_ready),
-                    ("live_media_continuity", False),
-                    ("webrtc_signaling", False),
-                    ("webrtc_media", False),
-                )
-                if not ready
-            ],
-            "deferred_protocol_authority": [
-                "yjs_room_state",
-                "semantic_channel_authority",
-                "webrtc_peer_lifecycle",
-            ],
-        }
-        continuity_blockers: list[str] = []
-        for boundary, entry in (("browser_events_ws", ws_entry), ("browser_yjs_ws", yws_entry)):
-            blocker = _route_blocker(entry)
-            if blocker:
-                continuity_blockers.append(f"{boundary}: {blocker}")
-        route_tunnel_ready = route_handoff_ready and sync_handoff_ready
-        continuity_contract = {
-            "required": False,
-            "enabled": enabled,
-            "member_runtime_update": "allow",
-            "hub_runtime_update": "preserve_sidecar",
-            "observed_live_topology": None,
-            "current_support": "ready" if enabled and route_tunnel_ready else ("planned" if enabled else "disabled"),
-            "required_boundaries": [],
-            "ready_boundaries": [
-                item
-                for item, ready in (
-                    ("browser_events_ws", route_handoff_ready),
-                    ("browser_yjs_ws", sync_handoff_ready),
-                )
-                if ready
-            ],
-            "pending_boundaries": [
-                item
-                for item, ready in (
-                    ("browser_events_ws", route_handoff_ready),
-                    ("browser_yjs_ws", sync_handoff_ready),
-                )
-                if not ready
-            ],
-            "blockers": continuity_blockers,
-            "target_behavior": (
-                "keep sidecar alive while the hub runtime restarts during live media sessions"
-                if enabled
-                else "transport sidecar currently isolates only hub_root transport"
-            ),
-            "reason": "supervisor-side sidecar status does not require runtime reliability API",
-        }
-        milestones = [
-            {
-                "id": "hub_root_transport_sidecar",
-                "title": "Hub-root transport sidecar",
-                "status": "completed",
-                "active_on_node": bool(enabled),
-                "ready_on_node": bool(transport_ready),
-                "summary": "sidecar owns the hub-root transport boundary",
-            },
-            {
-                "id": "supervisor_managed_sidecar",
-                "title": "Supervisor-managed sidecar lifecycle",
-                "status": "completed",
-                "active_on_node": True,
-                "ready_on_node": True,
-                "summary": "supervisor-managed sidecar lifecycle is implemented",
-            },
-            _handoff_step("browser_events_ws_handoff", "Browser /ws handoff", ws_entry),
-            _handoff_step("browser_yjs_ws_handoff", "Browser /yws handoff", yws_entry),
-        ]
-        completed_milestones = sum(1 for item in milestones if str(item.get("status") or "") == "completed")
-        milestone_total = len(milestones)
-        current_milestone = next((item for item in milestones if str(item.get("status") or "") != "completed"), None)
-        progress = {
-            "target": "first_browser_realtime_tunnel",
-            "state": "ready" if milestone_total > 0 and completed_milestones >= milestone_total else "in_progress",
-            "completed_milestones": completed_milestones,
-            "milestone_total": milestone_total,
-            "percent": int((completed_milestones * 100) / milestone_total) if milestone_total else 0,
-            "current_milestone": current_milestone.get("id") if isinstance(current_milestone, dict) else None,
-            "next_blocker": (
-                str(current_milestone.get("blocker") or "").strip() or None
-                if isinstance(current_milestone, dict)
-                else None
-            ),
-            "summary": (
-                f"{completed_milestones}/{milestone_total} milestones completed "
-                "toward first browser realtime sidecar use case"
-            ),
-            "milestones": milestones,
-            "future_targets": ["live_media_continuity", "webrtc_signaling", "webrtc_media"],
-        }
-        transport_provenance = {
-            "local_url": realtime_sidecar_local_url(),
-            "diag_path": str(diag_path),
-            "session_id": last_diag.get("session_id") if isinstance(last_diag, dict) else None,
-            "remote_url": last_diag.get("remote_url") if isinstance(last_diag, dict) else None,
-            "loop_policy": last_diag.get("loop_policy") if isinstance(last_diag, dict) else None,
-            "loop": last_diag.get("loop") if isinstance(last_diag, dict) else None,
-            "active_session": bool(last_diag.get("active_session")) if isinstance(last_diag, dict) else False,
-            "local_client_total": int(last_diag.get("local_client_total") or 0) if isinstance(last_diag, dict) else 0,
-            "session_open_total": int(last_diag.get("session_open_total") or 0) if isinstance(last_diag, dict) else 0,
-            "session_close_total": int(last_diag.get("session_close_total") or 0) if isinstance(last_diag, dict) else 0,
-            "remote_connect_total": int(last_diag.get("remote_connect_total") or 0) if isinstance(last_diag, dict) else 0,
-            "remote_connect_fail_total": int(last_diag.get("remote_connect_fail_total") or 0) if isinstance(last_diag, dict) else 0,
-            "remote_quarantine_total": int(last_diag.get("remote_quarantine_total") or 0) if isinstance(last_diag, dict) else 0,
-            "superseded_total": int(last_diag.get("superseded_total") or 0) if isinstance(last_diag, dict) else 0,
-            "last_remote_connect_error": last_diag.get("last_remote_connect_error") if isinstance(last_diag, dict) else None,
-            "last_remote_connect_error_ago_s": last_diag.get("last_remote_connect_error_ago_s") if isinstance(last_diag, dict) else None,
-            "last_remote_disconnect_ago_s": last_diag.get("last_remote_disconnect_ago_s") if isinstance(last_diag, dict) else None,
-        }
-        return {
-            "enabled": enabled,
-            "enablement": enablement,
-            "phase": "nats_transport_sidecar",
-            "transport_owner": "sidecar" if enabled else "runtime",
-            "lifecycle_manager": str(route_tunnel_contract.get("lifecycle_manager") or "supervisor"),
-            "ownership_boundary": "transport_only",
-            "ownership": {
-                "owns": ["transport sessions", "transport listeners", "transport relay lifecycle"],
-                "must_not_own": ["message semantics", "Yjs document authority", "core update authority"],
-            },
-            "delegations": {
-                "hub_root_transport": bool(enabled),
-                "route_tunnel_transport": str(ws_entry.get("current_owner") or "").strip().lower() == "sidecar",
-                "sync_transport": str(yws_entry.get("current_owner") or "").strip().lower() == "sidecar",
-                "media_transport": False,
-            },
-            "scope": scope,
-            "continuity_contract": continuity_contract,
-            "progress": progress,
-            "route_tunnel_contract": route_tunnel_contract,
-            "status": status_text,
-            "summary": summary,
-            "session_state": session_state,
-            "status_reason": status_reason,
-            "local_url": realtime_sidecar_local_url(),
-            "diag_path": str(diag_path),
-            "diag_age_s": diag_age_s,
-            "diag_fresh": diag_fresh,
-            "local_listener_state": local_listener_state,
-            "remote_session_state": remote_session_state,
-            "transport_ready": transport_ready,
-            "control_ready": "ready" if transport_ready else ("down" if enabled else "not_applicable"),
-            "route_ready": route_ready,
-            "sync_ready": sync_ready,
-            "media_ready": "not_owned",
-            "transport_provenance": transport_provenance,
-            "process": process,
-            "last_diag": last_diag,
-            "role": role,
-        }
 
     def _hub_root_watchdog_state_payload(self, *, include_events: bool = True) -> dict[str, Any]:
         log_path = _supervisor_hub_root_watchdog_log_path()
@@ -5430,6 +4530,39 @@ class SupervisorManager:
         role_norm = str(role or "").strip().lower()
         return "member_hub" if role_norm == "member" else "hub_root"
 
+    @staticmethod
+    def _hub_root_sidecar_handoff_evidence(sidecar_runtime: Any) -> dict[str, Any]:
+        sidecar = sidecar_runtime if isinstance(sidecar_runtime, dict) else {}
+        route_tunnel = (
+            sidecar.get("route_tunnel_contract")
+            if isinstance(sidecar.get("route_tunnel_contract"), dict)
+            else {}
+        )
+        blockers: list[str] = []
+        route_ready: dict[str, bool] = {}
+        for kind in ("ws", "yws"):
+            entry = route_tunnel.get(kind) if isinstance(route_tunnel.get(kind), dict) else {}
+            entry_blockers = [str(item).strip() for item in list(entry.get("blockers") or []) if str(item).strip()]
+            blockers.extend(f"{kind}: {item}" for item in entry_blockers)
+            route_ready[kind] = (
+                str(entry.get("current_owner") or "").strip().lower() == "sidecar"
+                and bool(entry.get("listener_ready"))
+                and bool(entry.get("handoff_ready"))
+                and not entry_blockers
+            )
+        status = str(sidecar.get("status") or "").strip().lower()
+        remote_state = str(sidecar.get("remote_session_state") or "").strip().lower()
+        transport_ready = bool(sidecar.get("transport_ready")) or status == "ready" or remote_state == "ready"
+        enabled = bool(sidecar.get("enabled"))
+        ready = enabled and transport_ready and route_ready.get("ws", False) and route_ready.get("yws", False)
+        return {
+            "ready": ready,
+            "state": "ready" if ready else (status or remote_state or "unknown"),
+            "transport_ready": transport_ready,
+            "routes": route_ready,
+            "blockers": blockers,
+        }
+
     def _required_upstream_link_state_payload(self, *, role: str | None = None) -> dict[str, Any]:
         transition_role = str(self._managed_transition_role or "").strip().lower()
         managed_role = transition_role if transition_role in {"hub", "member"} else None
@@ -5458,7 +4591,7 @@ class SupervisorManager:
             planned_owner = "runtime"
             future_owner = "sidecar"
             continuity_mode = "runtime_bound"
-        return {
+        result = {
             "kind": kind,
             "role": role_norm,
             "owner": "supervisor",
@@ -5479,6 +4612,29 @@ class SupervisorManager:
             "watchdog": dict(payload),
             "blockers": [],
         }
+        if kind == "hub_root" and sidecar_enabled:
+            try:
+                evidence = self._hub_root_sidecar_handoff_evidence(self._runtime_sidecar_runtime_payload())
+            except Exception:
+                evidence = {"ready": False, "state": "unknown", "blockers": []}
+            result["handoff_state"] = str(evidence.get("state") or "unknown")
+            result["handoff_ready"] = bool(evidence.get("ready"))
+            reason = str(result.get("reason") or "").strip().lower()
+            if (
+                not ready
+                and bool(evidence.get("ready"))
+                and "browser route degraded" in reason
+                and not list(result.get("blockers") or [])
+            ):
+                result.update(
+                    {
+                        "state": "ready",
+                        "reason": "sidecar browser route handoff is ready after stale runtime route degradation",
+                        "ready": True,
+                        "served_by": "supervisor_sidecar",
+                    }
+                )
+        return result
 
     def _required_upstream_link_snapshot(
         self,
@@ -5799,112 +4955,16 @@ class SupervisorManager:
 
     def _hub_root_watchdog_decision(
         self,
-        runtime: dict[str, Any],
+        reliability_payload: dict[str, Any],
         *,
         now: float | None = None,
     ) -> dict[str, Any] | None:
-        if not _hub_root_watchdog_enabled():
-            self._hub_root_watchdog_last_state = "disabled"
-            self._hub_root_watchdog_last_reason = "watchdog disabled"
-            return None
-        if self._stopping or not self._desired_running:
-            return None
-        current_time = time.time() if now is None else float(now)
-        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
-        role = str(node.get("role") or self._sidecar_role() or "").strip().lower()
-        if role != "hub":
-            self._hub_root_watchdog_last_state = "not_applicable"
-            self._hub_root_watchdog_last_reason = f"role={role or '-'}"
-            return None
-
-        channel_state = self._hub_root_channel_state(runtime)
-        root_status = str(channel_state.get("root_control_status") or "")
-        route_status = str(channel_state.get("route_status") or "")
-        hub_root_status = str(channel_state.get("hub_root_status") or "")
-        hub_root_state = str(channel_state.get("hub_root_state") or "")
-        hub_root_browser_status = str(channel_state.get("hub_root_browser_status") or "")
-        hub_root_browser_state = str(channel_state.get("hub_root_browser_state") or "")
-        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
-        sidecar_enabled = bool(required_link.get("sidecar_enabled"))
-        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or ("sidecar" if sidecar_enabled else "runtime")
-        root_down = self._hub_root_channel_down(channel_state)
-        route_degraded = self._hub_root_route_degraded(channel_state)
-        route_degraded_reset_enabled = _hub_root_watchdog_reset_degraded_route_enabled()
-        root_probe = (
-            self._hub_root_root_probe_last_result
-            if isinstance(self._hub_root_root_probe_last_result, dict)
-            else {}
+        return self._recovery_policy.hub_root_watchdog_decision(
+            self,
+            self._recovery_operations(),
+            reliability_payload,
+            now=now,
         )
-        root_probe_state = str(root_probe.get("state") or "").strip().lower()
-        action = (
-            "sidecar_restart"
-            if transport_owner == "sidecar"
-            else ("runtime_reconnect" if root_down else "runtime_route_reset")
-        )
-
-        if (
-            root_down
-            and root_probe_state == "ready"
-            and not self._root_probe_reports_hub_root_unready(root_probe)
-        ):
-            age = root_probe.get("age_sec")
-            age_text = f"{float(age):.1f}s" if isinstance(age, (int, float)) else "-"
-            self._hub_root_watchdog_last_state = "root_perspective_ready"
-            self._hub_root_watchdog_last_reason = (
-                f"runtime reports hub-root down, but root has a fresh hub control report (age={age_text})"
-            )
-            return None
-
-        if not root_down and not route_degraded:
-            state = (
-                root_status
-                or hub_root_status
-                or hub_root_state
-                or route_status
-                or hub_root_browser_status
-                or hub_root_browser_state
-                or "unknown"
-            )
-            self._hub_root_watchdog_last_state = state
-            self._hub_root_watchdog_last_reason = "hub-root and browser route are not down"
-            return None
-
-        if route_degraded and not root_down and not route_degraded_reset_enabled:
-            state = hub_root_browser_status or hub_root_browser_state or route_status or "route_degraded"
-            self._hub_root_watchdog_last_state = state
-            self._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
-            return None
-
-        cooldown = _hub_root_watchdog_cooldown_sec()
-        last_reconnect = self._hub_root_watchdog_last_reconnect_at
-        if last_reconnect is not None and (current_time - float(last_reconnect)) < cooldown:
-            self._hub_root_watchdog_last_state = "cooldown"
-            self._hub_root_watchdog_last_reason = f"hub-root down but reconnect cooldown is active ({cooldown:.0f}s)"
-            return None
-
-        reason = (
-            f"root_control={root_status or '-'} "
-            f"hub_root={hub_root_status or hub_root_state or '-'} "
-            f"route={route_status or '-'} "
-            f"hub_root_browser={hub_root_browser_status or hub_root_browser_state or '-'}"
-        )
-        return {
-            "reason": "supervisor.hub_root.watchdog_reconnect",
-            "message": f"hub-root route watchdog requesting {action} ({reason})",
-            "action": action,
-            "transport_owner": transport_owner,
-            "root_control_status": root_status or None,
-            "route_status": route_status or None,
-            "hub_root_status": hub_root_status or None,
-            "hub_root_state": hub_root_state or None,
-            "hub_root_browser_status": hub_root_browser_status or None,
-            "hub_root_browser_state": hub_root_browser_state or None,
-            "last_event": channel_state.get("last_event"),
-            "last_summary": channel_state.get("last_summary"),
-            "channel_before": channel_state,
-            "required_upstream_link": required_link,
-            "root_perspective_probe": dict(root_probe),
-        }
 
     async def _verify_hub_root_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
         timeout = _hub_root_watchdog_verify_timeout_sec() if timeout_sec is None else max(0.0, float(timeout_sec))
@@ -6021,89 +5081,16 @@ class SupervisorManager:
 
     def _member_hub_watchdog_decision(
         self,
-        runtime: dict[str, Any],
+        reliability_payload: dict[str, Any],
         *,
         now: float | None = None,
     ) -> dict[str, Any] | None:
-        if not _member_hub_watchdog_enabled():
-            self._member_hub_watchdog_last_state = "disabled"
-            self._member_hub_watchdog_last_reason = "watchdog disabled"
-            return None
-        if self._stopping or not self._desired_running:
-            return None
-        current_time = time.time() if now is None else float(now)
-        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
-        role = str(node.get("role") or self._sidecar_role() or "").strip().lower()
-        if role != "member":
-            self._member_hub_watchdog_last_state = "not_applicable"
-            self._member_hub_watchdog_last_reason = f"role={role or '-'}"
-            return None
-
-        channel_state = self._member_hub_channel_state(runtime)
-        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
-        transition_state = str(channel_state.get("transition_state") or "").strip().lower()
-        if transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
-            self._member_hub_watchdog_last_state = transition_state
-            self._member_hub_watchdog_last_reason = (
-                str(channel_state.get("transition_reason") or "").strip() or transition_state
-            )
-            return None
-
-        if bool(channel_state.get("connected")):
-            self._member_hub_watchdog_last_state = "ready"
-            self._member_hub_watchdog_last_reason = "member-hub link is connected"
-            return None
-
-        cooldown = _member_hub_watchdog_cooldown_sec()
-        last_reconnect = self._member_hub_watchdog_last_reconnect_at
-        if last_reconnect is not None and (current_time - float(last_reconnect)) < cooldown:
-            self._member_hub_watchdog_last_state = "cooldown"
-            self._member_hub_watchdog_last_reason = (
-                f"member-hub down but reconnect cooldown is active ({cooldown:.0f}s)"
-            )
-            return None
-
-        route_status = str(channel_state.get("route_status") or "").strip().lower() or "-"
-        member_state = str(channel_state.get("member_state") or "").strip().lower() or "-"
-        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or "runtime"
-        continuity_mode = str(required_link.get("continuity_mode") or "").strip().lower() or "runtime_bound"
-        handoff_state = str(required_link.get("handoff_state") or "").strip().lower() or "unknown"
-        handoff_ready = bool(required_link.get("handoff_ready"))
-        recovery_policy = (
-            dict(required_link.get("recovery_policy"))
-            if isinstance(required_link.get("recovery_policy"), dict)
-            else {}
+        return self._recovery_policy.member_hub_watchdog_decision(
+            self,
+            self._recovery_operations(),
+            reliability_payload,
+            now=now,
         )
-        reason = (
-            f"route={route_status} "
-            f"member_state={member_state} "
-            f"assessment={str(channel_state.get('assessment_state') or '-')} "
-            f"hub_url={str(channel_state.get('hub_url') or '-')} "
-            f"owner={transport_owner} "
-            f"handoff={handoff_state} "
-            f"continuity={continuity_mode}"
-        )
-        return {
-            "reason": "supervisor.member_hub.watchdog_reconnect",
-            "message": f"member-hub watchdog requesting runtime_reconnect ({reason})",
-            "action": "runtime_reconnect",
-            "transport_owner": transport_owner,
-            "continuity_mode": continuity_mode,
-            "handoff_state": handoff_state,
-            "handoff_ready": handoff_ready,
-            "recovery_policy": recovery_policy,
-            "route_status": channel_state.get("route_status"),
-            "hub_member_status": channel_state.get("hub_member_status"),
-            "member_state": channel_state.get("member_state"),
-            "assessment_state": channel_state.get("assessment_state"),
-            "assessment_reason": channel_state.get("assessment_reason"),
-            "transition_state": channel_state.get("transition_state"),
-            "transition_reason": channel_state.get("transition_reason"),
-            "last_error": channel_state.get("last_error"),
-            "last_close_reason": channel_state.get("last_close_reason"),
-            "channel_before": channel_state,
-            "required_upstream_link": required_link,
-        }
 
     async def _verify_member_hub_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
         timeout = _member_hub_watchdog_verify_timeout_sec() if timeout_sec is None else max(0.0, float(timeout_sec))
@@ -6472,259 +5459,24 @@ class SupervisorManager:
         profile_trigger: str | None = None,
         skip_pending_update: bool = False,
     ) -> tuple[list[str] | None, str | None, dict[str, str], str | None, str, str]:
-        resolved_slot = str(slot or active_slot() or "").strip().upper() or None
-        manifest = read_slot_manifest(resolved_slot) if slot else active_slot_manifest()
-        slot_port = self.slot_runtime_port(resolved_slot)
-        slot_dir = str(core_slot_status().get("slots", {}).get(resolved_slot or "", {}).get("path") or "")
-        resolved_runtime_instance_id = str(
-            runtime_instance_id or _new_runtime_instance_id(slot=resolved_slot, transition_role=transition_role)
-        )
-        requested_session_id = profile_session_id
-        requested_mode = str(profile_mode or "").strip().lower() or ""
-        resolved_profile_trigger = str(profile_trigger or "").strip() or None
-        if not requested_mode:
-            requested_session_id = str(self._memory_active_session_id or "").strip() or None
-            requested_mode = self._desired_memory_profile_mode()
-        if requested_session_id and not resolved_profile_trigger:
-            session = read_memory_session_summary(requested_session_id) or {}
-            trigger_source = str(session.get("trigger_source") or "").strip() or "operator"
-            trigger_reason = str(session.get("trigger_reason") or "").strip() or "supervisor.memory.request"
-            resolved_profile_trigger = f"{trigger_source}:{trigger_reason}"
-        env = self._runtime_env(
-            slot=resolved_slot,
-            slot_dir=slot_dir,
-            slot_port=slot_port,
+        return self._process_supervisor.runtime_launch_spec(
+            self,
+            self._process_operations(),
+            slot=slot,
             transition_role=transition_role,
-            runtime_instance_id=resolved_runtime_instance_id,
-            profile_mode=requested_mode,
-            profile_session_id=requested_session_id,
-            profile_trigger=resolved_profile_trigger,
+            runtime_instance_id=runtime_instance_id,
+            profile_mode=profile_mode,
+            profile_session_id=profile_session_id,
+            profile_trigger=profile_trigger,
             skip_pending_update=skip_pending_update,
-        )
-        if isinstance(manifest, dict):
-            manifest_env = manifest.get("env")
-            if isinstance(manifest_env, dict):
-                for key, value in manifest_env.items():
-                    env[str(key)] = str(value)
-            if resolved_slot:
-                env["ADAOS_ACTIVE_CORE_SLOT"] = resolved_slot
-                env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = slot_dir
-            values = {
-                "host": self.runtime_host,
-                "port": str(slot_port),
-                "token": str(self.token or ""),
-                "slot": str(resolved_slot or ""),
-                "slot_dir": slot_dir,
-                "base_dir": str(current_base_dir()),
-                "python": os.sys.executable,
-                "runtime_instance_id": resolved_runtime_instance_id,
-                "transition_role": str(transition_role or "active"),
-            }
-            argv_raw = manifest.get("argv")
-            if isinstance(argv_raw, list):
-                argv = [_format_slot_value(str(item), values) for item in argv_raw if str(item).strip()]
-                if argv:
-                    cwd = str(manifest.get("cwd") or "").strip() or None
-                    return argv, None, env, cwd, resolved_runtime_instance_id, str(transition_role or "active")
-            command = str(manifest.get("command") or "").strip()
-            if command:
-                cwd = str(manifest.get("cwd") or "").strip() or None
-                return None, _format_slot_value(command, values), env, cwd, resolved_runtime_instance_id, str(
-                    transition_role or "active"
-                )
-        return (
-            [
-                sys.executable,
-                "-m",
-                "adaos.apps.autostart_runner",
-                "--host",
-                self.runtime_host,
-                "--port",
-                str(slot_port),
-            ],
-            None,
-            env,
-            None,
-            resolved_runtime_instance_id,
-            str(transition_role or "active"),
         )
 
     def _runtime_state_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
-        proc = self._proc
-        slot_snapshot = core_slot_status()
-        current_slot = str(slot_snapshot.get("active_slot") or active_slot() or "").strip().upper() or None
-        previous_slot = str(slot_snapshot.get("previous_slot") or "").strip().upper() or None
-        active_manifest = active_slot_manifest()
-        update_status = read_core_update_status()
-        update_attempt = _read_update_attempt()
-        root_promotion_required, bootstrap_update = resolved_root_promotion_requirement(active_manifest)
-        slot_structure = validate_slot_structure(current_slot) if current_slot else None
-        active_runtime_port = self.slot_runtime_port(current_slot)
-        active_runtime_url = self.slot_runtime_base_url(current_slot)
-        managed = _proc_details(proc, cwd_hint=self._managed_runtime_cwd)
-        managed_pid = managed["managed_pid"]
-        managed_alive = bool(managed["managed_alive"])
-        managed_cmdline = managed["managed_cmdline"]
-        managed_executable = managed["managed_executable"]
-        managed_cwd = managed["managed_cwd"]
-        managed_runtime_url = self._managed_proc_base_url(proc)
-        listener_running = bool(managed_alive) and _listener_running(self.runtime_host, active_runtime_port)
-        api_ready = listener_running and _runtime_api_ready(
-            active_runtime_url,
-            token=self.token,
-            timeout=runtime_api_timeout,
+        return self._status_service.runtime_state_payload(
+            self,
+            self._status_operations(),
+            runtime_api_timeout=runtime_api_timeout,
         )
-        runtime_state = "stopped"
-        if self._stopping:
-            runtime_state = "stopping"
-        elif managed_alive and api_ready:
-            runtime_state = "ready"
-        elif managed_alive and listener_running:
-            runtime_state = "starting"
-        elif managed_alive:
-            runtime_state = "spawned"
-        expected_executable, expected_cwd, managed_matches_active_slot = self._managed_runtime_slot_expectations(
-            manifest=active_manifest,
-            managed_executable=managed_executable,
-            managed_cwd=managed_cwd,
-        )
-        warm_switch = self._warm_switch_state(
-            current_slot=current_slot,
-            update_status=update_status,
-            update_attempt=update_attempt,
-            managed_pid=managed_pid,
-        )
-        candidate_slot = str(self._candidate_slot or warm_switch.get("candidate_slot") or "").strip().upper() or None
-        candidate_manifest = read_slot_manifest(candidate_slot) if candidate_slot else None
-        candidate_runtime_port = self.slot_runtime_port(candidate_slot) if candidate_slot else None
-        candidate_runtime_url = self.slot_runtime_base_url(candidate_slot) if candidate_slot else None
-        candidate_managed = _proc_details(self._candidate_proc, cwd_hint=self._candidate_runtime_cwd)
-        candidate_managed_pid = candidate_managed["managed_pid"]
-        candidate_managed_alive = bool(candidate_managed["managed_alive"])
-        candidate_managed_cmdline = candidate_managed["managed_cmdline"]
-        candidate_managed_executable = candidate_managed["managed_executable"]
-        candidate_managed_cwd = candidate_managed["managed_cwd"]
-        candidate_listener_running = bool(candidate_managed_alive and candidate_runtime_port) and _listener_running(
-            self.runtime_host,
-            int(candidate_runtime_port or 0),
-        )
-        candidate_runtime_api_ready = bool(candidate_listener_running and candidate_runtime_url) and _runtime_api_ready(
-            str(candidate_runtime_url),
-            token=self.token,
-            timeout=runtime_api_timeout,
-        )
-        candidate_runtime_state = None
-        if candidate_slot:
-            candidate_runtime_state = "stopped"
-            if candidate_managed_alive and candidate_runtime_api_ready:
-                candidate_runtime_state = "ready"
-            elif candidate_managed_alive and candidate_listener_running:
-                candidate_runtime_state = "starting"
-            elif candidate_managed_alive:
-                candidate_runtime_state = "spawned"
-        candidate_expected_executable = None
-        candidate_expected_cwd = None
-        candidate_matches_candidate_slot = None
-        if isinstance(candidate_manifest, dict):
-            argv = candidate_manifest.get("argv")
-            if isinstance(argv, list) and argv:
-                candidate_expected_executable = str(argv[0] or "").strip() or None
-            candidate_expected_cwd = str(candidate_manifest.get("cwd") or "").strip() or None
-        if candidate_slot and (candidate_expected_executable or candidate_expected_cwd):
-            candidate_matches_candidate_slot = True
-            if (
-                candidate_expected_executable
-                and str(candidate_managed_executable or "").strip() != candidate_expected_executable
-            ):
-                candidate_matches_candidate_slot = False
-            if candidate_expected_cwd and str(candidate_managed_cwd or "").strip() != candidate_expected_cwd:
-                candidate_matches_candidate_slot = False
-        candidate_memory_guard = self._candidate_memory_guard_snapshot(
-            {
-                "candidate_managed_pid": candidate_managed_pid,
-                "candidate_managed_alive": candidate_managed_alive,
-            }
-        )
-        return {
-            "ok": True,
-            "supervisor_pid": os.getpid(),
-            "supervisor_url": _supervisor_base_url(),
-            "sidecar": self._sidecar_status_payload(),
-            "runtime_url": active_runtime_url,
-            "runtime_host": self.runtime_host,
-            "runtime_port": active_runtime_port,
-            "managed_slot": self._managed_slot,
-            "managed_runtime_url": managed_runtime_url,
-            "managed_runtime_port": self._managed_runtime_port,
-            "runtime_instance_id": self._managed_runtime_instance_id,
-            "transition_role": self._managed_transition_role if self._managed_runtime_instance_id else None,
-            "active_slot": current_slot,
-            "previous_slot": previous_slot,
-            "desired_running": bool(self._desired_running),
-            "stopping": bool(self._stopping),
-            "managed_pid": managed_pid,
-            "managed_alive": managed_alive,
-            "listener_running": listener_running,
-            "runtime_api_ready": api_ready,
-            "runtime_state": runtime_state,
-            "managed_cmdline": managed_cmdline,
-            "managed_executable": managed_executable,
-            "managed_cwd": managed_cwd,
-            "managed_start_reason": self._managed_start_reason,
-            "hub_root_watchdog": self._hub_root_watchdog_state_payload(),
-            "member_hub_watchdog": self._member_hub_watchdog_state_payload(),
-            "required_upstream_link": self._required_upstream_link_state_payload(),
-            "expected_managed_executable": expected_executable,
-            "expected_managed_cwd": expected_cwd,
-            "managed_matches_active_slot": managed_matches_active_slot,
-            **warm_switch,
-            "candidate_slot": candidate_slot,
-            "candidate_runtime_url": candidate_runtime_url,
-            "candidate_runtime_port": candidate_runtime_port,
-            "candidate_runtime_instance_id": self._candidate_runtime_instance_id,
-            "candidate_transition_role": (
-                self._candidate_transition_role
-                if self._candidate_runtime_instance_id
-                else str(warm_switch.get("candidate_transition_role") or "").strip() or None
-            ),
-            "candidate_managed_pid": candidate_managed_pid,
-            "candidate_managed_alive": candidate_managed_alive,
-            "candidate_listener_running": candidate_listener_running,
-            "candidate_runtime_api_ready": candidate_runtime_api_ready,
-            "candidate_runtime_state": candidate_runtime_state,
-            "candidate_managed_cmdline": candidate_managed_cmdline,
-            "candidate_managed_executable": candidate_managed_executable,
-            "candidate_managed_cwd": candidate_managed_cwd,
-            "candidate_start_reason": self._candidate_start_reason,
-            "candidate_expected_managed_executable": candidate_expected_executable,
-            "candidate_expected_managed_cwd": candidate_expected_cwd,
-            "candidate_matches_candidate_slot": candidate_matches_candidate_slot,
-            "candidate_memory_guard": candidate_memory_guard,
-            "active_manifest": active_manifest,
-            "root_promotion_required": root_promotion_required,
-            "bootstrap_update": bootstrap_update,
-            "slot_structure": slot_structure,
-            "restart_count": int(self._restart_count),
-            "retired_runtime_drain_pending": len(self._retired_runtime_tasks),
-            "preserve_children_on_supervisor_restart": bool(self._service_restart_pending),
-            "last_start_at": self._last_start_at,
-            "last_stop_reason": self._last_stop_reason,
-            "candidate_last_stop_reason": self._candidate_last_stop_reason,
-            "last_exit_at": self._last_exit_at,
-            "last_exit_code": self._last_exit_code,
-            "last_error": self._last_error,
-            "monitor": {
-                "running": bool(self._monitor_task is not None and not self._monitor_task.done()),
-                "loop_started_at": self._monitor_loop_started_at,
-                "last_iteration_at": self._monitor_last_iteration_at,
-                "last_failure_at": self._monitor_last_failure_at,
-                "last_failure": self._monitor_last_failure,
-                "consecutive_failure_total": int(self._monitor_failure_total),
-                "recovery_total": int(self._monitor_recovery_total),
-            },
-            "runtime_self_heal": self._runtime_self_heal_status_payload(),
-            "updated_at": time.time(),
-        }
 
     def _managed_runtime_slot_expectations(
         self,
@@ -6756,165 +5508,10 @@ class SupervisorManager:
             write_memory_runtime_state(self._memory_runtime_state_payload())
 
     def _memory_runtime_state_payload(self) -> dict[str, Any]:
-        ensure_memory_store()
-        self._memory_baseline_family_rss_bytes = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
-        current_slot = str(active_slot() or "").strip().upper() or None
-        now = time.time()
-        managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
-        managed_pid = managed.get("managed_pid")
-        self._ensure_memory_baseline_scope(managed_pid=managed_pid, now=now)
-        process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
-        attribution = _runtime_memory_attribution_snapshot(
-            managed_pid,
-            process_rss_bytes=process_rss_bytes,
-            family_rss_bytes=family_rss_bytes,
+        return self._memory_profiling.runtime_state_payload(
+            self,
+            self._memory_operations(),
         )
-        telemetry_tail = read_memory_telemetry_tail(limit=5000)
-        sessions_index = read_memory_session_index()
-        session_items = sessions_index.get("sessions") if isinstance(sessions_index.get("sessions"), list) else []
-        last_session_id = self._memory_last_session_id
-        if not last_session_id and session_items:
-            last_item = session_items[-1] if isinstance(session_items[-1], dict) else {}
-            last_session_id = str(last_item.get("session_id") or "").strip() or None
-        baseline_family_rss = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
-        baseline_started_at = self._memory_baseline_started_at
-        baseline_age_sec = max(0.0, now - baseline_started_at) if baseline_started_at is not None else None
-        current_sample_state = "fresh" if family_rss_bytes is not None else "unavailable"
-        if current_sample_state == "fresh":
-            current_sample_reason = None
-        elif managed_pid:
-            current_sample_reason = "process_family_rss_unavailable"
-        else:
-            current_sample_reason = "managed_pid_unavailable"
-        current_growth_bytes = (
-            max(0, int(family_rss_bytes) - int(baseline_family_rss))
-            if family_rss_bytes is not None and baseline_family_rss is not None
-            else None
-        )
-        current_growth_bytes_per_min = self._memory_last_growth_bytes_per_min if current_sample_state == "fresh" else None
-        last_telemetry_sample = None
-        baseline_scope_key = str(self._memory_baseline_scope_key or "").strip() or None
-        runtime_instance_id = str(self._managed_runtime_instance_id or "").strip() or None
-        for item in reversed(telemetry_tail):
-            if not isinstance(item, dict):
-                continue
-            item_scope_key = str(item.get("baseline_scope_key") or "").strip() or None
-            item_runtime_instance_id = str(item.get("runtime_instance_id") or "").strip() or None
-            item_pid = _positive_int_or_none(item.get("managed_pid"))
-            if baseline_scope_key and item_scope_key == baseline_scope_key:
-                last_telemetry_sample = item
-                break
-            if runtime_instance_id and item_runtime_instance_id == runtime_instance_id:
-                last_telemetry_sample = item
-                break
-            if managed_pid and item_pid == managed_pid:
-                last_telemetry_sample = item
-                break
-        last_telemetry_sampled_at = (
-            float(last_telemetry_sample.get("sampled_at"))
-            if isinstance(last_telemetry_sample, dict) and last_telemetry_sample.get("sampled_at") is not None
-            else None
-        )
-        last_telemetry_age_sec = (
-            max(0.0, now - last_telemetry_sampled_at)
-            if last_telemetry_sampled_at is not None
-            else None
-        )
-        return {
-            "contract_version": "1",
-            "authority": "supervisor",
-            "selected_profiler_adapter": self._memory_profiler_adapter,
-            "implemented_profiler_adapters": ["tracemalloc"],
-            "planned_profiler_adapters": ["tracemalloc", "memray"],
-            "current_profile_mode": self._memory_profile_mode,
-            "implemented_profile_modes": ["normal", "sampled_profile", "trace_profile"],
-            "planned_profile_modes": ["normal", "sampled_profile", "trace_profile"],
-            "profile_control_mode": IMPLEMENTED_PROFILE_CONTROL_MODE,
-            "implemented_profile_control_actions": list(IMPLEMENTED_PROFILE_CONTROL_ACTIONS),
-            "implemented_profile_launch_env": list(PROFILE_LAUNCH_ENV_KEYS),
-            "requested_profile_mode": self._memory_requested_profile_mode,
-            "requested_session_id": self._memory_active_session_id,
-            "finalizing_session_id": self._memory_profile_finalizing_session_id,
-            "publish_request_session_id": self._memory_publish_request_session_id,
-            "suspicion_state": self._memory_suspicion_state,
-            "suspicion_reason": self._memory_suspicion_reason,
-            "suspicion_since": self._memory_suspicion_since,
-            "active_session_id": self._memory_active_session_id,
-            "last_session_id": last_session_id,
-            "active_slot": current_slot,
-            "runtime_instance_id": self._managed_runtime_instance_id,
-            "transition_role": self._managed_transition_role,
-            "managed_pid": managed_pid,
-            "current_sample_state": current_sample_state,
-            "current_sample_reason": current_sample_reason,
-            "current_process_rss_bytes": process_rss_bytes,
-            "current_family_rss_bytes": family_rss_bytes,
-            "current_process_tree": attribution.get("process_tree") if isinstance(attribution.get("process_tree"), dict) else {},
-            "current_cgroup_memory_current_bytes": attribution.get("cgroup_memory_current_bytes"),
-            "current_cgroup_anon_bytes": attribution.get("cgroup_anon_bytes"),
-            "current_cgroup_file_bytes": attribution.get("cgroup_file_bytes"),
-            "current_cgroup_kernel_bytes": attribution.get("cgroup_kernel_bytes"),
-            "current_cgroup_slab_bytes": attribution.get("cgroup_slab_bytes"),
-            "current_cgroup_memory_stat": attribution.get("cgroup_memory_stat") if isinstance(attribution.get("cgroup_memory_stat"), dict) else {},
-            "current_memory_attribution": attribution,
-            "available_memory_bytes": self._memory_last_available_bytes,
-            "available_memory_percent": self._memory_last_available_percent,
-            "telemetry_interval_sec": _memory_telemetry_interval_sec(),
-            "telemetry_window_sec": _memory_telemetry_window_sec(),
-            "telemetry_samples_total": len(telemetry_tail),
-            "baseline_scope_key": self._memory_baseline_scope_key,
-            "baseline_pid": self._memory_baseline_pid,
-            "baseline_family_rss_bytes": baseline_family_rss,
-            "baseline_phase": self._memory_baseline_phase,
-            "baseline_started_at": baseline_started_at,
-            "baseline_matured_at": self._memory_baseline_matured_at,
-            "baseline_age_sec": baseline_age_sec,
-            "baseline_warmup_sec": _memory_baseline_warmup_sec(),
-            "baseline_maturity_slope_threshold_bytes_per_min": _memory_baseline_maturity_slope_bytes_per_min(),
-            "baseline_last_adjusted_at": self._memory_baseline_last_adjusted_at,
-            "baseline_last_adjustment_reason": self._memory_baseline_last_adjustment_reason,
-            "baseline_adjustment_total": self._memory_baseline_adjustment_total,
-            "rss_growth_bytes": current_growth_bytes,
-            "rss_growth_bytes_per_min": current_growth_bytes_per_min,
-            "last_telemetry_sampled_at": last_telemetry_sampled_at,
-            "last_telemetry_age_sec": last_telemetry_age_sec,
-            "last_observed_process_rss_bytes": (
-                last_telemetry_sample.get("process_rss_bytes") if isinstance(last_telemetry_sample, dict) else None
-            ),
-            "last_observed_family_rss_bytes": (
-                last_telemetry_sample.get("family_rss_bytes") if isinstance(last_telemetry_sample, dict) else None
-            ),
-            "last_observed_rss_growth_bytes": (
-                last_telemetry_sample.get("rss_growth_bytes") if isinstance(last_telemetry_sample, dict) else self._memory_last_growth_bytes
-            ),
-            "last_observed_rss_growth_bytes_per_min": (
-                last_telemetry_sample.get("rss_growth_bytes_per_min")
-                if isinstance(last_telemetry_sample, dict)
-                else self._memory_last_growth_bytes_per_min
-            ),
-            "suspicion_family_rss_threshold_bytes": _memory_suspicion_family_rss_threshold_bytes(),
-            "suspicion_growth_threshold_bytes": _memory_suspicion_growth_threshold_bytes(),
-            "suspicion_slope_threshold_bytes_per_min": _memory_suspicion_slope_threshold_bytes_per_min(),
-            "policy_profile_restarts_enabled": _memory_policy_profile_restarts_enabled(),
-            "auto_profile_min_uptime_sec": _memory_auto_profile_min_uptime_sec(),
-            "auto_profile_browser_live_ttl_sec": _memory_auto_profile_browser_live_ttl_sec(),
-            "auto_profile_last_block_reason": self._memory_auto_profile_last_block_reason,
-            "auto_profile_last_block_at": self._memory_auto_profile_last_block_at,
-            "critical_available_percent_threshold": _memory_critical_available_percent_threshold(),
-            "critical_available_bytes_threshold": _memory_critical_available_bytes_threshold(),
-            "critical_duration_sec": _memory_critical_duration_sec(),
-            "critical_restart_cooldown_sec": _memory_critical_restart_cooldown_sec(),
-            "critical_state": "critical" if self._memory_critical_since is not None else "normal",
-            "critical_reason": self._memory_critical_reason,
-            "critical_since": self._memory_critical_since,
-            "critical_restart_last_at": self._memory_critical_restart_last_at,
-            "telemetry_path": str(supervisor_memory_telemetry_path()),
-            "sessions_index_path": str(supervisor_memory_sessions_index_path()),
-            "implemented_operation_events": list(TOP_LEVEL_OPERATION_EVENTS),
-            "operation_log_contract_version": MEMORY_OPERATION_CONTRACT_VERSION,
-            "sessions_total": len(session_items),
-            "updated_at": now,
-        }
 
     def _runtime_memory_diagnostics_payload(self) -> dict[str, Any]:
         try:
@@ -7049,8 +5646,8 @@ class SupervisorManager:
         )
         compact_evidence = _compact_runtime_stop_evidence(evidence)
         payload["pre_restart_evidence"] = compact_evidence
-        self._runtime_self_heal_last_decision = payload
-        self._runtime_self_heal_last_evidence = compact_evidence
+        self._recovery_policy.last_decision = payload
+        self._recovery_policy.record_evidence(compact_evidence)
         return payload
 
     def _runtime_self_heal_status_payload(self) -> dict[str, Any]:
@@ -7060,6 +5657,27 @@ class SupervisorManager:
             "unhealthy_since": self._runtime_unhealthy_since,
             "unhealthy_kind": self._runtime_unhealthy_kind,
         }
+
+    async def _maybe_self_heal_runtime(self) -> bool:
+        """Restart a live process whose listener or API stayed unhealthy.
+
+        This is deliberately callable both from the normal monitor path and
+        from its exception boundary. Auxiliary monitor failures must not keep
+        a live-but-unresponsive runtime alive indefinitely.
+        """
+        restart_decision = self._runtime_self_heal_decision()
+        if restart_decision is None:
+            return False
+        recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
+        self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
+        self._runtime_unhealthy_since = None
+        self._runtime_unhealthy_kind = None
+        self._persist_runtime_state()
+        try:
+            await self.restart_runtime(reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy"))
+        except Exception:
+            _LOG.warning("failed to self-heal active runtime", exc_info=True)
+        return True
 
     def _memory_sessions_index_compact(self, *, limit: int = 10) -> dict[str, Any]:
         index = read_memory_session_index()
@@ -7500,8 +6118,7 @@ class SupervisorManager:
     def _runtime_self_heal_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
         proc = self._proc
         if proc is None or proc.poll() is not None or self._stopping or not self._desired_running:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
+            self._recovery_policy.clear_unhealthy_window()
             return None
         update_status = read_core_update_status()
         update_state = str(update_status.get("state") or "").strip().lower()
@@ -7516,77 +6133,39 @@ class SupervisorManager:
             managed_executable=managed_executable,
             managed_cwd=managed_cwd,
         )
-        if managed_matches_active_slot is False:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            mismatch_detail = expected_executable or expected_cwd or current_slot or "active slot"
-            return {
-                "reason": "supervisor.runtime.slot_mismatch",
-                "message": (
-                    f"active runtime process does not match the active slot {current_slot or '-'}"
-                    f"; expected {mismatch_detail} and will be restarted"
-                ),
-                "active_slot": current_slot,
-                "managed_executable": managed_executable,
-                "managed_cwd": managed_cwd,
-                "expected_managed_executable": expected_executable,
-                "expected_managed_cwd": expected_cwd,
-            }
-        if update_state == "applying" and update_phase == "apply":
-            # During core_update_apply the runner intentionally has no listener yet.
-            # Let supervisor timeout/recovery handle a stalled apply instead of
-            # repeatedly restarting the process mid-apply every listener timeout.
-            #
-            # Keep slot-mismatch recovery above this guard so a stale applying/apply
-            # status cannot pin the supervisor to an outdated runtime after the
-            # active slot marker has already moved on.
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            return None
         runtime_port = self.slot_runtime_port(current_slot)
         runtime_url = self.slot_runtime_base_url(current_slot)
         listener_running = _listener_running(self.runtime_host, runtime_port)
         api_ready = bool(listener_running and _runtime_api_ready(runtime_url, token=self.token))
-        if listener_running and api_ready:
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            return None
-
-        unhealthy_kind = "api_unready" if listener_running else "listener_lost"
         current_time = time.time() if now is None else float(now)
-        if self._runtime_unhealthy_kind != unhealthy_kind:
-            self._runtime_unhealthy_kind = unhealthy_kind
-            self._runtime_unhealthy_since = current_time
-            return None
-
-        unhealthy_since = float(self._runtime_unhealthy_since or current_time)
-        if self._last_start_at is not None:
-            unhealthy_since = max(unhealthy_since, float(self._last_start_at))
-        if unhealthy_kind == "listener_lost" and self._last_start_at is not None:
-            runtime_age = max(0.0, current_time - float(self._last_start_at))
-            if runtime_age < _runtime_listener_startup_grace_sec():
-                return None
-        timeout_sec = (
-            _runtime_api_restart_timeout_sec()
-            if unhealthy_kind == "api_unready"
-            else _runtime_listener_restart_timeout_sec()
+        evaluation = self._recovery_policy.evaluate(
+            RuntimeRecoveryFacts(
+                process_running=bool(proc is not None and proc.poll() is None),
+                stopping=self._stopping,
+                desired_running=self._desired_running,
+                update_state=update_state,
+                update_phase=update_phase,
+                current_slot=current_slot,
+                managed_executable=managed_executable,
+                managed_cwd=managed_cwd,
+                expected_executable=expected_executable,
+                expected_cwd=expected_cwd,
+                managed_matches_active_slot=managed_matches_active_slot,
+                runtime_host=self.runtime_host,
+                runtime_port=runtime_port,
+                runtime_url=runtime_url,
+                listener_running=listener_running,
+                runtime_api_ready=api_ready,
+                now=current_time,
+                unhealthy_kind=self._runtime_unhealthy_kind,
+                unhealthy_since=self._runtime_unhealthy_since,
+                last_start_at=self._last_start_at,
+                listener_startup_grace_sec=_runtime_listener_startup_grace_sec(),
+                listener_restart_timeout_sec=_runtime_listener_restart_timeout_sec(),
+                api_restart_timeout_sec=_runtime_api_restart_timeout_sec(),
+            )
         )
-        if (current_time - unhealthy_since) < timeout_sec:
-            return None
-
-        target = runtime_url if unhealthy_kind == "api_unready" else f"http://{self.runtime_host}:{runtime_port}"
-        return {
-            "reason": f"supervisor.runtime.{unhealthy_kind}",
-            "message": (
-                f"active runtime stayed {unhealthy_kind.replace('_', ' ')} for {timeout_sec:.0f}s"
-                f" at {target}; restarting"
-            ),
-            "runtime_port": runtime_port,
-            "runtime_url": runtime_url,
-            "listener_running": listener_running,
-            "runtime_api_ready": api_ready,
-            "timeout_sec": timeout_sec,
-        }
+        return self._recovery_policy.record_evaluation(evaluation)
 
     def _local_supervisor_update_status_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = _local_update_payload()
@@ -7595,95 +6174,11 @@ class SupervisorManager:
         return _reconcile_update_status(payload)
 
     def _adopt_active_runtime_listener(self, *, reason: str) -> bool:
-        current_slot = str(active_slot() or "").strip().upper() or None
-        runtime_port = self.slot_runtime_port(current_slot)
-        runtime_url = self.slot_runtime_base_url(current_slot)
-        listener_pid = _listener_owner_pid(self.runtime_host, runtime_port)
-        if not listener_pid:
-            return False
-        adopted = _AdoptedProcess(listener_pid)
-        identity: dict[str, Any] = {}
-        api_ready = _runtime_api_ready(runtime_url, token=self.token, timeout=1.5)
-        if api_ready:
-            headers = {"Accept": "application/json"}
-            if self.token:
-                headers["X-AdaOS-Token"] = self.token
-            try:
-                with requests.get(runtime_url + "/api/status", headers=headers, timeout=2.0) as response:
-                    response.raise_for_status()
-                    payload = response.json()
-                if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
-                    identity = dict(payload["runtime"])
-            except Exception:
-                identity = {}
-        else:
-            managed = _proc_details(adopted, cwd_hint=str(adopted.cwd or "").strip() or None)
-            expected_executable, expected_cwd, matches_active_slot = self._managed_runtime_slot_expectations(
-                manifest=active_slot_manifest(),
-                managed_executable=managed.get("managed_executable"),
-                managed_cwd=managed.get("managed_cwd"),
-            )
-            if matches_active_slot is not True:
-                _LOG.warning(
-                    "supervisor refused pre-ready runtime adoption slot=%s url=%s pid=%s expected_executable=%s "
-                    "actual_executable=%s expected_cwd=%s actual_cwd=%s",
-                    current_slot,
-                    runtime_url,
-                    listener_pid,
-                    expected_executable,
-                    managed.get("managed_executable"),
-                    expected_cwd,
-                    managed.get("managed_cwd"),
-                )
-                return False
-            persisted = _read_json(_supervisor_runtime_state_path())
-            try:
-                persisted_pid = int(persisted.get("managed_pid") or 0)
-            except Exception:
-                persisted_pid = 0
-            if persisted_pid == listener_pid:
-                identity = {
-                    "runtime_instance_id": persisted.get("runtime_instance_id"),
-                    "transition_role": persisted.get("transition_role"),
-                    "slot": persisted.get("managed_slot"),
-                }
-            _LOG.info(
-                "supervisor adopting slot-matched runtime listener before API readiness slot=%s url=%s pid=%s",
-                current_slot,
-                runtime_url,
-                listener_pid,
-            )
-        reported_slot = str(identity.get("slot") or "").strip().upper()
-        reported_role = str(identity.get("transition_role") or "active").strip().lower()
-        if reported_slot and current_slot and reported_slot != current_slot:
-            raise RuntimeError(
-                f"runtime listener on {runtime_url} reports slot {reported_slot}, expected {current_slot}"
-            )
-        if reported_role != "active":
-            raise RuntimeError(
-                f"runtime listener on {runtime_url} reports transition role {reported_role or 'unknown'}"
-            )
-        self._proc = adopted
-        self._managed_runtime_instance_id = str(identity.get("runtime_instance_id") or "").strip() or None
-        self._managed_transition_role = "active"
-        self._managed_slot = current_slot
-        self._managed_runtime_port = runtime_port
-        self._managed_runtime_base_url = runtime_url
-        self._managed_runtime_cwd = str(adopted.cwd or "").strip() or None
-        self._managed_start_reason = str(reason or "supervisor.adopt.active_listener")
-        self._last_start_at = float(getattr(adopted, "_created_at", time.time()))
-        self._last_error = None
-        self._runtime_unhealthy_since = None
-        self._runtime_unhealthy_kind = None
-        self._reset_memory_baseline_scope(managed_pid=listener_pid)
-        _LOG.info(
-            "supervisor adopted active runtime listener slot=%s url=%s pid=%s instance=%s",
-            current_slot,
-            runtime_url,
-            listener_pid,
-            self._managed_runtime_instance_id,
+        return self._process_supervisor.adopt_active_runtime_listener(
+            self,
+            self._process_operations(),
+            reason=reason,
         )
-        return True
 
     async def _spawn_runtime_locked(
         self,
@@ -7720,7 +6215,7 @@ class SupervisorManager:
             start_new_session=(os.name != "nt"),
             creationflags=(int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0),
         )
-        self._proc = proc
+        self._process_supervisor.track_active(proc)
         managed_slot = str(env.get("ADAOS_ACTIVE_CORE_SLOT") or active_slot() or "").strip().upper() or None
         try:
             managed_port = int(env.get("ADAOS_RUNTIME_PORT") or self.slot_runtime_port(managed_slot))
@@ -7762,12 +6257,14 @@ class SupervisorManager:
                 timeout_s=1.5,
             )
         if listener_ready:
-            self._sidecar_proc = _AdoptedProcess(int(listener_pid))
+            self._process_supervisor.track_sidecar(_AdoptedProcess(int(listener_pid)))
             _LOG.info("supervisor adopted realtime sidecar listener pid=%s", listener_pid)
         else:
-            self._sidecar_proc = await start_realtime_sidecar_subprocess(
-                role=self._sidecar_role(),
-                repo_root=repo_root,
+            self._process_supervisor.track_sidecar(
+                await start_realtime_sidecar_subprocess(
+                    role=self._sidecar_role(),
+                    repo_root=repo_root,
+                )
             )
         self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
         self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
@@ -7816,7 +6313,7 @@ class SupervisorManager:
             start_new_session=(os.name != "nt"),
             creationflags=(int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0),
         )
-        self._candidate_proc = proc
+        self._process_supervisor.track_candidate(proc)
         self._candidate_slot = resolved_slot
         self._candidate_runtime_instance_id = runtime_instance_id
         self._candidate_transition_role = transition_role
@@ -7826,8 +6323,7 @@ class SupervisorManager:
 
     async def ensure_started(self, *, reason: str = "supervisor.start") -> None:
         async with self._lock:
-            self._stopping = False
-            self._desired_running = True
+            self._process_supervisor.request_running()
             await self._spawn_runtime_locked(reason=reason, adopt_existing=True)
 
     async def ensure_sidecar_started(self) -> dict[str, Any]:
@@ -7942,46 +6438,27 @@ class SupervisorManager:
                         shutdown_error=shutdown_error,
                         reason=reason,
                     )
-            deadline = time.time() + float(graceful_wait_sec)
-            graceful_checks = max(1, int(float(graceful_wait_sec) / 0.2) + 2)
-            while time.time() < deadline and graceful_checks > 0:
-                graceful_checks -= 1
-                if proc.poll() is not None:
-                    return
-                await asyncio.sleep(0.2)
-        with contextlib.suppress(Exception):
-            self._capture_runtime_stop_evidence(
-                reason=reason,
-                stage="forced_terminate",
-                proc=proc,
+
+        def _capture_before_signal(stage: str) -> None:
+            with contextlib.suppress(Exception):
+                self._capture_runtime_stop_evidence(
+                    reason=reason,
+                    stage=stage,
+                    proc=proc,
+                )
+
+        try:
+            await self._process_supervisor.terminate_process(
+                proc,
+                graceful_wait_sec=graceful_wait_sec if graceful else 0.0,
+                terminate_wait_sec=terminate_wait_sec,
+                before_signal=_capture_before_signal,
+                signal_process=_signal_process_family,
             )
-        with contextlib.suppress(Exception):
-            _signal_process_family(proc, signal.SIGTERM)
-        deadline = time.time() + float(terminate_wait_sec)
-        terminate_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
-        while time.time() < deadline and terminate_checks > 0:
-            terminate_checks -= 1
-            if proc.poll() is not None:
-                return
-            await asyncio.sleep(0.1)
-        with contextlib.suppress(Exception):
-            self._capture_runtime_stop_evidence(
-                reason=reason,
-                stage="forced_kill",
-                proc=proc,
-            )
-        with contextlib.suppress(Exception):
-            _signal_process_family(proc, getattr(signal, "SIGKILL", 9))
-        kill_deadline = time.time() + float(terminate_wait_sec)
-        kill_checks = max(1, int(float(terminate_wait_sec) / 0.1) + 2)
-        while time.time() < kill_deadline and kill_checks > 0:
-            kill_checks -= 1
-            if proc.poll() is not None:
-                return
-            await asyncio.sleep(0.1)
-        self._last_error = f"runtime process did not exit after forced kill: {reason}"
-        self._persist_runtime_state()
-        raise RuntimeError(self._last_error)
+        except RuntimeError as exc:
+            self._last_error = f"runtime process did not exit after forced kill: {reason}"
+            self._persist_runtime_state()
+            raise RuntimeError(self._last_error) from exc
 
     async def _terminate_candidate_proc_locked(self, *, graceful: bool, reason: str) -> None:
         candidate_proc = self._candidate_proc
@@ -7996,7 +6473,7 @@ class SupervisorManager:
             reason=reason,
         )
         self._candidate_last_stop_reason = str(reason or "supervisor.candidate.stop")
-        self._candidate_proc = None
+        self._process_supervisor.track_candidate(None)
         self._candidate_slot = None
         self._candidate_runtime_instance_id = None
         self._candidate_transition_role = None
@@ -8052,7 +6529,7 @@ class SupervisorManager:
         if decision is not None:
             self._raise_restart_continuity_block(decision)
         async with self._lock:
-            self._desired_running = True
+            self._process_supervisor.desired_running = True
             await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.restart")
             await self._spawn_runtime_locked(reason=reason)
@@ -8062,8 +6539,7 @@ class SupervisorManager:
 
     async def stop(self, *, reason: str = "supervisor.stop") -> None:
         async with self._lock:
-            self._desired_running = False
-            self._stopping = True
+            self._process_supervisor.request_stop()
             await self._terminate_proc_locked(proc=self._proc, graceful=True, reason=reason)
             self._last_stop_reason = str(reason or "supervisor.stop")
             await self._terminate_candidate_proc_locked(graceful=True, reason=f"{reason}.candidate")
@@ -8072,7 +6548,7 @@ class SupervisorManager:
     async def stop_sidecar(self, *, reason: str = "supervisor.sidecar.stop") -> dict[str, Any]:
         async with self._lock:
             await stop_realtime_sidecar_subprocess(self._sidecar_proc)
-            self._sidecar_proc = None
+            self._process_supervisor.track_sidecar(None)
             self._sidecar_last_restart_reason = str(reason or "supervisor.sidecar.stop")
             self._persist_runtime_state()
             return self._sidecar_status_payload()
@@ -8116,7 +6592,7 @@ class SupervisorManager:
                     proc=self._sidecar_proc,
                     role=self._sidecar_role(),
                 )
-            self._sidecar_proc = new_proc
+            self._process_supervisor.track_sidecar(new_proc)
             code_state = self._sidecar_code_state()
             self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
             self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
@@ -8396,14 +6872,14 @@ class SupervisorManager:
             proc = self._candidate_proc
             if proc is None or proc.poll() is not None:
                 raise RuntimeError("candidate runtime exited before supervisor adopted it")
-            self._proc = proc
+            self._process_supervisor.track_active(proc)
             self._managed_runtime_instance_id = promoted_instance_id
             self._managed_transition_role = "active"
             self._managed_slot = resolved_slot
             self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
             self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
             self._managed_runtime_cwd = self._candidate_runtime_cwd
-            self._candidate_proc = None
+            self._process_supervisor.track_candidate(None)
             self._candidate_slot = None
             self._candidate_runtime_instance_id = None
             self._candidate_transition_role = None
@@ -8415,273 +6891,10 @@ class SupervisorManager:
         return payload
 
     async def _monitor_iteration_loop(self) -> None:
-        while True:
-            await asyncio.sleep(1.0)
-            self._monitor_last_iteration_at = time.time()
-            reconnect_hub_root_after_sidecar_restart = False
-            sidecar_proc = self._sidecar_proc
-            if sidecar_proc is not None and sidecar_proc.poll() is not None:
-                self._sidecar_last_restart_reason = "supervisor.sidecar.exited"
-                self._sidecar_proc = None
-                self._persist_runtime_state()
-            if realtime_sidecar_enabled(role=self._sidecar_role()) and not self._stopping:
-                sync_result = self._sync_sidecar_controlled_files_from_validated_slot()
-                if bool(sync_result.get("changed")):
-                    self._persist_runtime_state()
-                sidecar_snapshot = realtime_sidecar_listener_snapshot(self._sidecar_proc, role=self._sidecar_role())
-                code_state = self._sidecar_code_state()
-                current_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
-                code_changed = bool(
-                    current_fingerprint
-                    and self._sidecar_code_fingerprint
-                    and current_fingerprint != self._sidecar_code_fingerprint
-                )
-                code_change_ready = False
-                if code_changed:
-                    if current_fingerprint != self._sidecar_code_change_pending_fingerprint:
-                        self._sidecar_code_change_pending_fingerprint = current_fingerprint
-                        self._sidecar_code_change_pending_since = time.time()
-                    elif self._sidecar_code_change_pending_since is not None:
-                        code_change_ready = (
-                            time.time() - float(self._sidecar_code_change_pending_since)
-                            >= _sidecar_code_change_debounce_sec()
-                        )
-                else:
-                    self._sidecar_code_change_pending_fingerprint = None
-                    self._sidecar_code_change_pending_since = None
-                sidecar_ready = await self._probe_sidecar_health()
-                should_restart_sidecar = False
-                restart_reason = None
-                if bool(sync_result.get("changed")):
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.validated_slot_sync"
-                elif self._sidecar_proc is None and not bool(sidecar_snapshot.get("listener_running")):
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.missing"
-                elif code_changed and code_change_ready:
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.code_changed"
-                elif sidecar_ready is False and self._sidecar_consecutive_probe_failures >= 2:
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.unhealthy"
-                if should_restart_sidecar:
-                    allowed, blocked_reason = self._sidecar_restart_allowed()
-                    if not allowed:
-                        self._sidecar_last_restart_reason = blocked_reason
-                        self._persist_runtime_state()
-                        await self._maybe_resume_or_continue_transition()
-                        candidate_proc = self._candidate_proc
-                        if candidate_proc is not None:
-                            candidate_rc = candidate_proc.poll()
-                            if candidate_rc is not None:
-                                self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                                self._candidate_proc = None
-                                self._candidate_slot = None
-                                self._candidate_runtime_instance_id = None
-                                self._candidate_transition_role = None
-                                self._candidate_runtime_cwd = None
-                                self._persist_runtime_state()
-                        proc = self._proc
-                        if proc is None:
-                            self._runtime_unhealthy_since = None
-                            self._runtime_unhealthy_kind = None
-                            if self._desired_running and not self._stopping:
-                                async with self._lock:
-                                    if self._proc is None and self._desired_running and not self._stopping:
-                                        await self._spawn_runtime_locked(
-                                            reason="supervisor.monitor.ensure_running",
-                                            adopt_existing=True,
-                                        )
-                            continue
-                    try:
-                        async with self._lock:
-                            stale_code_restart = False
-                            if restart_reason in {
-                                "supervisor.sidecar.validated_slot_sync",
-                                "supervisor.sidecar.code_changed",
-                            }:
-                                refreshed_code_state = self._sidecar_code_state()
-                                refreshed_fingerprint = (
-                                    str(refreshed_code_state.get("fingerprint") or "").strip() or None
-                                )
-                                stale_code_restart = bool(
-                                    refreshed_fingerprint
-                                    and refreshed_fingerprint == self._sidecar_code_fingerprint
-                                )
-                                if stale_code_restart:
-                                    self._sidecar_code_change_pending_fingerprint = None
-                                    self._sidecar_code_change_pending_since = None
-                            if self._stopping or stale_code_restart:
-                                pass
-                            elif self._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
-                                self._sidecar_last_restart_reason = restart_reason
-                                await self._spawn_sidecar_locked(reason=restart_reason)
-                                reconnect_hub_root_after_sidecar_restart = True
-                            else:
-                                self._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                new_proc, restart_result = await restart_realtime_sidecar_subprocess(
-                                    proc=self._sidecar_proc,
-                                    role=self._sidecar_role(),
-                                    repo_root=str(self._sidecar_repo_root() or "").strip() or None,
-                                )
-                                self._sidecar_proc = new_proc
-                                self._sidecar_launch_cwd = str(code_state.get("repo_root") or self._sidecar_launch_cwd or "") or None
-                                self._sidecar_code_fingerprint = current_fingerprint
-                                self._sidecar_code_fingerprint_updated_at = time.time() if current_fingerprint else None
-                                self._sidecar_last_start_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                self._sidecar_last_restart_reason = str(restart_reason or restart_result.get("reason") or "restarted")
-                                self._sidecar_last_probe_at = None
-                                self._sidecar_last_probe_ok = None
-                                self._sidecar_last_probe_error = None
-                                self._sidecar_consecutive_probe_failures = 0
-                                self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
-                                self._persist_runtime_state()
-                                reconnect_hub_root_after_sidecar_restart = True
-                    except Exception:
-                        _LOG.warning("failed to restart adaos-realtime sidecar", exc_info=True)
-                if reconnect_hub_root_after_sidecar_restart:
-                    reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
-                    if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
-                        _LOG.warning(
-                            "failed to reconnect hub-root after sidecar restart: %s",
-                            reconnect_result.get("error") or reconnect_result,
-                        )
-            await self._maybe_resume_or_continue_transition()
-            candidate_proc = self._candidate_proc
-            if candidate_proc is not None:
-                candidate_rc = candidate_proc.poll()
-                if candidate_rc is not None:
-                    self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                    self._candidate_proc = None
-                    self._candidate_slot = None
-                    self._candidate_runtime_instance_id = None
-                    self._candidate_transition_role = None
-                    self._candidate_runtime_cwd = None
-                    self._persist_runtime_state()
-            proc = self._proc
-            if proc is None:
-                self._runtime_unhealthy_since = None
-                self._runtime_unhealthy_kind = None
-                if self._desired_running and not self._stopping:
-                    async with self._lock:
-                        if self._proc is None and self._desired_running and not self._stopping:
-                            await self._spawn_runtime_locked(
-                                reason="supervisor.monitor.ensure_running",
-                                adopt_existing=True,
-                            )
-                continue
-            rc = proc.poll()
-            if rc is None:
-                with contextlib.suppress(Exception):
-                    self._sample_memory_telemetry()
-                critical_memory_decision = self._memory_critical_restart_decision()
-                if critical_memory_decision is not None:
-                    with contextlib.suppress(Exception):
-                        critical_memory_decision["pre_restart_evidence"] = self._capture_runtime_stop_evidence(
-                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure"),
-                            stage="memory_critical_restart",
-                            decision=dict(critical_memory_decision),
-                        )
-                    self._last_error = str(
-                        critical_memory_decision.get("message") or "runtime restart requested due to critical memory pressure"
-                    )
-                    self._memory_critical_restart_last_at = time.time()
-                    self._persist_runtime_state()
-                    try:
-                        await self.restart_runtime(
-                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure")
-                        )
-                    except Exception:
-                        _LOG.warning("failed to self-heal critical memory pressure", exc_info=True)
-                    continue
-                try:
-                    await self._maybe_apply_memory_profile_mode()
-                except Exception as exc:
-                    _LOG.warning("failed to apply requested memory profile mode", exc_info=True)
-                    if str(self._memory_active_session_id or "").strip() and self._desired_memory_profile_mode() != "normal":
-                        self._fail_active_memory_session(
-                            reason=f"requested_profile_mode_apply_error.{self._desired_memory_profile_mode()}",
-                            stage="profile_apply_error",
-                            details={
-                                "error": f"{type(exc).__name__}: {exc}",
-                                "active_slot": str(active_slot() or "").strip().upper() or None,
-                                "runtime_instance_id": self._managed_runtime_instance_id,
-                                "transition_role": self._managed_transition_role,
-                            },
-                        )
-                try:
-                    self._expire_stuck_requested_memory_profile()
-                except Exception:
-                    _LOG.warning("failed to expire stuck requested memory profile session", exc_info=True)
-                finalize_profile = self._should_finalize_active_memory_profile()
-                if finalize_profile is not None:
-                    try:
-                        finalize_trigger_source = str(finalize_profile.get("trigger_source") or "").strip().lower() or None
-                        self.stop_memory_profile(
-                            str(finalize_profile.get("session_id") or ""),
-                            reason=str(finalize_profile.get("reason") or "supervisor.memory.profile_window_complete"),
-                        )
-                        if finalize_trigger_source:
-                            self._memory_profile_current_trigger_source = finalize_trigger_source
-                        allowed, block_reason = self._memory_profile_restart_guard(desired_mode="normal")
-                        if not allowed:
-                            self._record_memory_auto_profile_block(block_reason)
-                            self._persist_runtime_state()
-                            continue
-                        await self.restart_runtime(
-                            reason=f"supervisor.memory.complete_profile_mode.{str(finalize_profile.get('profile_mode') or 'profile')}"
-                        )
-                    except Exception:
-                        _LOG.warning("failed to finalize active memory profile session", exc_info=True)
-                    continue
-                try:
-                    await self._maybe_maintain_required_upstream_link()
-                except Exception:
-                    _LOG.warning("required-upstream-link supervisor watchdog failed", exc_info=True)
-                restart_decision = self._runtime_self_heal_decision()
-                if restart_decision is not None:
-                    recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
-                    self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
-                    self._runtime_unhealthy_since = None
-                    self._runtime_unhealthy_kind = None
-                    self._persist_runtime_state()
-                    try:
-                        await self.restart_runtime(
-                            reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy")
-                        )
-                    except Exception:
-                        _LOG.warning("failed to self-heal active runtime", exc_info=True)
-                    continue
-                continue
-            self._last_exit_code = int(rc)
-            self._last_exit_at = time.time()
-            self._last_stop_reason = self._last_stop_reason or "supervisor.runtime.exited"
-            if self._memory_profile_mode != "normal" and not self._stopping and self._desired_running:
-                self._fail_active_memory_session(
-                    reason="runtime_exited_during_profile_mode",
-                    exit_code=int(rc),
-                )
-            self._proc = None
-            self._managed_runtime_instance_id = None
-            self._managed_transition_role = None
-            self._managed_slot = None
-            self._managed_runtime_port = None
-            self._managed_runtime_base_url = None
-            self._managed_runtime_cwd = None
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            self._memory_profile_mode = "normal"
-            self._memory_profile_current_trigger_source = None
-            self._persist_runtime_state()
-            if self._stopping or not self._desired_running:
-                continue
-            async with self._lock:
-                if self._proc is None and self._desired_running and not self._stopping:
-                    await asyncio.sleep(1.0)
-                    await self._spawn_runtime_locked(
-                        reason="supervisor.monitor.respawn_after_exit",
-                        adopt_existing=True,
-                    )
+        await self._monitoring.run_iteration_loop(
+            self,
+            self._monitoring_operations(),
+        )
 
     async def monitor_forever(self) -> None:
         """Resume monitoring after a bounded iteration failure.
@@ -8707,7 +6920,16 @@ class SupervisorManager:
                 self._monitor_last_failure = f"{type(exc).__name__}: {exc}"
                 self._last_error = f"supervisor monitor recovered after {self._monitor_last_failure}"
                 self._persist_runtime_state()
-                delay_sec = min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                self_heal_attempted = False
+                try:
+                    self_heal_attempted = await self._maybe_self_heal_runtime()
+                except Exception:
+                    _LOG.warning("runtime self-heal fault boundary failed after monitor error", exc_info=True)
+                delay_sec = (
+                    1.0
+                    if self_heal_attempted
+                    else min(30.0, float(2 ** min(4, max(0, self._monitor_failure_total - 1))))
+                )
                 _LOG.exception(
                     "supervisor monitor iteration failed; resuming from durable state in %.1fs",
                     delay_sec,
@@ -8727,19 +6949,12 @@ class SupervisorManager:
         except Exception:
             _LOG.warning("failed to start adaos-realtime sidecar", exc_info=True)
         await self.ensure_started(reason="supervisor.start")
-        self._monitor_task = asyncio.create_task(self.monitor_forever(), name="adaos-supervisor-monitor")
+        self._process_supervisor.start_monitor(self.monitor_forever)
 
     async def close(self) -> None:
         self._stopping = True
-        if self._update_task is not None:
-            self._update_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._update_task
-            self._update_task = None
-        if self._monitor_task is not None:
-            self._monitor_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._monitor_task
+        await self._update_state_machine.cancel_task(mode="cancelled")
+        await self._process_supervisor.stop_monitor()
         preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
         if preserve_managed_children:
             reaper = self._schedule_managed_handoff_reaper()
@@ -8766,7 +6981,7 @@ class SupervisorManager:
         payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
         payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
         payload["update_attempt"] = _read_update_attempt()
-        payload["update_task_running"] = bool(self._update_task is not None and not self._update_task.done())
+        payload["update_task_running"] = self._update_state_machine.task_running()
         return payload
 
     def supervisor_update_status(self) -> dict[str, Any]:
@@ -8793,150 +7008,10 @@ class SupervisorManager:
         return _public_update_status_payload(self._local_supervisor_update_status_payload(runtime_api_timeout=0.1))
 
     def public_memory_status(self) -> dict[str, Any]:
-        runtime = self._memory_runtime_state_payload()
-        last_session_id = str(runtime.get("last_session_id") or "").strip() or None
-        active_session_id = str(runtime.get("active_session_id") or "").strip() or None
-        last_session = read_memory_session_summary(last_session_id) if last_session_id else None
-        active_session = read_memory_session_summary(active_session_id) if active_session_id else None
-        session = active_session if isinstance(active_session, dict) and active_session else last_session
-        compact_session = None
-        if isinstance(session, dict):
-            compact_session = {
-                "session_id": str(session.get("session_id") or "").strip() or None,
-                "profile_mode": str(session.get("profile_mode") or "").strip() or None,
-                "session_state": str(session.get("session_state") or "").strip() or None,
-                "trigger_source": str(session.get("trigger_source") or "").strip() or None,
-                "trigger_reason": str(session.get("trigger_reason") or "").strip() or None,
-                "requested_at": session.get("requested_at"),
-                "finished_at": session.get("finished_at"),
-                "stopped_at": session.get("stopped_at"),
-                "publish_state": str(session.get("publish_state") or "").strip() or None,
-                "published_ref": str(session.get("published_ref") or "").strip() or None,
-                "failure_reason": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("failure_reason")
-                    or ""
-                ).strip() or None,
-                "failure_stage": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("failure_stage")
-                    or ""
-                ).strip() or None,
-                "local_incident_artifact_id": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_artifact_id")
-                    or ""
-                ).strip() or None,
-                "local_incident_headline": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_headline")
-                    or ""
-                ).strip() or None,
-                "local_incident_dominant_signal": str(
-                    (
-                        session.get("operation_window")
-                        if isinstance(session.get("operation_window"), dict)
-                        else {}
-                    ).get("local_incident_dominant_signal")
-                    or ""
-                ).strip() or None,
-                "retry_depth": int(session.get("retry_depth") or 0),
-                "suspected_leak": bool(session.get("suspected_leak")),
-            }
-        process_tree = runtime.get("current_process_tree") if isinstance(runtime.get("current_process_tree"), dict) else {}
-        top_children: list[dict[str, Any]] = []
-        if isinstance(process_tree.get("children"), list):
-            for item in process_tree.get("children", [])[:8]:
-                if not isinstance(item, dict):
-                    continue
-                top_children.append(
-                    {
-                        "pid": item.get("pid"),
-                        "ppid": item.get("ppid"),
-                        "name": str(item.get("name") or "").strip() or None,
-                        "rss_bytes": item.get("rss_bytes"),
-                        "skill_runtime": str(item.get("skill_runtime") or "").strip() or None,
-                        "cmdline_label": str(item.get("cmdline_label") or "").strip() or None,
-                    }
-                )
-        return {
-            "ok": True,
-            "memory": {
-                "authority": str(runtime.get("authority") or "supervisor"),
-                "profile_control_mode": str(runtime.get("profile_control_mode") or IMPLEMENTED_PROFILE_CONTROL_MODE),
-                "current_profile_mode": str(runtime.get("current_profile_mode") or "normal"),
-                "requested_profile_mode": str(runtime.get("requested_profile_mode") or "").strip() or None,
-                "requested_session_id": str(runtime.get("requested_session_id") or "").strip() or None,
-                "active_session_id": active_session_id,
-                "last_session_id": last_session_id,
-                "publish_request_session_id": str(runtime.get("publish_request_session_id") or "").strip() or None,
-                "suspicion_state": str(runtime.get("suspicion_state") or "idle"),
-                "suspicion_reason": str(runtime.get("suspicion_reason") or "").strip() or None,
-                "managed_pid": runtime.get("managed_pid"),
-                "current_sample_state": str(runtime.get("current_sample_state") or "unknown"),
-                "current_sample_reason": str(runtime.get("current_sample_reason") or "").strip() or None,
-                "current_process_rss_bytes": runtime.get("current_process_rss_bytes"),
-                "current_family_rss_bytes": runtime.get("current_family_rss_bytes"),
-                "current_children_rss_bytes": process_tree.get("children_rss_bytes"),
-                "current_children_total": process_tree.get("children_total"),
-                "current_children_returned": process_tree.get("children_returned"),
-                "current_top_child_processes": top_children,
-                "baseline_scope_key": str(runtime.get("baseline_scope_key") or "").strip() or None,
-                "baseline_pid": runtime.get("baseline_pid"),
-                "baseline_family_rss_bytes": runtime.get("baseline_family_rss_bytes"),
-                "baseline_phase": str(runtime.get("baseline_phase") or "").strip() or None,
-                "baseline_started_at": runtime.get("baseline_started_at"),
-                "baseline_matured_at": runtime.get("baseline_matured_at"),
-                "baseline_age_sec": runtime.get("baseline_age_sec"),
-                "baseline_warmup_sec": runtime.get("baseline_warmup_sec"),
-                "baseline_maturity_slope_threshold_bytes_per_min": runtime.get(
-                    "baseline_maturity_slope_threshold_bytes_per_min"
-                ),
-                "baseline_last_adjusted_at": runtime.get("baseline_last_adjusted_at"),
-                "baseline_last_adjustment_reason": str(runtime.get("baseline_last_adjustment_reason") or "").strip()
-                or None,
-                "baseline_adjustment_total": int(runtime.get("baseline_adjustment_total") or 0),
-                "rss_growth_bytes": runtime.get("rss_growth_bytes"),
-                "rss_growth_bytes_per_min": runtime.get("rss_growth_bytes_per_min"),
-                "last_telemetry_sampled_at": runtime.get("last_telemetry_sampled_at"),
-                "last_telemetry_age_sec": runtime.get("last_telemetry_age_sec"),
-                "last_observed_process_rss_bytes": runtime.get("last_observed_process_rss_bytes"),
-                "last_observed_family_rss_bytes": runtime.get("last_observed_family_rss_bytes"),
-                "last_observed_rss_growth_bytes": runtime.get("last_observed_rss_growth_bytes"),
-                "last_observed_rss_growth_bytes_per_min": runtime.get("last_observed_rss_growth_bytes_per_min"),
-                "available_memory_bytes": runtime.get("available_memory_bytes"),
-                "available_memory_percent": runtime.get("available_memory_percent"),
-                "auto_profile_min_uptime_sec": runtime.get("auto_profile_min_uptime_sec"),
-                "auto_profile_last_block_reason": str(runtime.get("auto_profile_last_block_reason") or "").strip()
-                or None,
-                "auto_profile_last_block_at": runtime.get("auto_profile_last_block_at"),
-                "critical_available_percent_threshold": runtime.get("critical_available_percent_threshold"),
-                "critical_available_bytes_threshold": runtime.get("critical_available_bytes_threshold"),
-                "critical_duration_sec": runtime.get("critical_duration_sec"),
-                "critical_restart_cooldown_sec": runtime.get("critical_restart_cooldown_sec"),
-                "critical_state": str(runtime.get("critical_state") or "normal"),
-                "critical_reason": str(runtime.get("critical_reason") or "").strip() or None,
-                "critical_since": runtime.get("critical_since"),
-                "critical_restart_last_at": runtime.get("critical_restart_last_at"),
-                "selected_profiler_adapter": str(runtime.get("selected_profiler_adapter") or DEFAULT_PROFILER_ADAPTER),
-                "sessions_total": int(runtime.get("sessions_total") or 0),
-                "last_session": compact_session,
-                "updated_at": runtime.get("updated_at"),
-            },
-            "_served_by": "supervisor",
-        }
+        return self._memory_profiling.public_status(
+            self,
+            self._memory_operations(),
+        )
 
     async def _request_runtime_shutdown(self, *, reason: str, drain_timeout_sec: float, signal_delay_sec: float) -> dict[str, Any]:
         async with self._lock:
@@ -9013,8 +7088,10 @@ class SupervisorManager:
 
     def _begin_countdown_transition(self, request: dict[str, Any], *, countdown_sec: float | None = None) -> dict[str, Any]:
         countdown_value = max(0.0, float(request.get("countdown_sec") if countdown_sec is None else countdown_sec))
-        status = write_core_update_status(
-            {
+        request_payload = dict(request)
+        request_payload["countdown_sec"] = countdown_value
+        status = self._update_state_machine.persist_transition(
+            status_payload={
                 "state": "countdown",
                 "phase": "countdown",
                 "action": str(request.get("action") or "update"),
@@ -9026,21 +7103,17 @@ class SupervisorManager:
                 "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
                 "started_at": time.time(),
                 "scheduled_for": time.time() + countdown_value,
-            }
-        )
-        request_payload = dict(request)
-        request_payload["countdown_sec"] = countdown_value
-        _write_update_attempt(
-            _build_attempt_payload(
+            },
+            attempt_payload=lambda persisted_status: _build_attempt_payload(
                 action=str(request_payload.get("action") or "update"),
                 request=request_payload,
-                status=status,
+                status=persisted_status,
                 accepted=True,
-            )
+            ),
         )
-        self._update_task_cancel_mode = None
-        self._update_task = asyncio.create_task(
-            self._countdown_update_worker(
+        self._update_state_machine.start_task(
+            f"adaos-supervisor-core-update-{request_payload.get('action') or 'update'}",
+            lambda: self._countdown_update_worker(
                 action=str(request_payload.get("action") or "update"),
                 target_rev=str(request_payload.get("target_rev") or ""),
                 target_version=str(request_payload.get("target_version") or ""),
@@ -9049,12 +7122,18 @@ class SupervisorManager:
                 drain_timeout_sec=float(request_payload.get("drain_timeout_sec") or 10.0),
                 signal_delay_sec=float(request_payload.get("signal_delay_sec") or 0.25),
             ),
-            name=f"adaos-supervisor-core-update-{request_payload.get('action') or 'update'}",
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
     def _begin_prepare_transition(self, request: dict[str, Any]) -> dict[str, Any]:
         started_at = time.time()
+        try:
+            candidate_prewarm_deferral_count = max(
+                0,
+                int(request.get("candidate_prewarm_deferral_count") or 0),
+            )
+        except Exception:
+            candidate_prewarm_deferral_count = 0
         prepare_lease_token = uuid.uuid4().hex
         prepare_lease_path = _prepare_lease_path(prepare_lease_token)
         prepare_timeout_sec = _update_prepare_timeout_sec()
@@ -9069,42 +7148,49 @@ class SupervisorManager:
             created_at=started_at,
             timeout_sec=prepare_timeout_sec,
         )
-        status = write_core_update_status(
-            {
-                "state": "preparing",
-                "phase": "prepare",
-                "action": str(request.get("action") or "update"),
-                "target_rev": str(request.get("target_rev") or ""),
-                "target_version": str(request.get("target_version") or ""),
-                "reason": str(request.get("reason") or ""),
-                "countdown_sec": float(request.get("countdown_sec") or 0.0),
-                "drain_timeout_sec": float(request.get("drain_timeout_sec") or 10.0),
-                "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
-                "started_at": started_at,
-                "message": "preparing inactive slot before restart",
-                "prepare_timeout_sec": prepare_timeout_sec,
-                "prepare_lease_path": str(prepare_lease_path),
-                "prepare_lease_token": prepare_lease_token,
-            }
+        status_payload = {
+            "state": "preparing",
+            "phase": "prepare",
+            "action": str(request.get("action") or "update"),
+            "target_rev": str(request.get("target_rev") or ""),
+            "target_version": str(request.get("target_version") or ""),
+            "reason": str(request.get("reason") or ""),
+            "countdown_sec": float(request.get("countdown_sec") or 0.0),
+            "drain_timeout_sec": float(request.get("drain_timeout_sec") or 10.0),
+            "signal_delay_sec": float(request.get("signal_delay_sec") or 0.25),
+            "started_at": started_at,
+            "message": "preparing inactive slot before restart",
+            "prepare_timeout_sec": prepare_timeout_sec,
+            "prepare_lease_path": str(prepare_lease_path),
+            "prepare_lease_token": prepare_lease_token,
+            "candidate_prewarm_deferral_count": candidate_prewarm_deferral_count,
+            "candidate_prewarm_max_deferrals": _warm_switch_max_deferrals(),
+        }
+
+        def _prepare_attempt(persisted_status: dict[str, Any]) -> dict[str, Any]:
+            attempt_payload = dict(request)
+            attempt_payload.update(
+                {
+                    "state": "active",
+                    "accepted": True,
+                    "requested_at": _epoch(request.get("requested_at")) or started_at,
+                    "prepare_started_at": started_at,
+                    "prepare_timeout_sec": prepare_timeout_sec,
+                    "prepare_lease_path": str(prepare_lease_path),
+                    "prepare_lease_token": prepare_lease_token,
+                    "last_status": persisted_status,
+                    "updated_at": started_at,
+                }
+            )
+            return attempt_payload
+
+        status = self._update_state_machine.persist_transition(
+            status_payload=status_payload,
+            attempt_payload=_prepare_attempt,
         )
-        attempt_payload = dict(request)
-        attempt_payload.update(
-            {
-                "state": "active",
-                "accepted": True,
-                "requested_at": _epoch(request.get("requested_at")) or started_at,
-                "prepare_started_at": started_at,
-                "prepare_timeout_sec": prepare_timeout_sec,
-                "prepare_lease_path": str(prepare_lease_path),
-                "prepare_lease_token": prepare_lease_token,
-                "last_status": status,
-                "updated_at": started_at,
-            }
-        )
-        _write_update_attempt(attempt_payload)
-        self._update_task_cancel_mode = None
-        self._update_task = asyncio.create_task(
-            self._prepare_and_countdown_update_worker(
+        self._update_state_machine.start_task(
+            f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
+            lambda: self._prepare_and_countdown_update_worker(
                 action=str(request.get("action") or "update"),
                 target_rev=str(request.get("target_rev") or ""),
                 target_version=str(request.get("target_version") or ""),
@@ -9115,8 +7201,8 @@ class SupervisorManager:
                 prepare_lease_path=str(prepare_lease_path),
                 prepare_lease_token=prepare_lease_token,
                 prepare_timeout_sec=prepare_timeout_sec,
+                candidate_prewarm_deferral_count=candidate_prewarm_deferral_count,
             ),
-            name=f"adaos-supervisor-core-update-prepare-{request.get('action') or 'update'}",
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
@@ -9148,22 +7234,28 @@ class SupervisorManager:
         }
         if isinstance(extra_status, dict):
             status_payload.update(extra_status)
-        status = write_core_update_status(status_payload)
-        payload = dict(request)
-        payload.update(
-            {
-                "state": "planned",
-                "accepted": True,
-                "scheduled_for": due_at,
-                "planned_reason": planned_reason,
-                "min_update_period_sec": _min_update_period_sec(),
-                "last_status": status,
-                "updated_at": time.time(),
-            }
+
+        def _planned_attempt(persisted_status: dict[str, Any]) -> dict[str, Any]:
+            payload = dict(request)
+            payload.update(
+                {
+                    "state": "planned",
+                    "accepted": True,
+                    "scheduled_for": due_at,
+                    "planned_reason": planned_reason,
+                    "min_update_period_sec": _min_update_period_sec(),
+                    "last_status": persisted_status,
+                    "updated_at": time.time(),
+                }
+            )
+            if isinstance(extra_attempt, dict):
+                payload.update(extra_attempt)
+            return payload
+
+        status = self._update_state_machine.persist_transition(
+            status_payload=status_payload,
+            attempt_payload=_planned_attempt,
         )
-        if isinstance(extra_attempt, dict):
-            payload.update(extra_attempt)
-        _write_update_attempt(payload)
         return {"ok": True, "accepted": True, "planned": True, "status": status, "_served_by": "supervisor"}
 
     def _deduplicate_active_slot_transition(
@@ -9415,874 +7507,19 @@ class SupervisorManager:
                 bypass_min_period=True,
             )
 
-    async def _countdown_update_worker(
-        self,
-        *,
-        action: str,
-        target_rev: str,
-        target_version: str,
-        reason: str,
-        countdown_sec: float,
-        drain_timeout_sec: float,
-        signal_delay_sec: float,
-        prepare_lease_path: str = "",
-        prepare_lease_token: str = "",
-        prepare_timeout_sec: float | None = None,
-    ) -> None:
-        started_at = time.time()
-        write_core_update_status(
-            {
-                "state": "countdown",
-                "phase": "countdown",
-                "action": action,
-                "target_rev": target_rev,
-                "target_version": target_version,
-                "reason": reason,
-                "countdown_sec": countdown_sec,
-                "drain_timeout_sec": drain_timeout_sec,
-                "signal_delay_sec": signal_delay_sec,
-                "started_at": started_at,
-                "scheduled_for": started_at + countdown_sec,
-            }
+    async def _countdown_update_worker(self, **kwargs: Any) -> None:
+        await self._update_execution.countdown(
+            self,
+            self._update_execution_operations(),
+            **kwargs,
         )
-        try:
-            await asyncio.sleep(max(0.0, float(countdown_sec)))
-            plan = {
-                "state": "pending_restart",
-                "action": action,
-                "target_rev": target_rev,
-                "target_version": target_version,
-                "reason": reason,
-                "created_at": time.time(),
-                "expires_at": time.time() + 1800.0,
-            }
-            write_core_update_plan(plan)
-            write_core_update_status(
-                {
-                    "state": "restarting",
-                    "phase": "shutdown",
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "drain_timeout_sec": drain_timeout_sec,
-                    "signal_delay_sec": signal_delay_sec,
-                    "message": "countdown completed; pending update written",
-                }
-            )
-            shutdown_request_error: Exception | None = None
-            try:
-                await self._request_runtime_shutdown(
-                    reason=reason,
-                    drain_timeout_sec=drain_timeout_sec,
-                    signal_delay_sec=signal_delay_sec,
-                )
-            except Exception as exc:
-                shutdown_request_error = exc
-            stop_result = await self._ensure_runtime_stopped_for_update(
-                drain_timeout_sec=drain_timeout_sec,
-                signal_delay_sec=signal_delay_sec,
-                reason=reason,
-            )
-            if shutdown_request_error or bool(stop_result.get("forced")):
-                write_core_update_status(
-                    {
-                        "state": "restarting",
-                        "phase": "shutdown",
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                        "message": (
-                            "runtime shutdown API was unavailable; supervisor continued with direct process stop"
-                            if shutdown_request_error and bool(stop_result.get("forced"))
-                            else "runtime shutdown API response was unavailable; runtime still stopped during grace window"
-                            if shutdown_request_error
-                            else "runtime shutdown exceeded grace period; supervisor forced process stop"
-                        ),
-                        "forced_shutdown": bool(stop_result.get("forced")),
-                        "shutdown_request_error_type": (
-                            type(shutdown_request_error).__name__ if shutdown_request_error is not None else None
-                        ),
-                        "shutdown_request_error": str(shutdown_request_error) if shutdown_request_error is not None else None,
-                    }
-                )
-        except asyncio.CancelledError:
-            clear_core_update_plan()
-            cancel_mode = str(self._update_task_cancel_mode or "").strip().lower()
-            self._update_task_cancel_mode = None
-            if cancel_mode != "rescheduled":
-                status = write_core_update_status(
-                    {
-                        "state": "cancelled",
-                        "phase": "countdown",
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                        "message": "core update cancelled",
-                    }
-                )
-                _complete_update_attempt(state="cancelled", status=status, reason=reason)
-            raise
-        except Exception as exc:
-            clear_core_update_plan()
-            status = write_core_update_status(
-                {
-                    "state": "failed",
-                    "phase": "shutdown",
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "drain_timeout_sec": drain_timeout_sec,
-                    "signal_delay_sec": signal_delay_sec,
-                    "message": "failed to request runtime shutdown for pending core update",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "updated_at": time.time(),
-                }
-            )
-            _complete_update_attempt(
-                state="failed",
-                status=status,
-                reason=f"shutdown request failed: {type(exc).__name__}",
-            )
-        finally:
-            self._update_task_cancel_mode = None
-            if self._update_task is not None and self._update_task.done():
-                self._update_task = None
 
-    async def _prepare_and_countdown_update_worker(
-        self,
-        *,
-        action: str,
-        target_rev: str,
-        target_version: str,
-        reason: str,
-        countdown_sec: float,
-        drain_timeout_sec: float,
-        signal_delay_sec: float,
-        prepare_lease_path: str = "",
-        prepare_lease_token: str = "",
-        prepare_timeout_sec: float | None = None,
-    ) -> None:
-        cancel_phase = "prepare"
-        failure_phase = "prepare"
-        target_slot = ""
-        manifest: dict[str, Any] | None = None
-        candidate_prewarm_state = "skipped"
-        candidate_prewarm_message = ""
-        candidate_prewarm_ready_at = None
-        candidate_memory_guard: dict[str, Any] | None = None
-        candidate_launch_state = "skipped"
-        candidate_launch_message = ""
-        used_candidate_cutover = False
-        prepare_elapsed_s = None
-        install_elapsed_s = None
-        install_installer = None
-        venv_seed_source = None
-        venv_seeded = False
-        try:
-            prepare_result = await asyncio.to_thread(
-                prepare_pending_update,
-                {
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "prepare_lease_path": prepare_lease_path,
-                    "prepare_lease_token": prepare_lease_token,
-                },
-            )
-            if str(prepare_result.get("state") or "").strip().lower() != "prepared":
-                status = write_core_update_status(
-                    {
-                        **dict(prepare_result),
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "prepare_lease_path": prepare_lease_path or None,
-                        "prepare_lease_token": prepare_lease_token or None,
-                        "prepare_timeout_sec": prepare_timeout_sec,
-                    }
-                )
-                _complete_update_attempt(
-                    state="failed",
-                    status=status,
-                    reason=str(prepare_result.get("message") or "prepare failed"),
-                )
-                return
-
-            prepared_plan = prepare_result.get("plan") if isinstance(prepare_result.get("plan"), dict) else {}
-            target_slot = str(
-                prepare_result.get("target_slot")
-                or prepared_plan.get("target_slot")
-                or choose_inactive_slot()
-                or ""
-            ).strip().upper()
-            manifest = prepare_result.get("manifest") if isinstance(prepare_result.get("manifest"), dict) else None
-            requested_target_version = target_version
-            if isinstance(manifest, dict):
-                resolved_target_rev = str(manifest.get("target_rev") or "").strip()
-                resolved_target_version = str(
-                    manifest.get("target_version")
-                    or manifest.get("resolved_target_version")
-                    or manifest.get("git_commit")
-                    or ""
-                ).strip()
-                if resolved_target_rev:
-                    target_rev = resolved_target_rev
-                if resolved_target_version:
-                    target_version = resolved_target_version
-            if prepare_lease_path:
-                with contextlib.suppress(Exception):
-                    _write_prepare_lease(
-                        Path(prepare_lease_path),
-                        token=prepare_lease_token,
-                        state="completed",
-                        reason="prepared",
-                        action=action,
-                        target_rev=target_rev,
-                        target_version=target_version,
-                        target_slot=target_slot or None,
-                        completed_at=float(prepare_result.get("finished_at") or time.time()),
-                    )
-            prepare_elapsed_s = prepare_result.get("prepare_elapsed_s")
-            install_elapsed_s = prepare_result.get("install_elapsed_s")
-            install_installer = str(prepare_result.get("install_installer") or "").strip() or None
-            venv_seed_source = str(prepare_result.get("venv_seed_source") or "").strip() or None
-            venv_seeded = bool(prepare_result.get("venv_seeded"))
-            try:
-                candidate_prewarm = await self._candidate_prewarm(target_slot=target_slot)
-            except Exception as exc:
-                candidate_prewarm = {
-                    "attempted": True,
-                    "state": "failed",
-                    "message": f"candidate prewarm failed: {type(exc).__name__}: {exc}",
-                }
-            candidate_prewarm_state = str(candidate_prewarm.get("state") or "").strip().lower() or "skipped"
-            candidate_prewarm_message = str(candidate_prewarm.get("message") or "").strip()
-            candidate_prewarm_ready_at = candidate_prewarm.get("ready_at")
-            candidate_memory_guard = (
-                candidate_prewarm.get("candidate_memory_guard")
-                if isinstance(candidate_prewarm.get("candidate_memory_guard"), dict)
-                else None
-            )
-            countdown_started_at = time.time()
-            status = write_core_update_status(
-                {
-                    "state": "countdown",
-                    "phase": "countdown",
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "requested_target_version": requested_target_version,
-                    "reason": reason,
-                    "countdown_sec": countdown_sec,
-                    "drain_timeout_sec": drain_timeout_sec,
-                    "signal_delay_sec": signal_delay_sec,
-                    "started_at": countdown_started_at,
-                    "scheduled_for": countdown_started_at + countdown_sec,
-                    "prepared_at": float(prepare_result.get("finished_at") or countdown_started_at),
-                    "prepare_elapsed_s": prepare_elapsed_s,
-                    "install_elapsed_s": install_elapsed_s,
-                    "install_installer": install_installer,
-                    "venv_seed_source": venv_seed_source,
-                    "venv_seeded": venv_seeded,
-                    "target_slot": target_slot,
-                    "candidate_prewarm_state": candidate_prewarm_state,
-                    "candidate_prewarm_message": candidate_prewarm_message or None,
-                    "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                    "candidate_memory_guard": candidate_memory_guard,
-                    "message": (
-                        (
-                            f"slot {target_slot} prepared; passive candidate blocked by memory gate; countdown started"
-                            if candidate_prewarm_state == "memory_blocked"
-                            else
-                            f"slot {target_slot} prepared; passive candidate ready; countdown started"
-                            if candidate_prewarm_state == "ready"
-                            else f"slot {target_slot} prepared; passive candidate warming; countdown started"
-                            if candidate_prewarm_state == "starting"
-                            else f"slot {target_slot} prepared; passive candidate prewarm failed; countdown started"
-                            if candidate_prewarm_state == "failed"
-                            else f"slot {target_slot} prepared; countdown started"
-                        )
-                        if target_slot
-                        else "inactive slot prepared; countdown started"
-                    ),
-                    "manifest": manifest,
-                }
-            )
-            _write_update_attempt(
-                _build_attempt_payload(
-                    action=action,
-                    request={
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "countdown_sec": countdown_sec,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                        "candidate_prewarm_state": candidate_prewarm_state,
-                        "candidate_prewarm_message": candidate_prewarm_message,
-                    },
-                    status=status,
-                    accepted=True,
-                )
-            )
-            cancel_phase = "countdown"
-            await asyncio.sleep(max(0.0, float(countdown_sec)))
-            if candidate_prewarm_state == "starting":
-                candidate_refresh = await self._refresh_starting_candidate_prewarm(target_slot=target_slot)
-                refreshed_state = str(candidate_refresh.get("state") or "").strip().lower()
-                if refreshed_state:
-                    candidate_prewarm_state = refreshed_state
-                refreshed_message = str(candidate_refresh.get("message") or "").strip()
-                if refreshed_message:
-                    candidate_prewarm_message = refreshed_message
-                if candidate_refresh.get("ready_at") is not None:
-                    candidate_prewarm_ready_at = candidate_refresh.get("ready_at")
-                if isinstance(candidate_refresh.get("candidate_memory_guard"), dict):
-                    candidate_memory_guard = candidate_refresh.get("candidate_memory_guard")
-
-            if (
-                _warm_switch_enabled()
-                and _warm_switch_strict_cutover_enabled()
-                and not _warm_switch_cold_fallback_enabled()
-                and candidate_prewarm_state != "ready"
-            ):
-                blocked_by_memory = candidate_prewarm_state == "memory_blocked"
-                cleanup_kwargs: dict[str, Any] = {
-                    "reason": (
-                        "supervisor.candidate.defer_memory_blocked"
-                        if blocked_by_memory
-                        else "supervisor.candidate.defer_not_ready"
-                    ),
-                    "slot": target_slot,
-                }
-                if blocked_by_memory:
-                    cleanup_kwargs["graceful"] = False
-                candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
-                scheduled_for = time.time() + _warm_switch_defer_sec()
-                self._schedule_planned_transition(
-                    {
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "countdown_sec": countdown_sec,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                    },
-                    scheduled_for=scheduled_for,
-                    planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_not_ready",
-                    message=(
-                        f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate"
-                        if blocked_by_memory and target_slot
-                        else "core update deferred; candidate runtime exceeded the warm-switch memory gate"
-                        if blocked_by_memory
-                        else
-                        f"core update deferred; candidate slot {target_slot} is not ready for warm-switch cutover"
-                        if target_slot
-                        else "core update deferred; candidate runtime is not ready for warm-switch cutover"
-                    ),
-                    extra_status={
-                        "target_slot": target_slot,
-                        "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                        "prepare_elapsed_s": prepare_elapsed_s,
-                        "install_elapsed_s": install_elapsed_s,
-                        "install_installer": install_installer,
-                        "venv_seed_source": venv_seed_source,
-                        "venv_seeded": venv_seeded,
-                        "candidate_prewarm_state": "deferred_not_ready",
-                        "candidate_prewarm_message": candidate_prewarm_message or None,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "candidate_memory_guard": candidate_memory_guard,
-                        "candidate_cleanup": candidate_cleanup,
-                        "manifest": manifest,
-                    },
-                    extra_attempt={
-                        "target_slot": target_slot,
-                        "candidate_prewarm_state": "deferred_not_ready",
-                        "candidate_prewarm_message": candidate_prewarm_message or None,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "candidate_memory_guard": candidate_memory_guard,
-                    },
-                )
-                return
-
-            plan = {
-                "state": "prepared_restart",
-                "action": action,
-                "target_rev": target_rev,
-                "target_version": target_version,
-                "reason": reason,
-                "target_slot": target_slot,
-                "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                "prepare_elapsed_s": prepare_elapsed_s,
-                "install_elapsed_s": install_elapsed_s,
-                "install_installer": install_installer,
-                "venv_seed_source": venv_seed_source,
-                "venv_seeded": venv_seeded,
-                "created_at": time.time(),
-                "expires_at": time.time() + 1800.0,
-            }
-            write_core_update_plan(plan)
-            write_core_update_status(
-                {
-                    "state": "restarting",
-                    "phase": "shutdown",
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "target_slot": target_slot,
-                    "drain_timeout_sec": drain_timeout_sec,
-                    "signal_delay_sec": signal_delay_sec,
-                    "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                    "prepare_elapsed_s": prepare_elapsed_s,
-                    "install_elapsed_s": install_elapsed_s,
-                    "install_installer": install_installer,
-                    "venv_seed_source": venv_seed_source,
-                    "venv_seeded": venv_seeded,
-                    "candidate_prewarm_state": candidate_prewarm_state,
-                    "candidate_prewarm_message": candidate_prewarm_message or None,
-                    "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                    "candidate_memory_guard": candidate_memory_guard,
-                    "message": "countdown completed; prepared restart written",
-                    "manifest": manifest,
-                }
-            )
-            if candidate_prewarm_state == "ready":
-                failure_phase = "launch"
-                old_active_proc = self._proc
-                old_active_url = self.runtime_base_url
-                write_core_update_status(
-                    {
-                        "state": "restarting",
-                        "phase": "cutover",
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "target_slot": target_slot,
-                        "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                        "prepare_elapsed_s": prepare_elapsed_s,
-                        "install_elapsed_s": install_elapsed_s,
-                        "install_installer": install_installer,
-                        "venv_seed_source": venv_seed_source,
-                        "venv_seeded": venv_seeded,
-                        "candidate_prewarm_state": candidate_prewarm_state,
-                        "candidate_prewarm_message": candidate_prewarm_message or None,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "candidate_memory_guard": candidate_memory_guard,
-                        "message": (
-                            f"candidate slot {target_slot} is ready; promoting before stopping active runtime"
-                            if target_slot
-                            else "candidate runtime is ready; promoting before stopping active runtime"
-                        ),
-                        "manifest": manifest,
-                    }
-                )
-                try:
-                    await self._promote_candidate_runtime(
-                        slot=target_slot,
-                        reason="supervisor.fast_cutover",
-                    )
-                except Exception as exc:
-                    clear_core_update_plan()
-                    latest_guard = self._candidate_memory_guard_snapshot()
-                    blocked_by_memory = not bool(latest_guard.get("allowed"))
-                    if blocked_by_memory:
-                        candidate_memory_guard = latest_guard
-                    if not _warm_switch_cold_fallback_enabled():
-                        cleanup_kwargs = {
-                            "reason": (
-                                "supervisor.candidate.cutover_memory_blocked"
-                                if blocked_by_memory
-                                else "supervisor.candidate.cutover_deferred"
-                            ),
-                            "slot": target_slot,
-                        }
-                        if blocked_by_memory:
-                            cleanup_kwargs["graceful"] = False
-                        candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
-                        self._schedule_planned_transition(
-                            {
-                                "action": action,
-                                "target_rev": target_rev,
-                                "target_version": target_version,
-                                "reason": reason,
-                                "countdown_sec": countdown_sec,
-                                "drain_timeout_sec": drain_timeout_sec,
-                                "signal_delay_sec": signal_delay_sec,
-                            },
-                            scheduled_for=time.time() + _warm_switch_defer_sec(),
-                            planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_cutover_failed",
-                            message=(
-                                f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate before active shutdown"
-                                if blocked_by_memory and target_slot
-                                else "core update deferred; candidate runtime exceeded the warm-switch memory gate before active shutdown"
-                                if blocked_by_memory
-                                else
-                                f"core update deferred; candidate slot {target_slot} cutover failed before active shutdown"
-                                if target_slot
-                                else "core update deferred; candidate cutover failed before active shutdown"
-                            ),
-                            extra_status={
-                                "target_slot": target_slot,
-                                "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                                "prepare_elapsed_s": prepare_elapsed_s,
-                                "install_elapsed_s": install_elapsed_s,
-                                "install_installer": install_installer,
-                                "venv_seed_source": venv_seed_source,
-                                "venv_seeded": venv_seeded,
-                                "candidate_prewarm_state": "cutover_deferred",
-                                "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
-                                "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                                "candidate_memory_guard": candidate_memory_guard,
-                                "candidate_cleanup": candidate_cleanup,
-                                "manifest": manifest,
-                            },
-                            extra_attempt={
-                                "target_slot": target_slot,
-                                "candidate_prewarm_state": "cutover_deferred",
-                                "candidate_prewarm_message": f"{type(exc).__name__}: {exc}",
-                                "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                                "candidate_memory_guard": candidate_memory_guard,
-                            },
-                        )
-                        return
-
-                    cleanup_kwargs = {
-                        "reason": (
-                            "supervisor.candidate.cutover_memory_fallback"
-                            if blocked_by_memory
-                            else "supervisor.candidate.cutover_fallback"
-                        ),
-                        "slot": target_slot,
-                    }
-                    if blocked_by_memory:
-                        cleanup_kwargs["graceful"] = False
-                    candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
-                    candidate_prewarm_state = "cutover_fallback"
-                    candidate_prewarm_message = f"{type(exc).__name__}: {exc}"
-                    write_core_update_status(
-                        {
-                            "state": "restarting",
-                            "phase": "shutdown",
-                            "action": action,
-                            "target_rev": target_rev,
-                            "target_version": target_version,
-                            "reason": reason,
-                            "target_slot": target_slot,
-                            "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                            "prepare_elapsed_s": prepare_elapsed_s,
-                            "install_elapsed_s": install_elapsed_s,
-                            "install_installer": install_installer,
-                            "venv_seed_source": venv_seed_source,
-                            "venv_seeded": venv_seeded,
-                            "candidate_prewarm_state": candidate_prewarm_state,
-                            "candidate_prewarm_message": candidate_prewarm_message,
-                            "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                            "candidate_memory_guard": candidate_memory_guard,
-                            "candidate_cleanup": candidate_cleanup,
-                            "message": (
-                                f"candidate slot {target_slot} cutover failed; falling back to cold restart"
-                                if target_slot
-                                else "candidate cutover failed; falling back to cold restart"
-                            ),
-                            "manifest": manifest,
-                        }
-                    )
-                else:
-                    activate_slot(target_slot)
-                    used_candidate_cutover = True
-                    candidate_launch_state = "promoted_to_active"
-                    candidate_launch_message = "passive candidate runtime promoted to active via warm-switch cutover"
-                    if old_active_proc is not None and old_active_proc.poll() is None:
-                        self._schedule_retired_runtime_stop(
-                            proc=old_active_proc,
-                            base_url=old_active_url,
-                            reason="supervisor.fast_cutover.old_active_stop",
-                        )
-                    write_core_update_status(
-                        {
-                            "state": "restarting",
-                            "phase": "launch",
-                            "action": action,
-                            "target_rev": target_rev,
-                            "target_version": target_version,
-                            "reason": reason,
-                            "target_slot": target_slot,
-                            "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                            "prepare_elapsed_s": prepare_elapsed_s,
-                            "install_elapsed_s": install_elapsed_s,
-                            "install_installer": install_installer,
-                            "venv_seed_source": venv_seed_source,
-                            "venv_seeded": venv_seeded,
-                            "candidate_prewarm_state": candidate_launch_state,
-                            "candidate_prewarm_message": candidate_launch_message,
-                            "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                            "candidate_memory_guard": candidate_memory_guard,
-                            "message": (
-                                f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
-                                if target_slot
-                                else "prepared slot activated via warm-switch cutover; awaiting validation"
-                            ),
-                            "manifest": manifest,
-                        }
-                    )
-                    async with self._lock:
-                        self._desired_running = True
-                        self._persist_runtime_state()
-                    return
-
-            failure_phase = "shutdown"
-            shutdown_request_error: Exception | None = None
-            try:
-                await self._request_runtime_shutdown(
-                    reason=reason,
-                    drain_timeout_sec=drain_timeout_sec,
-                    signal_delay_sec=signal_delay_sec,
-                )
-            except Exception as exc:
-                shutdown_request_error = exc
-            async with self._lock:
-                self._desired_running = False
-                self._persist_runtime_state()
-            stop_result = await self._ensure_runtime_stopped_for_update(
-                drain_timeout_sec=drain_timeout_sec,
-                signal_delay_sec=signal_delay_sec,
-                reason=reason,
-            )
-            if shutdown_request_error or bool(stop_result.get("forced")):
-                write_core_update_status(
-                    {
-                        "state": "restarting",
-                        "phase": "shutdown",
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "target_slot": target_slot,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                        "prepare_elapsed_s": prepare_elapsed_s,
-                        "install_elapsed_s": install_elapsed_s,
-                        "install_installer": install_installer,
-                        "venv_seed_source": venv_seed_source,
-                        "venv_seeded": venv_seeded,
-                        "candidate_prewarm_state": candidate_prewarm_state,
-                        "candidate_prewarm_message": candidate_prewarm_message or None,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "candidate_memory_guard": candidate_memory_guard,
-                        "message": (
-                            "runtime shutdown API was unavailable; supervisor continued with direct process stop"
-                            if shutdown_request_error and bool(stop_result.get("forced"))
-                            else "runtime shutdown API response was unavailable; runtime still stopped during grace window"
-                            if shutdown_request_error
-                            else "runtime shutdown exceeded grace period; supervisor forced process stop"
-                        ),
-                        "forced_shutdown": bool(stop_result.get("forced")),
-                        "shutdown_request_error_type": (
-                            type(shutdown_request_error).__name__ if shutdown_request_error is not None else None
-                        ),
-                        "shutdown_request_error": str(shutdown_request_error) if shutdown_request_error is not None else None,
-                        "manifest": manifest,
-                    }
-                )
-            activate_slot(target_slot)
-            candidate_cleanup: dict[str, Any] | None = None
-            candidate_launch_state = candidate_prewarm_state
-            candidate_launch_message = candidate_prewarm_message
-            if candidate_prewarm_state == "ready":
-                try:
-                    await self._promote_candidate_runtime(
-                        slot=target_slot,
-                        reason="supervisor.fast_cutover",
-                    )
-                    used_candidate_cutover = True
-                    candidate_launch_state = "promoted_to_active"
-                    candidate_launch_message = (
-                        "passive candidate runtime promoted to active via warm-switch cutover"
-                    )
-                except Exception as exc:
-                    latest_guard = self._candidate_memory_guard_snapshot()
-                    blocked_by_memory = not bool(latest_guard.get("allowed"))
-                    if blocked_by_memory:
-                        candidate_memory_guard = latest_guard
-                    cleanup_kwargs = {
-                        "reason": (
-                            "supervisor.candidate.cutover_memory_fallback"
-                            if blocked_by_memory
-                            else "supervisor.candidate.cutover_fallback"
-                        ),
-                        "slot": target_slot,
-                    }
-                    if blocked_by_memory:
-                        cleanup_kwargs["graceful"] = False
-                    candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
-                    candidate_launch_state = "cutover_fallback"
-                    candidate_launch_message = (
-                        f"warm-switch cutover fallback: {type(exc).__name__}: {exc}"
-                    )
-            elif candidate_prewarm_state not in {"skipped", "cutover_fallback"}:
-                blocked_by_memory = candidate_prewarm_state == "memory_blocked"
-                cleanup_kwargs = {
-                    "reason": (
-                        "supervisor.candidate.stop_memory_blocked_before_active_launch"
-                        if blocked_by_memory
-                        else "supervisor.candidate.stop_before_active_launch"
-                    ),
-                    "slot": target_slot,
-                }
-                if blocked_by_memory:
-                    cleanup_kwargs["graceful"] = False
-                candidate_cleanup = await self._cleanup_candidate_runtime(**cleanup_kwargs)
-                if bool((candidate_cleanup or {}).get("stopped")):
-                    if blocked_by_memory:
-                        candidate_launch_state = "memory_blocked"
-                        candidate_launch_message = (
-                            candidate_prewarm_message
-                            or "passive candidate runtime stopped by warm-switch memory gate before active launch"
-                        )
-                    else:
-                        candidate_launch_state = "stopped_for_launch"
-                        candidate_launch_message = "passive candidate runtime stopped before active launch"
-            failure_phase = "launch"
-            write_core_update_status(
-                {
-                    "state": "restarting",
-                    "phase": "launch",
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "target_slot": target_slot,
-                    "prepared_at": float(prepare_result.get("finished_at") or time.time()),
-                    "prepare_elapsed_s": prepare_elapsed_s,
-                    "install_elapsed_s": install_elapsed_s,
-                    "install_installer": install_installer,
-                    "venv_seed_source": venv_seed_source,
-                    "venv_seeded": venv_seeded,
-                    "candidate_prewarm_state": candidate_launch_state,
-                    "candidate_prewarm_message": candidate_launch_message or None,
-                    "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                    "candidate_memory_guard": candidate_memory_guard,
-                    "candidate_cleanup": candidate_cleanup,
-                    "message": (
-                        f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
-                        if used_candidate_cutover and target_slot
-                        else "prepared slot activated via warm-switch cutover; awaiting validation"
-                        if used_candidate_cutover
-                        else f"prepared slot {target_slot} activated; awaiting runtime launch"
-                        if target_slot
-                        else "prepared slot activated; awaiting runtime launch"
-                    ),
-                    "manifest": manifest,
-                }
-            )
-            async with self._lock:
-                self._desired_running = True
-                self._persist_runtime_state()
-        except asyncio.CancelledError:
-            clear_core_update_plan()
-            prepare_lease_revocation = _revoke_prepare_lease(
-                status={
-                    "prepare_lease_path": prepare_lease_path,
-                    "prepare_lease_token": prepare_lease_token,
-                },
-                attempt=None,
-                reason="supervisor.cancelled_transition",
-            )
-            await self._cleanup_candidate_runtime(
-                reason="supervisor.candidate.cancelled_transition",
-                slot=target_slot or None,
-            )
-            cancel_mode = str(self._update_task_cancel_mode or "").strip().lower()
-            self._update_task_cancel_mode = None
-            if cancel_mode != "rescheduled":
-                status = write_core_update_status(
-                    {
-                        "state": "cancelled",
-                        "phase": cancel_phase,
-                        "action": action,
-                        "target_rev": target_rev,
-                        "target_version": target_version,
-                        "reason": reason,
-                        "drain_timeout_sec": drain_timeout_sec,
-                        "signal_delay_sec": signal_delay_sec,
-                        "candidate_prewarm_state": candidate_prewarm_state,
-                        "candidate_prewarm_message": candidate_prewarm_message or None,
-                        "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                        "candidate_memory_guard": candidate_memory_guard,
-                        "message": "core update cancelled",
-                        "prepare_lease_revocation": prepare_lease_revocation,
-                    }
-                )
-                _complete_update_attempt(state="cancelled", status=status, reason=reason)
-            raise
-        except Exception as exc:
-            clear_core_update_plan()
-            prepare_lease_revocation = _revoke_prepare_lease(
-                status={
-                    "prepare_lease_path": prepare_lease_path,
-                    "prepare_lease_token": prepare_lease_token,
-                },
-                attempt=None,
-                reason=f"supervisor.failed_transition:{type(exc).__name__}",
-            )
-            await self._cleanup_candidate_runtime(
-                reason="supervisor.candidate.failed_transition",
-                slot=target_slot or None,
-            )
-            async with self._lock:
-                self._desired_running = True
-                self._persist_runtime_state()
-            slot_cleanup = (
-                remove_inactive_slot(target_slot, reason="supervisor.prepared_transition_failed")
-                if target_slot
-                else None
-            )
-            status = write_core_update_status(
-                {
-                    "state": "failed",
-                    "phase": failure_phase,
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "drain_timeout_sec": drain_timeout_sec,
-                    "signal_delay_sec": signal_delay_sec,
-                    "candidate_prewarm_state": candidate_prewarm_state,
-                    "candidate_prewarm_message": candidate_prewarm_message or None,
-                    "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
-                    "candidate_memory_guard": candidate_memory_guard,
-                    "message": "prepared core update transition failed",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "updated_at": time.time(),
-                    "slot_cleanup": slot_cleanup,
-                    "prepare_lease_revocation": prepare_lease_revocation,
-                }
-            )
-            _complete_update_attempt(
-                state="failed",
-                status=status,
-                reason=f"prepared transition failed: {type(exc).__name__}",
-            )
-        finally:
-            self._update_task_cancel_mode = None
-            if self._update_task is not None and self._update_task.done():
-                self._update_task = None
+    async def _prepare_and_countdown_update_worker(self, **kwargs: Any) -> None:
+        await self._update_execution.prepare_and_countdown(
+            self,
+            self._update_execution_operations(),
+            **kwargs,
+        )
 
     async def start_update(
         self,
@@ -10430,14 +7667,10 @@ class SupervisorManager:
                 }
             )
             _complete_update_attempt(state="cancelled", status=status, reason=reason)
-            self._update_task = None
+            self._update_state_machine.release_finished_task(task)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
 
-        self._update_task_cancel_mode = "cancelled"
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        self._update_task = None
+        await self._update_state_machine.cancel_task(mode="cancelled")
         current_phase = str((read_core_update_status() or {}).get("phase") or "").strip().lower() or "countdown"
         status = write_core_update_status(
             {
@@ -10463,11 +7696,7 @@ class SupervisorManager:
             raise HTTPException(status_code=409, detail="defer requires a planned update or active countdown")
 
         if self._update_task is not None and not self._update_task.done():
-            self._update_task_cancel_mode = "rescheduled"
-            self._update_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._update_task
-            self._update_task = None
+            await self._update_state_machine.cancel_task(mode="rescheduled")
 
         request = _request_from_attempt(current_attempt or current_status)
         scheduled_for = time.time() + delay_value
@@ -10607,14 +7836,6 @@ class SupervisorManager:
 
 
 init_ctx()
-_CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
-_CORS_ALLOW_HEADERS = ["*"]
-
-
-app = FastAPI(title="AdaOS Supervisor")
-
-
-@app.on_event("startup")
 async def _startup() -> None:
     args = _parse_args()
     manager = SupervisorManager(runtime_host=args.host, runtime_port=args.port, token=_resolved_token(args.token))
@@ -10622,50 +7843,10 @@ async def _startup() -> None:
     await manager.start()
 
 
-@app.on_event("shutdown")
 async def _shutdown() -> None:
     manager = getattr(app.state, "manager", None)
     if manager is not None:
         await manager.close()
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=_CORS_ALLOW_METHODS,
-    allow_headers=_CORS_ALLOW_HEADERS,
-    allow_credentials=False,
-)
-
-
-@app.middleware("http")
-async def private_network_access_middleware(request: Request, call_next):
-    origin = str(request.headers.get("origin") or "").strip()
-    requested_method = str(request.headers.get("access-control-request-method") or "").strip().upper()
-    requested_headers = str(request.headers.get("access-control-request-headers") or "").strip()
-    requested_private_network = str(request.headers.get("access-control-request-private-network") or "").strip().lower()
-    if (
-        origin
-        and request.method.upper() == "OPTIONS"
-        and requested_method
-        and requested_private_network == "true"
-    ):
-        response = Response(status_code=204)
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Methods"] = requested_method
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
-        if requested_headers:
-            response.headers["Access-Control-Allow-Headers"] = requested_headers
-        response.headers["Vary"] = "Origin"
-        return response
-
-    response = await call_next(request)
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Private-Network"] = "true"
-        response.headers["Vary"] = "Origin"
-    return response
-
 
 def _manager() -> SupervisorManager:
     manager = getattr(app.state, "manager", None)
@@ -10674,219 +7855,13 @@ def _manager() -> SupervisorManager:
     return manager
 
 
-@app.get("/api/ping")
-async def ping() -> dict[str, Any]:
-    return {"ok": True, "ts": time.time(), "service": "adaos-supervisor"}
+_API_ADAPTER = SupervisorApiAdapter(lambda: _manager())
 
-
-@app.get("/api/supervisor/status", dependencies=[Depends(require_token)])
-async def supervisor_status() -> dict[str, Any]:
-    return _manager().status()
-
-
-@app.get("/api/supervisor/memory/status", dependencies=[Depends(require_token)])
-async def supervisor_memory_status() -> dict[str, Any]:
-    return _manager().memory_status()
-
-
-@app.get("/api/supervisor/memory/telemetry", dependencies=[Depends(require_token)])
-async def supervisor_memory_telemetry(limit: int = 100) -> dict[str, Any]:
-    return _manager().memory_telemetry(limit=limit)
-
-
-@app.get("/api/supervisor/public/memory-status")
-async def supervisor_public_memory_status() -> dict[str, Any]:
-    return _manager().public_memory_status()
-
-
-@app.get("/api/supervisor/memory/sessions", dependencies=[Depends(require_token)])
-async def supervisor_memory_sessions(limit: int = 100) -> dict[str, Any]:
-    manager = _manager()
-    try:
-        return manager.memory_sessions(limit=limit)
-    except TypeError:
-        return manager.memory_sessions()
-
-
-@app.get("/api/supervisor/memory/incidents", dependencies=[Depends(require_token)])
-async def supervisor_memory_incidents(limit: int = 50) -> dict[str, Any]:
-    return _manager().memory_incidents(limit=limit)
-
-
-@app.get("/api/supervisor/memory/sessions/{session_id}", dependencies=[Depends(require_token)])
-async def supervisor_memory_session(session_id: str) -> dict[str, Any]:
-    payload = _manager().memory_session(session_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="memory profiling session was not found")
-    return payload
-
-
-@app.get("/api/supervisor/memory/sessions/{session_id}/artifacts/{artifact_id}", dependencies=[Depends(require_token)])
-async def supervisor_memory_session_artifact(
-    session_id: str,
-    artifact_id: str,
-    offset: int = 0,
-    max_bytes: int = 256 * 1024,
-) -> dict[str, Any]:
-    manager = _manager()
-    if hasattr(manager, "memory_session_artifact_chunk"):
-        payload = manager.memory_session_artifact_chunk(
-            session_id,
-            artifact_id,
-            offset=offset,
-            max_bytes=max_bytes,
-        )
-    else:
-        payload = manager.memory_session_artifact(session_id, artifact_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="memory profiling artifact was not found")
-    return payload
-
-
-@app.post("/api/supervisor/memory/profile/start", dependencies=[Depends(require_token)])
-async def supervisor_memory_profile_start(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = payload if isinstance(payload, dict) else {}
-    return _manager().start_memory_profile(
-        profile_mode=str(body.get("profile_mode") or "sampled_profile"),
-        reason=str(body.get("reason") or "operator.request"),
-        trigger_source=str(body.get("trigger_source") or "operator"),
-    )
-
-
-@app.post("/api/supervisor/memory/profile/{session_id}/stop", dependencies=[Depends(require_token)])
-async def supervisor_memory_profile_stop(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = payload if isinstance(payload, dict) else {}
-    return _manager().stop_memory_profile(session_id, reason=str(body.get("reason") or "operator.stop"))
-
-
-@app.post("/api/supervisor/memory/profile/{session_id}/retry", dependencies=[Depends(require_token)])
-async def supervisor_memory_profile_retry(session_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = payload if isinstance(payload, dict) else {}
-    return _manager().retry_memory_profile(session_id, reason=str(body.get("reason") or "operator.retry"))
-
-
-@app.post("/api/supervisor/memory/publish", dependencies=[Depends(require_token)])
-async def supervisor_memory_publish(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = payload if isinstance(payload, dict) else {}
-    session_id = str(body.get("session_id") or "").strip()
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    return _manager().publish_memory_profile(session_id, reason=str(body.get("reason") or "operator.publish"))
-
-
-@app.get("/api/supervisor/sidecar/status", dependencies=[Depends(require_token)])
-async def supervisor_sidecar_status() -> dict[str, Any]:
-    return _manager().sidecar_status()
-
-
-@app.post("/api/supervisor/runtime/restart", dependencies=[Depends(require_token)])
-async def supervisor_runtime_restart(payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = payload if isinstance(payload, dict) else {}
-    status = await _manager().restart_runtime(reason=str(body.get("reason") or "supervisor.restart"))
-    return {"ok": True, "runtime": status}
-
-
-@app.post("/api/supervisor/runtime/candidate/start", dependencies=[Depends(require_token)])
-async def supervisor_runtime_candidate_start(payload: dict[str, Any]) -> dict[str, Any]:
-    status = await _manager().start_candidate_runtime(
-        slot=str(payload.get("slot") or "").strip().upper() or None,
-        reason=str(payload.get("reason") or "supervisor.candidate.start"),
-    )
-    return {"ok": True, "runtime": status}
-
-
-@app.post("/api/supervisor/runtime/candidate/stop", dependencies=[Depends(require_token)])
-async def supervisor_runtime_candidate_stop(payload: dict[str, Any]) -> dict[str, Any]:
-    status = await _manager().stop_candidate_runtime(
-        reason=str(payload.get("reason") or "supervisor.candidate.stop")
-    )
-    return {"ok": True, "runtime": status}
-
-
-@app.post("/api/supervisor/sidecar/restart", dependencies=[Depends(require_token)])
-async def supervisor_sidecar_restart(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().restart_sidecar(
-        reconnect_hub_root=bool(payload.get("reconnect_hub_root", True))
-    )
-
-
-@app.get("/api/supervisor/update/status", dependencies=[Depends(require_token)])
-async def supervisor_update_status() -> dict[str, Any]:
-    return _manager().supervisor_update_status()
-
-
-@app.get("/api/supervisor/public/update-status")
-async def supervisor_public_update_status() -> dict[str, Any]:
-    return _manager().public_update_status()
-
-
-def _payload_float(payload: dict[str, Any], key: str, default: float) -> float:
-    if key not in payload:
-        return float(default)
-    value = payload.get(key)
-    if value is None or value == "":
-        return float(default)
-    return float(value)
-
-
-def _payload_first_float(payload: dict[str, Any], keys: tuple[str, ...], default: float) -> float:
-    for key in keys:
-        if key not in payload:
-            continue
-        value = payload.get(key)
-        if value is None or value == "":
-            continue
-        return float(value)
-    return float(default)
-
-
-@app.post("/api/supervisor/update/start", dependencies=[Depends(require_token)])
-async def supervisor_update_start(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().start_update(
-        action="update",
-        target_rev=str(payload.get("target_rev") or ""),
-        target_version=str(payload.get("target_version") or ""),
-        reason=str(payload.get("reason") or "core.update"),
-        countdown_sec=_payload_float(payload, "countdown_sec", 60.0),
-        drain_timeout_sec=_payload_float(payload, "drain_timeout_sec", 10.0),
-        signal_delay_sec=_payload_float(payload, "signal_delay_sec", 0.25),
-    )
-
-
-@app.post("/api/supervisor/update/cancel", dependencies=[Depends(require_token)])
-async def supervisor_update_cancel(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().cancel_update(reason=str(payload.get("reason") or "user.cancelled"))
-
-
-@app.post("/api/supervisor/update/defer", dependencies=[Depends(require_token)])
-async def supervisor_update_defer(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().defer_update(
-        delay_sec=_payload_first_float(payload, ("delay_sec", "countdown_sec"), 300.0),
-        reason=str(payload.get("reason") or "user.deferred"),
-    )
-
-
-@app.post("/api/supervisor/update/rollback", dependencies=[Depends(require_token)])
-async def supervisor_update_rollback(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().start_update(
-        action="rollback",
-        target_rev="",
-        target_version="",
-        reason=str(payload.get("reason") or "core.rollback"),
-        countdown_sec=_payload_float(payload, "countdown_sec", 0.0),
-        drain_timeout_sec=_payload_float(payload, "drain_timeout_sec", 10.0),
-        signal_delay_sec=_payload_float(payload, "signal_delay_sec", 0.25),
-    )
-
-
-@app.post("/api/supervisor/update/promote-root", dependencies=[Depends(require_token)])
-async def supervisor_update_promote_root(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().promote_root(reason=str(payload.get("reason") or "core.root_promotion"))
-
-
-@app.post("/api/supervisor/update/complete", dependencies=[Depends(require_token)])
-async def supervisor_update_complete(payload: dict[str, Any]) -> dict[str, Any]:
-    return await _manager().complete_update(reason=str(payload.get("reason") or "core.update.complete"))
+app = create_supervisor_app(
+    startup=_startup,
+    shutdown=_shutdown,
+    routes=create_supervisor_routes(_API_ADAPTER.handlers()),
+)
 
 
 def main() -> None:

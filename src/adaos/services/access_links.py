@@ -12,6 +12,7 @@ LinkKind = Literal["browser", "member", "redevice"]
 _NS = "access_links"
 _KEY = "registry"
 _DEFAULT_BROWSER_SESSION_ONLINE_STALE_S = 300.0
+_UNSET = object()
 
 
 def _now_ts() -> float:
@@ -786,6 +787,15 @@ def _browser_media_control_patch(
     media_audio_input_supported: str | bool | None = None,
     media_audio_output_supported: str | bool | None = None,
     media_audio_output_selection_supported: str | bool | None = None,
+    media_route_status_level: str | None = None,
+    media_route_status_state: str | None = None,
+    media_route_status_reason: str | None = None,
+    media_route_status_detail: str | None = None,
+    media_route_checked_at: str | float | int | None = None,
+    media_route_recent_device_change: str | bool | None = None,
+    media_route_bluetooth_profile_hint: str | bool | None = None,
+    media_route_output_routed: str | bool | None = None,
+    media_route_input_applied: str | bool | None = None,
 ) -> dict[str, Any]:
     patch: dict[str, Any] = {}
     selected_input = _text(media_audio_input_device_id)
@@ -823,6 +833,30 @@ def _browser_media_control_patch(
             capabilities[key] = flag
     if capabilities:
         patch["capabilities"] = capabilities
+    route_status: dict[str, Any] = {}
+    for key, value in {
+        "level": media_route_status_level,
+        "state": media_route_status_state,
+        "reason": media_route_status_reason,
+        "detail": media_route_status_detail,
+    }.items():
+        token = _text(value)
+        if token:
+            route_status[key] = token[:160 if key == "detail" else 64]
+    checked_at = _clamped_float(media_route_checked_at, minimum=0.0, maximum=4_102_444_800_000.0)
+    if checked_at is not None and checked_at > 0:
+        route_status["checked_at"] = checked_at
+    for key, value in {
+        "recent_device_change": media_route_recent_device_change,
+        "bluetooth_profile_hint": media_route_bluetooth_profile_hint,
+        "output_routed": media_route_output_routed,
+        "input_applied": media_route_input_applied,
+    }.items():
+        flag = _optional_bool(value)
+        if flag is not None:
+            route_status[key] = flag
+    if route_status:
+        patch["route_status"] = route_status
     if patch:
         patch["schema_version"] = "browser-media-control.v1"
         patch["updated_at"] = _now_ts()
@@ -852,6 +886,15 @@ def touch_browser_session(
     media_audio_input_supported: str | bool | None = None,
     media_audio_output_supported: str | bool | None = None,
     media_audio_output_selection_supported: str | bool | None = None,
+    media_route_status_level: str | None = None,
+    media_route_status_state: str | None = None,
+    media_route_status_reason: str | None = None,
+    media_route_status_detail: str | None = None,
+    media_route_checked_at: str | float | int | None = None,
+    media_route_recent_device_change: str | bool | None = None,
+    media_route_bluetooth_profile_hint: str | bool | None = None,
+    media_route_output_routed: str | bool | None = None,
+    media_route_input_applied: str | bool | None = None,
 ) -> dict[str, Any] | None:
     token = str(device_id or "").strip()
     if not token:
@@ -897,6 +940,15 @@ def touch_browser_session(
         media_audio_input_supported=media_audio_input_supported,
         media_audio_output_supported=media_audio_output_supported,
         media_audio_output_selection_supported=media_audio_output_selection_supported,
+        media_route_status_level=media_route_status_level,
+        media_route_status_state=media_route_status_state,
+        media_route_status_reason=media_route_status_reason,
+        media_route_status_detail=media_route_status_detail,
+        media_route_checked_at=media_route_checked_at,
+        media_route_recent_device_change=media_route_recent_device_change,
+        media_route_bluetooth_profile_hint=media_route_bluetooth_profile_hint,
+        media_route_output_routed=media_route_output_routed,
+        media_route_input_applied=media_route_input_applied,
     )
     if media_patch:
         current_media = _mapping(entry.get("media_control"))
@@ -981,6 +1033,7 @@ def touch_redevice_link(
     active_surface: Mapping[str, Any] | None = None,
     assignment: str | None = None,
     endpoint_assignment: Mapping[str, Any] | None = None,
+    last_seen_at: Any = _UNSET,
 ) -> dict[str, Any] | None:
     requested_token = str(endpoint_id or "").strip()
     if not requested_token:
@@ -1065,7 +1118,7 @@ def touch_redevice_link(
             fallback_role=assignment,
             updated_at=updated_at,
         )
-    entry["last_seen_at"] = _now_ts()
+    entry["last_seen_at"] = _now_ts() if last_seen_at is _UNSET else _numeric_or_none(last_seen_at)
     entry = _updated(entry)
     saved = _put_entry(registry, "redevice", entry)
     _save_registry(registry)

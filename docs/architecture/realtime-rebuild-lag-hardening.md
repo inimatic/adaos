@@ -118,6 +118,38 @@ Demand coalescing remains useful burst control, but it is not a substitute for
 this ownership rule: subscription handlers must not execute ledger queries on
 the event-loop thread.
 
+### Supervisor Projection Single-Flight
+
+The reliability summary no longer starts an independent local supervisor HTTP
+probe for every concurrent browser/status consumer. Supervisor transition and
+required-link state use a short TTL cache with a single refresh owner. If that
+refresh times out, a bounded last-known-good value is returned with
+`_cache.state=stale` and refresh error evidence. An explicit successful
+supervisor response reporting a down link still replaces the cache; stale
+fallback covers probe failure, not real down state.
+
+Runtime knobs:
+
+- `ADAOS_SUPERVISOR_SNAPSHOT_CACHE_TTL_SEC`
+- `ADAOS_SUPERVISOR_SNAPSHOT_STALE_MAX_SEC`
+
+### Core Update Status Fanout
+
+`core.update.status` and `hub.core_update.status` are state reports, so queued
+obsolete revisions do not need event semantics. The local eventbus now bounds
+these topics and supersedes stale queued work per handler and node while
+preserving the latest revision for every subscriber. Synchronous SDK skill
+handlers are not moved wholesale because several schedule owner-loop Yjs work;
+blocking sub-operations must be offloaded inside the owning handler.
+
+### Teacher Startup Rehydration
+
+NLU Teacher startup rehydration keeps live YDoc access on its async owner but
+moves persisted-state I/O, plain-data merge/compaction, large equality checks,
+ledger reconciliation, and persisted writes to worker threads. A `sys.ready`
+handler can therefore reconcile Teacher state without monopolizing the runtime
+event loop.
+
 ### Skill Activation Admission
 
 SDK subscription wrappers now load the skill activation policy and evaluate it

@@ -9,6 +9,8 @@ This document describes the minimal teacher-in-the-loop implementation for AdaOS
    - built-in + dynamic `regex` (fast, deterministic)
    - if not matched -> delegates to Rasa service (`nlp.intent.detect.rasa`)
 3. If intent is found -> `nlp.intent.detected { via: "regex" | "regex.dynamic" | "rasa" }`.
+   This is a compatibility event; the target authority boundary is
+   `IntentProposal -> admitted workflow command/skill invocation`.
 4. If intent is not obtained -> `nlp.intent.not_obtained { reason, via, ... }`.
 5. Teacher bridge reacts to `nlp.intent.not_obtained` and emits:
    - `nlp.teacher.request { webspace_id, request }`
@@ -34,10 +36,12 @@ Set env vars on hub:
 LLM teacher receives a compact context snapshot (per webspace), including:
 
 - current scenario id
-- scenario-level NLU (`scenario.json:nlu`)
+- active conversational package input/examples/matchers and affordances
 - catalog of apps/widgets (with origins) + installed ids
 - built-in regex rules (`nlu.pipeline`)
-- existing regex rules (from skills/scenarios + legacy per-webspace cache)
+- scoped runtime matcher overlays
+- git-versioned package matchers plus legacy scenario/skill regex fields as
+  read-only compatibility evidence
 - routing hints (`intent_routes`: scenario intent -> callSkill topic -> skill)
 - system actions visible in the current scenario (`system_actions`) and a published host action catalog (`host_actions`)
 - skill manifests (`skills_manifest`: tools/events/llm_policy summary for installed skills)
@@ -55,7 +59,9 @@ Goal: prefer improving existing intents (regex rule / dataset revision) over cre
 - **Candidate view**: показывает intent ranking, извлеченные entities/slots, совпавшие lookup values и action preview.
 - **Правильно**: подтверждает текущую интерпретацию и пишет фразу как positive feedback.
 - **Исправить**: позволяет выбрать или поправить intent, slots, action и storage target.
-- **Сохранить пример**: сохраняет curated example в scenario или skill training content, без правки кода.
+- **Сохранить пример**: сохраняет curated example в runtime overlay и создает
+  promotion candidate для выбранного scenario/skill package, без правки кода
+  или package source.
 
 Первую реализацию лучше держать узкой: dry-run phrase check, ranking/entities от Rasa и сохранение примеров для baseline desktop modal intents.
 Более широкую генерацию tool/action стоит включать после появления Root MCP descriptors.
@@ -80,13 +86,15 @@ Token/session flow:
 
 - `nlu.describe_pipeline`: stages regex/neural/rasa, thresholds, поддерживаемые template types и apply capabilities.
 - `nlu.check_phrase`: dry-run интерпретация фразы с trace, ranking, entities и action preview.
-- `nlu.list_training_targets`: scenario/skill locations, куда можно сохранять examples/rules.
+- `nlu.list_training_targets`: scenario/skill packages, для которых можно
+  создать scoped overlay и Builder promotion candidate.
 - `nlu.propose_templates`: контракт LLM-facing template proposals.
 - `desktop.registry.lookup`: текущие `modal_id`, `node_ref`, `app_id`, `scenario_id`, webspace и установленные desktop objects.
 - `skill.describe_tools`: tools навыков, event subscriptions/publications, input schemas и ownership hints.
 
 Так мы не ломаем существующую regex-модель: Root MCP дает descriptors и governed operations, а текущий runtime pipeline остается
-`regex-first`; data-owned rules продолжают жить в scenario/skill artifacts.
+`regex-first`; runtime specialization живет в overlays, а reusable source - в
+git-versioned `conversational/` packages под контролем Builder.
 
 ## NLU authoring contract
 
@@ -119,7 +127,7 @@ Current template inventory response:
       "status": "active",
       "fingerprint": "sha256:...",
       "summary": "RU/EN weather phrase with optional city",
-      "source": {"path": "scenarios/web_desktop/scenario.json", "json_pointer": "/nlu/regex_rules/0"}
+      "source": {"path": "scenarios/web_desktop/conversational/matchers.yaml", "source_id": "open_weather.ru"}
     },
     {
       "template_id": "rasa.web_desktop.desktop.open_node_modal.example.4f9c...",
@@ -198,7 +206,8 @@ Runtime на первом этапе применяет только подде�
 Начальная apply policy:
 
 - `regex`: применять только после явного подтверждения оператора и никогда не перезаписывать существующие rules.
-- `rasa`: сохранять examples и lookup references в scenario/skill training content.
+- `rasa`: сохранять examples и lookup references в runtime overlay, затем
+  предлагать promotion в `conversational/examples.yaml`.
 - `neural`: сохранять labels/masked examples как будущую training metadata; не менять inference behavior, пока neural stage явно не включен.
 - `lookups`: генерировать из live desktop registry snapshots, а не из hardcoded examples вроде `member-1`.
 
@@ -211,33 +220,42 @@ Apply can be triggered from UI or programmatically:
 - apply a teacher candidate:
   - `nlp.teacher.candidate.apply { candidate_id, target? }`
   - for `regex_rule` candidates the runtime delegates to `nlp.teacher.regex_rule.apply { intent, pattern, target? }`
+  - Apply writes a scoped runtime overlay and promotion evidence; it does not
+    edit skill/scenario source
 
-## Where regex rules are stored
+## Where deterministic matchers are stored
 
-The teacher does not “bake” regexes into the hub code. A rule is stored as data owned by a workspace artifact:
-
-- **Skill-owned** (preferred): `.adaos/workspace/skills/<skill>/skill.yaml` → `nlu.regex_rules[]`
-- **Scenario-owned**: `.adaos/workspace/scenarios/<scenario>/scenario.json` → `nlu.regex_rules[]`
-- **Legacy runtime cache**: mirrored into YJS `data.nlu.regex_rules[]` so it starts matching immediately after Apply.
+- **Runtime specialization**: scoped Yjs `data.nlu.regex_rules[]`.
+- **Reusable source**: skill/scenario `conversational/matchers.yaml`, promoted
+  only through a reviewed Builder Change.
+- **Promotion evidence**:
+  `state/interpreter/nlu_teacher_overlays.json` stores bounded package patches,
+  provenance, privacy, validation, and rollback refs.
+- **Legacy compatibility**: skill/scenario `nlu.regex_rules[]` fields are
+  read-only baselines.
 
 Every rule has a stable identity: `id="rx.<uuid>"`.
 
 ## Target selection (skill vs scenario)
 
-When the teacher proposes a regex rule, it should also propose a storage target:
+When the Teacher proposes a matcher, it should also propose an owning package
+for possible promotion:
 
 - Prefer the skill that actually handles the intent (derived from scenario intent `callSkill` actions + skill `events.subscribe`).
 - If the intent triggers host/system behavior (`callHost`), the target is usually the scenario.
 
-Apply supports a UI override (“Apply to Scenario”), in addition to an LLM-suggested target.
+The selected target scopes runtime evidence and the promotion candidate; it is
+not permission for Teacher to write owner files.
 
 ## Auto-apply policy (trusted skills)
 
-Skills can opt into automatic application of teacher-proposed regex rules:
+Skills can opt into automatic application of trusted Teacher matcher overlays:
 
 - `skill.yaml: llm_policy.autoapply_nlu_teacher: true`
 
-If enabled and the candidate target is that skill, the hub auto-emits `nlp.teacher.candidate.apply` after a candidate is proposed.
+If enabled and the candidate target is that skill, the hub auto-emits
+`nlp.teacher.candidate.apply` after a candidate is proposed. Only the runtime
+overlay is auto-applied; reusable source still requires Builder review.
 
 ## Observability: regex usage journal
 
@@ -262,7 +280,9 @@ Expected teacher decision:
 
 After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 
-- the rule is persisted into the chosen owner (skill/scenario) and mirrored into `data.nlu.regex_rules`
+- the rule is applied to scoped `data.nlu.regex_rules`
+- a skill/scenario target produces a Builder promotion candidate for
+  `conversational/matchers.yaml`; Teacher does not edit owner source
 - the next time the same utterance is sent, `nlu.pipeline` should resolve it as `via="regex.dynamic"` without calling the LLM
 
 ## Roadmap
@@ -293,7 +313,8 @@ After you click **Apply** (UI emits `nlp.teacher.candidate.apply`):
 - Показать intent ranking/entities/action preview.
 - Показывать existing templates, релевантные phrase/intent, и давать выбрать template для correction.
 - Добавить действия Правильно/Исправить.
-- Сохранять curated examples в scenario/skill training content.
+- Сохранять curated examples в runtime overlays и формировать Builder
+  promotion candidates для package source.
 
 ### Phase 4 - Multi-engine template application
 

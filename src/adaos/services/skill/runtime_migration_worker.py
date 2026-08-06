@@ -362,6 +362,11 @@ def migration_candidates(
             explicitly_recovering = bool(requested_name and runtime_state.get("deactivated"))
             if explicitly_recovering:
                 reason = "explicit_quarantine_recovery"
+            elif bool(runtime_state.get("deactivated")):
+                # Quarantine is a durable fail-closed state. Background
+                # discovery reports it, but only an explicit named recovery
+                # may retry it, even when the Workspace source is newer.
+                continue
             elif not _runtime_is_behind(workspace_version, runtime_version):
                 continue
             else:
@@ -491,39 +496,28 @@ def _run_migration_sync(
         if not name:
             continue
         entry = dict(candidate)
-        entry["stage"] = "disable"
+        entry["stage"] = "refresh_runtime"
         entry["ok"] = False
-        payload["current"] = {"skill": name, "index": index, "stage": "disable"}
+        payload["current"] = {"skill": name, "index": index, "stage": "refresh_runtime"}
         _write_status(ctx, payload)
         try:
-            try:
-                deactivation = mgr.deactivate_runtime(
-                    name,
-                    reason="runtime_migration_in_progress",
-                    failure_kind="migration",
-                    failed_stage="disable",
-                    source="skill_runtime_migration_worker",
-                    committed_core_switch=False,
-                    status="disabled",
-                    comment="Skill runtime is disabled while AdaOS prepares and activates its updated runtime slot.",
-                    operation_id=operation_id,
-                    transient=True,
-                )
-                entry["disabled_for_migration"] = True
-                entry["transient_deactivation"] = deactivation
-            except Exception as exc:
-                entry["disabled_for_migration"] = False
-                entry["disable_error"] = str(exc)
-            entry["stage"] = "refresh_runtime"
-            payload["current"] = {"skill": name, "index": index, "stage": "refresh_runtime"}
-            _write_status(ctx, payload)
+            # A/B preparation is safe while the old slot remains active.  Do
+            # not create an outage before prepare/tests have succeeded; an
+            # explicit recovery keeps its existing quarantine until the new
+            # slot activates and clears it atomically.
+            entry["disabled_for_migration"] = False
             refresh = refresh_skill_runtime(
                 mgr,
                 name,
                 webspace_id=webspace_id,
                 source_version=str(candidate.get("workspace_version") or ""),
                 migrate_runtime=True,
-                ensure_installed=True,
+                # With sync_workspace=False the authoritative source has
+                # already been materialized (for example by WorkspaceLock).
+                # Calling the legacy ensure-installed path would start a git
+                # pull/rebase inside that release-owned Workspace before the
+                # runtime can be refreshed.
+                ensure_installed=bool(sync_workspace),
                 require_active_version=bool(candidate.get("workspace_version")),
                 disable_during_migration=False,
                 retry_deactivated=bool(candidate.get("deactivated")),
@@ -623,18 +617,26 @@ def _run_migration_sync(
             "skill runtime migration completed; "
             f"{len(quarantine_after)} skill runtime(s) remain quarantined"
         )
-    try:
-        final["webspace_rebuild"] = rebuild_webspace_projection_sync(
-            webspace_id=webspace_id,
-            action="skill_runtime_migration_sync",
-            source_of_truth="skill_runtime",
-        )
-    except Exception as exc:
-        final["webspace_rebuild"] = {"ok": False, "error": str(exc), "webspace_id": webspace_id}
-        if not failed:
-            final["ok"] = False
-            final["state"] = "failed"
-            final["message"] = f"skill runtime migration completed, but webspace rebuild failed: {exc}"
+    if not results:
+        final["webspace_rebuild"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "no_runtime_changes",
+            "webspace_id": webspace_id,
+        }
+    else:
+        try:
+            final["webspace_rebuild"] = rebuild_webspace_projection_sync(
+                webspace_id=webspace_id,
+                action="skill_runtime_migration_sync",
+                source_of_truth="skill_runtime",
+            )
+        except Exception as exc:
+            final["webspace_rebuild"] = {"ok": False, "error": str(exc), "webspace_id": webspace_id}
+            if not failed:
+                final["ok"] = False
+                final["state"] = "failed"
+                final["message"] = f"skill runtime migration completed, but webspace rebuild failed: {exc}"
     return _write_status(ctx, final)
 
 

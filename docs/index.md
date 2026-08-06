@@ -35,6 +35,9 @@ The current implementation is centered around local and private deployments:
 - [Governed Evolution Roadmap](architecture/governed-evolution-roadmap.md):
   cross-domain milestones and proof gates; detailed implementation work remains
   in the domain roadmaps
+- [Workflow Reference Persistence Decision](architecture/workflow-reference-persistence-decision.md):
+  local durability evidence, recovery contract, and measured admission gates
+  for any future DBOS, Temporal, Restate, or JetStream experiment
 - [Roadmap Inventory](architecture/roadmap-inventory.md): authority map and
   index of the domain architecture and roadmap documents
 - [Artifact Source, Package, and Activation](architecture/artifact-source-package-activation.md):

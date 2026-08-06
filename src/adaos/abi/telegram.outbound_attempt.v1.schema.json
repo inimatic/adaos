@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.telegram.outbound_attempt.v1",
+  "type": "object",
+  "required": [
+    "schema", "attempt_id", "operation_key", "hub_id", "bot_id", "chat_id",
+    "message_count", "status", "payload_digest", "claimed_at"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.telegram.outbound_attempt.v1"},
+    "attempt_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "operation_key": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "hub_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "bot_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "chat_id": {"type": "string", "minLength": 1, "maxLength": 240},
+    "message_count": {"type": "integer", "minimum": 1, "maximum": 100},
+    "status": {"enum": ["claimed", "delivered", "failed"]},
+    "payload_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "response_envelope_id": {"type": ["string", "null"], "maxLength": 240},
+    "durable_attempt_id": {"type": ["string", "null"], "maxLength": 240},
+    "receipt": {"type": ["object", "null"]},
+    "error": {"type": ["string", "null"], "maxLength": 4000},
+    "claimed_at": {"type": "string", "minLength": 1},
+    "completed_at": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

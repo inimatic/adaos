@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED, BUILDER_PREVIEW_OBSERVED
+from adaos.domain.project_events import (
+    BUILDER_CONTEXT_SELECTED,
+    BUILDER_PREVIEW_DESIRED,
+    BUILDER_PREVIEW_OBSERVED,
+    BUILDER_PREVIEW_TRANSITIONED,
+)
 from adaos.sdk.core.decorators import subscribe
 from adaos.services.builder.preview_reconciler import BuilderPreviewReconciler
 from adaos.services.runtime_paths import current_state_dir
@@ -150,6 +155,9 @@ def _preview_runtime_projection(value: Any) -> dict[str, Any]:
             "completed_at",
             "updated_at",
             "error",
+            "drift",
+            "observed_version",
+            "observed_at",
         )
     }
 
@@ -184,7 +192,19 @@ def _info_to_dict(info: Any) -> dict[str, Any]:
         except Exception:
             pass
     out: dict[str, Any] = {}
-    for key in ("id", "webspace_id", "title", "kind", "source_mode", "home_scenario"):
+    for key in (
+        "id",
+        "webspace_id",
+        "title",
+        "kind",
+        "source_mode",
+        "home_scenario",
+        "current_scenario",
+        "current_scenario_exists",
+        "degraded",
+        "validation_reason",
+        "recommended_action",
+    ):
         value = getattr(info, key, None)
         if value is not None:
             out[key] = value
@@ -262,6 +282,22 @@ class BuilderWorkbenchService:
             return token if relation.purpose == BUILDER_SELF_HOST else source
         return self.relationships.resolve_builder_host(token)
 
+    def resolve_action_source_webspace_id(
+        self,
+        value: Any,
+        *,
+        current_scenario_id: Any = None,
+    ) -> str:
+        """Resolve an action host, claiming the bounded self-host level for Builder."""
+
+        token = safe_source_webspace_id(value)
+        if relation_purpose_for_scenario(current_scenario_id) == BUILDER_SELF_HOST:
+            return self.relationships.claim_builder_self_host(
+                token,
+                scenario_id=current_scenario_id,
+            )
+        return self.resolve_source_webspace_id(token)
+
     def _ensure_preview_relation(
         self,
         source_webspace_id: str,
@@ -295,6 +331,117 @@ class BuilderWorkbenchService:
             sources.add(relation.source_webspace_id)
             bindings.append(self.get_workspace_binding(relation.source_webspace_id))
         return bindings
+
+    def _webspace_inventory(self) -> dict[str, dict[str, Any]]:
+        """Return the operational Webspace inventory without changing topology."""
+
+        svc = self.webspace_service
+        if svc is None:
+            from adaos.services.scenario.webspace_runtime import WebspaceService
+
+            svc = WebspaceService()
+        inventory: dict[str, dict[str, Any]] = {}
+        for item in svc.list(mode="mixed"):
+            payload = _info_to_dict(item)
+            webspace_id = str(payload.get("id") or payload.get("webspace_id") or "").strip()
+            if webspace_id:
+                inventory[webspace_id] = payload
+        return inventory
+
+    def list_builder_hosts(self) -> list[dict[str, Any]]:
+        """Discover active Builder surfaces and their explicit Preview targets.
+
+        Discovery is intentionally read-only: it never creates a workbench
+        binding, Webspace relation, or Preview Webspace. A Builder host is a
+        Webspace whose effective current scenario is a configured Builder
+        scenario. Merely having Builder installed or a stale binding is not
+        sufficient.
+        """
+
+        inventory = self._webspace_inventory()
+        configured_builder_scenarios = (
+            os.getenv("ADAOS_BUILDER_HOST_SCENARIO_IDS") or BUILDER_HOST_SCENARIO_ID
+        )
+        builder_scenarios = {
+            item.strip()
+            for item in str(configured_builder_scenarios).split(",")
+            if item.strip()
+        }
+        contexts: list[dict[str, Any]] = []
+        for webspace_id, info in inventory.items():
+            current_scenario = str(info.get("current_scenario") or "").strip()
+            home_scenario = str(info.get("home_scenario") or "").strip()
+            effective_scenario = current_scenario or home_scenario
+            if effective_scenario not in builder_scenarios:
+                continue
+
+            relation = self.relationships.get_outgoing(webspace_id)
+            preview_id = relation.target_webspace_id if relation is not None else ""
+            preview = inventory.get(preview_id) if preview_id else None
+            status = "ready"
+            reason: str | None = None
+            if info.get("current_scenario_exists") is False or bool(info.get("degraded")):
+                status = "builder_degraded"
+                reason = str(info.get("validation_reason") or "builder_webspace_degraded")
+            elif relation is None:
+                status = "preview_relation_missing"
+                reason = "builder_preview_relation_missing"
+            elif preview is None:
+                status = "preview_webspace_missing"
+                reason = "builder_preview_webspace_missing"
+            elif str(preview.get("kind") or "").strip() != "dev":
+                status = "preview_webspace_invalid"
+                reason = "builder_preview_must_be_dev_webspace"
+
+            contexts.append(
+                {
+                    "schema": "adaos.builder.context_ref.v1",
+                    "builder_webspace_id": webspace_id,
+                    "builder_title": str(info.get("title") or webspace_id).strip() or webspace_id,
+                    "builder_space_kind": str(info.get("kind") or "workspace").strip() or "workspace",
+                    "builder_source_mode": str(info.get("source_mode") or "workspace").strip() or "workspace",
+                    "builder_scenario_id": effective_scenario,
+                    "preview_webspace_id": preview_id or None,
+                    "preview_relation_id": relation.relation_id if relation is not None else None,
+                    "preview_relation_generation": relation.generation if relation is not None else None,
+                    "status": status,
+                    "selectable": status == "ready",
+                    "reason": reason,
+                }
+            )
+        return sorted(
+            contexts,
+            key=lambda item: (
+                not bool(item.get("selectable")),
+                str(item.get("builder_space_kind") or "workspace") == "dev",
+                str(item.get("builder_title") or "").casefold(),
+                str(item.get("builder_webspace_id") or "").casefold(),
+            ),
+        )
+
+    def resolve_builder_context(
+        self,
+        builder_webspace_id: Any,
+        *,
+        require_ready: bool = True,
+    ) -> dict[str, Any]:
+        """Resolve one explicit Builder host; never infer it from an id suffix."""
+
+        requested = safe_source_webspace_id(builder_webspace_id)
+        context = next(
+            (
+                item
+                for item in self.list_builder_hosts()
+                if str(item.get("builder_webspace_id") or "") == requested
+            ),
+            None,
+        )
+        if context is None:
+            raise ValueError(f"Builder is not active in Webspace {requested!r}")
+        if require_ready and not bool(context.get("selectable")):
+            status = str(context.get("status") or "unavailable")
+            raise ValueError(f"Builder Webspace {requested!r} is not ready: {status}")
+        return dict(context)
 
     async def ensure_dev_webspace(
         self,
@@ -1077,6 +1224,16 @@ async def _on_builder_source_webspace_reloaded(evt: Any) -> None:
     }:
         return
     service = BuilderWorkbenchService()
+    # A Builder opened inside another Builder's preview is a bounded self-host.
+    # Claim that topology as soon as scenario materialization tells us the
+    # authoritative scenario id. UI actions do not always carry scenario_id in
+    # their tool metadata, so deferring the claim until the first action can
+    # incorrectly resolve ``dev1-dev`` back to ``dev1`` and overwrite the
+    # Builder itself instead of allocating ``dev1-dev-dev`` for its project.
+    source_webspace_id = service.resolve_action_source_webspace_id(
+        source_webspace_id,
+        current_scenario_id=scenario_id,
+    )
     if not service.binding_path(source_webspace_id).is_file():
         return
     _schedule_projection_publish(service, source_webspace_id)
@@ -1145,3 +1302,43 @@ async def _on_builder_preview_observed(evt: Any) -> None:
     ):
         return
     _schedule_projection_publish(service, source_webspace_id)
+
+
+@subscribe(BUILDER_PREVIEW_TRANSITIONED)
+async def _on_builder_preview_transitioned(evt: Any) -> None:
+    payload = _payload_from_event(evt)
+    source_webspace_id = str(payload.get("source_webspace_id") or "").strip()
+    if not source_webspace_id:
+        return
+    service = BuilderWorkbenchService()
+    current = service.reconciler.describe(source_webspace_id)
+    if int(current.get("generation") or 0) != int(payload.get("generation") or 0):
+        return
+    _schedule_projection_publish(service, source_webspace_id)
+
+
+@subscribe("desktop.webspace.reloaded")
+async def _on_builder_preview_webspace_reloaded(evt: Any) -> None:
+    """Project runtime truth back to the owning Builder after reload/reconnect."""
+
+    payload = _payload_from_event(evt)
+    preview_webspace_id = str(payload.get("webspace_id") or "").strip()
+    observed_scenario = str(
+        payload.get("scenario_id")
+        or payload.get("current_scenario")
+        or payload.get("materialized_scenario")
+        or ""
+    ).strip()
+    if not preview_webspace_id or not observed_scenario:
+        return
+    service = BuilderWorkbenchService()
+    incoming = service.relationships.get_incoming(preview_webspace_id)
+    if incoming is None or incoming.purpose != BUILDER_PROJECT_PREVIEW:
+        return
+    service.reconciler.observe(
+        source_webspace_id=incoming.source_webspace_id,
+        preview_webspace_id=preview_webspace_id,
+        observed_scenario=observed_scenario,
+        observed_version=str(payload.get("version") or payload.get("revision") or "").strip() or None,
+        reason=str(payload.get("reason") or payload.get("action") or "webspace_reloaded"),
+    )

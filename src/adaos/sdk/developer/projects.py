@@ -517,6 +517,15 @@ def decide_candidate(
     )
 
 
+def get_candidate(candidate_id: str) -> dict[str, Any]:
+    """Inspect one prepared candidate without repeating trial activation."""
+
+    token = str(candidate_id or "").strip()
+    if not token:
+        raise DeveloperProjectError("candidate_id is required")
+    return _jsonable(_service().get_artifact_candidate(token))
+
+
 def prepare_rebased_candidate(
     stale_candidate_id: str,
     kind: str,

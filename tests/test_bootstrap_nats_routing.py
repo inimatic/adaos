@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services import bootstrap as bootstrap_mod
+from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
 from adaos.services.system_model import service as system_model_service
 
 
@@ -21,6 +22,23 @@ def _generic_public_route(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_nats_url_needs_public_ws_refresh_for_legacy_public_tcp_url() -> None:
     assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://nats.inimatic.com:4222") is True
     assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://api.inimatic.com:4222") is True
+
+
+def test_nats_bridge_policy_is_typed_bootstrap_dependency() -> None:
+    policy = NatsBridgePolicy()
+
+    assert policy.url_needs_public_ws_refresh("nats://api.inimatic.com:4222") is True
+    assert policy.transport_kind("wss://api.inimatic.com/nats") == "ws"
+    assert policy.canonical_identity(local_hub_id="hub-a", nats_user=None) == ("hub-a", "hub_hub-a")
+
+
+def test_hub_route_proxy_policy_owns_discovery_cache() -> None:
+    first = HubRouteProxyPolicy()
+    second = HubRouteProxyPolicy()
+    first.discovery.cache.update({"value": "http://127.0.0.1:8778", "expires_at": 10**12})
+
+    assert first.discover_active_runtime_local_base() == "http://127.0.0.1:8778"
+    assert second.discovery.snapshot()["cache"]["value"] is None
 
 
 def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
@@ -76,6 +94,14 @@ def test_nats_quarantine_skips_local_realtime_sidecar_candidate() -> None:
         )
         is True
     )
+
+
+def test_sidecar_transient_failover_is_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", raising=False)
+    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is False
+
+    monkeypatch.setenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", "1")
+    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is True
 
 
 def test_resolve_nats_log_server_prefers_current_attempt() -> None:
@@ -259,6 +285,42 @@ async def test_hub_root_reconnect_rearms_running_bridge_without_active_connectio
                 task.cancel()
         old_task.cancel()
         await asyncio.gather(*service._boot_tasks, old_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_hub_root_bridge_watchdog_rearms_unexpectedly_completed_bridge() -> None:
+    service = bootstrap_mod.BootstrapService(
+        SimpleNamespace(config=SimpleNamespace(role="hub")),
+        heartbeat=SimpleNamespace(),
+        skills_loader=SimpleNamespace(),
+        subnet_registry=SimpleNamespace(),
+    )
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def bridge() -> None:
+        started.set()
+        await stop.wait()
+
+    completed = asyncio.create_task(asyncio.sleep(0), name=service._hub_root_bridge_task_name)
+    await completed
+    service._hub_root_bridge_factory = bridge
+    service._boot_tasks.append(completed)
+
+    try:
+        result = await service._repair_missing_hub_root_bridge(reason="test_abnormal_close")
+
+        assert result["attempted"] is True
+        assert result["state"] == "rearmed"
+        assert service._hub_root_bridge_watchdog_rearm_total == 1
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert service._find_live_boot_task(service._hub_root_bridge_task_name) is not None
+    finally:
+        stop.set()
+        for task in list(service._boot_tasks):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*service._boot_tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -661,6 +723,58 @@ def test_build_hub_route_http_bases_prefers_process_runtime_port_over_stale_stat
     ]
 
 
+def test_build_hub_route_http_bases_prefers_supervisor_state_over_legacy_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
+    monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setenv("ADAOS_API_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_active_runtime_state_local_http_bases",
+        lambda ctx=None: ["http://127.0.0.1:8778"],
+    )
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_discover_active_runtime_local_base",
+        lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+    )
+
+    cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
+
+    assert bootstrap_mod._build_hub_route_http_bases(
+        path_norm="/api/node/reliability/summary",
+        method="GET",
+        cfg=cfg,
+    )[:2] == [
+        "http://127.0.0.1:8778",
+        "http://127.0.0.1:8777",
+    ]
+
+
+def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
+    monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_active_runtime_state_local_http_bases",
+        lambda ctx=None: ["http://127.0.0.1:8778"],
+    )
+    monkeypatch.setattr(bootstrap_mod, "realtime_sidecar_route_tunnel_ws_bases", lambda **_: [])
+    monkeypatch.setattr(
+        bootstrap_mod,
+        "_discover_active_runtime_local_base",
+        lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+    )
+
+    cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
+
+    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg, path="/ws")[:2] == [
+        "ws://127.0.0.1:8778",
+        "ws://127.0.0.1:8777",
+    ]
+
+
 def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert bootstrap_mod._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
     assert bootstrap_mod._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
@@ -673,17 +787,30 @@ def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> No
     )
 
 
-def test_hub_route_tools_call_never_retries_after_upstream_error() -> None:
+def test_hub_route_tools_call_retries_only_transport_safe_or_idempotent_failures() -> None:
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","arguments":{"content":"a"}}',
     ) is False
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ConnectionError",
-    ) is False
+    ) is True
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","idempotency_key":"idem-1","arguments":{"content":"a"}}',
+    ) is True
+    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+        method="POST",
+        path="/api/tools/call",
+        error_kind="ReadTimeout",
+        body=b'{"tool":"notes:save","arguments":{"_meta":{"request_id":"req-1"}}}',
+    ) is True
     assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
         method="GET",
         path="/api/ping",
@@ -867,6 +994,92 @@ def test_bootstrap_bounded_interval_rejects_non_finite_values() -> None:
     assert bootstrap_mod._bounded_interval_seconds("nan", default=15.0, minimum=5.0) == 15.0
     assert bootstrap_mod._bounded_interval_seconds("inf", default=15.0, minimum=5.0) == 15.0
     assert bootstrap_mod._bounded_interval_seconds("1", default=15.0, minimum=5.0) == 5.0
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_timeout_does_not_trap_reconnect_supervisor() -> None:
+    cancelled = asyncio.Event()
+
+    async def _stuck_close() -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=0.01)
+
+    assert cleaned is False
+    await asyncio.wait_for(cancelled.wait(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_reports_successful_close() -> None:
+    closed = False
+
+    async def _close() -> None:
+        nonlocal closed
+        closed = True
+
+    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_close, timeout_s=0.1)
+
+    assert cleaned is True
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_does_not_promote_child_cancellation_to_supervisor_shutdown() -> None:
+    async def _self_cancelled_close() -> None:
+        raise asyncio.CancelledError()
+
+    assert await bootstrap_mod._run_bounded_async_cleanup(_self_cancelled_close, timeout_s=0.1) is False
+
+
+@pytest.mark.asyncio
+async def test_nats_cleanup_preserves_owner_requested_task_cancellation() -> None:
+    started = asyncio.Event()
+
+    async def _stuck_close() -> None:
+        started.set()
+        await asyncio.Future()
+
+    async def _worker() -> bool:
+        return await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=10.0)
+
+    task = asyncio.create_task(_worker())
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_nats_route_tunnel_cleanup_is_concurrent_and_bounded() -> None:
+    cancelled: set[str] = set()
+
+    class StuckWebSocket:
+        def __init__(self, key: str) -> None:
+            self.key = key
+
+        async def close(self) -> None:
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.add(self.key)
+
+    tunnels = {
+        f"route-{index}": {"ws": StuckWebSocket(f"route-{index}")}
+        for index in range(4)
+    }
+    started = asyncio.get_running_loop().time()
+
+    result = await bootstrap_mod._close_route_tunnels_bounded(tunnels, timeout_s=0.02)
+
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 0.1
+    assert result == {"attempted": 4, "completed": 0, "failed_or_timed_out": 4}
+    assert tunnels == {}
+    assert cancelled == {"route-0", "route-1", "route-2", "route-3"}
 
 
 def test_should_forward_node_status_to_members_skips_member_originated_payloads() -> None:

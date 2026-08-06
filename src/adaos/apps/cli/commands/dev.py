@@ -861,6 +861,11 @@ def dev_login(
     status: Optional[str] = typer.Option(None, "--status", help="Check pairing status for code."),
     revoke: Optional[str] = typer.Option(None, "--revoke", help="Revoke pairing code."),
     hub: Optional[str] = typer.Option(None, "--hub", help="Explicit hub id to bind (overrides defaults)."),
+    webspace: Optional[str] = typer.Option(
+        None,
+        "--webspace",
+        help="Bind this Telegram channel to a trusted webspace route (for example dev1-dev).",
+    ),
 ):
     ctx = get_ctx()
 
@@ -899,7 +904,10 @@ def dev_login(
         raise typer.Exit(0)
     print("hub_log", hub_id)
     # Send hub id in JSON body using the expected key; avoid query param 'hub_id' which backend ignores
-    data = client.request("POST", "/io/tg/pair/create", json={"code": "PING", "hub_id": hub_id})
+    pair_payload = {"code": "PING", "hub_id": hub_id}
+    if webspace and webspace.strip():
+        pair_payload["webspace_id"] = webspace.strip()
+    data = client.request("POST", "/io/tg/pair/create", json=pair_payload)
     # TODO Перенести обработку ошибок из метода _request на уровень  логики.
     """ if resp.status_code != 200:
         _print_error(f"API error: {resp.status_code} {resp.text}")
@@ -912,6 +920,8 @@ def dev_login(
     typer.secho("Telegram pairing:", fg=typer.colors.GREEN)
     typer.echo(f"  pair_code: {code}")
     typer.echo(f"  deep_link: {deep_link}")
+    if data.get("webspace_id"):
+        typer.echo(f"  webspace_id: {data['webspace_id']}")
     if data.get("expires_at"):
         typer.echo(f"  expires_at: {data['expires_at']}")
 

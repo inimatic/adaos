@@ -114,6 +114,34 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    older = service.factory.submit_realize_request(
+        {
+            "request_id": "realize.test.older-builder-task",
+            "target": {"type": "scenario", "id": "older_scenario"},
+        }
+    )["task"]
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the approved recipe prototype.",
+        webspace_id="prompt-dev",
+        conversation_id="conv.builder.recipes",
+    )
+
+    status = service.status(object_type="scenario", object_id="recipes")
+    assert status["session"]["status"] == "completed"
+    submitted_task_id = status["session"]["current_task_id"]
+    tasks = {
+        item["task_id"]: item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+    }
+    assert tasks[older["task_id"]]["status"] == "queued"
+    assert tasks[submitted_task_id]["status"] == "completed"
+
+
 def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service._workflow().transition(
@@ -153,13 +181,32 @@ def test_automation_carries_active_change_set_into_isolated_codex_request(tmp_pa
     )
     request = task["realize_request"]
     assert request["links"]["change_set_id"] == "CS-recipes-store-sync"
+    assert request["links"]["canonical_change_id"] == "CS-recipes-store-sync"
+    assert request["links"]["context_packet_digest"].startswith("sha256:")
     assert request["artifacts"]["change_set"]["issues"][0]["issue_id"] == "store-sync"
+    packet = request["artifacts"]["context_packet"]
+    assert packet["schema"] == "adaos.builder.context_packet.v1"
+    assert packet["digest"] == request["links"]["context_packet_digest"]
+    assert packet["change"]["change_id"] == "CS-recipes-store-sync"
+    assert started["session"]["canonical_change_id"] == "CS-recipes-store-sync"
+    assert started["session"]["context_packet_digest"] == packet["digest"]
+    serialized_packet = json.dumps(packet, ensure_ascii=False).lower()
+    assert "raw_transcript" not in serialized_packet
+    assert "secret" not in serialized_packet
     assert (
         "A failed remote request leaves the local shopping list unchanged."
         in request["acceptance"]["checks"]
     )
     workflow = service._workflow().describe("scenario", "recipes")
     assert started["session"]["change_id"] in workflow["change_set"]["member_change_ids"]
+    automation_run = next(
+        item
+        for item in workflow["change"]["runs"]
+        if item["run_id"] == started["session"]["current_task_id"]
+    )
+    assert automation_run["context_packet_digest"] == packet["digest"]
+    assert automation_run["status"] == "running"
+    assert automation_run["activity"] == "automation_started"
 
 
 def test_automation_rejects_change_set_before_prototype_approval(tmp_path: Path) -> None:

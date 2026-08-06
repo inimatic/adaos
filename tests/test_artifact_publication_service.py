@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from adaos.services.artifact_pipeline import (
     WorkspaceActivationManager,
 )
 from adaos.services.artifact_pipeline import packages as package_module
+from adaos.services import workflow_authoring
+from adaos.services.builder.governed import builder_change_definition
 
 
 class _Remote:
@@ -112,6 +115,20 @@ def _scenario(root: Path) -> Path:
         encoding="utf-8",
     )
     (scenario / "webui.json").write_text('{"ui": {}}\n', encoding="utf-8")
+    return scenario
+
+
+def _workflow_scenario(root: Path) -> Path:
+    scenario = _scenario(root)
+    (scenario / "scenario.yaml").write_text(
+        "id: recipes\nversion: 1.0.0\ntitle: Recipes\n"
+        "workflow:\n  manifest: workflow.json\n",
+        encoding="utf-8",
+    )
+    (scenario / "workflow.json").write_text(
+        json.dumps(builder_change_definition(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return scenario
 
 
@@ -229,6 +246,132 @@ def test_checkpoint_candidate_isolated_trial_and_stable_promotion(tmp_path: Path
     assert '"stable"' in registry
 
 
+def test_workflow_publication_admission_precedes_channel_and_binds_all_locks(
+    tmp_path: Path,
+) -> None:
+    dev = _workflow_scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-workflow-admission",),
+        validation_evidence={
+            "suite": "workflow-validation",
+            "status": "passed",
+            "context_packet": {
+                "digest": "sha256:" + "0" * 64,
+                "coverage": {
+                    "required": ["workflow_definition"],
+                    "present": ["workflow_definition"],
+                    "missing": [],
+                    "ambiguous": [],
+                    "ready": True,
+                },
+            },
+            "story_reports": [
+                {
+                    "valid": True,
+                    "diagnostics": [],
+                    "timeline": [
+                        {
+                            "command": "inspect",
+                            "retry_of_step": 0,
+                            "action_failure": True,
+                            "output": {"kind": "clarification"},
+                            "presentation": None,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    trial_metrics = prepared.candidate.trials[0].workflow_metrics
+    assert trial_metrics is not None
+    assert trial_metrics["context_sufficiency"]["ready"] is True
+    assert trial_metrics["rates"] == {
+        "clarification": 1.0,
+        "repair": 0.0,
+        "retry": 1.0,
+        "action_failure": 1.0,
+    }
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+
+    _promote(service, prepared.candidate.candidate_id)
+
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    phases = [item["phase"] for item in operation["events"]]
+    assert phases.index("workflow_admitted") < phases.index("channel_moved")
+    admission = operation["receipts"]["workflow_admitted"]["admission"]
+    package = admission["packages"][0]
+    workflow = admission["workflow_admission"]["workflows"][0]
+    assert package["package_digest"] == prepared.plan.packages[0].digest
+    assert package["definition_digest"] == workflow["definition"]["digest"]
+    assert package["validation_digest"] == workflow["validation"]["digest"]
+    assert package["binding_digest"] == workflow["binding_digest"]
+    assert package["role_policy_digest"] == workflow["role_policy_digest"]
+    assert workflow["adapter_locks"]
+
+
+def test_workflow_role_policy_mismatch_blocks_channel_in_publication_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _workflow_scenario(tmp_path / "dev")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=workspace,
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-role-policy",),
+        validation_evidence={"suite": "workflow-validation", "status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    changed_policy = workflow_authoring.default_workflow_role_policy()
+    changed_policy["roles"][1]["permission_ceiling"] = ["workflow.changed"]
+    monkeypatch.setattr(
+        workflow_authoring,
+        "default_workflow_role_policy",
+        lambda: changed_policy,
+    )
+
+    with pytest.raises(PublicationError, match="role policy"):
+        _promote(service, prepared.candidate.candidate_id)
+
+    assert remote.channel_writes == 0
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    assert "workflow_admitted" not in operation["receipts"]
+    assert "channel_moved" not in operation["receipts"]
+
+
 def test_paused_promotion_recovers_failed_activation_with_new_identity(
     tmp_path: Path,
 ) -> None:
@@ -264,6 +407,11 @@ def test_paused_promotion_recovers_failed_activation_with_new_identity(
             },
             health_check=lambda _lock: False,
         )
+    from adaos.services.builder.repair import BuilderRepairService
+
+    repairs = BuilderRepairService(state_dir=tmp_path / "state").list(project_id="recipes")
+    assert repairs[-1]["signal_type"] == "post_activation"
+    assert repairs[-1]["context"]["release_digest"] == prepared.candidate.release_digest
     failed_operation_id = WorkspaceActivationManager.operation_id(
         f"stable:{prepared.candidate.release_digest}"
     )
@@ -1376,3 +1524,70 @@ def test_promotion_continues_after_projection_failure_without_reactivation(
     assert completed["status"] == "completed"
     assert completed["receipts"]["workspace_activated"]["operation_id"] == activation_operation
     assert promoted.activation.idempotent_replay is True
+
+
+def test_completed_promotion_replays_only_terminal_receipts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dev = _scenario(tmp_path / "dev")
+    remote = _Remote(tmp_path / "remote")
+    service = ArtifactPublicationService(
+        state_root=tmp_path / "state",
+        workspace_root=tmp_path / "workspace",
+        remote=remote,
+    )
+    service.record_push(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        source_ref=_source(),
+    )
+    prepared = service.prepare_candidate(
+        kind="scenario",
+        artifact_id="recipes",
+        artifact_dir=dev,
+        change_ids=("change-terminal-replay",),
+        validation_evidence={"status": "passed"},
+    )
+    service.decide_candidate(prepared.candidate.candidate_id, accepted=True)
+    promoted = _promote(
+        service,
+        prepared.candidate.candidate_id,
+        health_check=lambda _lock: True,
+    )
+    channel_writes = remote.channel_writes
+    monkeypatch.setattr(
+        remote,
+        "get_channel",
+        lambda *_args, **_kwargs: pytest.fail(
+            "terminal promotion replay must not query or rewrite the remote channel"
+        ),
+    )
+
+    replayed = _promote(service, prepared.candidate.candidate_id)
+
+    assert replayed.pointer == promoted.pointer
+    assert replayed.activation.operation_id == promoted.activation.operation_id
+    assert replayed.activation.idempotent_replay is True
+    assert remote.channel_writes == channel_writes
+
+    # A legacy replay could have overwritten only the operation status after
+    # all terminal receipts were already durable.  Receipt reconciliation must
+    # restore the terminal marker without touching the registry or runtime.
+    operation = service.load_promotion(prepared.candidate.candidate_id)
+    assert operation is not None
+    operation["status"] = "paused"
+    operation["error"] = "legacy post-completion admission replay"
+    operation["paused_at"] = "2026-08-05T00:00:00+00:00"
+    service._write_promotion(operation)
+
+    repaired = _promote(service, prepared.candidate.candidate_id)
+
+    persisted = service.load_promotion(prepared.candidate.candidate_id)
+    assert persisted is not None
+    assert persisted["status"] == "completed"
+    assert "error" not in persisted
+    assert "paused_at" not in persisted
+    assert repaired.activation.idempotent_replay is True
+    assert remote.channel_writes == channel_writes

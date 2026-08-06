@@ -125,6 +125,7 @@ def _bounded_event_topics() -> tuple[str, ...]:
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
             "io.out.stream.publish,"
             "subnet.member.snapshot.changed,browser.session.changed,"
+            "core.update.status,hub.core_update.status,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
@@ -140,7 +141,8 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
             "io.out.stream.publish,"
-            "browser.session.changed,adaos.status.card.changed,adaos.projection.lifecycle.changed",
+            "browser.session.changed,core.update.status,hub.core_update.status,"
+            "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""
     ).strip()
@@ -300,6 +302,11 @@ class LocalEventBus(EventBus):
             node_id = str(self._event_field(event, "target_node_id", "node_id", "member_id") or "").strip()
             webspace_id = str(self._event_field(event, "webspace_id") or "").strip()
             return (event_type, node_id, webspace_id)
+        if event_type in {"core.update.status", "hub.core_update.status"}:
+            node_id = str(
+                self._event_field(event, "target_node_id", "node_id", "member_id") or "local"
+            ).strip() or "local"
+            return (event_type, node_id)
         if event_type == _BROWSER_SESSION_CHANGED_EVENT:
             webspace_id = str(self._event_field(event, "webspace_id", "workspace_id") or "default").strip() or "default"
             device_id = str(

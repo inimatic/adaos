@@ -13,6 +13,8 @@ import hashlib
 import uuid
 from urllib.parse import quote
 
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
+
 
 class RootHttpError(RuntimeError):
     """Raised when the Root API returns an error response."""
@@ -77,7 +79,7 @@ def _env_timeout_s(name: str, default: float, *, minimum: float = 0.25, maximum:
 class RootHttpClient:
     """HTTP client for the Inimatic Root API."""
 
-    base_url: str = "https://api.inimatic.com"
+    base_url: str = DEFAULT_PUBLIC_ROOT_BASE_URL
     timeout: float = 15.0
     verify: str | bool | ssl.SSLContext = True
     # mTLS client cert (cert_file, key_file)
@@ -110,7 +112,7 @@ class RootHttpClient:
             or getattr(root, "api_base", None)
             or getattr(settings, "root_base_url", None)
             or getattr(settings, "api_base", None)
-            or "https://api.inimatic.com"
+            or DEFAULT_PUBLIC_ROOT_BASE_URL
         )
 
         # TLS verification (CA) & client cert

@@ -81,6 +81,55 @@ transport-only `/ws` and `/yws` handoff as ready.
 
 ### Repository checkpoint: current tree
 
+- The `192.168.0.30` incident on 2026-08-04 exposed two coupled livelocks.
+  A closed subnet member WebSocket raised a synchronous Starlette
+  `RuntimeError`; the receive loop retried it without yielding until the
+  runtime consumed a CPU and filled the `8778` accept backlog. Independently,
+  supervisor diagnostics referenced `re` without importing it, so every
+  monitor iteration failed before the existing API-unready watchdog could
+  restart that live-but-unresponsive runtime. Subnet receive failures are now
+  terminal except for explicitly recoverable malformed JSON, stale connection
+  cleanup is generation-bound, and the supervisor exception boundary advances
+  runtime self-heal even when auxiliary monitor work fails.
+- A promoted target that reached `root_restart_timeout` can now converge after
+  that self-heal only when the replacement runtime is ready and the active
+  manifest matches the original immutable target. The reconciler records a
+  terminal validation instead of replaying the update or silently claiming
+  rollback.
+- The one-shot `.30` recovery advanced from slot B to slot A at exact target
+  `bf8ba37edfc743e85a1a62baefd17e808147ff78` (`0.1.665`) and reached
+  `succeeded / validate` without redispatching the state-changing command. The
+  replacement supervisor reconciled root restart completion and adopted the
+  already-ready slot A runtime.
+- That rollout also exposed an unbounded `candidate_not_ready` loop. Candidate
+  startup completed in the same second that the old 12-second readiness windows
+  expired and the supervisor stopped it; the scheduled attempt then rebuilt the
+  inactive slot from scratch. The current tree uses 60-second readiness windows,
+  persists a deferral counter, permits one automatic retry by default, and then
+  fails explicitly in `prewarm` with public evidence instead of repeating
+  preparation forever or silently violating strict warm-switch policy.
+- Automatic release reconciliation on `.30` subsequently detected immutable
+  target `ffee59be46c496049421c1c8ba19e25dcfc5044a` (`0.1.666`) without an
+  operator redispatch. Slot B preparation took about 182 seconds under local I/O
+  pressure, the passive runtime became ready during the normal 60-second
+  countdown, and warm cutover completed through root promotion plus a managed
+  supervisor self-restart. The replacement generation reported
+  `succeeded / validate`, exact manifest parity, no candidate listener, a clean
+  monitor (`last_failure=null`, `consecutive_failure_total=0`), and ready
+  sidecar/upstream-route evidence. This is the live acceptance for bounded
+  slow-candidate handling and automatic distribution recovery.
+- The hub-root bridge now has two independent recovery rails. Child transport
+  cleanup cancellation is classified separately from owner-requested task
+  cancellation, so an abnormal sidecar EOF cannot silently terminate the
+  supervisor loop; a periodic runtime watchdog also rearms a bridge task that
+  nevertheless disappears. Sidecar/direct-WSS oscillation after a transient
+  remote failure is disabled by default, while listener-unavailable fallback
+  remains intact.
+- Regression coverage now exercises `established -> abnormal remote close ->
+  local session close -> new runtime session`, missing-bridge rearm, and both
+  child and owner cancellation semantics. It also proves that a fragmented
+  `PUB` payload crosses the sidecar byte-for-byte even when legacy sidecar NATS
+  ping configuration is present. Live soak after deployment remains open.
 - Code and tests now keep realtime sidecar enabled by default for hub runtimes;
   `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
 - Yjs materialization fallback is now explicitly bounded and degraded-aware.
@@ -133,6 +182,47 @@ transport-only `/ws` and `/yws` handoff as ready.
   enabled and partially stand-accepted for local transport-only handoff**.
   Full acceptance still requires A/B/root-routed browser survival and
   WebRTC/Yjs auto-upgrade evidence with server-side opt-outs verified.
+
+### Local incident checkpoint: 2026-08-04, `sn_6acf0c01`
+
+- The sidecar listener and process remained alive, but its last established
+  remote session had closed with WebSocket `1006`; the runtime NATS bridge task
+  had disappeared after `UnexpectedEOF`, while HTTP heartbeat continued to be
+  accepted. Telegram input therefore never reached the local Builder runtime.
+- Correlated Root NATS logs exposed two `Client parser ERROR` records while the
+  local runtime was publishing large payloads. NATS parser state `41` is
+  `MSG_END_R`: the server had consumed the declared payload length but did not
+  find the required carriage return. The sidecar's timer-driven NATS `PING`
+  could be queued between TCP fragments of the same `PUB` payload, adding bytes
+  that were absent from the declared size. The upstream NATS close then
+  surfaced at the client as WebSocket `1006` (no close frame observed).
+- WebSocket `1006` is a local API diagnostic for an absent close frame, not a
+  close code that may be transmitted on the wire. Healthy traffic and managed
+  restart must therefore not produce it. Managed stop now calls a loopback-only
+  sidecar control endpoint first so the relay itself can send a close frame.
+  A dedicated process-group signal and then hard termination remain bounded
+  fallbacks for an unresponsive child.
+- A single `POST /api/node/hub-root/reconnect` restored the route. Sidecar
+  diagnostics changed from `remote_session_state=down` and
+  `transport_ready=false` to `ready` and `true`, with a new remote session and
+  active NATS traffic. The routed node-status endpoint changed from transport
+  `503` to the expected authentication boundary (`401` without credentials).
+- After loading the patch locally, a managed `POST /api/node/sidecar/restart`
+  closed session `rt-60c8c88921` with WebSocket `1000` at the Root proxy,
+  opened `rt-02f4d1481b`, and restored the hub route subscriptions on the next
+  one-second status sample. The operation completed in 7.85 seconds including
+  process replacement; public ingress remained at the expected unauthenticated
+  `401`, sidecar-originated NATS ping counters remained zero, and Root NATS had
+  no new parser error. This closes the controlled-restart `1006` case; injected
+  abnormal-close and long-duration large-payload soak remain open.
+- Root cause: cleanup-level cancellation was interpreted as cancellation of
+  the entire supervisor, and no in-process invariant repaired the missing
+  bridge. The initiating protocol defect was sidecar-originated NATS keepalive
+  injection into a transparent byte stream. The current tree removes that
+  injection, separates child/owner cancellation, adds an independent bridge
+  watchdog, and disables transient sidecar/direct-WSS failover by default.
+  Deployment plus large-payload and injected-close soak remains the acceptance
+  gate.
 
 ### Stand checkpoint: 2026-06-07, `adaost1` / `91.98.89.76`
 
@@ -494,6 +584,80 @@ Runtime now also exposes `hardening_coverage`, and for the current `hub_root.*` 
 - `tools/diag_nats_ws.py`
 - `tools/diag_route_probe.py`
 
+### Bootstrap decomposition constraint
+
+Extracted helpers are ownership seams, not a second bootstrap implementation:
+
+- `BootstrapService` composes lifecycle, subscriptions, and service
+  start/stop only
+- the NATS bridge owns credentials, connect/reconnect, subscriptions, delivery
+  budgets, outboxes, and transport diagnostics
+- the hub route proxy owns HTTP/WS tunnels, resend/backpressure, and route
+  caches
+- root transport owns the required upstream link plus bridge/watchdog state,
+  without duplicating route policy
+- the realtime sidecar remains transport-only while protocol and Yjs authority
+  migration is deferred
+
+Migration removes synchronized helper globals and wrapper callbacks while
+preserving delivery and idempotency contracts. `run_boot_sequence()` remains
+composition-only. Stand evidence must cover transport policy, rooted A/B
+cutover, and reconnect soak acceptance.
+
+Implementation status, 2026-08-06:
+
+- lifecycle now owns boot serialization, readiness, app binding, task
+  adoption/replacement, and cancellation
+- root transport owns bridge/watchdog execution and bounded route reset
+- status/watchdog owns environment policy plus heartbeat registration
+- NATS decisions are consumed through a typed composed policy
+- hub-route local-runtime discovery cache and diagnostics are instance-owned
+  by the route proxy policy
+- `run_boot_sequence()` and its compatibility implementation are now thin
+  composition delegates; boot ordering/subscriptions live in
+  `bootstrap_runtime/boot_sequence.py`
+- `bootstrap_runtime/nats_root_runtime.py` is now composition-only; the
+  long-lived connection/session owner lives in `nats_transport_runtime.py`,
+  credential persistence and refresh throttling live in `nats_credentials.py`,
+  and browser/root HTTP/WS tunnel state plus cleanup live in
+  `route_tunnel_runtime.py`
+- explicit reconnect and authority waiting remain on `RootTransportService`;
+  the transport runtime consumes those lifecycle operations instead of
+  duplicating them
+- `bootstrap.py` remains the compatibility/composition surface (about 1.3k
+  lines after the split), while transport state has one owner and the promoted
+  root dependency closure explicitly includes every extracted module
+
+The 2026-08-06 `.30` delivery checkpoint promoted commit `5422f6c7` through
+the rooted A/B path to slot `B`; supervisor update state finished as
+`succeeded` and the replacement root supervisor validated the active runtime.
+The sidecar remained a single long-lived process with `/ws` and `/yws` route
+listeners ready. The thin reliability contract reported the required
+`hub_root` link as `ready`, served by `supervisor_sidecar`, with no blockers;
+state sync was attached, complete, semantically ready, and fresh.
+
+The checkpoint is not a pressure-soak claim. An extended observation through
+23:49 UTC still showed recurring blocking pressure: 19 event-loop-lag warnings
+and four `subnet.member.link.down` event publications after 23:27. The link
+reconverged to `ready` with no blockers, and the same window contained no
+`recovering`, traceback, or error records, but the lag/drop pattern is not
+closed by this decomposition tranche. The remaining fanout/blocking-work
+investigation stays tracked separately under `RT-FANOUT` / `LRLT-001` /
+`LRLT-002`.
+
+The first follow-up hardening slice is implemented locally. Supervisor public
+status reads are now single-flight and TTL-cached; a transient local probe
+failure serves an explicitly marked stale last-known-good projection for a
+bounded window instead of immediately turning a ready required upstream link
+into false `degraded`. `core.update.status` and `hub.core_update.status` are
+latest-state bounded eventbus topics with per-handler supersession, and
+obsolete queued revisions do not amplify subscriber work. Event-loop-affine
+skill handlers stay on their owner loop; their blocking sub-operations must be
+offloaded at the handler boundary instead of moving the whole handler.
+NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
+`sys.ready` also run in workers. Target-stand pressure evidence is still needed
+before closing the tracking items.
+
 ### Exit criteria
 
 - [x] `[must]` Route pressure cannot starve control readiness.
@@ -564,6 +728,18 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   blocker is architectural: the current sidecar NATS path is a byte relay tied
   to the local runtime client lifetime. A stable root-visible hub session needs
   a protocol-aware relay or sidecar-owned hub-root NATS session authority.
+- [x] `[must]` Recover the current runtime NATS session after an abnormal
+  sidecar remote close without reusing stale protocol state. The byte relay
+  closes the affected local socket; the runtime supervisor recreates NATS
+  subscriptions, child cleanup cancellation cannot terminate the supervisor,
+  and an independent watchdog rearms a missing bridge task.
+- [x] `[must]` Preserve transparent NATS byte-stream integrity. Sidecar does
+  not synthesize application-level NATS keepalive commands; protocol keepalive
+  stays with the runtime NATS client and transport liveness uses WebSocket
+  control ping/pong.
+- [x] `[must]` Stop automatic oscillation between a healthy local sidecar
+  listener and direct WSS after transient remote EOF. Direct fallback is used
+  when the listener is unavailable; transient failover is explicit opt-in.
 - [x] `[must]` Add route-proxy runtime-reconnect support so an already-open
   browser `/ws` or `/yws` socket is not closed only because the current runtime
   upstream disappears.
@@ -773,6 +949,13 @@ lifecycle and update attempt state.
   only in ad-hoc browser badges.
 - [x] `[must]` Separate runtime liveness from listener/API readiness in
   supervisor-visible status.
+- [x] `[must]` Keep live-but-unresponsive runtime self-heal independent of
+  auxiliary monitor success, and regression-test the exception boundary.
+- [x] `[must]` Terminate closed/replaced subnet member receive handlers without
+  a synchronous retry loop, and prevent stale handler cleanup from removing a
+  replacement member link.
+- [x] `[must]` Reconcile `root_restart_timeout` after bounded runtime self-heal
+  only when the active manifest still matches the requested immutable target.
 - [x] `[must]` Surface the active managed runtime command/source in supervisor
   diagnostics.
 - [x] `[must]` Surface active-slot structure validation in supervisor
@@ -807,6 +990,9 @@ lifecycle and update attempt state.
 - [x] `[must]` Automatically prewarm passive candidate runtime when warm-switch
   is admitted, surface its readiness/failure in supervisor/browser-safe status,
   and keep the candidate passive until supervisor explicitly commits cutover.
+- [x] `[must]` Bound slow-candidate readiness and automatic warm-switch
+  deferrals; expose their count and terminate exhausted attempts as an explicit
+  `failed / prewarm` outcome rather than an infinite prepare loop.
 - [x] `[must]` Harden fast-cutover authority handoff so promoted candidate
   runtime becomes the sole live root/browser traffic owner without ambiguous
   overlap. Promotion now waits for route authority before retiring the old
@@ -817,6 +1003,11 @@ lifecycle and update attempt state.
 - [ ] `[should]` Add stronger soak/recovery coverage for candidate promotion
   fallback, stale candidate cleanup, and low-memory warm-switch downgrade
   paths.
+- [ ] `[should]` Keep the supervisor public/status control surface responsive
+  while a promoted candidate retires a slow old runtime and root promotion is
+  being finalized. The `.30` acceptance kept the new runtime and routed data
+  plane available, but the old-runtime shutdown took about 55 seconds and the
+  supervisor API was temporarily unavailable until the managed self-restart.
 
 ### Candidate code areas
 
@@ -871,9 +1062,10 @@ lifecycle and update attempt state.
 - [x] `[must]` Root/browser diagnostics can distinguish concurrent `active`
   and `candidate` runtimes by explicit runtime instance identity instead of
   only `hub_id`.
-- [ ] `[must]` When warm-switch is admitted and candidate prewarm succeeds,
+- [x] `[must]` When warm-switch is admitted and candidate prewarm succeeds,
   supervisor can promote/adopt that candidate without ambiguous overlap, while
-  fallback to stop-and-switch remains deterministic.
+  fallback to stop-and-switch remains deterministic. Live `.30` recovery
+  promoted the second bounded candidate attempt and completed root validation.
 
 ## Phase 4: Hub-member semantic channels
 

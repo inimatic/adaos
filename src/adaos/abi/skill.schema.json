@@ -46,6 +46,15 @@
       "description": "Builder-readable NLU hints for aliases, examples, slot schemas, entities, and owner routing."
     },
 
+    "workflow": {
+      "$ref": "#/$defs/workflowManifest",
+      "description": "Optional single governed workflow definition stored in the component-root workflow.json file."
+    },
+    "conversational": {
+      "$ref": "#/$defs/conversationalManifest",
+      "description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
+    },
+
     "runtime": {
       "description": "Runtime requirements for the skill handlers (mapped to adaos.services.skill.runtime).",
       "type": "object",
@@ -323,6 +332,22 @@
   "required": ["name", "version"],
 
   "$defs": {
+    "workflowManifest": {
+      "type": "object",
+      "required": ["manifest"],
+      "properties": {
+        "manifest": { "const": "workflow.json" }
+      },
+      "additionalProperties": false
+    },
+    "conversationalManifest": {
+      "type": "object",
+      "required": ["manifest"],
+      "properties": {
+        "manifest": { "const": "conversational/manifest.yaml" }
+      },
+      "additionalProperties": false
+    },
     "authoringHints": {
       "type": "object",
       "additionalProperties": true,

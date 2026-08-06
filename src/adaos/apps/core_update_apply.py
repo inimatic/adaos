@@ -951,7 +951,13 @@ def _prepare_checkout_repo(
 def _strip_repo_vcs_metadata(repo_dir: Path) -> None:
     git_dir = repo_dir / ".git"
     if git_dir.exists():
-        shutil.rmtree(git_dir, ignore_errors=True)
+        # Git object files are commonly read-only on Windows.  Silent cleanup
+        # leaves a partial ``.git/objects`` tree inside the immutable slot and
+        # makes its provenance ambiguous, so use the same writeable retry as
+        # slot replacement and fail preparation if metadata survives.
+        _force_remove_tree(git_dir)
+    if git_dir.exists():
+        raise RuntimeError(f"prepared slot retains VCS metadata: {git_dir}")
 
 
 def _path_content_differs(left: Path, right: Path) -> bool:

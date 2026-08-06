@@ -11,11 +11,31 @@
     "artifact_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
     "target_ref": { "type": "string", "pattern": "^(widget|field|surface):" },
     "comment": { "type": "string", "minLength": 1, "maxLength": 4000 },
-    "status": { "enum": ["open", "accepted", "rejected", "resolved"] },
+    "status": { "enum": ["open", "submitted", "accepted", "accepted_as_constraint", "converted_to_issue", "dismissed", "withdrawn", "rejected", "resolved", "superseded"] },
     "author_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "source_revision": { "type": ["string", "null"], "maxLength": 160 },
+    "current_revision": { "type": ["string", "null"], "maxLength": 160 },
+    "anchor_state": { "enum": ["stable", "moved", "unresolved"] },
+    "anchor_snapshot": { "type": "object", "additionalProperties": true },
+    "revision_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["revision", "observed_at", "anchor_state"],
+        "properties": {
+          "revision": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "anchor_state": { "enum": ["stable", "moved", "unresolved"] }
+        }
+      }
+    },
     "issue_id": { "type": ["string", "null"], "maxLength": 80 },
     "constraint_ref": { "type": ["string", "null"], "maxLength": 300 },
     "resolution_ref": { "type": ["string", "null"], "maxLength": 300 },
+    "disposition_reason": { "type": ["string", "null"], "maxLength": 2000 },
+    "superseded_by_ref": { "type": ["string", "null"], "maxLength": 300 },
+    "tombstone": { "type": "boolean" },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": ["string", "null"], "format": "date-time" }
   },

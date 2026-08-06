@@ -16,6 +16,7 @@ from adaos.services.join_codes import create as create_join_code
 from adaos.services.root.client import RootHttpClient, RootHttpError
 from adaos.services.root_mcp.client import RootMcpClient, RootMcpClientConfig
 from adaos.services.root.service import RootAuthError, RootAuthService
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 app = typer.Typer(help="Hub operations.")
 join_code_app = typer.Typer(help="Join-code management.")
@@ -74,7 +75,7 @@ def _resolve_root_base_url(conf: Any, explicit_root: str | None = None) -> str:
     base_url = (
         explicit_root
         or getattr(getattr(conf, "root_settings", None), "base_url", None)
-        or "https://api.inimatic.com"
+        or DEFAULT_PUBLIC_ROOT_BASE_URL
     ).rstrip("/")
     return base_url
 

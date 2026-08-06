@@ -675,6 +675,65 @@ def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkey
     assert attempt["completion_reason"] == "root restart timeout"
 
 
+def test_reconcile_root_restart_timeout_after_runtime_self_heal(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.time, "time", lambda: 300.0)
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "git_commit": "target-commit",
+            "target_version": "target-commit",
+        },
+    )
+    write_status(
+        {
+            "state": "failed",
+            "phase": "root_restart_timeout",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-commit",
+            "supervisor_timeout_at": 240.0,
+            "updated_at": 240.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "failed",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "target-commit",
+            "completion_reason": "root restart timeout",
+            "completed_at": 240.0,
+            "updated_at": 240.0,
+        }
+    )
+
+    payload = supervisor._reconcile_update_status(
+        {
+            "ok": True,
+            "status": read_status(),
+            "runtime": {
+                "runtime_state": "ready",
+                "listener_running": True,
+                "runtime_api_ready": True,
+                "active_slot": "B",
+            },
+            "_served_by": "supervisor_fallback",
+        }
+    )
+
+    assert payload["status"]["state"] == "succeeded"
+    assert payload["status"]["phase"] == "validate"
+    assert payload["status"]["root_restart_timeout_reconciled"] is True
+    assert payload["_served_by"] == "supervisor_root_restart_timeout_reconciled"
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "completed"
+    assert attempt["completion_reason"] == "root restart timeout reconciled after runtime recovery"
+
+
 def test_reconcile_update_status_self_heals_stale_awaiting_root_restart_when_runtime_can_finalize(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
@@ -1425,6 +1484,78 @@ def test_required_upstream_link_uses_node_role_before_transition_role(monkeypatc
     assert payload["current_owner"] == "sidecar"
 
 
+def test_required_upstream_link_uses_ready_sidecar_handoff_over_stale_route_degradation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._hub_root_watchdog_last_state = "degraded"
+    manager._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(supervisor, "realtime_sidecar_enabled", lambda *, role=None: role == "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_sidecar_runtime_payload",
+        lambda: {
+            "enabled": True,
+            "status": "ready",
+            "remote_session_state": "ready",
+            "transport_ready": True,
+            "route_tunnel_contract": {
+                "ws": {
+                    "current_owner": "sidecar",
+                    "listener_ready": True,
+                    "handoff_ready": True,
+                    "blockers": [],
+                },
+                "yws": {
+                    "current_owner": "sidecar",
+                    "listener_ready": True,
+                    "handoff_ready": True,
+                    "blockers": [],
+                },
+            },
+        },
+    )
+
+    payload = manager._required_upstream_link_state_payload(role="hub")
+
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+    assert payload["handoff_state"] == "ready"
+    assert payload["handoff_ready"] is True
+    assert payload["served_by"] == "supervisor_sidecar"
+    assert payload["watchdog"]["last_state"] == "degraded"
+
+
+def test_required_upstream_link_does_not_hide_failed_sidecar_transport(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._hub_root_watchdog_last_state = "degraded"
+    manager._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(supervisor, "realtime_sidecar_enabled", lambda *, role=None: role == "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_sidecar_runtime_payload",
+        lambda: {
+            "enabled": True,
+            "status": "degraded",
+            "remote_session_state": "down",
+            "transport_ready": False,
+            "route_tunnel_contract": {
+                "ws": {"current_owner": "sidecar", "listener_ready": True, "handoff_ready": True},
+                "yws": {"current_owner": "sidecar", "listener_ready": True, "handoff_ready": True},
+            },
+        },
+    )
+
+    payload = manager._required_upstream_link_state_payload(role="hub")
+
+    assert payload["state"] == "degraded"
+    assert payload["ready"] is False
+    assert payload["handoff_ready"] is False
+    assert payload["served_by"] == "supervisor"
+
+
 def test_read_jsonl_tail_uses_bounded_tail_window(tmp_path) -> None:
     path = tmp_path / "watchdog.jsonl"
     lines = [{"i": i, "payload": "x" * 20} for i in range(10)]
@@ -1971,6 +2102,14 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
     assert promote_calls == [("B", "supervisor.fast_cutover")]
 
 
+def test_warm_switch_candidate_readiness_defaults_cover_slow_startup(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_SUPERVISOR_CANDIDATE_READY_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", raising=False)
+
+    assert supervisor._warm_switch_candidate_ready_timeout_sec() == 60.0
+    assert supervisor._warm_switch_max_deferrals() == 1
+
+
 def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
@@ -2042,9 +2181,82 @@ def test_prepare_worker_defers_when_candidate_is_not_ready(monkeypatch, tmp_path
     assert status["phase"] == "scheduled"
     assert status["planned_reason"] == "candidate_not_ready"
     assert status["candidate_prewarm_state"] == "deferred_not_ready"
+    assert status["candidate_prewarm_deferral_count"] == 1
+    assert status["candidate_prewarm_max_deferrals"] == 1
     assert attempt["state"] == "planned"
+    assert attempt["candidate_prewarm_deferral_count"] == 1
+    assert attempt["candidate_prewarm_max_deferrals"] == 1
     assert lifecycle_calls == []
     assert activated_slots == []
+    assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
+
+
+def test_prepare_worker_fails_after_candidate_prewarm_deferrals_are_exhausted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", "0")
+    monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
+    monkeypatch.setattr(
+        supervisor,
+        "prepare_pending_update",
+        lambda plan: {
+            "state": "prepared",
+            "phase": "prepare",
+            "target_slot": "B",
+            "manifest": {"slot": "B"},
+            "plan": {"target_slot": "B"},
+            "finished_at": 222.0,
+        },
+    )
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    cleanup_calls: list[tuple[str, str | None]] = []
+
+    async def _candidate_prewarm(*, target_slot: str | None):
+        return {
+            "attempted": True,
+            "state": "starting",
+            "message": "passive candidate runtime is still warming on http://127.0.0.1:8778",
+        }
+
+    async def _refresh_starting_candidate_prewarm(*, target_slot: str | None):
+        return {
+            "state": "starting",
+            "message": "passive candidate runtime is still warming on http://127.0.0.1:8778",
+        }
+
+    async def _cleanup_candidate_runtime(*, reason: str, slot: str | None = None):
+        cleanup_calls.append((reason, slot))
+        return {"ok": True, "stopped": True, "slot": slot}
+
+    monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
+    monkeypatch.setattr(manager, "_refresh_starting_candidate_prewarm", _refresh_starting_candidate_prewarm)
+    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(
+        manager._prepare_and_countdown_update_worker(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+    )
+
+    status = read_status()
+    attempt = supervisor._read_update_attempt()
+    assert status["state"] == "failed"
+    assert status["phase"] == "prewarm"
+    assert status["failure_reason"] == "candidate_not_ready"
+    assert status["candidate_prewarm_state"] == "failed_not_ready"
+    assert status["candidate_prewarm_deferral_count"] == 1
+    assert status["candidate_prewarm_max_deferrals"] == 0
+    assert attempt["state"] == "failed"
+    assert attempt["completion_reason"] == "candidate_not_ready: automatic warm-switch deferrals exhausted"
     assert cleanup_calls == [("supervisor.candidate.defer_not_ready", "B")]
 
 
@@ -4264,6 +4476,46 @@ def test_supervisor_monitor_recovers_scheduler_after_iteration_failure(monkeypat
     assert manager._monitor_recovery_total == 1
     assert manager._monitor_failure_total == 1
     assert manager._monitor_last_failure == "RuntimeError: transient monitor failure"
+
+
+def test_supervisor_monitor_failure_boundary_still_self_heals_runtime(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    iteration_calls: list[int] = []
+    restart_reasons: list[str] = []
+
+    async def _iteration_loop() -> None:
+        iteration_calls.append(len(iteration_calls) + 1)
+        if len(iteration_calls) == 1:
+            raise NameError("auxiliary monitor defect")
+        manager._stopping = True
+
+    async def _restart_runtime(*, reason: str) -> dict[str, object]:
+        restart_reasons.append(reason)
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "_monitor_iteration_loop", _iteration_loop)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_self_heal_decision",
+        lambda: {
+            "reason": "supervisor.runtime.api_unready",
+            "message": "runtime API stayed unavailable",
+        },
+    )
+    monkeypatch.setattr(manager, "_record_runtime_self_heal_restart", lambda decision: dict(decision))
+    monkeypatch.setattr(manager, "restart_runtime", _restart_runtime)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(manager.monitor_forever())
+
+    assert iteration_calls == [1, 2]
+    assert restart_reasons == ["supervisor.runtime.api_unready"]
+    assert manager._monitor_last_failure == "NameError: auxiliary monitor defect"
+
+
+def test_safe_evidence_label_is_available_to_monitor_diagnostics() -> None:
+    assert supervisor._safe_evidence_label("runtime/API unhealthy") == "runtime_API_unhealthy"
 
 
 def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tmp_path) -> None:

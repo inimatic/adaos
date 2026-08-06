@@ -4,11 +4,9 @@ from typing import Any, Callable, Mapping
 from pathlib import Path
 import asyncio
 import json
-import threading
 import time
 import requests
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -20,7 +18,7 @@ from adaos.domain import Event
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from .rules_loader import load_rules, watch_rules
-from .media_routes import resolve_media_route_intent
+from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.io_console import print_text
 from adaos.services.subnet_alias import display_subnet_alias, load_subnet_alias
@@ -35,1532 +33,366 @@ from adaos.services.scenario.projection_service import _merge_nested_path
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.skill.manager import SkillManager
 from adaos.sdk.io.context import io_meta
-from adaos.services import conversation_context, conversation_response, conversation_store, dialog_runtime
+from adaos.services import (
+    conversation_context,
+    conversation_response,
+    conversation_store,
+    dialog_runtime,
+    durable_delivery,
+    telegram_delivery,
+)
 from adaos.services.nlu.text_correction import correct_light_text
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
 
 
 _log = logging.getLogger("adaos.router.service")
 
 
 _WEBIO_RECEIVER_METADATA_CACHE_TTL_S = 2.0
-_WEBIO_STREAM_GUARD_STATS_LOCK = threading.Lock()
-_WEBIO_STREAM_GUARD_STATS: dict[str, dict[str, Any]] = {}
-GENERAL_DIALOG_AGENT_ID = "agent:core:general"
-GENERAL_DIALOG_AGENT_CONFIGURED_LABEL = os.getenv("ADAOS_GENERAL_ASSISTANT_NAME", "").strip()
-GENERAL_DIALOG_AGENT_DEFAULT_LABEL = "Ассистент"
-GENERAL_DIALOG_AGENT_GENDER = os.getenv("ADAOS_GENERAL_ASSISTANT_GENDER", "male").strip().lower() or "male"
-GENERAL_DIALOG_AGENT_VOICE = os.getenv("ADAOS_GENERAL_ASSISTANT_VOICE", "ru-male").strip() or "ru-male"
-GENERAL_DIALOG_AGENT_OWNER = "core:general_assistant"
-GENERAL_DIALOG_CHANNEL_ID = "general"
-CONVERSATIONAL_DIALOG_CHANNEL_ID = "conversational"
-BUILDER_DIALOG_CHANNEL_ID = "builder"
-BUILDER_SKILL_ID = "builder_skill"
-CONVERSATION_COMPANIONS_SKILL_ID = "conversation_companions"
-DIALOG_USER_MESSAGE_EVENT = "dialog.user_message"
-VOICE_CHAT_USER_EVENT = "voice.chat.user"
-VOICE_CHAT_STREAM_RECEIVER = "voice_chat.messages"
-try:
-    VOICE_CHAT_VISIBLE_TAIL = max(8, min(int(str(os.getenv("ADAOS_VOICE_CHAT_VISIBLE_TAIL") or "24").strip()), 100))
-except Exception:
-    VOICE_CHAT_VISIBLE_TAIL = 24
-VOICE_CHAT_HISTORY_LIMIT = 200
-VOICE_CHAT_STREAM_TEXT_MAX_CHARS = 1200
-VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = 4096
-VOICE_CHAT_STREAM_ACTIONS_MAX = 6
-
-
-def _builder_transport_integrity_error(
-    text: Any,
-    *,
-    meta: Mapping[str, Any] | None = None,
-    dialog_channel_id: str | None = None,
-) -> str | None:
-    """Return a rejection reason before a Builder chat turn is persisted.
-
-    Builder requests can create durable change evidence or launch an LLM job, so
-    text whose Unicode code points were already lost must be rejected at the
-    voice-chat ingress boundary.  Other dialog channels keep their existing
-    punctuation semantics.
-    """
-
-    metadata = dict(meta or {})
-    channel = str(
-        dialog_channel_id
-        or metadata.get("dialog_channel_id")
-        or metadata.get("conversation_channel_id")
-        or ""
-    ).strip().lower()
-    agent_id = str(metadata.get("active_agent_id") or "").strip().lower()
-    if channel != BUILDER_DIALOG_CHANNEL_ID and agent_id not in {
-        "agent:builder_skill:builder",
-        "agent:builder_skill",
-    }:
-        return None
-    token = str(text or "")
-    if "\ufffd" in token:
-        return "replacement_character"
-    if "????" in token:
-        return "suspicious_question_mark_run"
-    return None
-try:
-    VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = max(
-        4096,
-        min(int(str(os.getenv("ADAOS_VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES") or "16384").strip()), 65536),
-    )
-except Exception:
-    VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = 16384
-_CONVERSATION_AGENT_REGISTRY: tuple[dict[str, Any], ...] = (
-    {
-        "id": GENERAL_DIALOG_AGENT_ID,
-        "label": GENERAL_DIALOG_AGENT_DEFAULT_LABEL,
-        "owner": GENERAL_DIALOG_AGENT_OWNER,
-        "kind": "core_agent",
-        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
-        "gender": GENERAL_DIALOG_AGENT_GENDER,
-        "voice": GENERAL_DIALOG_AGENT_VOICE,
-        "icon": "sparkles-outline",
-        "aliases": (GENERAL_DIALOG_AGENT_DEFAULT_LABEL, "ассистент", "общий ассистент", "general"),
-    },
-    {
-        "id": "agent:conversation_companions:arseni",
-        "label": "Арсений",
-        "owner": "skill:conversation_companions",
-        "kind": "skill_agent",
-        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
-        "skill": "conversation_companions",
-        "talk_tool": "talk",
-        "switch_tool": "switch_character",
-        "character_id": "arseni",
-        "gender": "male",
-        "voice": "ru-male",
-        "icon": "male-outline",
-        "aliases": ("Арсений", "Arseni", "Arseniy", "советник", "консультант"),
-    },
-    {
-        "id": "agent:conversation_companions:nika",
-        "label": "Ника",
-        "owner": "skill:conversation_companions",
-        "kind": "skill_agent",
-        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
-        "skill": "conversation_companions",
-        "talk_tool": "talk",
-        "switch_tool": "switch_character",
-        "character_id": "nika",
-        "gender": "female",
-        "voice": "ru-female",
-        "icon": "female-outline",
-        "aliases": ("Ника", "Nika", "скептик"),
-    },
-    {
-        "id": "agent:conversation_companions:mira",
-        "label": "Мира",
-        "owner": "skill:conversation_companions",
-        "kind": "skill_agent",
-        "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
-        "skill": "conversation_companions",
-        "talk_tool": "talk",
-        "switch_tool": "switch_character",
-        "character_id": "mira",
-        "gender": "female",
-        "voice": "ru-female",
-        "icon": "heart-circle-outline",
-        "aliases": ("Мира", "Mira", "собеседник", "рассказчик"),
-    },
-    {
-        "id": "agent:builder_skill:builder",
-        "label": "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-        "owner": "skill:builder_skill",
-        "kind": "skill_agent",
-        "channel_id": BUILDER_DIALOG_CHANNEL_ID,
-        "skill": BUILDER_SKILL_ID,
-        "talk_tool": "chat",
-        "gender": "male",
-        "voice": "ru-male",
-        "icon": "construct-outline",
-        "aliases": (
-            "\u0421\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-            "\u0441\u0442\u0440\u043e\u0438\u0442\u0435\u043b\u044c",
-            "Builder",
-            "builder",
-            "buikder",
-            "\u0431\u0438\u043b\u0434\u0435\u0440",
-        ),
-    },
-)
-
-
-def _truncate_voice_chat_stream_text(value: Any, *, max_chars: int = VOICE_CHAT_STREAM_TEXT_MAX_CHARS) -> str:
-    text = str(value or "")
-    if max_chars <= 0 or len(text) <= max_chars:
-        return text
-    return text[:max_chars].rstrip() + "…"
-
-
-def _compact_voice_chat_stream_action(action: Mapping[str, Any]) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    for key in ("id", "label", "title", "icon", "fill", "command"):
-        value = action.get(key)
-        if value is not None and value != "":
-            compact[key] = value
-    if action.get("disabled") is True:
-        compact["disabled"] = True
-    for key in ("params", "action"):
-        value = action.get(key)
-        if value is None:
-            continue
-        try:
-            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        except Exception:
-            continue
-        if len(encoded) <= VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS:
-            compact[key] = value
-    return compact
-
-
-def _compact_voice_chat_stream_message(item: Mapping[str, Any]) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    for key in (
-        "id",
-        "from",
-        "ts",
-        "seq",
-        "conversation_id",
-        "dialog_channel_id",
-        "thread_id",
-        "conversation_topic_id",
-        "topic_id",
-        "turn_trace_id",
-        "active_agent_id",
-        "active_agent_label",
-        "active_agent_gender",
-        "active_agent_voice",
-        "active_agent_icon",
-        "active_agent_avatar_ref",
-        "agent_avatar_ref",
-        "recipient_label",
-        "origin_label",
-        "progress_group_id",
-        "progress_phase",
-        "progress_status",
-        "progress_label",
-        "progress_seq",
-    ):
-        value = item.get(key)
-        if value is not None and value != "":
-            compact[key] = value
-    compact["text"] = _truncate_voice_chat_stream_text(item.get("text"))
-    meta = item.get("_meta")
-    if isinstance(meta, Mapping):
-        compact_meta: dict[str, Any] = {}
-        for key in (
-            "route_id",
-            "dialog_channel_id",
-            "dialog_event_kind",
-            "canonical_event_kind",
-            "input_event_kind",
-            "origin",
-            "origin_kind",
-            "actor_kind",
-            "source",
-        ):
-            value = meta.get(key)
-            if isinstance(value, str):
-                value = value.strip()
-                if value:
-                    compact_meta[key] = value[:160]
-            elif isinstance(value, (bool, int, float)):
-                compact_meta[key] = value
-        if compact_meta:
-            compact["_meta"] = compact_meta
-    actions = item.get("actions")
-    if isinstance(actions, list):
-        compact_actions = [
-            _compact_voice_chat_stream_action(action)
-            for action in actions[:VOICE_CHAT_STREAM_ACTIONS_MAX]
-            if isinstance(action, Mapping)
-        ]
-        compact_actions = [action for action in compact_actions if action]
-        if compact_actions:
-            compact["actions"] = compact_actions
-    return compact
-
-
-def _compact_voice_chat_stream_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        _compact_voice_chat_stream_message(item)
-        for item in messages
-        if isinstance(item, Mapping)
-    ]
-
-
-def _voice_chat_stream_json_bytes(value: Any) -> int:
-    return len(
-        json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str).encode(
-            "utf-8", errors="replace"
-        )
-    )
-
-
-def _bound_voice_chat_stream_messages(
-    messages: list[dict[str, Any]],
-    *,
-    max_bytes: int = VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES,
-) -> tuple[list[dict[str, Any]], int]:
-    """Keep the newest contiguous chat tail within the WebIO payload budget."""
-    budget = max(1024, int(max_bytes or VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES))
-    selected_reversed: list[dict[str, Any]] = []
-    used_bytes = 2  # JSON list brackets.
-    for source in reversed(messages):
-        candidate = dict(source)
-        candidate_bytes = _voice_chat_stream_json_bytes(candidate)
-        while candidate_bytes > budget - 2 and isinstance(candidate.get("actions"), list) and candidate["actions"]:
-            candidate["actions"] = candidate["actions"][:-1]
-            if not candidate["actions"]:
-                candidate.pop("actions", None)
-            candidate_bytes = _voice_chat_stream_json_bytes(candidate)
-        if candidate_bytes > budget - 2:
-            candidate["text"] = _truncate_voice_chat_stream_text(candidate.get("text"), max_chars=256)
-            candidate_bytes = _voice_chat_stream_json_bytes(candidate)
-        separator_bytes = 1 if selected_reversed else 0
-        if selected_reversed and used_bytes + separator_bytes + candidate_bytes > budget:
-            break
-        selected_reversed.append(candidate)
-        used_bytes += separator_bytes + candidate_bytes
-        if used_bytes >= budget:
-            break
-    selected = list(reversed(selected_reversed))
-    return selected, max(0, len(messages) - len(selected))
-_GENERAL_AGENT_ADDRESS_RE = re.compile(
-    r"^\s*(?:general|ассистент|общий\s+ассистент)\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
-    re.IGNORECASE | re.UNICODE,
-)
-
-
-def _webio_receiver_metadata_timeout_s() -> float:
-    try:
-        return max(0.05, min(float(str(os.getenv("ADAOS_WEBIO_RECEIVER_METADATA_TIMEOUT_S") or "0.75").strip()), 10.0))
-    except Exception:
-        return 0.75
-
-
-def _voice_chat_yjs_timeout_s() -> float:
-    try:
-        return max(0.05, min(float(str(os.getenv("ADAOS_VOICE_CHAT_YJS_TIMEOUT_S") or "0.75").strip()), 5.0))
-    except Exception:
-        return 0.75
-
-
-def _voice_chat_persist_debounce_s() -> float:
-    try:
-        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_DEBOUNCE_S") or "0.05").strip()), 5.0))
-    except Exception:
-        return 0.05
-
-
-def _voice_chat_persist_failure_backoff_s() -> float:
-    try:
-        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_FAILURE_BACKOFF_S") or "2.0").strip()), 60.0))
-    except Exception:
-        return 2.0
-
-
-def _voice_chat_persist_stream_snapshots_enabled() -> bool:
-    return str(os.getenv("ADAOS_VOICE_CHAT_PERSIST_STREAM_SNAPSHOTS") or "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _voice_chat_snapshot_republish_interval_s() -> float:
-    try:
-        return max(0.0, min(float(str(os.getenv("ADAOS_VOICE_CHAT_SNAPSHOT_REPUBLISH_INTERVAL_S") or "30.0").strip()), 300.0))
-    except Exception:
-        return 30.0
-
-
-def _webio_stream_guard_enabled() -> bool:
-    return str(os.getenv("ADAOS_WEBIO_STREAM_GUARD_ENABLE") or "1").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _webio_stream_warn_bytes() -> int:
-    try:
-        return max(1024, int(str(os.getenv("ADAOS_WEBIO_STREAM_WARN_BYTES") or "65536").strip()))
-    except Exception:
-        return 65536
-
-
-def _webio_stream_block_bytes() -> int:
-    try:
-        return max(_webio_stream_warn_bytes(), int(str(os.getenv("ADAOS_WEBIO_STREAM_BLOCK_BYTES") or "262144").strip()))
-    except Exception:
-        return max(_webio_stream_warn_bytes(), 262144)
-
-
-def _webio_stream_payload_bytes(payload: Any) -> int:
-    try:
-        return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
-    except Exception:
-        return 0
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    to_json = getattr(value, "to_json", None)
-    if callable(to_json):
-        try:
-            decoded = to_json()
-            if isinstance(decoded, dict):
-                return dict(decoded)
-        except Exception:
-            return {}
-    return {}
-
-
-def _positive_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-        return parsed if parsed > 0 else None
-    except Exception:
-        return None
-
-
-def _general_conversation_id(webspace_id: str) -> str:
-    ws = str(webspace_id or "default").strip() or "default"
-    return f"conv.core.general.{ws}"
-
-
-def _skill_conversation_id(skill_id: str, webspace_id: str) -> str:
-    skill = str(skill_id or "skill").strip() or "skill"
-    ws = str(webspace_id or "default").strip() or "default"
-    return f"conv.skill.{skill}.default.{ws}"
-
-
-def _dialog_channel_label(channel_id: Any) -> str:
-    token = str(channel_id or "").strip()
-    if token == "general":
-        return "General"
-    if token == "conversational":
-        return "Conversational"
-    if token == "builder":
-        return "Builder"
-    return token.replace("_", " ").replace("-", " ").title() if token else "Dialog"
-
-
-def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> bool:
-    token = str(skill_id or "").strip()
-    if token == BUILDER_SKILL_ID:
-        return True
-    if token != CONVERSATION_COMPANIONS_SKILL_ID:
-        return False
-    detail = f"{type(exc).__name__}: {exc}".lower()
-    return any(
-        marker in detail
-        for marker in (
-            "not activated",
-            "not prepared",
-            "not found",
-            "unavailable",
-            "deactivated",
-            "no default tool",
-            "resolved_manifest",
-            "manifest",
-        )
-    )
-
-
-def _dialog_channel_policy(channel_id: Any, *, default_tool: str | None = None) -> dict[str, Any]:
-    token = str(channel_id or "").strip() or "general"
-    if token == "general":
-        return {
-            "entry_intents": ["general.request", "general.agent_addressed"],
-            "default_tool": default_tool or "voice_chat_skill.handle_text",
-            "fallback": "nlu",
-            "exit_intents": [],
-            "switch_intents": ["conversation.start", "builder.start"],
-        }
-    if token == "conversational":
-        return {
-            "entry_intents": ["conversation.start", "conversation.agent_addressed"],
-            "default_tool": default_tool or "conversation_companions.talk",
-            "fallback": "owner_default_tool",
-            "exit_intents": ["conversation.exit", "general.agent_addressed"],
-            "switch_intents": ["conversation.switch_character", "general.agent_addressed"],
-        }
-    if token == "builder":
-        return {
-            "entry_intents": ["builder.start", "builder.agent_addressed"],
-            "default_tool": default_tool or f"{BUILDER_SKILL_ID}.chat",
-            "fallback": "owner_default_tool",
-            "exit_intents": ["builder.exit", "general.agent_addressed"],
-            "switch_intents": ["general.agent_addressed", "conversation.agent_addressed"],
-        }
-    return {
-        "entry_intents": [f"{token}.start", f"{token}.agent_addressed"],
-        "default_tool": default_tool or "chat",
-        "fallback": "owner_default_tool",
-        "exit_intents": [f"{token}.exit", "general.agent_addressed"],
-        "switch_intents": ["general.agent_addressed"],
-    }
-
-
-def _dedupe_texts(values: list[Any] | tuple[Any, ...]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        token = str(value or "").strip()
-        if not token:
-            continue
-        key = token.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(token)
-    return result
-
-
-def _current_subnet_id() -> str:
-    for getter in (
-        lambda: getattr(get_ctx(), "config", None),
-        load_config,
-    ):
-        try:
-            config = getter()
-        except Exception:
-            continue
-        for attr in ("subnet_id_value", "subnet_id"):
-            try:
-                token = str(getattr(config, attr, "") or "").strip()
-            except Exception:
-                token = ""
-            if token:
-                return token
-    return ""
-
-
-def _is_technical_subnet_label(label: str) -> bool:
-    return bool(re.fullmatch(r"sn_[0-9a-f]{8,}", str(label or "").strip(), re.IGNORECASE))
-
-
-def _general_agent_label() -> str:
-    if GENERAL_DIALOG_AGENT_CONFIGURED_LABEL:
-        return GENERAL_DIALOG_AGENT_CONFIGURED_LABEL
-    subnet_id = _current_subnet_id()
-    try:
-        label = display_subnet_alias(load_subnet_alias(subnet_id=subnet_id), subnet_id)
-    except Exception:
-        label = subnet_id
-    token = str(label or "").strip()
-    if token and not _is_technical_subnet_label(token):
-        return token
-    return GENERAL_DIALOG_AGENT_DEFAULT_LABEL
-
-
-def _general_agent_aliases(label: str | None = None) -> list[str]:
-    resolved = str(label or _general_agent_label()).strip()
-    return _dedupe_texts(
-        [
-            resolved,
-            GENERAL_DIALOG_AGENT_DEFAULT_LABEL,
-            "ассистент",
-            "общий ассистент",
-            "general",
-        ]
-    )
-
-
-def _general_agent_record() -> dict[str, Any]:
-    label = _general_agent_label()
-    return {
-        **dict(_CONVERSATION_AGENT_REGISTRY[0]),
-        "id": GENERAL_DIALOG_AGENT_ID,
-        "label": label,
-        "owner": GENERAL_DIALOG_AGENT_OWNER,
-        "kind": "core_agent",
-        "channel_id": GENERAL_DIALOG_CHANNEL_ID,
-        "gender": GENERAL_DIALOG_AGENT_GENDER,
-        "voice": GENERAL_DIALOG_AGENT_VOICE,
-        "icon": "sparkles-outline",
-        "aliases": tuple(_general_agent_aliases(label)),
-    }
-
-
-def _is_dialog_surface_route(
-    meta: Mapping[str, Any] | None,
-    payload: Mapping[str, Any] | None = None,
-    *,
-    route_id: str | None = None,
-) -> bool:
-    meta = meta if isinstance(meta, Mapping) else {}
-    payload = payload if isinstance(payload, Mapping) else {}
-    for source in (meta, payload):
-        if str(source.get("dialog_channel_id") or source.get("conversation_id") or "").strip():
-            return True
-    event_kind = str(
-        meta.get("canonical_event_kind")
-        or meta.get("input_event_kind")
-        or meta.get("dialog_event_kind")
-        or payload.get("canonical_event_kind")
-        or payload.get("input_event_kind")
-        or payload.get("dialog_event_kind")
-        or ""
-    ).strip()
-    if event_kind in {DIALOG_USER_MESSAGE_EVENT, VOICE_CHAT_USER_EVENT}:
-        return True
-    token = str(route_id or meta.get("route_id") or meta.get("route") or payload.get("route_id") or payload.get("route") or "").strip()
-    return token == "voice_chat"
-
-
-def _dialog_surface_fallback_policy(
-    meta: Mapping[str, Any] | None,
-    payload: Mapping[str, Any] | None = None,
-    *,
-    route_id: str | None = None,
-) -> dict[str, Any]:
-    if not _is_dialog_surface_route(meta, payload, route_id=route_id):
-        return {}
-    meta = meta if isinstance(meta, Mapping) else {}
-    payload = payload if isinstance(payload, Mapping) else {}
-    channel_id = str(
-        meta.get("dialog_channel_id")
-        or payload.get("dialog_channel_id")
-        or GENERAL_DIALOG_CHANNEL_ID
-    ).strip() or GENERAL_DIALOG_CHANNEL_ID
-    default_tool = str(
-        meta.get("default_tool")
-        or payload.get("default_tool")
-        or _dialog_channel_policy(channel_id).get("default_tool")
-        or "voice_chat_skill.handle_text"
-    ).strip()
-    skill, _, tool = default_tool.partition(".")
-    if not tool:
-        if channel_id == GENERAL_DIALOG_CHANNEL_ID:
-            skill, tool = "voice_chat_skill", "handle_text"
-        else:
-            owner = str(meta.get("conversation_owner") or payload.get("conversation_owner") or "").strip()
-            skill = owner.removeprefix("skill:") if owner.startswith("skill:") else owner
-            tool = default_tool or "chat"
-    return {
-        "schema": "adaos.dialog.surface_fallback_policy.v1",
-        "channel_id": channel_id,
-        "skill": str(skill or "voice_chat_skill").strip() or "voice_chat_skill",
-        "tool": str(tool or "handle_text").strip() or "handle_text",
-        "reason": "nlu_not_obtained_surface_fallback",
-        "route_id": str(route_id or meta.get("route_id") or meta.get("route") or "").strip() or None,
-    }
-
-
-def _fallback_agent_registry_records() -> list[dict[str, Any]]:
-    records = [_general_agent_record()]
-    records.extend(dict(item) for item in _CONVERSATION_AGENT_REGISTRY[1:])
-    return records
-
-
-def _skill_manifest_dirs() -> list[Path]:
-    roots: list[Path] = []
-    try:
-        roots.append(Path(get_ctx().paths.skills_workspace_dir()))
-    except Exception:
-        pass
-    try:
-        roots.append(Path(__file__).resolve().parents[2] / "skills_templates")
-    except Exception:
-        pass
-    dirs: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
-        try:
-            candidates = sorted(path for path in root.iterdir() if (path / "skill.yaml").exists())
-        except Exception:
-            candidates = []
-        for path in candidates:
-            token = str(path.resolve())
-            if token in seen:
-                continue
-            seen.add(token)
-            dirs.append(path)
-    return dirs
-
-
-def _read_skill_manifest(skill_dir: Path) -> dict[str, Any]:
-    manifest_path = skill_dir / "skill.yaml"
-    try:
-        import yaml  # type: ignore
-
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        manifest = {}
-    return manifest if isinstance(manifest, dict) else {}
-
-
-def _conversation_manifest_agent_records() -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for skill_dir in _skill_manifest_dirs():
-        manifest = _read_skill_manifest(skill_dir)
-        skill_id = str(manifest.get("name") or skill_dir.name).strip()
-        if not skill_id:
-            continue
-        conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
-        declared_agents = conv.get("agents") if isinstance(conv, dict) else []
-        if not isinstance(declared_agents, list):
-            continue
-        for raw in declared_agents:
-            if not isinstance(raw, dict):
-                continue
-            record = dict(raw)
-            channel_id = str(record.get("channel_id") or "").strip()
-            if not channel_id:
-                channel = conv.get("dialog_channel") if isinstance(conv.get("dialog_channel"), dict) else {}
-                channels = conv.get("channels") if isinstance(conv.get("channels"), list) else []
-                if channel.get("id"):
-                    channel_id = str(channel.get("id") or "").strip()
-                elif channels and isinstance(channels[0], dict):
-                    channel_id = str(channels[0].get("id") or "").strip()
-            record.setdefault("owner", f"skill:{skill_id}")
-            record.setdefault("skill", skill_id)
-            record.setdefault("kind", "skill_agent")
-            if channel_id:
-                record.setdefault("channel_id", channel_id)
-            record.setdefault("source", f"skill:{skill_id}.skill_yaml")
-            records.append(record)
-    return records
-
-
-def _normalize_manifest_renderer_capabilities(raw: Mapping[str, Any]) -> dict[str, Any]:
-    renderer = raw.get("renderer") if isinstance(raw.get("renderer"), dict) else {}
-    capabilities = raw.get("renderer_capabilities") or renderer.get("capabilities")
-    if isinstance(capabilities, dict):
-        result = dict(capabilities)
-    elif isinstance(capabilities, list):
-        result = {"targets": [str(item).strip() for item in capabilities if str(item).strip()]}
-    else:
-        result = {}
-    targets = result.get("targets")
-    if not isinstance(targets, list) or not targets:
-        result["targets"] = ["text", "speech", "dialog.visible_tail"]
-    result.setdefault("default_projection", "dialog.visible_tail")
-    return result
-
-
-def _conversation_manifest_channel_records(webspace_id: str) -> list[dict[str, Any]]:
-    ws = str(webspace_id or "").strip() or "default"
-    channels_out: list[dict[str, Any]] = []
-    for skill_dir in _skill_manifest_dirs():
-        manifest = _read_skill_manifest(skill_dir)
-        skill_id = str(manifest.get("name") or skill_dir.name).strip()
-        if not skill_id:
-            continue
-        conv = manifest.get("conversation") if isinstance(manifest, dict) else {}
-        if not isinstance(conv, dict):
-            continue
-        raw_channels: list[dict[str, Any]] = []
-        dialog_channel = conv.get("dialog_channel")
-        if isinstance(dialog_channel, dict):
-            raw_channels.append(dict(dialog_channel))
-        channels = conv.get("channels")
-        if isinstance(channels, list):
-            raw_channels.extend(dict(item) for item in channels if isinstance(item, dict))
-        for raw in raw_channels:
-            channel_id = str(raw.get("id") or raw.get("channel_id") or "").strip()
-            if not channel_id or not re.match(r"^[a-zA-Z0-9_.:-]+$", channel_id):
-                continue
-            owner = str(raw.get("owner") or f"skill:{skill_id}").strip()
-            if not owner.startswith(("skill:", "core:")):
-                continue
-            default_tool_ref = str(raw.get("default_tool") or raw.get("tool") or "chat").strip() or "chat"
-            default_skill, _, default_tool = default_tool_ref.partition(".")
-            if default_tool:
-                skill = default_skill or skill_id
-                tool = default_tool
-            else:
-                skill = skill_id
-                tool = default_tool_ref
-            if not skill or not tool:
-                continue
-            conversation_id = str(raw.get("conversation_id") or _skill_conversation_id(skill, ws)).strip()
-            policy = raw.get("policy") if isinstance(raw.get("policy"), dict) else _dialog_channel_policy(channel_id, default_tool=default_tool_ref)
-            policy = dict(policy)
-            renderer_capabilities = _normalize_manifest_renderer_capabilities(raw)
-            policy.setdefault("renderer_capabilities", renderer_capabilities)
-            raw_meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
-            channels_out.append(
-                {
-                    "id": channel_id,
-                    "channel_id": channel_id,
-                    "label": str(raw.get("label") or _dialog_channel_label(channel_id)).strip(),
-                    "owner": owner,
-                    "conversation_id": conversation_id,
-                    "default_skill": skill,
-                    "default_tool": tool,
-                    "route_id": str(raw.get("route_id") or "voice_chat").strip(),
-                    "policy": policy,
-                    "meta": {
-                        "source": f"skill:{skill_id}.skill_yaml",
-                        "manifest_validated": True,
-                        "renderer_capabilities": renderer_capabilities,
-                        **raw_meta,
-                    },
-                }
-            )
-    if not any(str(item.get("id") or "").strip() == BUILDER_DIALOG_CHANNEL_ID for item in channels_out):
-        renderer_capabilities = _normalize_manifest_renderer_capabilities({})
-        channels_out.append(
-            {
-                "id": BUILDER_DIALOG_CHANNEL_ID,
-                "channel_id": BUILDER_DIALOG_CHANNEL_ID,
-                "label": "Builder",
-                "owner": f"skill:{BUILDER_SKILL_ID}",
-                "conversation_id": _skill_conversation_id(BUILDER_SKILL_ID, ws),
-                "default_skill": BUILDER_SKILL_ID,
-                "default_tool": "chat",
-                "route_id": "voice_chat",
-                "policy": _dialog_channel_policy(
-                    BUILDER_DIALOG_CHANNEL_ID,
-                    default_tool=f"{BUILDER_SKILL_ID}.chat",
-                ),
-                "meta": {
-                    "source": "core:builder_dialog",
-                    "contract_validated": True,
-                    "renderer_capabilities": renderer_capabilities,
-                },
-            }
-        )
-    return channels_out
-
-
-def _seed_manifest_dialog_channels(webspace_id: str) -> None:
-    for channel in _conversation_manifest_channel_records(webspace_id):
-        try:
-            conversation_store.upsert_conversation(
-                conversation_id=channel["conversation_id"],
-                webspace_id=webspace_id,
-                owner=channel["owner"],
-                kind="dialog",
-                title=channel["label"],
-                meta={"channel_id": channel["id"], "source": (channel.get("meta") or {}).get("source")},
-            )
-            conversation_store.upsert_dialog_channel(
-                webspace_id=webspace_id,
-                channel_id=channel["id"],
-                label=channel["label"],
-                owner=channel["owner"],
-                conversation_id=channel["conversation_id"],
-                default_skill=channel["default_skill"],
-                default_tool=channel["default_tool"],
-                route_id=channel["route_id"],
-                policy=channel["policy"],
-                meta=channel["meta"],
-            )
-        except Exception:
-            logging.getLogger("adaos.router.dialog").debug(
-                "failed to seed manifest dialog channel webspace=%s channel=%s",
-                webspace_id,
-                channel.get("id"),
-                exc_info=True,
-            )
-
-
-def _conversation_companion_profile_agent_records() -> list[dict[str, Any]]:
-    try:
-        skills_dir = Path(get_ctx().paths.skills_workspace_dir())
-    except Exception:
-        return []
-    skill_dir = skills_dir / "conversation_companions"
-    records: list[dict[str, Any]] = []
-
-    # Compatibility for the existing pilot profile file before every skill has
-    # explicit conversation agent declarations in its manifest.
-    profile_path = skill_dir / "profiles" / "default_characters.json"
-    try:
-        profiles = json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.exists() else {}
-    except Exception:
-        profiles = {}
-    if not isinstance(profiles, dict):
-        return []
-    static_by_character = {
-        str(item.get("character_id") or "").strip(): item
-        for item in _CONVERSATION_AGENT_REGISTRY
-        if str(item.get("character_id") or "").strip()
-    }
-    for character_id, profile in profiles.items():
-        if not isinstance(profile, dict):
-            continue
-        fallback = dict(static_by_character.get(str(character_id), {}))
-        label = str(profile.get("name") or fallback.get("label") or character_id).strip()
-        records.append(
-            {
-                **fallback,
-                "id": fallback.get("id") or f"agent:conversation_companions:{character_id}",
-                "label": label,
-                "owner": "skill:conversation_companions",
-                "kind": "skill_agent",
-                "channel_id": CONVERSATIONAL_DIALOG_CHANNEL_ID,
-                "skill": "conversation_companions",
-                "talk_tool": fallback.get("talk_tool") or "talk",
-                "switch_tool": fallback.get("switch_tool") or "switch_character",
-                "character_id": str(character_id),
-                "source": "skill:conversation_companions.profiles",
-            }
-        )
-    return records
-
-
-def _seed_conversation_registry() -> None:
-    records = _fallback_agent_registry_records()
-    records.extend(_conversation_manifest_agent_records())
-    records.extend(_conversation_companion_profile_agent_records())
-    unique: dict[str, dict[str, Any]] = {}
-    for record in records:
-        agent_id = str(record.get("id") or "").strip()
-        if agent_id:
-            unique[agent_id] = record
-    records = list(unique.values())
-    try:
-        conversation_store.seed_agents(records, source="router.bootstrap")
-    except Exception:
-        logging.getLogger("adaos.router.dialog").debug("conversation agent registry seed failed", exc_info=True)
-
-
-def _agent_registry_records() -> list[dict[str, Any]]:
-    try:
-        records = conversation_store.list_agents()
-    except Exception:
-        records = []
-    merged_by_id = {
-        str(item.get("id") or "").strip(): dict(item)
-        for item in _fallback_agent_registry_records()
-        if str(item.get("id") or "").strip()
-    }
-    for item in records:
-        record = dict(item)
-        agent_id = str(record.get("id") or "").strip()
-        if not agent_id:
-            continue
-        merged_by_id[agent_id] = {**merged_by_id.get(agent_id, {}), **record}
-    merged_by_id[GENERAL_DIALOG_AGENT_ID] = {
-        **merged_by_id.get(GENERAL_DIALOG_AGENT_ID, {}),
-        **_general_agent_record(),
-    }
-    return list(merged_by_id.values())
-
-
-def _agent_record_by_id(agent_id: Any) -> dict[str, Any] | None:
-    token = str(agent_id or "").strip()
-    if not token:
-        return None
-    for item in _agent_registry_records():
-        if str(item.get("id") or "").strip() == token:
-            return dict(item)
-    return None
-
-
-def _agent_voice_profile(agent: Mapping[str, Any]) -> dict[str, Any]:
-    gender = str(agent.get("gender") or "").strip().lower()
-    voice = str(agent.get("voice") or "").strip()
-    return {
-        "gender": gender or None,
-        "voice": voice or None,
-        "lang": "ru-RU",
-        "browser_voice_hint": _browser_voice_hint(voice=voice, gender=gender),
-    }
-
-
-def _agent_avatar_ref(agent: Mapping[str, Any]) -> str | None:
-    value = str(agent.get("avatar_ref") or agent.get("avatar") or "").strip()
-    return value or None
-
-
-def _browser_voice_hint(*, voice: Any = None, gender: Any = None) -> str | None:
-    gender_token = str(gender or "").strip().lower()
-    if gender_token in {"female", "male"}:
-        return gender_token
-    voice_token = str(voice or "").strip().lower()
-    if not voice_token:
-        return gender_token or None
-    if voice_token in {"female", "ru-female"} or voice_token.endswith("-female") or voice_token.endswith("_female"):
-        return "female"
-    if voice_token in {"male", "ru-male"} or voice_token.endswith("-male") or voice_token.endswith("_male"):
-        return "male"
-    return voice_token or gender_token or None
-
-
-def _agent_projection_from_record(agent: Mapping[str, Any]) -> dict[str, Any]:
-    projection = {
-        "id": str(agent.get("id") or "").strip(),
-        "label": str(agent.get("label") or agent.get("id") or "").strip(),
-        "owner": str(agent.get("owner") or "").strip(),
-        "kind": str(agent.get("kind") or "agent").strip(),
-        "channel_id": str(agent.get("channel_id") or "").strip(),
-        "memory_scope": "global_user" if agent.get("id") == GENERAL_DIALOG_AGENT_ID else "agent_user",
-        "gender": str(agent.get("gender") or "").strip() or None,
-        "voice": str(agent.get("voice") or "").strip() or None,
-        "icon": str(agent.get("icon") or "").strip() or None,
-        "avatar_ref": _agent_avatar_ref(agent),
-        "voice_profile": _agent_voice_profile(agent),
-    }
-    if agent.get("skill"):
-        projection["skill_id"] = str(agent.get("skill") or "").strip()
-    if agent.get("character_id"):
-        projection["character_id"] = str(agent.get("character_id") or "").strip()
-    aliases = [str(item).strip() for item in agent.get("aliases", ()) if str(item).strip()]
-    if aliases:
-        projection["aliases"] = aliases
-    return projection
-
-
-def _agent_label_from_id(agent_id: Any) -> str:
-    token = str(agent_id or "").strip()
-    if not token:
-        return ""
-    agent = _agent_record_by_id(token)
-    if agent is not None:
-        return str(agent.get("label") or "").strip() or token
-    return token.rsplit(":", 1)[-1] or token
-
-
-def _general_agent_projection() -> dict[str, Any]:
-    return _agent_projection_from_record(_general_agent_record())
-
-
-def _general_agent_metadata() -> dict[str, Any]:
-    agent = _general_agent_projection()
-    gender = str(agent.get("gender") or "").strip()
-    voice = str(agent.get("voice") or "").strip()
-    return {
-        "active_agent_id": GENERAL_DIALOG_AGENT_ID,
-        "active_agent_label": str(agent.get("label") or "").strip(),
-        "active_agent_gender": gender or None,
-        "active_agent_voice": voice or None,
-        "active_agent_icon": agent.get("icon"),
-        "active_agent_avatar_ref": agent.get("avatar_ref"),
-        "voice_gender": gender or None,
-        "voice": voice or None,
-        "voice_profile": agent.get("voice_profile") or _agent_voice_profile({"gender": gender, "voice": voice}),
-    }
-
-
-def _apply_general_agent_metadata(meta: dict[str, Any]) -> dict[str, Any]:
-    meta.update(_general_agent_metadata())
-    return meta
-
-
-def _active_agent_projection(active_channel: dict[str, Any] | None, channel_id: str) -> dict[str, Any]:
-    if channel_id == GENERAL_DIALOG_CHANNEL_ID or not active_channel:
-        return _general_agent_projection()
-    agent_id = str(active_channel.get("active_agent_id") or "").strip()
-    label = str(active_channel.get("active_agent_label") or "").strip() or _agent_label_from_id(agent_id)
-    owner = str(active_channel.get("active_agent_owner") or active_channel.get("owner") or "").strip()
-    kind = str(active_channel.get("active_agent_kind") or "").strip() or "skill_agent"
-    registry_agent = _agent_record_by_id(agent_id)
-    gender = str(active_channel.get("active_agent_gender") or (registry_agent or {}).get("gender") or "").strip()
-    voice = str(active_channel.get("active_agent_voice") or (registry_agent or {}).get("voice") or "").strip()
-    icon = str(
-        active_channel.get("active_agent_icon")
-        or active_channel.get("agent_icon")
-        or (registry_agent or {}).get("icon")
-        or ""
-    ).strip()
-    avatar_ref = str(
-        active_channel.get("active_agent_avatar_ref")
-        or active_channel.get("agent_avatar_ref")
-        or active_channel.get("active_agent_avatar")
-        or (registry_agent or {}).get("avatar_ref")
-        or ""
-    ).strip()
-    return {
-        "id": agent_id or f"agent:{channel_id}:active",
-        "label": label,
-        "owner": owner,
-        "kind": kind,
-        "channel_id": channel_id,
-        "memory_scope": "agent_user",
-        "gender": gender or None,
-        "voice": voice or None,
-        "icon": icon or None,
-        "avatar_ref": avatar_ref or None,
-        "voice_profile": _agent_voice_profile({"gender": gender, "voice": voice}),
-    }
-
-
-def _extract_general_agent_addressed_text(text: str) -> str | None:
-    value = str(text or "").strip()
-    if not value:
-        return None
-    aliases = {item.casefold() for item in _general_agent_aliases() if item}
-    lowered = value.casefold()
-    if lowered in aliases:
-        return ""
-    for alias in aliases:
-        match = re.match(
-            rf"^\s*{re.escape(alias)}\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
-            value,
-            re.IGNORECASE | re.UNICODE,
-        )
-        if match:
-            return str(match.group("rest") or "").strip()
-    match = _GENERAL_AGENT_ADDRESS_RE.match(value)
-    if not match:
-        return None
-    return str(match.group("rest") or "").strip()
-
-
-def _extract_addressed_agent(text: str) -> tuple[dict[str, Any], str] | None:
-    value = str(text or "").strip()
-    if not value:
-        return None
-    lowered = value.lower()
-    for agent in _agent_registry_records():
-        aliases = [str(item or "").strip() for item in agent.get("aliases", ()) if str(item or "").strip()]
-        aliases.sort(key=len, reverse=True)
-        for alias in aliases:
-            alias_lower = alias.lower()
-            if lowered == alias_lower:
-                return dict(agent), ""
-            match = re.match(
-                rf"^\s*{re.escape(alias)}\s*(?:[,;:.!?]\s*|\s+)(?P<rest>.*)$",
-                value,
-                re.IGNORECASE | re.UNICODE,
-            )
-            if match:
-                return dict(agent), str(match.group("rest") or "").strip()
-    return None
-
-
-def _general_agent_transition_text(seed: str = "") -> str:
-    label = _general_agent_label()
-    variants = [
-        f"{label} на связи. Продолжим в общем режиме.",
-        f"{label} к вашим услугам. Чем помочь дальше?",
-        f"{label} готов помочь. Диалог вернулся в общий режим.",
-    ]
-    try:
-        index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
-    except Exception:
-        index = 0
-    return variants[index]
-
-
-def _general_agent_ready_text(seed: str = "") -> str:
-    label = _general_agent_label()
-    variants = [
-        f"{label} на связи.",
-        f"{label} к вашим услугам.",
-        f"{label} готов помочь.",
-    ]
-    try:
-        index = sum(ord(ch) for ch in str(seed or "")) % len(variants)
-    except Exception:
-        index = 0
-    return variants[index]
-
-
-def _is_agent_roster_question(text: str) -> bool:
-    value = str(text or "").strip().lower()
-    if not value:
-        return False
-    return any(
-        token in value
-        for token in (
-            "агент",
-            "ассистент",
-            "персонаж",
-            "кто у тебя",
-            "кто доступен",
-            "представь",
-            "познакомь",
-        )
-    )
-
-
-def _agent_roster_text() -> str:
-    general_label = _general_agent_label()
-    companions = [
-        agent
-        for agent in _agent_registry_records()
-        if str(agent.get("channel_id") or "").strip() == CONVERSATIONAL_DIALOG_CHANNEL_ID
-    ]
-    lines = [
-        f"{general_label}: в общем режиме я отвечаю как системный ассистент.",
-        "Для разговорного режима доступны персонажи:",
-    ]
-    for agent in companions:
-        label = str(agent.get("label") or "").strip()
-        role = {
-            "agent:conversation_companions:arseni": "спокойный советник",
-            "agent:conversation_companions:nika": "скептик для проверки идей",
-            "agent:conversation_companions:mira": "теплый собеседник",
-        }.get(str(agent.get("id") or "").strip(), "разговорный агент")
-        lines.append(f"- {label}: {role}.")
-    lines.append(f"Можно обратиться по имени: «{general_label}, ...», «Арсений, ...», «Ника, ...» или «Мира, ...».")
-    return "\n".join(lines)
-
-
-def _receiver_declared_owner(receiver_meta: dict[str, Any]) -> str:
-    origin = str(receiver_meta.get("origin") or "").strip()
-    if origin:
-        return origin
-    route = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
-    owner = str(route.get("owner") or receiver_meta.get("owner") or "").strip()
-    return owner
-
-
-def _static_webio_receiver_metadata(receiver: str) -> dict[str, Any]:
-    receiver_id = str(receiver or "").strip()
-    if receiver_id != VOICE_CHAT_STREAM_RECEIVER:
-        return {}
-    return {
-        "origin": "skill:voice_chat_skill",
-        "owner": "skill:voice_chat_skill",
-        "mode": "stream",
-        "snapshotPolicy": "compact_tail",
-        "budget": {"maxPayloadBytes": 524288},
-        "route": {
-            "kind": "stream",
-            "surface": "voice_chat",
-            "owner": "skill:voice_chat_skill",
-        },
-    }
-
-
-def _webio_stream_stats_key(webspace_id: str, receiver: str, owner: str) -> str:
-    return "\0".join(
-        [
-            str(webspace_id or "").strip() or "default",
-            str(receiver or "").strip() or "unknown",
-            str(owner or "").strip() or "unknown",
-        ]
-    )
-
-
-def _record_webio_stream_guard_event(
-    *,
-    webspace_id: str,
-    receiver: str,
-    owner: str,
-    event: str,
-    payload_bytes: int,
-    fanout_total: int,
-    effective_bytes: int,
-    policy_state: str = "ok",
-    reason: str = "healthy",
-    receiver_meta: dict[str, Any] | None = None,
-) -> None:
-    receiver_meta = receiver_meta or {}
-    route_meta = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
-    budget = receiver_meta.get("budget") if isinstance(receiver_meta.get("budget"), dict) else {}
-    token_event = str(event or "").strip().lower()
-    if not token_event:
-        return
-    token_ws = str(webspace_id or "").strip() or "default"
-    token_receiver = str(receiver or "").strip() or "unknown"
-    token_owner = str(owner or "").strip() or "unknown"
-    now = time.time()
-    key = _webio_stream_stats_key(token_ws, token_receiver, token_owner)
-    with _WEBIO_STREAM_GUARD_STATS_LOCK:
-        current = dict(_WEBIO_STREAM_GUARD_STATS.get(key) or {})
-        current["webspace_id"] = token_ws
-        current["receiver"] = token_receiver
-        current["owner"] = token_owner
-        current["last_at"] = now
-        current["last_event"] = token_event
-        current["last_policy_state"] = str(policy_state or "").strip() or "ok"
-        current["last_reason"] = str(reason or "").strip() or None
-        current["last_payload_bytes"] = max(0, int(payload_bytes or 0))
-        current["last_fanout_total"] = max(1, int(fanout_total or 1))
-        current["last_effective_bytes"] = max(0, int(effective_bytes or 0))
-        current["surface"] = str(route_meta.get("surface") or "").strip() or None
-        current["route_kind"] = str(route_meta.get("kind") or "").strip() or None
-        current["receiver_origin"] = str(receiver_meta.get("origin") or "").strip() or None
-        current["receiver_mode"] = str(receiver_meta.get("mode") or "").strip() or None
-        current["snapshot_policy"] = str(receiver_meta.get("snapshotPolicy") or "").strip() or None
-        current["declared_max_payload_bytes"] = _positive_int(
-            budget.get("maxPayloadBytes")
-            or budget.get("max_payload_bytes")
-            or receiver_meta.get("maxPayloadBytes")
-        )
-        field = f"{token_event}_total"
-        current[field] = int(current.get(field) or 0) + 1
-        if token_event == "published":
-            current["published_fanout_total"] = int(current.get("published_fanout_total") or 0) + max(1, int(fanout_total or 1))
-        _WEBIO_STREAM_GUARD_STATS[key] = current
-
-
-def webio_stream_guard_snapshot(
-    *,
-    webspace_id: str | None = None,
-    receiver: str | None = None,
-    owner: str | None = None,
-    limit: int = 50,
-) -> dict[str, Any]:
-    token_ws = str(webspace_id or "").strip()
-    token_receiver = str(receiver or "").strip()
-    token_owner = str(owner or "").strip()
-    try:
-        max_items = max(1, min(500, int(limit)))
-    except Exception:
-        max_items = 50
-    with _WEBIO_STREAM_GUARD_STATS_LOCK:
-        rows = [dict(item) for item in _WEBIO_STREAM_GUARD_STATS.values()]
-    if token_ws:
-        rows = [row for row in rows if str(row.get("webspace_id") or "") == token_ws]
-    if token_receiver:
-        rows = [row for row in rows if str(row.get("receiver") or "") == token_receiver]
-    if token_owner:
-        rows = [row for row in rows if str(row.get("owner") or "") == token_owner]
-    rows.sort(key=lambda item: float(item.get("last_at") or 0.0), reverse=True)
-    totals = {
-        "attempted": sum(int(row.get("attempted_total") or 0) for row in rows),
-        "published": sum(int(row.get("published_total") or 0) for row in rows),
-        "suppressed": sum(int(row.get("suppressed_total") or 0) for row in rows),
-        "throttled": sum(int(row.get("throttled_total") or 0) for row in rows),
-        "published_fanout": sum(int(row.get("published_fanout_total") or 0) for row in rows),
-    }
-    return {
-        "schema": "adaos.webio_stream_guard.v1",
-        "webspace_id": token_ws or None,
-        "receiver": token_receiver or None,
-        "owner": token_owner or None,
-        "items": rows[:max_items],
-        "total": len(rows),
-        "totals": totals,
-    }
-
-
-async def _read_webio_receiver_metadata(webspace_id: str, receiver: str) -> dict[str, Any]:
-    try:
-        async with async_get_ydoc(
-            webspace_id,
-            read_only=True,
-            prefer_live_room=True,
-            load_mark_roots=["data"],
-        ) as ydoc:
-            data = _as_dict(ydoc.get_map("data"))
-            webio = data.get("webio") if isinstance(data.get("webio"), dict) else {}
-            receivers = webio.get("receivers") if isinstance(webio.get("receivers"), dict) else {}
-            row = receivers.get(receiver) if isinstance(receivers, dict) else None
-            return dict(row) if isinstance(row, dict) else {}
-    except Exception:
-        _log.debug(
-            "failed to read webio receiver metadata webspace=%s receiver=%s",
-            webspace_id,
-            receiver,
-            exc_info=True,
-        )
-        return {}
-
-
-def _webio_stream_owner(payload: dict[str, Any], meta: dict[str, Any]) -> str:
-    owner = str(
-        payload.get("owner")
-        or meta.get("owner")
-        or payload.get("skill_owner")
-        or meta.get("skill_owner")
-        or ""
-    ).strip()
-    if owner:
-        return owner
-    skill_name = str(
-        payload.get("skill_name")
-        or meta.get("skill_name")
-        or payload.get("skill")
-        or meta.get("skill")
-        or ""
-    ).strip()
-    return f"skill:{skill_name}" if skill_name else ""
-
-
-def _webio_stream_admit(
-    *,
-    webspace_id: str,
-    receiver: str,
-    owner: str,
-    payload_bytes: int,
-    fanout_total: int = 1,
-    receiver_meta: dict[str, Any] | None = None,
-) -> bool:
-    if not _webio_stream_guard_enabled():
-        return True
-    receiver_meta = receiver_meta or {}
-    route_meta = receiver_meta.get("route") if isinstance(receiver_meta.get("route"), dict) else {}
-    budget = receiver_meta.get("budget") if isinstance(receiver_meta.get("budget"), dict) else {}
-    declared_max_payload = _positive_int(
-        budget.get("maxPayloadBytes")
-        or budget.get("max_payload_bytes")
-        or receiver_meta.get("maxPayloadBytes")
-    )
-    warn_bytes = _webio_stream_warn_bytes()
-    block_bytes = _webio_stream_block_bytes()
-    if declared_max_payload:
-        block_bytes = min(block_bytes, declared_max_payload)
-        warn_bytes = min(warn_bytes, max(1, int(declared_max_payload * 0.8)))
-    effective_bytes = max(0, int(payload_bytes or 0)) * max(1, int(fanout_total or 1))
-    policy_state = "ok"
-    reason = "healthy"
-    if effective_bytes >= block_bytes:
-        policy_state = "block"
-        reason = (
-            "browser_stream_declared_payload_budget_exceeded"
-            if declared_max_payload and effective_bytes >= declared_max_payload
-            else "browser_stream_payload_blocked"
-        )
-    elif effective_bytes >= warn_bytes:
-        policy_state = "throttle"
-        reason = (
-            "browser_stream_declared_payload_budget_pressure"
-            if declared_max_payload
-            else "browser_stream_payload_pressure"
-        )
-    _record_webio_stream_guard_event(
-        webspace_id=webspace_id,
-        receiver=receiver,
-        owner=owner,
-        event="attempted",
-        payload_bytes=payload_bytes,
-        fanout_total=fanout_total,
-        effective_bytes=effective_bytes,
-        policy_state=policy_state,
-        reason=reason,
-        receiver_meta=receiver_meta,
-    )
-    if policy_state == "ok":
-        return True
-    if not owner:
-        _record_webio_stream_guard_event(
-            webspace_id=webspace_id,
-            receiver=receiver,
-            owner=owner,
-            event="suppressed",
-            payload_bytes=payload_bytes,
-            fanout_total=fanout_total,
-            effective_bytes=effective_bytes,
-            policy_state=policy_state,
-            reason=reason,
-            receiver_meta=receiver_meta,
-        )
-        _log.warning(
-            "webio stream dropped by payload guard webspace=%s receiver=%s surface=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s owner=unknown",
-            webspace_id,
-            receiver,
-            str(route_meta.get("surface") or "").strip() or "-",
-            payload_bytes,
-            fanout_total,
-            effective_bytes,
-            declared_max_payload or "-",
-            reason,
-        )
-        return False
-    try:
-        from adaos.services.yjs.owner_guard import admit_owner_work
-
-        admission = admit_owner_work(
-            webspace_id=webspace_id,
-            owner=owner,
-            root_names=["stream"],
-            path=f"stream/{receiver}",
-            source="router.webio_stream",
-            channel="webio.stream",
-            work_kind="browser_stream",
-            tool=f"{owner}:stream:{receiver}",
-            policy={
-                "policy_state": policy_state,
-                "reason": reason,
-                "observed_state": "critical" if policy_state == "block" else "high",
-                "payload_bytes": payload_bytes,
-                "fanout_total": fanout_total,
-                "effective_bytes": effective_bytes,
-                "budget": dict(budget) if budget else {},
-                "declared_max_payload_bytes": declared_max_payload,
-                "receiver_origin": str(receiver_meta.get("origin") or "").strip() or None,
-                "receiver_mode": str(receiver_meta.get("mode") or "").strip() or None,
-                "snapshot_policy": str(receiver_meta.get("snapshotPolicy") or "").strip() or None,
-                "route": dict(route_meta) if route_meta else {},
-                "guard_visibility": receiver_meta.get("guardVisibility"),
-                "blocked_roots": ["stream"] if policy_state == "block" else [],
-                "throttled_roots": ["stream"] if policy_state == "throttle" else [],
-            },
-        )
-        if not bool(admission.get("allowed", True)):
-            _record_webio_stream_guard_event(
-                webspace_id=webspace_id,
-                receiver=receiver,
-                owner=admission.get("owner") or owner,
-                event="suppressed",
-                payload_bytes=payload_bytes,
-                fanout_total=fanout_total,
-                effective_bytes=effective_bytes,
-                policy_state=policy_state,
-                reason=admission.get("reason") or reason,
-                receiver_meta=receiver_meta,
-            )
-            _log.warning(
-                "webio stream denied by owner guard webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s retry_after_s=%s",
-                webspace_id,
-                receiver,
-                str(route_meta.get("surface") or "").strip() or "-",
-                admission.get("owner") or owner,
-                payload_bytes,
-                fanout_total,
-                effective_bytes,
-                declared_max_payload or "-",
-                admission.get("reason") or reason,
-                admission.get("retry_after_s") or 0,
-            )
-            return False
-        if bool(admission.get("throttled")):
-            _record_webio_stream_guard_event(
-                webspace_id=webspace_id,
-                receiver=receiver,
-                owner=admission.get("owner") or owner,
-                event="throttled",
-                payload_bytes=payload_bytes,
-                fanout_total=fanout_total,
-                effective_bytes=effective_bytes,
-                policy_state=policy_state,
-                reason=admission.get("reason") or reason,
-                receiver_meta=receiver_meta,
-            )
-            _log.warning(
-                "webio stream allowed under pressure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
-                webspace_id,
-                receiver,
-                str(route_meta.get("surface") or "").strip() or "-",
-                admission.get("owner") or owner,
-                payload_bytes,
-                fanout_total,
-                effective_bytes,
-                declared_max_payload or "-",
-                admission.get("reason") or reason,
-            )
-        return True
-    except Exception:
-        _record_webio_stream_guard_event(
-            webspace_id=webspace_id,
-            receiver=receiver,
-            owner=owner,
-            event="suppressed",
-            payload_bytes=payload_bytes,
-            fanout_total=fanout_total,
-            effective_bytes=effective_bytes,
-            policy_state=policy_state,
-            reason=reason,
-            receiver_meta=receiver_meta,
-        )
-        _log.warning(
-            "webio stream dropped after guard failure webspace=%s receiver=%s surface=%s owner=%s bytes=%s fanout=%s effective_bytes=%s budget_max=%s reason=%s",
-            webspace_id,
-            receiver,
-            str(route_meta.get("surface") or "").strip() or "-",
-            owner,
-            payload_bytes,
-            fanout_total,
-            effective_bytes,
-            declared_max_payload or "-",
-            reason,
-            exc_info=True,
-        )
-        return False
+
+from . import dialog_registry as _dialog_registry
+from . import telegram_projection as _telegram_projection
+from . import voice_chat_stream as _voice_chat_stream
+from . import webio_stream_guard as _webio_stream_guard
+
+GENERAL_DIALOG_AGENT_ID = _dialog_registry.GENERAL_DIALOG_AGENT_ID
+GENERAL_DIALOG_AGENT_CONFIGURED_LABEL = _dialog_registry.GENERAL_DIALOG_AGENT_CONFIGURED_LABEL
+GENERAL_DIALOG_AGENT_DEFAULT_LABEL = _dialog_registry.GENERAL_DIALOG_AGENT_DEFAULT_LABEL
+GENERAL_DIALOG_AGENT_GENDER = _dialog_registry.GENERAL_DIALOG_AGENT_GENDER
+GENERAL_DIALOG_AGENT_VOICE = _dialog_registry.GENERAL_DIALOG_AGENT_VOICE
+GENERAL_DIALOG_AGENT_OWNER = _dialog_registry.GENERAL_DIALOG_AGENT_OWNER
+GENERAL_DIALOG_CHANNEL_ID = _dialog_registry.GENERAL_DIALOG_CHANNEL_ID
+CONVERSATIONAL_DIALOG_CHANNEL_ID = _dialog_registry.CONVERSATIONAL_DIALOG_CHANNEL_ID
+BUILDER_DIALOG_CHANNEL_ID = _dialog_registry.BUILDER_DIALOG_CHANNEL_ID
+BUILDER_SKILL_ID = _dialog_registry.BUILDER_SKILL_ID
+CONVERSATION_COMPANIONS_SKILL_ID = _dialog_registry.CONVERSATION_COMPANIONS_SKILL_ID
+DIALOG_USER_MESSAGE_EVENT = _dialog_registry.DIALOG_USER_MESSAGE_EVENT
+VOICE_CHAT_USER_EVENT = _dialog_registry.VOICE_CHAT_USER_EVENT
+VOICE_CHAT_STREAM_RECEIVER = _webio_stream_guard.VOICE_CHAT_STREAM_RECEIVER
+VOICE_CHAT_VISIBLE_TAIL = _voice_chat_stream.VOICE_CHAT_VISIBLE_TAIL
+VOICE_CHAT_HISTORY_LIMIT = _voice_chat_stream.VOICE_CHAT_HISTORY_LIMIT
+VOICE_CHAT_STREAM_TEXT_MAX_CHARS = _voice_chat_stream.VOICE_CHAT_STREAM_TEXT_MAX_CHARS
+VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS = _voice_chat_stream.VOICE_CHAT_STREAM_ACTION_JSON_MAX_CHARS
+VOICE_CHAT_STREAM_ACTIONS_MAX = _voice_chat_stream.VOICE_CHAT_STREAM_ACTIONS_MAX
+VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES = _voice_chat_stream.VOICE_CHAT_STREAM_SNAPSHOT_MAX_BYTES
+_WEBIO_STREAM_GUARD_STATS_LOCK = _webio_stream_guard._WEBIO_STREAM_GUARD_STATS_LOCK
+_WEBIO_STREAM_GUARD_STATS = _webio_stream_guard._WEBIO_STREAM_GUARD_STATS
+
+
+def _sync_router_helper_dependencies() -> None:
+    _telegram_projection.get_ctx = get_ctx
+    _dialog_registry.get_ctx = get_ctx
+    _dialog_registry.load_config = load_config
+    _dialog_registry.load_subnet_alias = load_subnet_alias
+    _dialog_registry.display_subnet_alias = display_subnet_alias
+    _dialog_registry.conversation_store = conversation_store
+    _webio_stream_guard.async_get_ydoc = async_get_ydoc
+
+
+def _call_telegram_helper(name: str, *args: Any, **kwargs: Any) -> Any:
+    _sync_router_helper_dependencies()
+    return getattr(_telegram_projection, name)(*args, **kwargs)
+
+
+def _call_voice_chat_stream_helper(name: str, *args: Any, **kwargs: Any) -> Any:
+    return getattr(_voice_chat_stream, name)(*args, **kwargs)
+
+
+def _call_dialog_registry_helper(name: str, *args: Any, **kwargs: Any) -> Any:
+    _sync_router_helper_dependencies()
+    return getattr(_dialog_registry, name)(*args, **kwargs)
+
+
+def _call_webio_stream_guard_helper(name: str, *args: Any, **kwargs: Any) -> Any:
+    _sync_router_helper_dependencies()
+    return getattr(_webio_stream_guard, name)(*args, **kwargs)
+
+
+def _dialog_ingress_route_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_ingress_route_id", *args, **kwargs)
+
+
+def _telegram_text_chunks(*args: Any, **kwargs: Any) -> Any:
+    return _call_telegram_helper("_telegram_text_chunks", *args, **kwargs)
+
+
+def _telegram_output_projection(*args: Any, **kwargs: Any) -> Any:
+    return _call_telegram_helper("_telegram_output_projection", *args, **kwargs)
+
+
+def _telegram_interaction_consumed_projection(*args: Any, **kwargs: Any) -> Any:
+    return _call_telegram_helper("_telegram_interaction_consumed_projection", *args, **kwargs)
+
+
+def _builder_transport_integrity_error(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_builder_transport_integrity_error", *args, **kwargs)
+
+
+def _truncate_voice_chat_stream_text(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_truncate_voice_chat_stream_text", *args, **kwargs)
+
+
+def _compact_voice_chat_stream_action(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_compact_voice_chat_stream_action", *args, **kwargs)
+
+
+def _compact_voice_chat_stream_message(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_compact_voice_chat_stream_message", *args, **kwargs)
+
+
+def _compact_voice_chat_stream_messages(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_compact_voice_chat_stream_messages", *args, **kwargs)
+
+
+def _voice_chat_stream_json_bytes(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_stream_json_bytes", *args, **kwargs)
+
+
+def _bound_voice_chat_stream_messages(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_bound_voice_chat_stream_messages", *args, **kwargs)
+
+
+def _webio_receiver_metadata_timeout_s(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_receiver_metadata_timeout_s", *args, **kwargs)
+
+
+def _voice_chat_yjs_timeout_s(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_yjs_timeout_s", *args, **kwargs)
+
+
+def _voice_chat_persist_debounce_s(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_persist_debounce_s", *args, **kwargs)
+
+
+def _voice_chat_persist_failure_backoff_s(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_persist_failure_backoff_s", *args, **kwargs)
+
+
+def _voice_chat_persist_stream_snapshots_enabled(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_persist_stream_snapshots_enabled", *args, **kwargs)
+
+
+def _voice_chat_snapshot_republish_interval_s(*args: Any, **kwargs: Any) -> Any:
+    return _call_voice_chat_stream_helper("_voice_chat_snapshot_republish_interval_s", *args, **kwargs)
+
+
+def _webio_stream_guard_enabled(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_guard_enabled", *args, **kwargs)
+
+
+def _webio_stream_warn_bytes(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_warn_bytes", *args, **kwargs)
+
+
+def _webio_stream_block_bytes(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_block_bytes", *args, **kwargs)
+
+
+def _webio_stream_payload_bytes(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_payload_bytes", *args, **kwargs)
+
+
+def _as_dict(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_as_dict", *args, **kwargs)
+
+
+def _positive_int(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_positive_int", *args, **kwargs)
+
+
+def _general_conversation_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_conversation_id", *args, **kwargs)
+
+
+def _skill_conversation_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_skill_conversation_id", *args, **kwargs)
+
+
+def _dialog_channel_label(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_channel_label", *args, **kwargs)
+
+
+def _dialog_runtime_dev_fallback_allowed(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_runtime_dev_fallback_allowed", *args, **kwargs)
+
+
+def _dialog_runtime_uses_dev_webspace(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_runtime_uses_dev_webspace", *args, **kwargs)
+
+
+def _dialog_channel_policy(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_channel_policy", *args, **kwargs)
+
+
+def _dedupe_texts(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dedupe_texts", *args, **kwargs)
+
+
+def _current_subnet_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_current_subnet_id", *args, **kwargs)
+
+
+def _is_technical_subnet_label(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_is_technical_subnet_label", *args, **kwargs)
+
+
+def _general_agent_label(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_label", *args, **kwargs)
+
+
+def _general_agent_aliases(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_aliases", *args, **kwargs)
+
+
+def _general_agent_record(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_record", *args, **kwargs)
+
+
+def _is_dialog_surface_route(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_is_dialog_surface_route", *args, **kwargs)
+
+
+def _dialog_surface_fallback_policy(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_surface_fallback_policy", *args, **kwargs)
+
+
+def _fallback_agent_registry_records(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_fallback_agent_registry_records", *args, **kwargs)
+
+
+def _skill_manifest_dirs(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_skill_manifest_dirs", *args, **kwargs)
+
+
+def _read_skill_manifest(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_read_skill_manifest", *args, **kwargs)
+
+
+def _conversation_manifest_agent_records(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_conversation_manifest_agent_records", *args, **kwargs)
+
+
+def _normalize_manifest_renderer_capabilities(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_normalize_manifest_renderer_capabilities", *args, **kwargs)
+
+
+def _conversation_manifest_channel_records(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_conversation_manifest_channel_records", *args, **kwargs)
+
+
+def _seed_manifest_dialog_channels(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_seed_manifest_dialog_channels", *args, **kwargs)
+
+
+def _conversation_companion_profile_agent_records(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_conversation_companion_profile_agent_records", *args, **kwargs)
+
+
+def _seed_conversation_registry(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_seed_conversation_registry", *args, **kwargs)
+
+
+def _agent_registry_records(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_registry_records", *args, **kwargs)
+
+
+def _agent_record_by_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_record_by_id", *args, **kwargs)
+
+
+def _agent_voice_profile(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_voice_profile", *args, **kwargs)
+
+
+def _agent_avatar_ref(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_avatar_ref", *args, **kwargs)
+
+
+def _browser_voice_hint(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_browser_voice_hint", *args, **kwargs)
+
+
+def _agent_projection_from_record(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_projection_from_record", *args, **kwargs)
+
+
+def _agent_label_from_id(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_label_from_id", *args, **kwargs)
+
+
+def _general_agent_projection(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_projection", *args, **kwargs)
+
+
+def _general_agent_metadata(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_metadata", *args, **kwargs)
+
+
+def _apply_general_agent_metadata(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_apply_general_agent_metadata", *args, **kwargs)
+
+
+def _active_agent_projection(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_active_agent_projection", *args, **kwargs)
+
+
+def _extract_general_agent_addressed_text(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_extract_general_agent_addressed_text", *args, **kwargs)
+
+
+def _extract_addressed_agent(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_extract_addressed_agent", *args, **kwargs)
+
+
+def _general_agent_transition_text(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_transition_text", *args, **kwargs)
+
+
+def _general_agent_ready_text(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_general_agent_ready_text", *args, **kwargs)
+
+
+def _is_agent_roster_question(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_is_agent_roster_question", *args, **kwargs)
+
+
+def _agent_roster_text(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_agent_roster_text", *args, **kwargs)
+
+
+def _receiver_declared_owner(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_receiver_declared_owner", *args, **kwargs)
+
+
+def _static_webio_receiver_metadata(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_static_webio_receiver_metadata", *args, **kwargs)
+
+
+def _webio_stream_stats_key(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_stats_key", *args, **kwargs)
+
+
+def _record_webio_stream_guard_event(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_record_webio_stream_guard_event", *args, **kwargs)
+
+
+def webio_stream_guard_snapshot(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("webio_stream_guard_snapshot", *args, **kwargs)
+
+
+async def _read_webio_receiver_metadata(*args: Any, **kwargs: Any) -> Any:
+    _sync_router_helper_dependencies()
+    return await _webio_stream_guard._read_webio_receiver_metadata(*args, **kwargs)
+
+
+def _webio_stream_owner(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_owner", *args, **kwargs)
+
+
+def _webio_stream_admit(*args: Any, **kwargs: Any) -> Any:
+    return _call_webio_stream_guard_helper("_webio_stream_admit", *args, **kwargs)
+
+
 
 
 class RouterService:
@@ -1704,6 +536,55 @@ class RouterService:
 
         task.add_done_callback(_forget)
 
+    async def _on_telegram_delivery_receipt(self, ev: Event) -> None:
+        payload = ev.payload if isinstance(ev.payload, dict) else {}
+        try:
+            payload = telegram_delivery.validate_receipt(payload)
+        except Exception:
+            _log.warning("router: invalid Telegram delivery receipt", exc_info=True)
+            return
+        attempt_id = str(payload.get("delivery_attempt_id") or "").strip()
+        if not attempt_id:
+            return
+        delivered = bool(payload.get("delivered"))
+        error = str(payload.get("error") or "").strip() or None
+        receipt = {
+            "schema": "adaos.telegram.delivery_receipt.v1",
+            "receipt_id": str(payload.get("receipt_id") or "").strip() or None,
+            "operation_key": str(payload.get("operation_key") or "").strip() or None,
+            "transport": str(payload.get("transport") or "telegram").strip() or "telegram",
+            "external_message_ids": [
+                str(item) for item in payload.get("external_message_ids") or [] if str(item)
+            ],
+            "duplicate_suppressed": int(payload.get("duplicate_suppressed") or 0),
+            "completed_at": str(payload.get("completed_at") or "").strip() or None,
+        }
+        try:
+            attempt = telegram_delivery.complete_outbound(
+                attempt_id,
+                delivered=delivered,
+                receipt=receipt,
+                error=error,
+            )
+        except Exception:
+            _log.warning("router: unknown Telegram delivery receipt attempt=%s", attempt_id, exc_info=True)
+            return
+        durable_attempt_id = str(attempt.get("durable_attempt_id") or "").strip()
+        if durable_attempt_id:
+            try:
+                durable_delivery.complete_delivery(
+                    durable_attempt_id,
+                    delivered=delivered,
+                    receipt=receipt,
+                    error=error,
+                )
+            except Exception:
+                _log.warning(
+                    "router: durable response receipt could not be completed attempt=%s",
+                    durable_attempt_id,
+                    exc_info=True,
+                )
+
     async def _handle_notify_event(self, ev: Event) -> None:
         payload = ev.payload or {}
         text = (payload or {}).get("text")
@@ -1714,30 +595,27 @@ class RouterService:
         is_tg = str(meta.get("io_type") or "").lower() == "telegram"
         chat_id = meta.get("chat_id") if is_tg else None
         is_tg_chat = isinstance(chat_id, str) and bool(chat_id.strip())
+        telegram_delivery_handled = False
 
         # If this came from a chat platform (telegram), reply back into that chat via tg.output.*.
         # This path does not depend on route rules and is meant to be "request/response" style.
         try:
             if is_tg and is_tg_chat and not self._tg_reply_via_root_http:
-                bot_id = meta.get("bot_id")
-                if not isinstance(bot_id, str) or not bot_id.strip():
-                    bot_id = "main-bot"
-                hub_id = meta.get("hub_id")
-                if not isinstance(hub_id, str) or not hub_id.strip():
-                    hub_id = get_ctx().config.subnet_id
-                out_payload = {
-                    "target": {"bot_id": bot_id, "hub_id": hub_id, "chat_id": chat_id.strip()},
-                    "messages": [{"type": "text", "text": text}],
-                    "options": {"reply_to": meta.get("reply_to")} if meta.get("reply_to") else None,
-                }
-                self.bus.publish(
-                    Event(
-                        type=f"tg.output.{bot_id}.chat.{chat_id.strip()}",
-                        source="router",
-                        ts=time.time(),
-                        payload=out_payload,
-                    )
+                projection = _telegram_output_projection(
+                    {"id": payload.get("id"), "from": "hub", "text": text, "ts": payload.get("ts")},
+                    meta,
                 )
+                if projection is not None:
+                    subject, out_payload = projection
+                    self.bus.publish(
+                        Event(
+                            type=subject,
+                            source="router",
+                            ts=time.time(),
+                            payload=out_payload,
+                        )
+                    )
+                    telegram_delivery_handled = True
         except Exception:
             pass
 
@@ -1757,7 +635,11 @@ class RouterService:
                             "from": "hub",
                             "text": text,
                             "ts": time.time(),
-                            "_meta": {**meta, "route_id": route_id.strip()},
+                            "_meta": {
+                                **meta,
+                                "route_id": route_id.strip(),
+                                "telegram_delivery_handled": telegram_delivery_handled,
+                            },
                         },
                     )
                 )
@@ -1821,7 +703,7 @@ class RouterService:
                 # Root API base
                 from adaos.services.agent_context import get_ctx as _get_ctx
 
-                api_base = getattr(_get_ctx().settings, "api_base", "https://api.inimatic.com")
+                api_base = getattr(_get_ctx().settings, "api_base", DEFAULT_PUBLIC_ROOT_BASE_URL)
                 url = f"{api_base.rstrip('/')}/io/tg/send"
                 # Prefix message with subnet alias (or id) for clarity
                 try:
@@ -1934,19 +816,8 @@ class RouterService:
         except Exception:
             return None
 
-    async def start(self) -> None:
-        if self._started:
-            return
-        self._started = True
-        try:
-            conversation_store.ensure_schema()
-            _seed_conversation_registry()
-        except Exception:
-            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
-        # Subscribe to ui.notify on local event bus
+    def _compose_handlers(self) -> list[tuple[str, Callable[[Event], Any]]]:
         if not self._subscribed:
-            self.bus.subscribe("ui.notify", self._on_event)
-
             # ui.say routing (TTS)
             def _say_via_system(text: str) -> bool:
                 try:
@@ -2030,9 +901,6 @@ class RouterService:
                         print_text(text.strip(), node_id=conf.node_id, origin={"source": ev.source})
                     except Exception:
                         pass
-
-            self.bus.subscribe("ui.say", _on_say)
-            self._subscribed = True
 
         # ------------------------------------------------------------
         # Web voice chat routing (per-webspace)
@@ -2983,22 +1851,34 @@ class RouterService:
             def _mutator(data_map: Any, txn: Any) -> None:
                 data_map.set(txn, "dialog", snapshot)
 
+            write_task = asyncio.create_task(
+                _mutate_data_map(
+                    webspace_id,
+                    _mutator,
+                    channel="core.router.dialog.store",
+                    prefer_live_room=True,
+                ),
+                name=f"dialog-state-projection:{webspace_id}",
+            )
             try:
-                await asyncio.wait_for(
-                    _mutate_data_map(
-                        webspace_id,
-                        _mutator,
-                        channel="core.router.dialog.store",
-                        prefer_live_room=True,
-                    ),
+                done, _pending = await asyncio.wait(
+                    {write_task},
                     timeout=_voice_chat_yjs_timeout_s(),
                 )
-            except asyncio.TimeoutError:
-                logging.getLogger("adaos.router.dialog").warning(
-                    "dialog.state yjs write timed out webspace=%s event=%s",
-                    webspace_id,
-                    event,
-                )
+                if not done:
+                    logging.getLogger("adaos.router.dialog").warning(
+                        "dialog.state yjs write exceeded latency budget webspace=%s event=%s; projection continues in background",
+                        webspace_id,
+                        event,
+                    )
+                # Do not cancel an in-flight YDoc session when the latency
+                # budget is exceeded.  Cancellation can leave native y_py
+                # objects in a coroutine cycle which a later skill worker GC
+                # then drops on the wrong thread.  The durable conversation
+                # store is authoritative; this task only refreshes its compact
+                # browser projection and is already isolated by the per-space
+                # coalescing worker below.
+                await write_task
             except Exception:
                 logging.getLogger("adaos.router.dialog").warning(
                     "dialog.state yjs write failed webspace=%s event=%s",
@@ -3996,7 +2876,7 @@ class RouterService:
                     meta={"route_id": route_id, "channel_id": channel_id},
                 )
                 _store_dialog_channel_projection(worker_webspace_id, worker_context_channel)
-                stored = conversation_store.append_message(
+                stored = conversation_store.materialize_message(
                     conversation_id=conversation_id,
                     thread_id=topic_id or None,
                     webspace_id=worker_webspace_id,
@@ -4012,7 +2892,12 @@ class RouterService:
                     route_id=route_id,
                     request_id=str(local_meta.get("request_id") or local_msg.get("request_id") or "") or None,
                     turn_trace_id=local_turn_trace_id or None,
-                    idempotency_key=str(local_meta.get("idempotency_key") or "") or None,
+                    idempotency_key=str(
+                        local_meta.get("response_idempotency_key")
+                        or local_meta.get("idempotency_key")
+                        or ""
+                    )
+                    or None,
                     ts=float(local_msg.get("ts") or time.time()),
                 )
                 projection = conversation_store.list_projection(
@@ -4362,29 +3247,6 @@ class RouterService:
                     )
                 )
 
-        def _coerce_bool(value: Any) -> bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, (int, float)):
-                return bool(value)
-            if isinstance(value, str):
-                return value.strip().lower() in {"1", "true", "yes", "on"}
-            return False
-
-        def _coerce_int(value: Any) -> int:
-            try:
-                return int(value or 0)
-            except Exception:
-                return 0
-
-        def _coerce_float(value: Any) -> float | None:
-            try:
-                if value is None or value == "":
-                    return None
-                return float(value)
-            except Exception:
-                return None
-
         async def _ensure_media_state(webspace_id: str) -> None:
             def _mutator(data_map: Any, txn: Any) -> None:
                 current = _coerce_y(data_map.get("media"))
@@ -4438,134 +3300,13 @@ class RouterService:
                     connected += 1
             return (total, connected)
 
-        def _route_ability_available(route_state: dict[str, Any], topology_id: str) -> bool:
-            capabilities = route_state.get("capabilities") if isinstance(route_state.get("capabilities"), dict) else {}
-            abilities = capabilities.get("ability") if isinstance(capabilities.get("ability"), dict) else {}
-            entry = abilities.get(topology_id) if isinstance(abilities.get(topology_id), dict) else {}
-            return _coerce_bool(entry.get("available"))
-
-        def _route_target_member_id(route_state: dict[str, Any]) -> str:
-            preferred_member_id = str(route_state.get("preferred_member_id") or "").strip()
-            if preferred_member_id:
-                return preferred_member_id
-            producer_target = route_state.get("producer_target") if isinstance(route_state.get("producer_target"), dict) else {}
-            return str(producer_target.get("member_id") or "").strip()
-
-        def _route_signature(route_state: dict[str, Any] | None) -> tuple[str, str, str, str, str]:
-            state = route_state if isinstance(route_state, dict) else {}
-            producer_target = state.get("producer_target") if isinstance(state.get("producer_target"), dict) else {}
-            return (
-                str(state.get("active_route") or "").strip(),
-                str(state.get("delivery_topology") or "").strip(),
-                _route_target_member_id(state),
-                str(producer_target.get("kind") or "").strip(),
-                str(producer_target.get("webspace_id") or "").strip(),
-            )
-
-        def _build_media_route_attempt(
-            previous_route_state: dict[str, Any] | None,
-            normalized_route_state: dict[str, Any],
-            *,
-            cause: str,
-            ts: float,
-            observed_failure: str | None = None,
-        ) -> dict[str, Any]:
-            previous = previous_route_state if isinstance(previous_route_state, dict) else {}
-            previous_attempt = _coerce_y(previous.get("attempt"))
-            previous_attempt = dict(previous_attempt) if isinstance(previous_attempt, dict) else {}
-            previous_signature = _route_signature(previous)
-            next_signature = _route_signature(normalized_route_state)
-            has_previous_selection = any(previous_signature)
-            route_changed = next_signature != previous_signature
-            sequence = _coerce_int(previous_attempt.get("sequence"))
-            if sequence <= 0:
-                sequence = 1
-            elif route_changed and has_previous_selection:
-                sequence += 1
-            switch_total = _coerce_int(previous_attempt.get("switch_total"))
-            if route_changed and has_previous_selection:
-                switch_total += 1
-            selected_at = _coerce_float(previous_attempt.get("selected_at"))
-            if selected_at is None or (route_changed and has_previous_selection):
-                selected_at = ts
-            last_switch_at = _coerce_float(previous_attempt.get("last_switch_at"))
-            if route_changed and has_previous_selection:
-                last_switch_at = ts
-            previous_route = str(previous.get("active_route") or "").strip()
-            previous_delivery_topology = str(previous.get("delivery_topology") or "").strip()
-            previous_member_id = _route_target_member_id(previous)
-            producer_target = (
-                normalized_route_state.get("producer_target")
-                if isinstance(normalized_route_state.get("producer_target"), dict)
-                else {}
-            )
-            current_failure = str(observed_failure or "").strip() or None
-            if current_failure is None:
-                current_failure = str(previous_attempt.get("observed_failure") or "").strip() or None
-
-            attempt = {
-                "sequence": sequence,
-                "state": "selected" if str(normalized_route_state.get("active_route") or "").strip() else "unavailable",
-                "active_route": normalized_route_state.get("active_route"),
-                "delivery_topology": normalized_route_state.get("delivery_topology"),
-                "preferred_route": normalized_route_state.get("preferred_route"),
-                "preferred_member_id": normalized_route_state.get("preferred_member_id"),
-                "producer_target": dict(producer_target) if producer_target else None,
-                "selection_reason": normalized_route_state.get("selection_reason"),
-                "degradation_reason": normalized_route_state.get("degradation_reason"),
-                "refresh_cause": cause,
-                "observed_failure": current_failure,
-                "switch_total": switch_total,
-                "selected_at": selected_at,
-                "last_switch_at": last_switch_at,
-            }
-            if route_changed and has_previous_selection:
-                if previous_route:
-                    attempt["previous_route"] = previous_route
-                if previous_delivery_topology:
-                    attempt["previous_delivery_topology"] = previous_delivery_topology
-                if previous_member_id:
-                    attempt["previous_member_id"] = previous_member_id
-            else:
-                prior_route = str(previous_attempt.get("previous_route") or "").strip()
-                prior_topology = str(previous_attempt.get("previous_delivery_topology") or "").strip()
-                prior_member = str(previous_attempt.get("previous_member_id") or "").strip()
-                if prior_route:
-                    attempt["previous_route"] = prior_route
-                if prior_topology:
-                    attempt["previous_delivery_topology"] = prior_topology
-                if prior_member:
-                    attempt["previous_member_id"] = prior_member
-            return attempt
-
         def _refresh_media_route_payload(route_state: dict[str, Any], *, cause: str, observed_failure: str | None = None) -> dict[str, Any]:
-            member_browser = (
-                route_state.get("member_browser_direct")
-                if isinstance(route_state.get("member_browser_direct"), dict)
-                else {}
+            return build_media_route_refresh_payload(
+                route_state,
+                cause=cause,
+                browser_session_totals=_active_browser_session_totals(),
+                observed_failure=observed_failure,
             )
-            browser_session_total, connected_browser_session_total = _active_browser_session_totals()
-            payload: dict[str, Any] = {
-                "need": str(route_state.get("route_intent") or "scenario_response_media"),
-                "producer_preference": str(route_state.get("producer_preference") or ""),
-                "direct_local_ready": _route_ability_available(route_state, "local_http"),
-                "root_routed_ready": _route_ability_available(route_state, "root_media_relay"),
-                "hub_webrtc_ready": _route_ability_available(route_state, "hub_webrtc_loopback"),
-                "browser_session_total": browser_session_total,
-                "connected_browser_session_total": connected_browser_session_total,
-                "refresh_cause": cause,
-            }
-            if member_browser:
-                payload["member_browser_direct"] = {}
-                if "admitted" in member_browser:
-                    payload["member_browser_direct"]["admitted"] = _coerce_bool(member_browser.get("admitted"))
-            monitoring = route_state.get("monitoring") if isinstance(route_state.get("monitoring"), dict) else {}
-            existing_failure = str(monitoring.get("observed_failure") or "").strip()
-            if observed_failure:
-                payload["observed_failure"] = observed_failure
-            elif existing_failure:
-                payload["observed_failure"] = existing_failure
-            return payload
 
         async def _refresh_media_route_for_webspace(
             webspace_id: str,
@@ -4629,178 +3370,13 @@ class RouterService:
             webspace_id: str,
             previous_route_state: dict[str, Any] | None = None,
         ) -> dict[str, Any] | None:
-            raw_route = payload.get("route")
-            if not isinstance(raw_route, dict) and isinstance(payload.get("route_intent"), dict):
-                raw_route = payload.get("route_intent")
-
-            route_state = _coerce_y(raw_route) if isinstance(raw_route, dict) else None
-            member_browser = payload.get("member_browser_direct")
-            member_browser = member_browser if isinstance(member_browser, dict) else {}
-            current_browser_session_total, current_connected_browser_session_total = _active_browser_session_totals()
-            route_producer_target = (
-                route_state.get("producer_target")
-                if isinstance(route_state, dict) and isinstance(route_state.get("producer_target"), dict)
-                else {}
+            return resolve_media_route_state(
+                payload,
+                webspace_id=webspace_id,
+                browser_session_totals=_active_browser_session_totals(),
+                previous_route_state=previous_route_state,
+                coerce_value=_coerce_y,
             )
-            preferred_member_id = str(payload.get("preferred_member_id") or "").strip()
-            if not preferred_member_id and isinstance(route_state, dict):
-                preferred_member_id = str(route_state.get("preferred_member_id") or "").strip()
-            if not preferred_member_id:
-                preferred_member_id = str(route_producer_target.get("member_id") or "").strip()
-            raw_candidate_members = (
-                member_browser.get("candidate_members")
-                if isinstance(member_browser.get("candidate_members"), list)
-                else payload.get("candidate_member_ids")
-            )
-            candidate_member_ids = (
-                [
-                    str(item or "").strip()
-                    for item in raw_candidate_members
-                    if str(item or "").strip()
-                ]
-                if isinstance(raw_candidate_members, list)
-                else []
-            )
-            admitted_member_browser = (
-                _coerce_bool(member_browser.get("admitted"))
-                if member_browser and "admitted" in member_browser
-                else _coerce_bool(payload.get("member_browser_direct_admitted"))
-            )
-            auto_member_browser: dict[str, Any] = {}
-            if not preferred_member_id or not candidate_member_ids:
-                try:
-                    from adaos.services.media_capability import member_browser_direct_foundation
-
-                    auto_member_browser = member_browser_direct_foundation(
-                        browser_session_total=(
-                            _coerce_int(member_browser.get("browser_session_total"))
-                            if member_browser and "browser_session_total" in member_browser
-                            else (
-                                _coerce_int(payload.get("browser_session_total"))
-                                if "browser_session_total" in payload
-                                else current_browser_session_total
-                            )
-                        ),
-                        connected_browser_session_total=(
-                            _coerce_int(member_browser.get("connected_browser_session_total"))
-                            if member_browser and "connected_browser_session_total" in member_browser
-                            else (
-                                _coerce_int(payload.get("connected_browser_session_total"))
-                                if "connected_browser_session_total" in payload
-                                else current_connected_browser_session_total
-                            )
-                        ),
-                        admitted=admitted_member_browser,
-                    )
-                except Exception:
-                    auto_member_browser = {}
-            if not preferred_member_id:
-                preferred_member_id = str(auto_member_browser.get("preferred_member_id") or "").strip()
-            if not candidate_member_ids:
-                candidate_member_ids = [
-                    str(item or "").strip()
-                    for item in list(auto_member_browser.get("candidate_members") or [])
-                    if str(item or "").strip()
-                ]
-
-            if route_state is None:
-                route_state = resolve_media_route_intent(
-                    need=str(payload.get("need") or payload.get("route_intent") or "scenario_response_media"),
-                    target_webspace_id=webspace_id,
-                    producer_preference=str(payload.get("producer_preference") or ""),
-                    preferred_member_id=preferred_member_id or None,
-                    candidate_member_ids=candidate_member_ids,
-                    direct_local_ready=_coerce_bool(payload.get("direct_local_ready")),
-                    root_routed_ready=_coerce_bool(payload.get("root_routed_ready")),
-                    hub_webrtc_ready=_coerce_bool(payload.get("hub_webrtc_ready")),
-                    member_browser_direct_possible=(
-                        _coerce_bool(member_browser.get("possible"))
-                        if member_browser and "possible" in member_browser
-                        else (
-                            _coerce_bool(payload.get("member_browser_direct_possible"))
-                            if "member_browser_direct_possible" in payload
-                            else _coerce_bool(auto_member_browser.get("possible"))
-                        )
-                    ),
-                    member_browser_direct_admitted=(
-                        _coerce_bool(member_browser.get("admitted"))
-                        if member_browser and "admitted" in member_browser
-                        else (
-                            _coerce_bool(payload.get("member_browser_direct_admitted"))
-                            if "member_browser_direct_admitted" in payload
-                            else _coerce_bool(auto_member_browser.get("admitted"))
-                        )
-                    ),
-                    member_browser_direct_reason=(
-                        str(member_browser.get("reason") or "").strip()
-                        or str(payload.get("member_browser_direct_reason") or "").strip()
-                        or str(auto_member_browser.get("reason") or "").strip()
-                        or None
-                    ),
-                    candidate_member_total=(
-                        _coerce_int(member_browser.get("candidate_member_total"))
-                        if member_browser and "candidate_member_total" in member_browser
-                        else (
-                            _coerce_int(payload.get("candidate_member_total"))
-                            if "candidate_member_total" in payload
-                            else _coerce_int(auto_member_browser.get("candidate_member_total"))
-                        )
-                    ),
-                    browser_session_total=(
-                        _coerce_int(member_browser.get("browser_session_total"))
-                        if member_browser and "browser_session_total" in member_browser
-                        else (
-                            _coerce_int(payload.get("browser_session_total"))
-                            if "browser_session_total" in payload
-                            else _coerce_int(auto_member_browser.get("browser_session_total"))
-                        )
-                    ),
-                    observed_failure=str(payload.get("observed_failure") or "").strip() or None,
-                )
-
-            if not isinstance(route_state, dict):
-                return None
-
-            monitoring = _coerce_y(route_state.get("monitoring"))
-            monitoring = dict(monitoring) if isinstance(monitoring, dict) else {}
-            observed_failure = str(payload.get("observed_failure") or "").strip()
-            if observed_failure and not monitoring.get("observed_failure"):
-                monitoring["observed_failure"] = observed_failure
-
-            normalized = dict(route_state)
-            normalized_member_browser = _coerce_y(normalized.get("member_browser_direct"))
-            normalized_member_browser = dict(normalized_member_browser) if isinstance(normalized_member_browser, dict) else {}
-            if preferred_member_id and not normalized.get("preferred_member_id"):
-                normalized["preferred_member_id"] = preferred_member_id
-            if candidate_member_ids and not isinstance(normalized_member_browser.get("candidate_members"), list):
-                normalized_member_browser["candidate_members"] = list(candidate_member_ids)
-            if preferred_member_id and not normalized_member_browser.get("preferred_member_id"):
-                normalized_member_browser["preferred_member_id"] = preferred_member_id
-            if candidate_member_ids and not normalized_member_browser.get("candidate_member_total"):
-                normalized_member_browser["candidate_member_total"] = len(candidate_member_ids)
-            if normalized_member_browser:
-                normalized["member_browser_direct"] = normalized_member_browser
-            refresh_cause = str(payload.get("refresh_cause") or "io.out.media.route").strip() or "io.out.media.route"
-            updated_at = float(payload.get("ts") or time.time())
-            effective_observed_failure = str(monitoring.get("observed_failure") or "").strip() or None
-            attempt = _build_media_route_attempt(
-                previous_route_state,
-                normalized,
-                cause=refresh_cause,
-                ts=updated_at,
-                observed_failure=effective_observed_failure,
-            )
-            normalized["attempt"] = attempt
-            normalized["target_webspace_id"] = webspace_id
-            normalized["route_administrator"] = "router"
-            normalized["updated_at"] = updated_at
-            monitoring["refresh_cause"] = refresh_cause
-            monitoring["attempt_sequence"] = attempt.get("sequence")
-            monitoring["switch_total"] = attempt.get("switch_total")
-            monitoring["last_switch_at"] = attempt.get("last_switch_at")
-            if monitoring:
-                normalized["monitoring"] = monitoring
-            return normalized
 
         def _now_ms() -> int:
             return int(time.time() * 1000)
@@ -4819,7 +3395,7 @@ class RouterService:
             for ws in await _resolve_webspace_ids(payload):
                 await _ensure_voice_chat_state(ws, target_node_id)
                 await _ensure_tts_state(ws)
-                await _write_dialog_state(ws, event="voice_open")
+                _schedule_dialog_state_write(ws, event="voice_open")
                 await _publish_voice_chat_snapshot(
                     ws,
                     target_node_id,
@@ -4844,63 +3420,34 @@ class RouterService:
                 except Exception:
                     pass
                 return
-            if isinstance(meta, dict) and meta.get("skip_voice_chat") is True:
-                return
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 return
 
-            # Optional request/response Telegram delivery via Root HTTP (/io/tg/send).
-            #
-            # Disabled by default because `tg.output.*` is already bridged to Root via NATS (see bootstrap),
-            # and enabling both produces duplicate Telegram messages.
             try:
-                if self._tg_reply_via_root_http and str((meta or {}).get("io_type") or "").lower() == "telegram":
-                    chat_id = (meta or {}).get("chat_id")
-                    if isinstance(chat_id, str) and chat_id.strip():
-                        bot_id = (meta or {}).get("bot_id")
-                        if not isinstance(bot_id, str) or not bot_id.strip():
-                            bot_id = "main-bot"
-                        hub_id = (meta or {}).get("hub_id")
-                        if not isinstance(hub_id, str) or not hub_id.strip():
-                            hub_id = get_ctx().config.subnet_id
-                        ctx = get_ctx()
-                        api_base = getattr(ctx.settings, "api_base", "https://api.inimatic.com")
-                        url = f"{api_base.rstrip('/')}/io/tg/send"
-                        body = {"hub_id": hub_id, "bot_id": bot_id, "chat_id": chat_id.strip(), "text": text.strip()}
-                        if (meta or {}).get("reply_to"):
-                            body["reply_to"] = (meta or {}).get("reply_to")
-                        try:
-                            r = await asyncio.to_thread(
-                                requests.post,
-                                url,
-                                json=body,
-                                headers={"Content-Type": "application/json"},
-                                timeout=3.0,
-                            )
-                            if not (200 <= int(r.status_code) < 300):
-                                logging.getLogger("adaos.router").warning(
-                                    "router: telegram send failed (chat reply)",
-                                    extra={
-                                        "hub_id": hub_id,
-                                        "chat_id": chat_id.strip(),
-                                        "status": r.status_code,
-                                        "body": (r.text or "")[:300],
-                                    },
-                                )
-                            else:
-                                logging.getLogger("adaos.router").info(
-                                    "router: telegram sent (chat reply)",
-                                    extra={"hub_id": hub_id, "chat_id": chat_id.strip(), "status": r.status_code},
-                                )
-                        except Exception as pe:
-                            logging.getLogger("adaos.router").warning(
-                                "router: telegram request failed (chat reply)",
-                                extra={"hub_id": hub_id, "chat_id": chat_id.strip(), "error": str(pe)},
-                            )
-                        return
+                # All dialog replies use the canonical tg.output transport.  The
+                # former Root HTTP shortcut discarded interaction actions and
+                # returned before local materialization, so a turn could be
+                # reported as successful without a Telegram-visible result.
+                projection = _telegram_output_projection(payload, meta)
+                if projection is not None:
+                    subject, out_payload = projection
+                    self.bus.publish(
+                        Event(
+                            type=subject,
+                            source="router.dialog.transport",
+                            ts=time.time(),
+                            payload=out_payload,
+                        )
+                    )
             except Exception:
-                pass
+                logging.getLogger("adaos.router").warning(
+                    "router: telegram dialog projection failed",
+                    exc_info=True,
+                )
+
+            if isinstance(meta, dict) and meta.get("skip_voice_chat") is True:
+                return
 
             msg = {
                 "id": str(payload.get("id") or _make_id("m")),
@@ -5307,7 +3854,14 @@ class RouterService:
         def _call_runtime_skill_tool(skill: str, tool: str, payload: dict[str, Any], meta: dict) -> Any:
             log = logging.getLogger("adaos.router.voice_chat")
             route_meta = dict(meta)
-            scheduled_raw = route_meta.pop("_router_tool_scheduled_at", None)
+            # Keep the scheduling marker in the tool metadata.  Besides
+            # measuring queue latency it is the explicit hand-off contract
+            # telling a dialog skill that Router owns fallback
+            # materialization.  Removing it here lets the skill emit an
+            # eager chat event while the materialization probe is active;
+            # the probe can then observe the event before durable storage and
+            # suppress Router's reliable fallback (most visible on Telegram).
+            scheduled_raw = route_meta.get("_router_tool_scheduled_at")
             worker_started = time.perf_counter()
             queue_ms: float | None = None
             try:
@@ -5346,6 +3900,37 @@ class RouterService:
                     tool_payload.setdefault("target_node_id", target_node_id)
                 with io_meta(route_meta):
                     run_started = time.perf_counter()
+                    if _dialog_runtime_uses_dev_webspace(webspace_id):
+                        if not hasattr(mgr, "run_dev_tool"):
+                            raise RuntimeError(
+                                f"DEV dialog runtime is unavailable for webspace '{webspace_id}'"
+                            )
+                        try:
+                            result = mgr.run_dev_tool(skill, tool, tool_payload)
+                        except Exception:
+                            log.warning(
+                                "dialog runtime tool run failed skill=%s tool=%s webspace=%s runtime=dev_authoritative manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                                skill,
+                                tool,
+                                webspace_id,
+                                manager_ms,
+                                (time.perf_counter() - run_started) * 1000.0,
+                                (time.perf_counter() - worker_started) * 1000.0,
+                            )
+                            raise
+                        run_ms = (time.perf_counter() - run_started) * 1000.0
+                        total_ms = (time.perf_counter() - worker_started) * 1000.0
+                        log.log(
+                            _dialog_timing_level(total_ms),
+                            "dialog runtime tool run completed skill=%s tool=%s webspace=%s runtime=dev_authoritative manager_ms=%.1f run_ms=%.1f total_ms=%.1f",
+                            skill,
+                            tool,
+                            webspace_id,
+                            manager_ms,
+                            run_ms,
+                            total_ms,
+                        )
+                        return result
                     try:
                         result = mgr.run_tool(skill, tool, tool_payload, bypass_yjs_guard=True)
                         run_ms = (time.perf_counter() - run_started) * 1000.0
@@ -5425,6 +4010,81 @@ class RouterService:
             skill = str(policy.get("skill") or "voice_chat_skill").strip() or "voice_chat_skill"
             tool = str(policy.get("tool") or "handle_text").strip() or "handle_text"
             return _call_runtime_skill_tool(skill, tool, {"text": text}, meta)
+
+        async def _on_conversation_interaction_responded(ev: Event) -> None:
+            payload = ev.payload if isinstance(ev.payload, Mapping) else {}
+            if not payload or bool(payload.get("duplicate")):
+                return
+            interaction = payload.get("interaction") if isinstance(payload.get("interaction"), Mapping) else {}
+            response = payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+            try:
+                consumed_projection = _telegram_interaction_consumed_projection(interaction, response)
+                if consumed_projection is not None:
+                    subject, out_payload = consumed_projection
+                    self.bus.publish(
+                        Event(
+                            type=subject,
+                            source="router.interaction.presentation",
+                            ts=time.time(),
+                            payload=out_payload,
+                        )
+                    )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "interaction presentation consumption projection failed interaction_id=%s response_id=%s",
+                    interaction.get("interaction_id"),
+                    response.get("response_id"),
+                    exc_info=True,
+                )
+            interaction_meta = interaction.get("metadata") if isinstance(interaction.get("metadata"), Mapping) else {}
+            if str(interaction_meta.get("domain") or "").strip() != "builder":
+                return
+            response_meta = response.get("metadata") if isinstance(response.get("metadata"), Mapping) else {}
+            topic_ref = interaction_meta.get("topic_ref") if isinstance(interaction_meta.get("topic_ref"), Mapping) else {}
+            execution_webspace_id = str(
+                interaction_meta.get("execution_webspace_id")
+                or response_meta.get("execution_webspace_id")
+                or topic_ref.get("dev_webspace_id")
+                or response_meta.get("webspace_id")
+                or interaction_meta.get("source_webspace_id")
+                or "desktop"
+            ).strip() or "desktop"
+            route_meta = {
+                **dict(response_meta),
+                "webspace_id": execution_webspace_id,
+                "source_webspace_id": str(
+                    interaction_meta.get("source_webspace_id")
+                    or response_meta.get("source_webspace_id")
+                    or execution_webspace_id
+                ).strip(),
+                "conversation_id": str(
+                    interaction.get("conversation_id")
+                    or response_meta.get("conversation_id")
+                    or ""
+                ).strip(),
+                "dialog_channel_id": BUILDER_DIALOG_CHANNEL_ID,
+                "interaction_id": str(interaction.get("interaction_id") or "").strip(),
+                "interaction_response_id": str(response.get("response_id") or "").strip(),
+            }
+            try:
+                await asyncio.to_thread(
+                    _call_runtime_skill_tool,
+                    BUILDER_SKILL_ID,
+                    "handle_interaction_response",
+                    {
+                        "event": dict(payload),
+                        "webspace_id": execution_webspace_id,
+                    },
+                    route_meta,
+                )
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "Builder interaction response dispatch failed interaction_id=%s response_id=%s webspace=%s",
+                    interaction.get("interaction_id"),
+                    response.get("response_id"),
+                    execution_webspace_id,
+                    exc_info=True,
+                )
 
         def _chat_append_matches_dialog_action(
             payload: Mapping[str, Any],
@@ -5602,7 +4262,7 @@ class RouterService:
                         )
                     except Exception:
                         pass
-                await _write_dialog_state(webspace_id, event="exit")
+                _schedule_dialog_state_write(webspace_id, event="exit")
                 return True
 
             if kind != "skill_tool":
@@ -5829,14 +4489,20 @@ class RouterService:
                 ),
             }
             if materialized_payload is not None:
-                trace_status = "materialized"
+                external_transport = str(action_meta.get("io_type") or "").strip().lower()
+                trace_status = "delivery_pending" if external_transport == "telegram" else "materialized"
                 trace_renderer = {
-                    "receiver": "voice_chat.messages",
+                    "receiver": "telegram.transport" if external_transport == "telegram" else "voice_chat.messages",
                     "projection": "skill_emitted_message" if result_message else "response_envelope",
                     "message_id": materialized_payload.get("id"),
                 }
-                trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
-                trace_policy["materialization_status"] = "materialized"
+                if external_transport == "telegram":
+                    trace_summary = f"{skill}.{tool} returned ok; Telegram delivery was projected and awaits transport acknowledgement"
+                    trace_policy["materialization_status"] = "local_materialized"
+                    trace_policy["delivery_status"] = "pending_acknowledgement"
+                else:
+                    trace_summary = f"{skill}.{tool} returned ok and materialized visible output"
+                    trace_policy["materialization_status"] = "materialized"
             elif result_message and suppress_visible_result_message:
                 trace_renderer = {
                     "receiver": "skill_runtime",
@@ -5927,7 +4593,7 @@ class RouterService:
             event_name = str(ev.type or "").rsplit(".", 1)[-1] or "changed"
             if event_name == "deactivated":
                 _persist_general_dialog_channel(webspace_id, event=event_name)
-            await _write_dialog_state(webspace_id, event=event_name)
+            _schedule_dialog_state_write(webspace_id, event=event_name)
 
         async def _on_dialog_channel_select(ev: Event) -> None:
             payload = ev.payload or {}
@@ -5968,10 +4634,10 @@ class RouterService:
                             },
                             _resolve_voice_target_node_id(payload, route_meta, default_local=False),
                         )
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 if current_id == channel_id:
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 if channel_id != "conversational":
                     try:
@@ -5995,7 +4661,7 @@ class RouterService:
                             "unsupported dialog channel selected: %r",
                             channel_id,
                         )
-                        await _write_dialog_state(ws, event="select_failed")
+                        _schedule_dialog_state_write(ws, event="select_failed")
                         continue
                     default_skill = str(channel.get("default_skill") or "").strip()
                     owner = str(channel.get("owner") or "").strip()
@@ -6058,7 +4724,7 @@ class RouterService:
                         bus=self.bus,
                         source="router.dialog",
                     )
-                    await _write_dialog_state(ws, event="selected")
+                    _schedule_dialog_state_write(ws, event="selected")
                     continue
                 try:
                     result = await asyncio.to_thread(
@@ -6074,7 +4740,7 @@ class RouterService:
                         ws,
                         exc_info=True,
                     )
-                    await _write_dialog_state(ws, event="select_failed")
+                    _schedule_dialog_state_write(ws, event="select_failed")
                     continue
                 if isinstance(result, dict) and bool(result.get("ok")):
                     try:
@@ -6092,7 +4758,7 @@ class RouterService:
                             "conversation_companions start result state update failed",
                             exc_info=True,
                         )
-                await _write_dialog_state(ws, event="selected")
+                _schedule_dialog_state_write(ws, event="selected")
 
         async def _activate_requested_dialog_channel(
             webspace_id: str,
@@ -6247,7 +4913,7 @@ class RouterService:
                     bus=self.bus,
                     source="router.voice.requested_channel",
                 )
-                await _write_dialog_state(ws, event="requested_channel")
+                _schedule_dialog_state_write(ws, event="requested_channel")
             except Exception:
                 logging.getLogger("adaos.router.dialog").debug(
                     "requested dialog channel activation failed webspace=%s channel=%s",
@@ -6304,19 +4970,28 @@ class RouterService:
                 )
             else:
                 text = f"{label} channel selected, but its runtime tool is not available yet."
-            await _append_voice_chat_message(
-                webspace_id,
-                {
-                    "id": _make_id("m"),
-                    "from": "hub",
-                    "text": text,
-                    "ts": time.time(),
-                    "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
-                    "active_agent_label": label or None,
-                    "_meta": dict(meta),
-                },
-                target_node_id,
-            )
+            response = {
+                "id": _make_id("m"),
+                "from": "hub",
+                "text": text,
+                "ts": time.time(),
+                "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
+                "active_agent_label": label or None,
+                "_meta": dict(meta),
+            }
+            await _append_voice_chat_message(webspace_id, response, target_node_id)
+            if str(meta.get("io_type") or "").strip().lower() == "telegram":
+                self.bus.publish(
+                    Event(
+                        type="io.out.chat.append",
+                        source="router.dialog",
+                        ts=time.time(),
+                        payload={
+                            **response,
+                            "_meta": {**dict(meta), "skip_voice_chat": True},
+                        },
+                    )
+                )
 
         async def _on_voice_user(ev: Event) -> None:
             voice_started = time.perf_counter()
@@ -6372,6 +5047,8 @@ class RouterService:
                 meta.setdefault("dialog_event_kind", DIALOG_USER_MESSAGE_EVENT)
                 meta.setdefault("canonical_event_kind", DIALOG_USER_MESSAGE_EVENT)
                 meta.setdefault("input_event_kind", DIALOG_USER_MESSAGE_EVENT)
+            turn_route_id = _dialog_ingress_route_id(meta, event_kind)
+            meta["route_id"] = turn_route_id
             if len(target_webspaces) > 1:
                 meta["webspace_ids"] = list(target_webspaces)
             if target_node_id:
@@ -6420,7 +5097,7 @@ class RouterService:
                     "ts": time.time(),
                     "_meta": {
                         **meta,
-                        "route_id": "voice_chat",
+                        "route_id": turn_route_id,
                         "transport_integrity": "rejected",
                         "transport_integrity_reason": transport_integrity_error,
                     },
@@ -6465,7 +5142,7 @@ class RouterService:
                 meta["dialog_channel_id"] = GENERAL_DIALOG_CHANNEL_ID
                 _apply_general_agent_metadata(meta)
                 try:
-                    await _write_dialog_state(ws, event="general_channel_requested")
+                    _schedule_dialog_state_write(ws, event="general_channel_requested")
                 except Exception:
                     pass
                 _log_voice_phase("general_channel_requested")
@@ -6504,7 +5181,7 @@ class RouterService:
                             "from": msg["from"],
                             "text": msg["text"],
                             "ts": msg["ts"],
-                            "_meta": {**meta, "route_id": "voice_chat", "skip_voice_chat": True},
+                            "_meta": {**meta, "route_id": turn_route_id, "skip_voice_chat": True},
                           },
                       )
                   )
@@ -6592,7 +5269,7 @@ class RouterService:
                                 ts=time.time(),
                                 payload={
                                     **transition_msg,
-                                    "_meta": {**dict(meta), "route_id": "voice_chat"},
+                                    "_meta": {**dict(meta), "route_id": turn_route_id},
                                 },
                             )
                         )
@@ -6602,7 +5279,7 @@ class RouterService:
                 _apply_general_agent_metadata(meta)
                 if not addressed_general_text:
                     try:
-                        await _write_dialog_state(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
                     except Exception:
                         pass
                     try:
@@ -6627,7 +5304,7 @@ class RouterService:
                     return
                 if _is_agent_roster_question(addressed_general_text):
                     try:
-                        await _write_dialog_state(ws, event="general_agent_addressed")
+                        _schedule_dialog_state_write(ws, event="general_agent_addressed")
                     except Exception:
                         pass
                     _record_voice_turn_trace(
@@ -6672,7 +5349,7 @@ class RouterService:
                     action_meta = {
                         **meta,
                         "webspace_id": ws,
-                        "route_id": "voice_chat",
+                        "route_id": turn_route_id,
                         "dialog_policy_reason": "addressed_agent",
                         "addressed_agent_id": str(agent.get("id") or "").strip(),
                         "dialog_channel_id": channel_id,
@@ -6704,11 +5381,11 @@ class RouterService:
                             active_agent_voice=str(agent.get("voice") or "").strip(),
                             active_agent_icon=str(agent.get("icon") or "").strip(),
                             active_agent_avatar_ref=str(agent.get("avatar_ref") or "").strip() or None,
-                            route_id="voice_chat",
+                            route_id=turn_route_id,
                             bus=self.bus,
                             source="router.voice.addressed_agent",
                         )
-                        await _write_dialog_state(ws, event="agent_addressed")
+                        _schedule_dialog_state_write(ws, event="agent_addressed")
                     except Exception:
                         logging.getLogger("adaos.router.dialog").debug(
                             "addressed agent state update failed webspace=%s agent=%s",
@@ -6747,7 +5424,7 @@ class RouterService:
                         dialog_action=dialog_action,
                         webspace_id=ws,
                         meta=action_meta,
-                        route_id="voice_chat",
+                        route_id=turn_route_id,
                         mark_request=False,
                     ):
                         _log_voice_phase(
@@ -6812,8 +5489,8 @@ class RouterService:
                 dialog_action = dialog_runtime.resolve_followup_action(
                     webspace_id=ws,
                     text=text,
-                    route_id="voice_chat",
-                    meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
+                    route_id=turn_route_id,
+                    meta={**meta, "route_id": turn_route_id, "dialog_policy_reason": "active_dialog_followup"},
                 )
             except Exception:
                 dialog_action = None
@@ -6821,8 +5498,8 @@ class RouterService:
             if isinstance(dialog_action, dict) and await _handle_dialog_action(
                 dialog_action=dialog_action,
                 webspace_id=ws,
-                meta={**meta, "route_id": "voice_chat", "dialog_policy_reason": "active_dialog_followup"},
-                route_id="voice_chat",
+                meta={**meta, "route_id": turn_route_id, "dialog_policy_reason": "active_dialog_followup"},
+                route_id=turn_route_id,
                 mark_request=False,
             ):
                 _log_voice_phase("followup_action_handled")
@@ -6880,7 +5557,7 @@ class RouterService:
                             "text": text,
                             "webspace_id": ws,
                             "request_id": meta.get("message_id") or meta.get("id") or _make_id("nlu"),
-                            "_meta": {**meta, "route_id": "voice_chat"},
+                            "_meta": {**meta, "route_id": turn_route_id},
                         },
                     )
                 )
@@ -7072,29 +5749,34 @@ class RouterService:
             except Exception:
                 pass
 
+        return [
+            ("ui.notify", self._on_event),
+            ("ui.say", _on_say),
+            ("voice.chat.open", _on_voice_open),
+            ("voice.chat.user", _on_voice_user),
+            ("dialog.user_message", _on_voice_user),
+            ("dialog.channel.select", _on_dialog_channel_select),
+            ("dialog.channel.activated", _on_dialog_channel_event),
+            ("dialog.channel.deactivated", _on_dialog_channel_event),
+            ("conversation.interaction.responded", _on_conversation_interaction_responded),
+            ("tg.delivery.receipt", self._on_telegram_delivery_receipt),
+            ("io.out.chat.append", _on_io_out_chat_append),
+            ("io.out.say", _on_io_out_say),
+            ("io.out.media.route", _on_io_out_media_route),
+            ("io.out.stream.publish", _on_io_out_stream_publish),
+            ("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot),
+            ("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot),
+            ("conversation.history.more", _on_conversation_history_more),
+            ("browser.session.changed", _on_browser_session_changed),
+            ("subnet.member.snapshot.changed", _on_member_media_inventory_changed),
+            ("subnet.member.link.up", _on_member_media_inventory_changed),
+            ("subnet.member.link.down", _on_member_media_inventory_changed),
+            ("capacity.changed", _on_member_media_inventory_changed),
+            ("nlp.intent.not_obtained", _on_nlp_intent_not_obtained),
+            ("nlp.teacher.candidate.proposed", _on_nlp_teacher_candidate_proposed),
+        ]
 
-        self.bus.subscribe("voice.chat.open", _on_voice_open)
-        self.bus.subscribe("voice.chat.user", _on_voice_user)
-        self.bus.subscribe("dialog.user_message", _on_voice_user)
-        self.bus.subscribe("dialog.channel.select", _on_dialog_channel_select)
-        self.bus.subscribe("dialog.channel.activated", _on_dialog_channel_event)
-        self.bus.subscribe("dialog.channel.deactivated", _on_dialog_channel_event)
-        self.bus.subscribe("io.out.chat.append", _on_io_out_chat_append)
-        self.bus.subscribe("io.out.say", _on_io_out_say)
-        self.bus.subscribe("io.out.media.route", _on_io_out_media_route)
-        self.bus.subscribe("io.out.stream.publish", _on_io_out_stream_publish)
-        self.bus.subscribe("webio.stream.snapshot.requested", _on_voice_chat_stream_snapshot)
-        self.bus.subscribe("webio.stream.subscription.changed", _on_voice_chat_stream_snapshot)
-        self.bus.subscribe("conversation.history.more", _on_conversation_history_more)
-        self.bus.subscribe("browser.session.changed", _on_browser_session_changed)
-        self.bus.subscribe("subnet.member.snapshot.changed", _on_member_media_inventory_changed)
-        self.bus.subscribe("subnet.member.link.up", _on_member_media_inventory_changed)
-        self.bus.subscribe("subnet.member.link.down", _on_member_media_inventory_changed)
-        self.bus.subscribe("capacity.changed", _on_member_media_inventory_changed)
-        self.bus.subscribe("nlp.intent.not_obtained", _on_nlp_intent_not_obtained)
-        self.bus.subscribe("nlp.teacher.candidate.proposed", _on_nlp_teacher_candidate_proposed)
-
-        # Watch rules file
+    def _start_rules_watch(self) -> None:
         def _reload(rules: list[dict]):
             self._rules = rules or []
 
@@ -7106,6 +5788,21 @@ class RouterService:
             node_id = ""
         self._rules = load_rules(self.base_dir, node_id)
         self._stop_watch = watch_rules(self.base_dir, node_id, _reload)
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        try:
+            conversation_store.ensure_schema()
+            _seed_conversation_registry()
+        except Exception:
+            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
+        if not self._subscribed:
+            for event_type, handler in self._compose_handlers():
+                self.bus.subscribe(event_type, handler)
+            self._subscribed = True
+        self._start_rules_watch()
 
     async def stop(self) -> None:
         if self._stop_watch:

@@ -6,6 +6,8 @@ import types
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 
+import pytest
+
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(YDoc=object)
 if "ypy_websocket" not in sys.modules:
@@ -14,6 +16,23 @@ if "ypy_websocket" not in sys.modules:
     sys.modules["ypy_websocket.ystore"] = ystore_mod
 
 from adaos.services.scenario import projection_service as projection_service_module
+
+
+@pytest.fixture(autouse=True)
+def _reset_projection_runtime_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Projection tests that exercise core-owned persistence must not inherit a
+    # skill ContextVar left by an earlier full-suite runtime task. Individual
+    # skill-ownership tests override this explicitly after fixture setup.
+    monkeypatch.setattr(projection_service_module, "get_current_skill", lambda: None)
+    projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
+    projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._PROJECTION_RULE_MISS_STATS.clear()
+    yield
+    projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
+    projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
+    projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._PROJECTION_RULE_MISS_STATS.clear()
 
 
 def test_projection_service_records_missing_rule_for_skill_publish(monkeypatch, tmp_path) -> None:

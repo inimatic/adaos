@@ -1,0 +1,29 @@
+{
+  "$schema": "../../src/adaos/abi/webui.v1.schema.json",
+  "catalog": {
+    "widgets": [
+      {
+        "id": "builder-generated-preferences",
+        "type": "ui.list",
+        "title": "Preference proposals",
+        "area": "main",
+        "inputs": {
+          "itemsKey": "items",
+          "titleKey": "title",
+          "descriptionKey": "description",
+          "statusKey": "status",
+          "emptyText": "No preference proposals are awaiting review."
+        }
+      }
+    ]
+  },
+  "ydoc_defaults": {
+    "data/builder_generated_preferences": {
+      "items": []
+    }
+  },
+  "llm_hints": {
+    "description": "Render consent-gated preference proposals; approval remains a Pending Action.",
+    "aliases": ["preference proposals"]
+  }
+}

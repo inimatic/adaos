@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from adaos.domain import Event
 from adaos.sdk import chat
-from adaos.services import conversation_response, conversation_store
+from adaos.services import conversation_interactions, conversation_response, conversation_store
+from adaos.services.conversational_runtime import (
+    build_conversation_output,
+    response_envelope_from_conversation_output,
+)
 from adaos.services.eventbus import LocalEventBus
 
 
@@ -28,6 +32,51 @@ def test_chat_send_materializes_visible_message_and_ledger() -> None:
     history = chat.history("conv.chat", limit=5)
     assert history["messages"][0]["text"] == "visible reply"
     assert history["messages"][0]["active_agent_id"] == "agent:core:general"
+
+
+def test_chat_response_does_not_reuse_transport_ingress_idempotency_key() -> None:
+    conversation_id = "conv.chat.transport-idempotency"
+    ingress_key = "transport:telegram:main-bot:42:100"
+    conversation_store.upsert_conversation(
+        conversation_id=conversation_id,
+        webspace_id="desktop",
+        owner="skill:builder_skill",
+    )
+    conversation_store.append_message(
+        conversation_id=conversation_id,
+        thread_id="prompt-project:scenario:builder",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        role="user",
+        text="Строитель, что выбрано?",
+        payload={"id": "m.transport.input"},
+        meta={"idempotency_key": ingress_key},
+        request_id="telegram:main-bot:42:100",
+        turn_trace_id="trace.transport.100",
+        idempotency_key=ingress_key,
+    )
+
+    result = chat.send(
+        "Конструктор: сейчас выбран Builder (builder).",
+        conversation_id=conversation_id,
+        thread_id="prompt-project:scenario:builder",
+        webspace_id="desktop",
+        channel_id="builder",
+        owner="skill:builder_skill",
+        route_id="telegram",
+        request_id="telegram:main-bot:42:100",
+        turn_trace_id="trace.transport.100",
+        meta={"idempotency_key": ingress_key, "io_type": "telegram"},
+        bus=None,
+    )
+
+    stored = result["stored_message"]
+    history = chat.history(conversation_id, thread_id="prompt-project:scenario:builder", limit=5)
+    assert stored["from"] == "hub"
+    assert [item["from"] for item in history["messages"]] == ["user", "hub"]
+    assert stored["_meta"]["idempotency_key"] == ingress_key
+    assert stored["_meta"]["response_idempotency_key"].startswith("response:")
 
 
 def test_chat_start_thread_and_history_filter_messages() -> None:
@@ -151,6 +200,42 @@ def test_tool_result_receipt_only_message_is_not_materialized() -> None:
     assert conversation_store.list_projection("conv.receipt.only")["messages"] == []
 
 
+def test_present_negotiates_an_existing_interaction_without_creating_a_duplicate() -> None:
+    bus = LocalEventBus()
+    seen: list[Event] = []
+    bus.subscribe("io.out.chat.append", lambda event: seen.append(event))
+    interaction = conversation_interactions.create_interaction(
+        interaction_id="interaction.sdk.present",
+        conversation_id="conversation.sdk.present",
+        owner="skill:test",
+        prompt="Choose",
+        input_spec={"kind": "choice", "required_fields": [], "choices": [{"value": "inspect", "label": "Inspect"}], "sensitive": False},
+        actions=[
+            {
+                "action_id": "inspect",
+                "label": "Inspect",
+                "command": "builder.process.inspect",
+                "value": "inspect",
+                "risk": "read",
+                "confirmation_required": False,
+            }
+        ],
+    )
+
+    result = chat.present(
+        interaction,
+        conversation_id="conversation.sdk.present",
+        owner="skill:test",
+        webspace_id="desktop",
+        channel_id="builder",
+        bus=bus,
+    )
+
+    assert result["presentation"]["mode"] == "buttons"
+    assert seen[0].payload["actions"][0]["token"].startswith("ia:0:")
+    assert conversation_store.get_interaction("interaction.sdk.present")["status"] == "awaiting_input"
+
+
 def test_response_planner_infers_structured_targets() -> None:
     envelope = conversation_response.normalize_response_envelope(
         {
@@ -194,3 +279,38 @@ def test_response_planner_adds_speech_for_voice_policy() -> None:
     assert result["envelope"]["response_plan"]["reason"] == "text_content+voice_policy:ask"
     assert chat_events and chat_events[0].payload["text"] == "Need one detail"
     assert say_events and say_events[0].payload["text"] == "Need one detail"
+
+
+def test_response_normalizer_preserves_semantic_output_identity() -> None:
+    output = build_conversation_output(
+        output_id="output.semantic.1",
+        conversation_id="conv.semantic",
+        kind="result",
+        summary="The workflow completed.",
+        risk_level="low",
+        reason={
+            "code": "workflow_completed",
+            "explanation": "The terminal state was reached.",
+            "retryable": False,
+            "source": "workflow",
+        },
+        now="2026-01-01T00:00:00+00:00",
+    )
+
+    direct = conversation_response.normalize_response_envelope(
+        output,
+        conversation_id="conv.semantic",
+    )
+    durable = conversation_response.normalize_response_envelope(
+        response_envelope_from_conversation_output(
+            output,
+            now="2026-01-01T00:00:01+00:00",
+        ),
+        conversation_id="conv.semantic",
+    )
+
+    assert direct["content"] == [{"type": "text", "text": "The workflow completed."}]
+    assert direct["meta"]["semantic_output_id"] == "output.semantic.1"
+    assert direct["meta"]["semantic_output_reason"]["code"] == "workflow_completed"
+    assert durable["meta"]["semantic_output_id"] == "output.semantic.1"
+    assert durable["meta"]["response_envelope_id"].startswith("response:")

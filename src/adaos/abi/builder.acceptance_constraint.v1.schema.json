@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.acceptance_constraint.v1",
+  "title": "AdaOS Builder Acceptance Constraint",
+  "type": "object",
+  "required": ["schema", "constraint_id", "change_id", "review_id", "project_ref", "artifact_ref", "target_ref", "kind", "expected", "source_revision", "status", "created_at"],
+  "properties": {
+    "schema": { "const": "adaos.builder.acceptance_constraint.v1" },
+    "constraint_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "change_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "review_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "project_ref": { "type": "string", "pattern": "^scenario:[^/\\\\]+$" },
+    "artifact_ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "target_ref": { "type": "string", "pattern": "^(widget|field):" },
+    "kind": { "enum": ["present", "label_equals", "property_equals", "visible", "order_before", "data_mode"] },
+    "expected": {},
+    "source_revision": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "status": { "enum": ["active", "satisfied", "violated", "unverifiable", "superseded"] },
+    "last_evaluation": { "type": ["object", "null"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": ["string", "null"], "format": "date-time" },
+    "superseded_reason": { "type": ["string", "null"], "maxLength": 2000 },
+    "superseded_by_ref": { "type": ["string", "null"], "maxLength": 300 }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.trace_identity.v1",
+  "title": "AdaOS Workflow Trace Identity Report",
+  "type": "object",
+  "required": [
+    "schema",
+    "trace_id",
+    "valid",
+    "generated_at",
+    "conversation_id",
+    "turn_trace_id",
+    "intent_proposal_id",
+    "interaction_id",
+    "interaction_response_id",
+    "invocation_id",
+    "command_id",
+    "workflow_ref",
+    "workflow_event_id",
+    "activity_run_id",
+    "run_ref",
+    "conversation_output_id",
+    "response_envelope_id",
+    "delivery_attempt_id",
+    "reply_route_id",
+    "diagnostics",
+    "links"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.workflow.trace_identity.v1" },
+    "trace_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "valid": { "type": "boolean" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "conversation_id": { "type": ["string", "null"], "maxLength": 240 },
+    "turn_trace_id": { "type": ["string", "null"], "maxLength": 240 },
+    "intent_proposal_id": { "type": ["string", "null"], "maxLength": 240 },
+    "interaction_id": { "type": ["string", "null"], "maxLength": 240 },
+    "interaction_response_id": { "type": ["string", "null"], "maxLength": 240 },
+    "invocation_id": { "type": ["string", "null"], "maxLength": 240 },
+    "command_id": { "type": ["string", "null"], "maxLength": 240 },
+    "workflow_ref": {
+      "oneOf": [
+        { "$ref": "workflow.ref.v1.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "workflow_event_id": { "type": ["string", "null"], "maxLength": 240 },
+    "activity_run_id": { "type": ["string", "null"], "maxLength": 300 },
+    "run_ref": {
+      "oneOf": [
+        { "$ref": "workflow.ref.v1.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "conversation_output_id": { "type": ["string", "null"], "maxLength": 240 },
+    "response_envelope_id": { "type": ["string", "null"], "maxLength": 240 },
+    "delivery_attempt_id": { "type": ["string", "null"], "maxLength": 240 },
+    "reply_route_id": { "type": ["string", "null"], "maxLength": 240 },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["code", "severity", "path", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "severity": { "enum": ["info", "warning", "error"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "links": {
+      "type": "object",
+      "properties": {
+        "intent_proposal_ref": { "type": ["object", "null"] },
+        "interaction_ref": { "type": ["object", "null"] },
+        "interaction_response_ref": { "type": ["object", "null"] },
+        "invocation_ref": { "type": ["object", "null"] },
+        "workflow_event_ref": { "type": ["object", "null"] },
+        "activity_run_ref": { "type": ["object", "null"] },
+        "conversation_output_ref": { "type": ["object", "null"] },
+        "response_envelope_ref": { "type": ["object", "null"] },
+        "delivery_attempt_ref": { "type": ["object", "null"] },
+        "reply_route_ref": { "type": ["object", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -85,6 +85,37 @@ def _resolve_target(webui: Mapping[str, Any], target_ref: str) -> tuple[dict[str
     return matches[0], target_kind
 
 
+def _target_location(
+    value: Any,
+    target: Mapping[str, Any],
+    *,
+    parent: Mapping[str, Any] | None = None,
+    collection: str | None = None,
+) -> tuple[list[Any], int, Mapping[str, Any] | None, str] | None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            found = _target_location(child, target, parent=value, collection=str(key))
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            if child is target:
+                return value, index, parent, str(collection or "")
+            found = _target_location(child, target, parent=parent, collection=collection)
+            if found is not None:
+                return found
+    return None
+
+
+def _stable_ref(value: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    identifier = str(value.get("id") or "").strip()
+    if not identifier:
+        return None
+    return f"widget:{identifier}"
+
+
 def _rename(target: dict[str, Any], target_kind: str, value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         text = " ".join(str(value.get("text") or "").split())
@@ -114,6 +145,80 @@ def _rename(target: dict[str, Any], target_kind: str, value: Any) -> dict[str, A
     }
 
 
+def _add(target: dict[str, Any], target_ref: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError("add requires an object value")
+    collection = str(value.get("collection") or "fields").strip()
+    if collection not in {"fields", "widgets", "actions"}:
+        raise BuilderWorkflowError("add collection must be fields, widgets, or actions")
+    item = copy.deepcopy(value.get("item"))
+    if not isinstance(item, Mapping):
+        raise BuilderWorkflowError("add requires value.item")
+    item = dict(item)
+    item_id = str(item.get("id") or "").strip()
+    if not item_id:
+        raise BuilderWorkflowError("added field, widget, or action requires a stable id")
+    children = target.setdefault(collection, [])
+    if not isinstance(children, list):
+        raise BuilderWorkflowError(f"target {target_ref} does not expose a {collection} list")
+    if any(isinstance(child, Mapping) and str(child.get("id") or "") == item_id for child in children):
+        raise BuilderWorkflowError(f"duplicate {collection} id: {item_id}")
+    raw_index = value.get("index")
+    index = len(children) if raw_index is None else int(raw_index)
+    if index < 0 or index > len(children):
+        raise BuilderWorkflowError("add index is outside the target collection")
+    children.insert(index, item)
+    added_ref = (
+        f"field:{str(target.get('id') or '').strip()}:{item_id}"
+        if collection == "fields"
+        else f"widget:{item_id}"
+    )
+    return {
+        "property": collection,
+        "before": None,
+        "after": copy.deepcopy(item),
+        "undo": {
+            "operation": "remove",
+            "target_ref": added_ref,
+            "parent_ref": target_ref,
+            "collection": collection,
+            "index": index,
+        },
+    }
+
+
+def _remove(
+    webui: Mapping[str, Any],
+    target: dict[str, Any],
+    target_ref: str,
+) -> dict[str, Any]:
+    location = _target_location(webui, target)
+    if location is None:
+        raise BuilderWorkflowError(f"semantic UI target {target_ref!r} is not removable")
+    container, index, parent, collection = location
+    if collection not in {"fields", "widgets", "actions"}:
+        raise BuilderWorkflowError("remove is limited to fields, widgets, or actions")
+    removed = copy.deepcopy(container[index])
+    parent_ref = _stable_ref(parent)
+    if parent_ref is None:
+        raise BuilderWorkflowError(
+            "remove requires a stable widget parent so deterministic undo remains possible"
+        )
+    del container[index]
+    return {
+        "property": collection,
+        "before": removed,
+        "after": None,
+        "undo": {
+            "operation": "add",
+            "parent_ref": parent_ref,
+            "collection": collection,
+            "index": index,
+            "value": removed,
+        },
+    }
+
+
 def _write_bytes_atomic(path: Path, raw: bytes) -> None:
     temporary = path.with_name(f".{path.name}.semantic-ui.tmp")
     temporary.write_bytes(raw)
@@ -135,8 +240,10 @@ class BuilderSemanticUIService:
         value.setdefault("schema", BUILDER_SEMANTIC_UI_CHANGE_SCHEMA)
         value.setdefault("risk", "local_reversible")
         Draft202012Validator(_schema("builder.semantic_ui_change.v1.schema.json")).validate(value)
-        if value["operation"] != "rename":
-            raise BuilderWorkflowError("only the proven semantic UI operation 'rename' is enabled")
+        if value["operation"] not in {"rename", "add", "remove", "set_data_mode"}:
+            raise BuilderWorkflowError(
+                "enabled semantic UI operations are rename, add, remove, and set_data_mode"
+            )
 
         change_id = str(value["change_id"]).strip()
         operation_id = str(value["operation_id"]).strip()
@@ -165,6 +272,27 @@ class BuilderSemanticUIService:
                     f"stale semantic UI source revision: expected {source_revision}, current {current_revision}"
                 )
 
+            if value["operation"] == "set_data_mode":
+                binding = projection.get("data_binding") if isinstance(projection.get("data_binding"), Mapping) else {}
+                selected = value.get("value") if isinstance(value.get("value"), Mapping) else {"profile_id": value.get("value")}
+                profile_id = str(selected.get("profile_id") or selected.get("id") or "").strip()
+                result = self.workflow.select_binding_profile(
+                    object_type,
+                    object_id,
+                    profile_id,
+                    expected_binding_generation=int(binding.get("generation") or 0),
+                    confirmed=bool(selected.get("confirmed")),
+                )
+                return {
+                    "ok": True,
+                    "operation": value,
+                    "revision": source_revision,
+                    "revision_ref": f"ui_revision:{source_revision}",
+                    "ui_revision_changed": False,
+                    "binding": copy.deepcopy(result["workflow"].get("data_binding")),
+                    "workflow": result["workflow"],
+                }
+
             root = self.workflow.project_root(object_type, object_id)
             webui_path = root / "webui.json"
             scenario_json_path = root / "scenario.json"
@@ -175,7 +303,14 @@ class BuilderSemanticUIService:
             before_webui = _read_json(webui_path, label="webui.json")
             after_webui = copy.deepcopy(before_webui)
             target, target_kind = _resolve_target(after_webui, target_ref)
-            edit = _rename(target, target_kind, value.get("value"))
+            if value["operation"] == "rename":
+                edit = _rename(target, target_kind, value.get("value"))
+            elif value["operation"] == "add":
+                if target_kind != "widget":
+                    raise BuilderWorkflowError("add requires a widget parent target")
+                edit = _add(target, target_ref, value.get("value"))
+            else:
+                edit = _remove(after_webui, target, target_ref)
             Draft202012Validator(_schema("webui.v1.schema.json")).validate(after_webui)
 
             scenario_json = _read_json(scenario_json_path, label="scenario.json")

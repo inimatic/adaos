@@ -1,0 +1,518 @@
+from __future__ import annotations
+
+import copy
+import json
+from datetime import datetime, timezone
+from typing import Any, Mapping, Sequence
+
+from adaos.services.conversational_artifacts import (
+    ConversationalPackage,
+    ConversationalValidationResult,
+    run_conversation_story,
+)
+from adaos.services.governed_workflow import (
+    CompiledWorkflowDefinition,
+    WORKFLOW_STATIC_REPORT_SCHEMA,
+    compile_definition,
+    definition_review_report,
+    export_statechart,
+    generate_conformance_cases,
+    validate_workflow_record,
+    workflow_definition_digest,
+)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _compiled(
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+) -> CompiledWorkflowDefinition:
+    return definition if isinstance(definition, CompiledWorkflowDefinition) else compile_definition(definition)
+
+
+def _sorted_ids(values: Sequence[Any]) -> list[str]:
+    return sorted({str(item) for item in values if str(item or "").strip()})
+
+
+def _ids_from_mapping(values: Mapping[str, Any]) -> list[str]:
+    return sorted(str(key) for key in values)
+
+
+def _output_id_list(outputs: Sequence[Mapping[str, Any]] | Sequence[str]) -> list[str]:
+    ids: list[str] = []
+    for item in outputs:
+        if isinstance(item, Mapping):
+            value = str(item.get("id") or "").strip()
+        else:
+            value = str(item or "").strip()
+        if value:
+            ids.append(value)
+    return _sorted_ids(ids)
+
+
+def _story_output_refs(stories: Sequence[Mapping[str, Any]]) -> list[str]:
+    output_refs: list[str] = []
+    for story in stories:
+        for step in list(story.get("steps") or []):
+            if not isinstance(step, Mapping):
+                continue
+            expect = step.get("expect")
+            if not isinstance(expect, Mapping):
+                continue
+            output = expect.get("output")
+            if not isinstance(output, Mapping):
+                continue
+            output_ref = str(output.get("output_ref") or "").strip()
+            if output_ref:
+                output_refs.append(output_ref)
+    return _sorted_ids(output_refs)
+
+
+def _timeline_output_summary(output: Mapping[str, Any]) -> dict[str, Any]:
+    correlation = dict(output.get("correlation") or {})
+    next_expected = dict(output.get("next_expected_input") or {})
+    return {
+        "output_id": str(output.get("output_id") or "missing"),
+        "kind": str(output.get("kind") or "result"),
+        "next_expected_input": str(next_expected.get("kind") or "none"),
+        "turn_trace_id": correlation.get("turn_trace_id"),
+        "workflow_event_id": correlation.get("workflow_event_id"),
+        "command_id": correlation.get("command_id"),
+        "source_output_ref": dict(output.get("metadata") or {}).get("source_output_ref"),
+    }
+
+
+def _story_report_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    timeline: list[dict[str, Any]] = []
+    for item in list(report.get("timeline") or []):
+        if not isinstance(item, Mapping):
+            continue
+        output = item.get("output")
+        output = output if isinstance(output, Mapping) else {}
+        timeline.append(
+            {
+                "step": int(item.get("step") or 0),
+                "command": item.get("command"),
+                "before_state": item.get("before_state"),
+                "after_state": item.get("after_state"),
+                "accepted": item.get("accepted"),
+                "reason_code": item.get("reason_code"),
+                "transition_id": item.get("transition_id"),
+                "output": _timeline_output_summary(output),
+            }
+        )
+    return {
+        "story_id": str(report.get("story_id") or "story"),
+        "valid": bool(report.get("valid")),
+        "steps": int(report.get("steps") or len(timeline)),
+        "final_state": report.get("final_state"),
+        "diagnostics": [copy.deepcopy(dict(item)) for item in list(report.get("diagnostics") or [])],
+        "timeline": timeline,
+    }
+
+
+def _coverage(
+    compiled: CompiledWorkflowDefinition,
+    review: Mapping[str, Any],
+    *,
+    story_reports: Sequence[Mapping[str, Any]],
+    stories: Sequence[Mapping[str, Any]],
+    outputs: Sequence[Mapping[str, Any]] | Sequence[str],
+    repair_policies: Sequence[Mapping[str, Any]],
+    affordances: Sequence[Mapping[str, Any]],
+    locales: Sequence[str],
+) -> dict[str, Any]:
+    declared_states = _ids_from_mapping(compiled.states)
+    declared_transitions = _sorted_ids(transition.transition_id for transition in compiled.transitions)
+    declared_commands = _ids_from_mapping(compiled.commands)
+    declared_outputs = _output_id_list(outputs)
+    declared_output_kinds = _sorted_ids(
+        item.get("kind") for item in outputs if isinstance(item, Mapping)
+    )
+    declared_repairs = _sorted_ids(
+        item.get("id") for item in repair_policies if isinstance(item, Mapping)
+    )
+    repair_kind_to_id = {
+        str(item.get("kind") or ""): str(item.get("id") or "")
+        for item in repair_policies
+        if isinstance(item, Mapping) and item.get("kind") and item.get("id")
+    }
+    declared_risks = _sorted_ids(
+        dict(item.get("action_policy") or {}).get("risk_class")
+        for item in affordances
+        if isinstance(item, Mapping) and isinstance(item.get("action_policy"), Mapping)
+    )
+
+    covered_states: list[str] = []
+    covered_transitions: list[str] = []
+    covered_commands: list[str] = []
+    story_step_count = 0
+    covered_outputs_actual: list[str] = []
+    covered_output_kinds: list[str] = []
+    covered_repairs: list[str] = []
+    covered_risks: list[str] = []
+    covered_locales: list[str] = []
+    covered_channels: list[str] = []
+    story_kinds: list[str] = []
+    for report in story_reports:
+        story_step_count += int(report.get("steps") or 0)
+        final_state = str(report.get("final_state") or "").strip()
+        if final_state:
+            covered_states.append(final_state)
+        for item in list(report.get("timeline") or []):
+            if not isinstance(item, Mapping):
+                continue
+            for field in ("before_state", "after_state"):
+                state = str(item.get(field) or "").strip()
+                if state:
+                    covered_states.append(state)
+            command = str(item.get("command") or "").strip()
+            if command:
+                covered_commands.append(command)
+            transition_id = str(item.get("transition_id") or "").strip()
+            if transition_id:
+                covered_transitions.append(transition_id)
+            output = item.get("output")
+            if isinstance(output, Mapping):
+                output_ref = str(output.get("source_output_ref") or "").strip()
+                if output_ref:
+                    covered_outputs_actual.append(output_ref)
+
+    for story in stories:
+        if not isinstance(story, Mapping):
+            continue
+        covered_locales.append(str(story.get("locale") or ""))
+        covered_channels.append(str(story.get("channel") or ""))
+        story_kinds.append(str(story.get("story_kind") or ""))
+        for step in story.get("steps") or []:
+            if not isinstance(step, Mapping):
+                continue
+            given = step.get("given") if isinstance(step.get("given"), Mapping) else {}
+            proposal = given.get("proposal") if isinstance(given.get("proposal"), Mapping) else {}
+            policy = proposal.get("action_policy") if isinstance(proposal.get("action_policy"), Mapping) else {}
+            covered_risks.append(str(policy.get("risk_class") or ""))
+            expect = step.get("expect") if isinstance(step.get("expect"), Mapping) else {}
+            output = expect.get("output") if isinstance(expect.get("output"), Mapping) else {}
+            covered_output_kinds.append(str(output.get("kind") or ""))
+            repair = expect.get("repair") if isinstance(expect.get("repair"), Mapping) else {}
+            reason = str(repair.get("reason_code") or "")
+            if reason:
+                covered_repairs.append(
+                    reason if reason in declared_repairs else repair_kind_to_id.get(reason, reason)
+                )
+
+    covered_states_sorted = _sorted_ids(covered_states)
+    covered_transitions_sorted = _sorted_ids(covered_transitions)
+    covered_commands_sorted = _sorted_ids(covered_commands)
+    covered_outputs = _sorted_ids(covered_outputs_actual)
+    return {
+        "state_total": len(declared_states),
+        "transition_total": len(declared_transitions),
+        "command_total": len(declared_commands),
+        "story_count": len(story_reports),
+        "story_step_count": story_step_count,
+        "valid_story_count": sum(1 for item in story_reports if item.get("valid") is True),
+        "states_declared": declared_states,
+        "states_reachable": _sorted_ids(list(review.get("reachable_states") or [])),
+        "states_covered_by_stories": covered_states_sorted,
+        "states_missing_story_coverage": sorted(set(declared_states) - set(covered_states_sorted)),
+        "transitions_declared": declared_transitions,
+        "transitions_covered_by_stories": covered_transitions_sorted,
+        "transitions_missing_story_coverage": sorted(set(declared_transitions) - set(covered_transitions_sorted)),
+        "commands_declared": declared_commands,
+        "commands_covered_by_stories": covered_commands_sorted,
+        "commands_missing_story_coverage": sorted(set(declared_commands) - set(covered_commands_sorted)),
+        "outputs_declared": declared_outputs,
+        "outputs_covered_by_stories": covered_outputs,
+        "outputs_missing_story_coverage": sorted(set(declared_outputs) - set(covered_outputs)),
+        "output_kinds_declared": declared_output_kinds,
+        "output_kinds_covered_by_stories": _sorted_ids(covered_output_kinds),
+        "output_kinds_missing_story_coverage": sorted(
+            set(declared_output_kinds) - set(_sorted_ids(covered_output_kinds))
+        ),
+        "repair_policies_declared": declared_repairs,
+        "repair_policies_covered_by_stories": _sorted_ids(covered_repairs),
+        "repair_policies_missing_story_coverage": sorted(
+            set(declared_repairs) - set(_sorted_ids(covered_repairs))
+        ),
+        "risk_classes_declared": declared_risks,
+        "risk_classes_covered_by_stories": _sorted_ids(covered_risks),
+        "risk_classes_missing_story_coverage": sorted(
+            set(declared_risks) - set(_sorted_ids(covered_risks))
+        ),
+        "locales_declared": _sorted_ids(locales),
+        "locales_covered_by_stories": _sorted_ids(covered_locales),
+        "locales_missing_story_coverage": sorted(
+            set(_sorted_ids(locales)) - set(_sorted_ids(covered_locales))
+        ),
+        "channels_covered_by_stories": _sorted_ids(covered_channels),
+        "story_kinds_covered": _sorted_ids(story_kinds),
+    }
+
+
+def workflow_static_report(
+    definition: CompiledWorkflowDefinition | Mapping[str, Any],
+    *,
+    stories: Sequence[Mapping[str, Any]] = (),
+    story_reports: Sequence[Mapping[str, Any]] = (),
+    outputs: Sequence[Mapping[str, Any]] | Sequence[str] = (),
+    repair_policies: Sequence[Mapping[str, Any]] = (),
+    affordances: Sequence[Mapping[str, Any]] = (),
+    locales: Sequence[str] = (),
+    package_id: str | None = None,
+    package_digest: str | None = None,
+    report_id: str | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic static review artifact from declarative workflow sources."""
+
+    compiled = _compiled(definition)
+    definition_digest = workflow_definition_digest(compiled)
+    review = definition_review_report(compiled)
+    cases = generate_conformance_cases(compiled)
+    story_summaries = [_story_report_summary(item) for item in story_reports]
+    state_case_count = sum(1 for item in cases if item.get("kind") == "state_explanation")
+    transition_case_count = sum(1 for item in cases if item.get("kind") == "transition_admission")
+    report = {
+        "schema": WORKFLOW_STATIC_REPORT_SCHEMA,
+        "report_id": report_id or f"workflow-static:{definition_digest.removeprefix('sha256:')[:24]}",
+        "generated_at": generated_at or _now(),
+        "workflow_type": compiled.workflow_type,
+        "definition_version": compiled.definition_version,
+        "definition_digest": definition_digest,
+        "package_id": package_id,
+        "package_digest": package_digest,
+        "statechart": export_statechart(compiled),
+        "definition_review": review,
+        "conformance": {
+            "case_count": len(cases),
+            "state_case_count": state_case_count,
+            "transition_case_count": transition_case_count,
+            "cases": [copy.deepcopy(dict(item)) for item in cases],
+        },
+        "coverage": _coverage(
+            compiled,
+            review,
+            story_reports=story_summaries,
+            stories=stories,
+            outputs=outputs,
+            repair_policies=repair_policies,
+            affordances=affordances,
+            locales=locales,
+        ),
+        "story_reports": story_summaries,
+    }
+    validate_workflow_record(WORKFLOW_STATIC_REPORT_SCHEMA, report)
+    return report
+
+
+def conversational_package_static_report(
+    package: ConversationalPackage,
+    *,
+    validation_result: ConversationalValidationResult | Mapping[str, Any] | None = None,
+    report_id: str | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the static workflow review report bound to a conversational package."""
+
+    if isinstance(validation_result, ConversationalValidationResult):
+        validation_report = validation_result.report
+    elif validation_result is not None:
+        validation_report = dict(validation_result)
+    else:
+        validation_report = None
+
+    story_reports: Sequence[Mapping[str, Any]]
+    if validation_report is not None:
+        story_reports = tuple(
+            dict(item)
+            for item in list(validation_report.get("story_reports") or [])
+            if isinstance(item, Mapping)
+        )
+    else:
+        story_reports = tuple(
+            run_conversation_story(story, package.workflow_artifact.compiled)
+            for story in package.stories
+        )
+
+    outputs = tuple(
+        dict(item)
+        for item in list(package.output_source.get("outputs") or [])
+        if isinstance(item, Mapping)
+    )
+    repair_policies = tuple(
+        dict(item)
+        for item in list(package.repair_source.get("policies") or [])
+        if isinstance(item, Mapping)
+    )
+    affordances = tuple(
+        dict(item)
+        for item in list(package.affordances_source.get("affordances") or [])
+        if isinstance(item, Mapping)
+    )
+    return workflow_static_report(
+        package.workflow_artifact.compiled,
+        stories=package.stories,
+        story_reports=story_reports,
+        outputs=outputs,
+        repair_policies=repair_policies,
+        affordances=affordances,
+        locales=tuple(str(item) for item in package.manifest.get("locales") or []),
+        package_id=str(package.manifest.get("package_id") or "") or None,
+        package_digest=package.package_digest,
+        report_id=report_id,
+        generated_at=generated_at,
+    )
+
+
+def _markdown_cell(value: Any) -> str:
+    return str(value if value not in (None, "") else "-").replace("|", "\\|").replace("\n", " ")
+
+
+def workflow_static_report_markdown(report: Mapping[str, Any]) -> str:
+    """Render a human-readable, non-authoritative projection of a static report."""
+
+    value = copy.deepcopy(dict(report))
+    validate_workflow_record(WORKFLOW_STATIC_REPORT_SCHEMA, value)
+    statechart = dict(value.get("statechart") or {})
+    states = [dict(item) for item in statechart.get("states") or [] if isinstance(item, Mapping)]
+    edges = [dict(item) for item in statechart.get("edges") or [] if isinstance(item, Mapping)]
+    node_ids = {str(item.get("id")): f"state_{index}" for index, item in enumerate(states)}
+    terminal_states = set(dict(value.get("definition_review") or {}).get("terminal_states") or [])
+
+    lines = [
+        f"# Workflow {value['workflow_type']}",
+        "",
+        "> Generated projection for review. `workflow.json` and the admitted package remain authoritative.",
+        "",
+        f"- Definition version: `{value['definition_version']}`",
+        f"- Definition digest: `{value['definition_digest']}`",
+        f"- Package: `{value.get('package_id') or 'none'}`",
+        f"- Package digest: `{value.get('package_digest') or 'none'}`",
+        f"- Generated at: `{value['generated_at']}`",
+        "",
+        "## Statechart",
+        "",
+        "```mermaid",
+        "flowchart LR",
+    ]
+    for state in states:
+        state_id = str(state.get("id") or "state")
+        label = f"{state_id} (terminal)" if state_id in terminal_states else state_id
+        lines.append(f"  {node_ids[state_id]}[{json.dumps(label, ensure_ascii=True)}]")
+    for edge in edges:
+        target = node_ids.get(str(edge.get("target") or ""))
+        if target is None:
+            continue
+        label = f"{edge.get('command')} / {edge.get('transition_id')}"
+        for source_id in edge.get("source") or []:
+            source = node_ids.get(str(source_id))
+            if source is not None:
+                lines.append(f"  {source} -->|{label}| {target}")
+    lines.extend(["```", "", "## Coverage", ""])
+
+    coverage = dict(value.get("coverage") or {})
+    lines.extend(
+        [
+            "| Surface | Covered | Declared | Missing |",
+            "| --- | ---: | ---: | --- |",
+            (
+                f"| States | {len(coverage.get('states_covered_by_stories') or [])} | "
+                f"{coverage.get('state_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('states_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Transitions | {len(coverage.get('transitions_covered_by_stories') or [])} | "
+                f"{coverage.get('transition_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('transitions_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Commands | {len(coverage.get('commands_covered_by_stories') or [])} | "
+                f"{coverage.get('command_total', 0)} | "
+                f"{_markdown_cell(', '.join(coverage.get('commands_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Outputs | {len(coverage.get('outputs_covered_by_stories') or [])} | "
+                f"{len(coverage.get('outputs_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('outputs_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Output kinds | {len(coverage.get('output_kinds_covered_by_stories') or [])} | "
+                f"{len(coverage.get('output_kinds_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('output_kinds_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Repair policies | {len(coverage.get('repair_policies_covered_by_stories') or [])} | "
+                f"{len(coverage.get('repair_policies_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('repair_policies_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Risk classes | {len(coverage.get('risk_classes_covered_by_stories') or [])} | "
+                f"{len(coverage.get('risk_classes_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('risk_classes_missing_story_coverage') or []))} |"
+            ),
+            (
+                f"| Locales | {len(coverage.get('locales_covered_by_stories') or [])} | "
+                f"{len(coverage.get('locales_declared') or [])} | "
+                f"{_markdown_cell(', '.join(coverage.get('locales_missing_story_coverage') or []))} |"
+            ),
+            "",
+            f"Channels covered: {_markdown_cell(', '.join(coverage.get('channels_covered_by_stories') or []))}",
+            "",
+            "## Conversation Stories",
+            "",
+        ]
+    )
+    stories = [dict(item) for item in value.get("story_reports") or [] if isinstance(item, Mapping)]
+    if not stories:
+        lines.append("No conversation stories were included.")
+    for story in stories:
+        status = "PASS" if story.get("valid") is True else "FAIL"
+        lines.extend(
+            [
+                f"### {story.get('story_id')} [{status}]",
+                "",
+                f"Final state: `{story.get('final_state') or 'none'}`",
+                "",
+                "| Step | Command | Transition | State | Output |",
+                "| ---: | --- | --- | --- | --- |",
+            ]
+        )
+        for item in story.get("timeline") or []:
+            if not isinstance(item, Mapping):
+                continue
+            output = dict(item.get("output") or {})
+            state_path = f"{item.get('before_state') or '-'} -> {item.get('after_state') or '-'}"
+            output_label = output.get("source_output_ref") or output.get("kind") or "-"
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        _markdown_cell(item.get("step")),
+                        _markdown_cell(item.get("command")),
+                        _markdown_cell(item.get("transition_id")),
+                        _markdown_cell(state_path),
+                        _markdown_cell(output_label),
+                    )
+                )
+                + " |"
+            )
+        diagnostics = [dict(item) for item in story.get("diagnostics") or [] if isinstance(item, Mapping)]
+        if diagnostics:
+            lines.extend(["", "Diagnostics:"])
+            for diagnostic in diagnostics:
+                lines.append(
+                    f"- `{diagnostic.get('code')}` at `{diagnostic.get('path')}`: {diagnostic.get('message')}"
+                )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+__all__ = [
+    "WORKFLOW_STATIC_REPORT_SCHEMA",
+    "conversational_package_static_report",
+    "workflow_static_report_markdown",
+    "workflow_static_report",
+]

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from adaos.domain.project_events import BUILDER_CONTEXT_SELECTED, BUILDER_PREVIEW_DESIRED
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL
 
 
 def _service():
@@ -58,8 +59,48 @@ def canonical_source_webspace_id(webspace_id: str | None = None) -> str:
     return str(webspace_id or "desktop").strip() or "desktop"
 
 
+def action_source_webspace_id(
+    webspace_id: str | None = None,
+    *,
+    current_scenario_id: str | None = None,
+) -> str:
+    """Resolve the host for a UI action, including bounded Builder self-hosting."""
+
+    service = _service()
+    resolve = getattr(service, "resolve_action_source_webspace_id", None)
+    if callable(resolve):
+        return str(
+            resolve(
+                webspace_id,
+                current_scenario_id=current_scenario_id,
+            )
+        ).strip()
+    return canonical_source_webspace_id(webspace_id)
+
+
 def get_binding(source_webspace_id: str | None = None) -> dict[str, Any]:
     return _plain(_service().get_workspace_binding(canonical_source_webspace_id(source_webspace_id)))
+
+
+def list_builder_hosts() -> list[dict[str, Any]]:
+    """List active Builder Webspaces without provisioning Preview topology."""
+
+    return [dict(item) for item in _service().list_builder_hosts()]
+
+
+def resolve_builder_context(
+    builder_webspace_id: str,
+    *,
+    require_ready: bool = True,
+) -> dict[str, Any]:
+    """Resolve an explicit Builder host and its unique Preview Webspace."""
+
+    return _plain(
+        _service().resolve_builder_context(
+            builder_webspace_id,
+            require_ready=require_ready,
+        )
+    )
 
 
 def set_active_draft(
@@ -317,10 +358,16 @@ def select_target(
         current_automation = str(
             automation_state.get("snapshot_task_id") or automation_state.get("head_task_id") or "current"
         ).strip() or "current"
-        if target_revision and target_revision != current_automation:
+        current_automation_version = str(automation_state.get("result_version") or "").strip()
+        accepted_automation_revisions = {
+            value
+            for value in (current_automation, current_automation_version)
+            if value
+        }
+        if target_revision and target_revision not in accepted_automation_revisions:
             raise ValueError("only the current Automation result can be shown in Preview")
         target_revision = current_automation
-        display_revision = str(automation_state.get("result_version") or "current")
+        display_revision = current_automation_version or "current"
     elif stage_token == "publication":
         current_publication = str(publication.get("current_version") or "current").strip() or "current"
         if target_revision and target_revision != current_publication:
@@ -467,6 +514,64 @@ def open_workspace(source_webspace_id: str | None = None, *, base_url: str | Non
     return _plain(_service().open_dev_webspace(source, base_url=base_url))
 
 
+def public_app_base() -> str:
+    """Return the configured public AdaOS application origin for deep links."""
+
+    try:
+        from adaos.services.agent_context import get_ctx
+
+        return str(get_ctx().settings.app_base or DEFAULT_PUBLIC_APP_BASE_URL).strip().rstrip("/")
+    except Exception:
+        return DEFAULT_PUBLIC_APP_BASE_URL
+
+
+def navigation_link(
+    source_webspace_id: str | None = None,
+    *,
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    """Build a topology-aware Preview destination through Navigation SDK."""
+
+    from adaos.sdk import navigation
+
+    source = canonical_source_webspace_id(source_webspace_id)
+    binding = get_binding(source)
+    preview_webspace_id = str(
+        binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+    ).strip()
+    if not preview_webspace_id:
+        raise RuntimeError("Builder preview relation is missing")
+    target = _plain(binding.get("preview_target"))
+    scope = navigation.runtime_scope()
+    zone = str(scope.get("zone") or "").strip()
+    subnet_id = str(scope.get("subnet_id") or "").strip()
+    if not zone or not subnet_id:
+        raise RuntimeError("Builder Preview navigation requires zone and subnet identity")
+    object_type = str(target.get("object_type") or "").strip().lower().rstrip("s")
+    destination = navigation.webspace_destination(
+        zone=zone,
+        subnet_id=subnet_id,
+        webspace_id=preview_webspace_id,
+        space_kind="development",
+        expected_scenario_id=(
+            str(target.get("object_id") or "").strip() or None
+            if object_type == "scenario"
+            else None
+        ),
+        expected_revision=str(target.get("revision") or "").strip() or None,
+        preview_stage=str(target.get("stage") or "").strip() or None,
+    )
+    return {
+        "schema": "adaos.builder.preview_navigation.v1",
+        "url": navigation.build_url(destination, base_url=base_url or public_app_base()),
+        "destination": destination,
+        "preview_webspace_id": preview_webspace_id,
+        "source_webspace_id": source,
+        "target": target,
+        "label": str(target.get("label") or "").strip() or f"preview: {preview_webspace_id}",
+    }
+
+
 # Compatibility operation names used by the existing Builder tool surface.
 get_workspace_binding = get_binding
 ensure_dev_webspace = ensure
@@ -567,17 +672,22 @@ __all__ = [
     "get_binding",
     "get_workspace_binding",
     "invalidate_scenario_caches",
+    "list_builder_hosts",
     "list_development_skills",
     "materialize_revision",
     "materialize_revision_async",
+    "navigation_link",
     "open_workspace",
+    "public_app_base",
     "open_dev_webspace",
     "reload",
     "reload_async",
+    "resolve_builder_context",
     "refresh_follow_active_target",
     "select_project",
     "select_target",
     "set_active_draft",
     "snapshot",
     "canonical_source_webspace_id",
+    "action_source_webspace_id",
 ]

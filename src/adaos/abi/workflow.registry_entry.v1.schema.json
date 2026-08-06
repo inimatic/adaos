@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.workflow.registry_entry.v1",
+  "title": "AdaOS Workflow Registry Entry",
+  "type": "object",
+  "required": ["schema", "contract", "status"],
+  "properties": {
+    "schema": { "const": "adaos.workflow.registry_entry.v1" },
+    "contract": { "$ref": "workflow.adapter_contract.v1.schema.json" },
+    "status": { "const": "active" }
+  },
+  "additionalProperties": false
+}

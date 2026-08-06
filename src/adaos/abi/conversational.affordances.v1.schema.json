@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.affordances.v1",
+  "title": "AdaOS Conversational Affordance Source",
+  "type": "object",
+  "required": ["schema", "package_id", "affordances"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.affordances.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "affordances": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "description",
+          "workflow",
+          "skill_invocation",
+          "action_policy",
+          "required_capabilities",
+          "output_refs"
+        ],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["workflow_command", "skill_invocation", "query", "view", "output_only"] },
+          "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "label_ref": { "$ref": "#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "description_ref": { "$ref": "#/$defs/id" },
+          "workflow": {
+            "type": ["object", "null"],
+            "required": ["workflow_type", "command_id"],
+            "properties": {
+              "workflow_type": { "$ref": "#/$defs/id" },
+              "command_id": { "$ref": "#/$defs/id" },
+              "transition_id": { "type": ["string", "null"], "maxLength": 160 }
+            },
+            "additionalProperties": false
+          },
+          "skill_invocation": {
+            "type": ["object", "null"],
+            "required": ["skill_id", "operation_id"],
+            "properties": {
+              "skill_id": { "$ref": "#/$defs/id" },
+              "operation_id": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": false
+          },
+          "action_policy": {
+            "type": "object",
+            "required": ["schema", "risk_class", "side_effect", "confirmation"],
+            "properties": {
+              "schema": { "const": "adaos.conversation.action_policy.v1" },
+              "risk_class": { "enum": ["read", "local_reversible", "isolated_write", "trial_activation", "workspace_activation", "publication", "destructive"] },
+              "side_effect": { "enum": ["none", "reversible", "external", "destructive"] },
+              "confirmation": { "enum": ["none", "required", "rich_review"] },
+              "required_capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+              "policy_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 300 } }
+            },
+            "additionalProperties": false
+          },
+          "required_capabilities": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          },
+          "presentation": {
+            "type": "object",
+            "properties": {
+              "hint": { "enum": ["button", "form", "link", "text", "hidden"] },
+              "priority": { "type": "integer", "minimum": 0, "maximum": 100 }
+            },
+            "additionalProperties": false
+          },
+          "output_refs": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          },
+          "metadata": { "type": "object" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "workflow_command" } } },
+            "then": { "properties": { "workflow": { "type": "object" }, "skill_invocation": { "type": "null" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["skill_invocation", "query"] } } },
+            "then": { "properties": { "workflow": { "type": "null" }, "skill_invocation": { "type": "object" } } }
+          },
+          {
+            "if": { "properties": { "kind": { "enum": ["view", "output_only"] } } },
+            "then": { "properties": { "workflow": { "type": "null" }, "skill_invocation": { "type": "null" } } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" }
+  },
+  "additionalProperties": false
+}

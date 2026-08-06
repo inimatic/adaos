@@ -14,6 +14,7 @@ import requests
 
 from adaos.services.core_slots import active_slot, active_slot_manifest
 from adaos.services.core_update import read_status
+from adaos.services.env_policy import truthy
 from adaos.services.runtime_paths import current_state_dir
 
 
@@ -27,7 +28,7 @@ def _now() -> str:
 
 
 def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return truthy(value, default=False)
 
 
 def autonomous_release_validation_enabled() -> bool:

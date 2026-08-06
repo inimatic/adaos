@@ -1372,6 +1372,7 @@ def _wait_for_server_start(
     timeout: float,
     expected_git_commit: str | None = None,
     stability: float | None = None,
+    readiness_grace: float | None = None,
 ) -> bool:
     deadline = time.monotonic() + max(0.0, float(timeout))
     stability_window = (
@@ -1379,6 +1380,12 @@ def _wait_for_server_start(
         if stability is None
         else max(0.0, float(stability))
     )
+    readiness_grace_window = (
+        _api_restart_readiness_grace_seconds()
+        if readiness_grace is None
+        else max(0.0, float(readiness_grace))
+    )
+    listener_progress_observed = False
     ready_since: float | None = None
     while time.monotonic() < deadline:
         owner_pid = _find_listening_server_pid(host, port)
@@ -1389,10 +1396,17 @@ def _wait_for_server_start(
             ready_since = None
             time.sleep(0.1)
             continue
+        if not listener_progress_observed:
+            # Binding the requested port proves that the child passed import
+            # and socket admission. Give readiness hooks a separate, bounded
+            # grace window while a large local skill catalog completes its
+            # sys.ready handlers.
+            listener_progress_observed = True
+            deadline = max(deadline, time.monotonic() + readiness_grace_window)
         try:
             response = requests.get(
                 f"http://{host}:{int(port)}/health/ready",
-                timeout=0.75,
+                timeout=2.5,
             )
             payload = response.json() if response.status_code == 200 else {}
             adaos_payload = payload.get("adaos") if isinstance(payload, dict) else None
@@ -1439,9 +1453,82 @@ def _api_restart_stability_seconds() -> float:
     return max(0.0, min(value, 60.0))
 
 
+def _api_restart_readiness_grace_seconds() -> float:
+    raw = str(os.getenv("ADAOS_API_RESTART_READINESS_GRACE_SEC") or "60").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 60.0
+    return max(0.0, min(value, 120.0))
+
+
 def _api_restart_expected_git_commit() -> str:
+    if _api_restart_preserves_repo_runtime():
+        return _repo_runtime_git_commit()
     manifest = active_slot_manifest() or {}
     return str(manifest.get("git_commit") or "").strip()
+
+
+def _same_runtime_path(left: str | os.PathLike[str] | None, right: str | os.PathLike[str] | None) -> bool:
+    if not left or not right:
+        return False
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except Exception:
+        return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+
+
+def _api_restart_preserves_repo_runtime() -> bool:
+    if os.getenv("ADAOS_CLI_SLOT_BOUND") == "1":
+        return False
+    repo_root = _repo_root_for_runtime_preflight()
+    candidates = (
+        repo_root / ".venv" / "Scripts" / "python.exe",
+        repo_root / ".venv" / "bin" / "python",
+    )
+    return any(candidate.exists() and _same_runtime_path(candidate, sys.executable) for candidate in candidates)
+
+
+def _repo_runtime_git_commit() -> str:
+    repo_root = _repo_root_for_runtime_preflight()
+    try:
+        result = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=repo_root,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return ""
+    return str(result.stdout or "").strip()
+
+
+def _repo_restart_environment(env: dict[str, str]) -> tuple[dict[str, str], Path]:
+    repo_root = _repo_root_for_runtime_preflight().resolve()
+    merged = dict(env)
+    for key in (
+        "ADAOS_ACTIVE_CORE_SLOT",
+        "ADAOS_ACTIVE_CORE_SLOT_DIR",
+        "ADAOS_SLOT_REPO_ROOT",
+        "ADAOS_CLI_SLOT_BOUND",
+    ):
+        merged.pop(key, None)
+    merged.update(
+        {
+            "ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC": "1",
+            "ADAOS_DISABLE_ACTIVE_SLOT_ENV_APPLY": "1",
+            "ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC": "1",
+            "PYTHONPATH": str(repo_root / "src"),
+        }
+    )
+    commit = _repo_runtime_git_commit()
+    if commit:
+        merged["ADAOS_GIT_COMMIT"] = commit
+    else:
+        merged.pop("ADAOS_GIT_COMMIT", None)
+    return merged, repo_root
 
 
 def _restart_log_path(host: str, port: int) -> Path:
@@ -1475,11 +1562,14 @@ def _spawn_detached_server(
         args.extend(["--token", str(token)])
 
     env = merged_runtime_dotenv_env(os.environ.copy())
+    cwd = Path(os.getcwd())
+    if _api_restart_preserves_repo_runtime():
+        env, cwd = _repo_restart_environment(env)
     creationflags = 0
     log_path = _restart_log_path(host, port)
     popen_kwargs: dict[str, object] = {
         "args": args,
-        "cwd": os.getcwd(),
+        "cwd": str(cwd),
         "env": env,
         "stdin": subprocess.DEVNULL,
         "stderr": subprocess.STDOUT,
@@ -1839,8 +1929,10 @@ def restart():
             expected_git_commit=expected_git_commit,
         ):
             alive = psutil.pid_exists(launch.pid)
+            readiness_grace = _api_restart_readiness_grace_seconds()
             raise RuntimeError(
-                f"api server did not start at {host}:{port} within {start_timeout:g}s; "
+                f"api server did not become ready at {host}:{port}; "
+                f"base_timeout={start_timeout:g}s readiness_grace={readiness_grace:g}s "
                 f"spawned_pid={launch.pid} alive={str(alive).lower()} "
                 f"expected_git_commit={expected_git_commit or '-'} log={launch.log_path}"
             )

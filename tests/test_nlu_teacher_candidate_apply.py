@@ -102,11 +102,15 @@ async def test_candidate_apply_persists_rule_and_notifies():
         await asyncio.sleep(0.01)
 
     saved = json.loads(scenario_json.read_text(encoding="utf-8"))
-    rules = (saved.get("nlu") or {}).get("regex_rules") or []
+    assert (saved.get("nlu") or {}).get("regex_rules") is None
+    async with async_get_ydoc(webspace_id) as ydoc:
+        rules = list(((ydoc.get_map("data").get("nlu") or {}).get("regex_rules")) or [])
     saved_rule = next(
         r
         for r in rules
-        if isinstance(r, dict) and r.get("intent") == "desktop.open_weather" and r.get("pattern") == pattern
+        if isinstance(r, dict)
+        and r.get("intent") == "desktop.open_weather"
+        and r.get("pattern") == pattern
     )
     assert saved_rule["promotion"]["state"] == "local_learned"
     assert saved_rule["promotion"]["public_export_allowed"] is False
@@ -487,6 +491,7 @@ async def test_training_example_apply_persists_skill_tool_action():
     from adaos.services.agent_context import get_ctx
     from adaos.services.nlu.candidates_runtime import _on_candidate_apply
     from adaos.services.nlu.teacher_runtime import _on_example_save
+    from adaos.services.nlu.teacher_overlay_store import read_store
     from adaos.services.yjs.doc import async_get_ydoc
 
     ctx = get_ctx()
@@ -548,21 +553,21 @@ async def test_training_example_apply_persists_skill_tool_action():
     await ctx.bus.wait_for_idle(timeout=2.0)
 
     saved = yaml.safe_load(skill_yaml.read_text(encoding="utf-8")) or {}
-    intents = saved["nlu"]["intents"]
-    if isinstance(intents, dict):
-        spec = intents[intent]
-    else:
-        spec = next(item for item in intents if item.get("intent") == intent)
-    assert request_text in spec["examples"]
-    assert spec["actions"] == [
-        {
-            "type": "skillTool",
-            "skill": skill_name,
-            "tool": "create_note",
-            "target": f"{skill_name}.create_note",
-            "params": {},
-        }
-    ]
+    assert "nlu" not in saved
+    overlay = next(
+        item
+        for item in read_store(ctx)["examples"]
+        if item["target"] == {"type": "skill", "id": skill_name}
+        and item["intent"] == intent
+        and item["text"] == request_text
+    )
+    assert overlay["action"] == {
+        "type": "skillTool",
+        "skill": skill_name,
+        "tool": "create_note",
+        "target": f"{skill_name}.create_note",
+        "params": {},
+    }
 
     async with async_get_ydoc(webspace_id) as ydoc:
         teacher = ydoc.get_map("data").get("nlu_teacher") or {}

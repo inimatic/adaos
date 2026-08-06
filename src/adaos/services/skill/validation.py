@@ -12,7 +12,9 @@ import importlib.resources as ir
 
 from adaos.domain.personalization_access import CAPABILITY_VOCABULARY, validate_capability
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.webui_contract import validate_webui_contract
+from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
@@ -205,6 +207,28 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     # webui.json (optional): validate declarative WebUI contributions and
     # cross-link the public skill interface with modal routes/actions.
     issues.extend(validate_webui_file_contract(skill_dir, skill_name=str(data.get("name") or "")))
+    try:
+        load_manifest_bound_workflow(
+            skill_dir,
+            manifest_name="skill.yaml",
+            allow_legacy_inline=False,
+        )
+    except WorkflowArtifactError as exc:
+        issues.append(Issue("error", "workflow.invalid", str(exc), "workflow.json"))
+    if isinstance(data.get("conversational"), dict):
+        conversational = compile_conversational_package(
+            skill_dir,
+            manifest_name="skill.yaml",
+        )
+        issues.extend(
+            Issue(
+                str(item.get("severity") or "error"),
+                str(item.get("code") or "conversational.invalid"),
+                str(item.get("message") or "conversational package validation failed"),
+                str(item.get("path") or "conversational"),
+            )
+            for item in conversational.validation.report.get("diagnostics") or []
+        )
     issues.extend(validate_data_route_contract(data))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_direct_projection_write_issues(skill_dir))

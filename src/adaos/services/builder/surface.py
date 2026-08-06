@@ -1,0 +1,117 @@
+"""Localized, semantic presentation for the Builder control surface.
+
+Command identity is deliberately separate from translated labels.  The
+surface catalog is small and deterministic; package authors can replace the
+presentation later without changing workflow commands or action tokens.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+
+BUILDER_SURFACE_CATALOG_VERSION = 1
+BUILDER_SURFACE_DEFAULT_LOCALE = "en"
+BUILDER_SURFACE_LOCALES = ("en", "ru")
+
+_ACTION_LABELS: dict[str, dict[str, str]] = {
+    "builder.process.inspect": {"en": "Show process", "ru": "Показать процесс"},
+    "builder.change.plan": {"en": "Plan change", "ru": "Описать изменение"},
+    "builder.change.extend": {"en": "Add to change", "ru": "Дополнить изменение"},
+    "builder.prototype.edit": {"en": "Refine prototype", "ru": "Доработать прототип"},
+    "builder.prototype.approve": {"en": "Approve prototype", "ru": "Согласовать прототип"},
+    "builder.implementation.start": {"en": "Start implementation", "ru": "Начать автоматизацию"},
+    "builder.implementation.iterate": {"en": "Continue implementation", "ru": "Доработать автоматизацию"},
+    "builder.prototype.derive": {"en": "Return result to prototype", "ru": "Вернуть результат в прототип"},
+    "builder.verification.accept": {"en": "Accept verification", "ru": "Принять проверку"},
+    "builder.trial.prepare": {"en": "Start trial", "ru": "Начать апробацию"},
+    "builder.trial.accept": {"en": "Accept trial", "ru": "Принять апробацию"},
+    "builder.trial.reject": {"en": "Request changes", "ru": "Вернуть на доработку"},
+    "builder.publication.publish": {"en": "Begin publication", "ru": "Начать публикацию"},
+    "builder.change.cancel": {"en": "Cancel change", "ru": "Отменить изменение"},
+    "builder.preview.prototype": {"en": "Preview prototype", "ru": "Показать прототип"},
+    "builder.preview.active": {"en": "Preview implementation", "ru": "Показать автоматизацию"},
+    "builder.preview.publication": {"en": "Preview publication", "ru": "Показать публикацию"},
+    "builder.project.list": {"en": "Show projects", "ru": "Показать проекты"},
+    "builder.preview.link": {"en": "Preview link", "ru": "Ссылка на Preview"},
+    "builder.help": {"en": "Help", "ru": "Помощь"},
+}
+
+
+def normalize_builder_locale(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("_", "-").split("-", 1)[0]
+    return token if token in BUILDER_SURFACE_LOCALES else BUILDER_SURFACE_DEFAULT_LOCALE
+
+
+def builder_action_label_ref(command: Any) -> str:
+    token = str(command or "").strip()
+    return f"builder.action.{token.removeprefix('builder.').replace('.', '_')}"
+
+
+def builder_action_label(command: Any, *, locale: Any = None, fallback: Any = None) -> str:
+    token = str(command or "").strip()
+    selected = normalize_builder_locale(locale)
+    values = _ACTION_LABELS.get(token) or {}
+    return str(
+        values.get(selected)
+        or values.get(BUILDER_SURFACE_DEFAULT_LOCALE)
+        or fallback
+        or token
+    ).strip()
+
+
+def builder_surface_locale_context(locale: Any = None) -> dict[str, Any]:
+    selected = normalize_builder_locale(locale)
+    return {
+        "locale": selected,
+        "default_locale": BUILDER_SURFACE_DEFAULT_LOCALE,
+        "fallback_chain": list(dict.fromkeys((selected, BUILDER_SURFACE_DEFAULT_LOCALE))),
+        "catalog": "builder.surface",
+        "catalog_version": BUILDER_SURFACE_CATALOG_VERSION,
+    }
+
+
+def localize_builder_explanation(
+    explanation: Mapping[str, Any],
+    *,
+    locale: Any = None,
+) -> str:
+    selected = normalize_builder_locale(locale)
+    state = str(explanation.get("state") or "ready")
+    change_ref = str(explanation.get("change_ref") or "").removeprefix("change:")
+    blockers = [
+        str(item.get("reason_code") or "blocked")
+        for item in explanation.get("blockers") or []
+        if isinstance(item, Mapping)
+    ]
+    commands = [
+        builder_action_label(f"builder.{str(item)}", locale=selected, fallback=item)
+        if not str(item).startswith("builder.")
+        else builder_action_label(item, locale=selected)
+        for item in explanation.get("next_commands") or []
+    ]
+    if selected == "ru":
+        summary = (
+            f"Изменение {change_ref} находится в состоянии {state}."
+            if change_ref
+            else "Активного изменения нет. Опишите требуемое изменение."
+        )
+        reason = "; ".join(blockers[:3]) if blockers else "Активных блокировок нет."
+        next_step = ", ".join(commands[:4]) if commands else "ожидать ввода или открыть процесс"
+        return f"{summary} Причина: {reason} Далее: {next_step}."
+    # Preserve the established English compact projection byte-for-byte.  It
+    # is already the canonical diagnostic representation used by API clients.
+    return str(explanation.get("text") or "No active Change.")
+
+
+__all__ = [
+    "BUILDER_SURFACE_CATALOG_VERSION",
+    "BUILDER_SURFACE_DEFAULT_LOCALE",
+    "BUILDER_SURFACE_LOCALES",
+    "builder_action_label",
+    "builder_action_label_ref",
+    "builder_surface_locale_context",
+    "localize_builder_explanation",
+    "normalize_builder_locale",
+]

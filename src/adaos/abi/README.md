@@ -21,8 +21,17 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   evaluator, or recovery attempt linked to a Change
 - `builder.context_packet.v1.schema.json` - bounded, stable-digested execution
   context assembled from refs instead of an unbounded transcript
+- `builder.action_risk.v1.schema.json` - deterministic side-effect,
+  confirmation, approval, isolation, rollback, and limited-channel policy for
+  one Builder command risk class
 - `builder.interaction_frame.v1.schema.json` - chat-first message, context,
   risk-aware actions, and rich-view projection
+- `builder.process_projection.v1.schema.json` - dependent Change -> Prototype
+  -> Automation -> Trial -> Publication lineage and exact Preview choices
+- `builder.project.v1.schema.json` - project portfolio, release/component refs,
+  scoped Change focus, conflict/dependency indexes, and coordination generations
+- `builder.binding_profile.v1.schema.json` - explicit mock, fixture, sandbox,
+  live-readonly, and live Preview data boundary plus implementation mappings
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review
@@ -36,9 +45,67 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   signing purposes, validity windows, rotation, and fail-closed revocation state
 - `endpoint-audio-events.v1.schema.json` - MVP endpoint audio event wire
   contract for ReDevice and future endpoint agents
-- `nlu.teacher.v1.schema.json` - NLU Teacher request/thread, candidate,
-  clarification, feedback, idempotency, scope, response policy, and MCP
+- `nlu.teacher.v1.schema.json`,
+  `nlu.teacher_overlay_store.v1.schema.json`, and
+  `nlu.teacher_promotion_candidate.v1.schema.json` - NLU Teacher
+  request/thread, candidate, clarification, feedback, scoped runtime overlay,
+  Builder promotion candidate, idempotency, scope, response policy, and MCP
   capability profile contracts
+- `conversation.output.v1.schema.json` - semantic conversation output before
+  channel-specific `ResponseEnvelope` materialization
+- `conversation.action_policy.v1.schema.json` - canonical workflow-facing risk,
+  side-effect, and confirmation policy shared through explicit legacy adapters
+- `skill.invocation.v1.schema.json` - governed skill operation invocation built
+  from an admitted `IntentProposal`
+- `conversational.package_manifest.v1.schema.json` - git-versioned
+  `conversational/manifest.yaml` contract for skill/scenario conversational
+  sources and compiled output refs
+- `conversational.input.v1.schema.json`,
+  `conversational.entities.v1.schema.json`,
+  `conversational.examples.v1.schema.json`,
+  `conversational.matchers.v1.schema.json`,
+  `conversational.locale.v1.schema.json`,
+  `conversational.affordances.v1.schema.json`,
+  `conversational.repair.v1.schema.json`,
+  `conversational.output.v1.schema.json`, and
+  `conversational.story.v1.schema.json` - design-time conversational package
+  sources for IntentProposal inputs, deterministic matchers, workflow-facing
+  affordances, repair behavior, semantic output templates, and executable
+  stories; `conversational.runtime_bundle.v1.schema.json` is the immutable
+  source-digested runtime/catalog projection with atomic rollout and rollback
+  identity
+  conversation stories. Optional runtime controls support expected generation,
+  executor readiness, retry-of-step, and an interleaved concurrent command;
+  runner v2 uses them for stale/concurrency/retry/executor-unavailable and
+  expected-negative proof without changing the source schema version.
+- `conversational.validation_report.v1.schema.json` - Builder/SDK validation
+  report for package schema checks, workflow cross-checks, threat diagnostics,
+  coverage, and deterministic story-runner evidence
+  The pure runtime bridge for these conversation-facing schemas lives in
+  `adaos.services.conversational_runtime`; it validates proposals/outputs and
+  converts between proposed workflow acts, canonical workflow invocation,
+  workflow execution results, and response-envelope refs.
+  The design-time SDK in `adaos.sdk.developer.conversational` scaffolds,
+  compiles, validates, runs stories, and exports static JSON/Markdown evidence.
+- `workflow.definition.v1.schema.json`, `workflow.transition.v1.schema.json`,
+  `workflow.validation_report.v1.schema.json`, `workflow.registry_entry.v1.schema.json`,
+  `workflow.binding.v1.schema.json`, `workflow.definition_artifact.v1.schema.json`,
+  `workflow.admission.v1.schema.json`, `workflow.authoring_context.v1.schema.json`,
+  `workflow.authoring_attempt.v1.schema.json`,
+  `workflow.static_report.v1.schema.json`,
+  `workflow.ingress_conformance.v1.schema.json`,
+  `workflow.trace_identity.v1.schema.json`, and
+  `workflow.metrics_report.v1.schema.json`,
+  `workflow.metrics_evidence.v1.schema.json`, and
+  `workflow.publication_admission.v1.schema.json` - data-driven governed workflow
+  authoring, validation, adapter trust, package binding, activation admission,
+  pre-channel publication admission, LLM context, provenance, static review,
+  cross-channel ingress equivalence, cross-surface trace identity, and measured
+  acceptance contracts.
+  `workflow.definition.v1` references the full transition schema from the ABI
+  folder; registry, admission, authoring provenance, static review evidence,
+  trace reports, metrics, review state, and activation pointers stay outside
+  the pure definition so they cannot alter the definition digest.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, skill-owned UI view interfaces, modal address contracts, and

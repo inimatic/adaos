@@ -20,6 +20,15 @@ adaos api restart
 
 The API command manages a local FastAPI process and keeps a pidfile in runtime state. On restart and stop it attempts graceful shutdown first, then falls back to process termination when necessary.
 
+`api restart` preserves the runtime authority that invoked it. A production
+slot-bound CLI restarts the active slot. When the command is explicitly invoked
+with a repository checkout's own `.venv`, it restarts that checkout and does
+not silently switch to a stale active slot. Readiness requires the expected Git
+identity plus a stability window. The initial wait is controlled by
+`ADAOS_API_RESTART_START_TIMEOUT_SEC`; once the replacement binds its port, a
+separate bounded `ADAOS_API_RESTART_READINESS_GRACE_SEC` allows heavy local
+`sys.ready` handlers to finish.
+
 ## Health and status
 
 Unauthenticated endpoints:

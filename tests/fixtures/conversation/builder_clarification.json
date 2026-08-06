@@ -1,0 +1,14 @@
+{
+  "schema_version": "adaos.conversation.golden_dataset.v1",
+  "id": "builder_clarification",
+  "conversation_id": "conv.golden.builder.clarification",
+  "description": "Builder requests bounded clarification instead of inventing an underspecified product.",
+  "messages": [
+    {"id": "golden.builder.clarification.1", "conversation_id": "conv.golden.builder.clarification", "seq": 1, "from": "user", "text": "Builder, I have an idea.", "dialog_channel_id": "builder"},
+    {"id": "golden.builder.clarification.2", "conversation_id": "conv.golden.builder.clarification", "seq": 2, "from": "hub", "text": "What should the product help you do, and who will use it?", "dialog_channel_id": "builder", "active_agent_id": "agent:builder_skill:builder"}
+  ],
+  "turn_traces": [
+    {"turn_trace_id": "trace.golden.builder.clarification.1", "conversation_id": "conv.golden.builder.clarification", "channel_id": "builder", "agent_id": "agent:builder_skill:builder", "selected_tool": "builder_skill.chat", "policy_decision": {"reason": "insufficient_product_intent", "outcome": "input_required"}, "renderer": {"projection": "builder.guided_clarification"}, "status": "completed", "created_at": 1300.0, "completed_at": 1300.2}
+  ],
+  "expectations": {"required_text": ["What should", "who will use"], "forbidden_text": ["created a draft"], "required_agents": ["agent:builder_skill:builder"], "required_channels": ["builder"], "min_success_rate": 1.0, "max_fallback_rate": 0.0, "max_latency_ms_p95": 1000}
+}

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from adaos.services.redevice_versions import endpoint_version_info
+from adaos.services.zone_hosts import zone_public_base_url
 
 TRANSPORT_LADDER = (
     "webrtc_p2p",
@@ -154,7 +155,7 @@ def _root_base(value: str | None = None) -> str:
         or os.environ.get("ADAOS_ROOT_API_BASE")
         or os.environ.get("PUBLIC_ROOT_BASE")
         or os.environ.get("ROOT_API_BASE")
-        or "https://ru.api.inimatic.com"
+        or zone_public_base_url("ru")
     )
     return _text(raw).rstrip("/")
 
@@ -709,7 +710,7 @@ def _local_registry_endpoints(*, hub_id: str | None = None, owner_id: str | None
 @dataclass(frozen=True)
 class ReDeviceBridge:
     root_base: str | None = None
-    timeout: int = 20
+    timeout: int | float = 20
 
     @property
     def base_url(self) -> str:
@@ -819,6 +820,7 @@ class ReDeviceBridge:
                     service_state=_mapping(endpoint.get("service_state")) or None,
                     active_app=_mapping(compact.get("active_app")) or None,
                     active_surface=_mapping(compact.get("active_surface")) or None,
+                    last_seen_at=endpoint.get("last_seen_at"),
                 )
             except Exception:
                 continue
@@ -869,8 +871,10 @@ def list_endpoints(
     sync_registry: bool = True,
     hub_id: str | None = None,
     owner_id: str | None = None,
+    timeout: int | float | None = None,
 ) -> list[dict[str, Any]]:
-    return bridge(root_base).list_endpoints(sync_registry=sync_registry, hub_id=hub_id, owner_id=owner_id)
+    client = bridge(root_base) if timeout is None else ReDeviceBridge(root_base=root_base, timeout=timeout)
+    return client.list_endpoints(sync_registry=sync_registry, hub_id=hub_id, owner_id=owner_id)
 
 
 def send_command(code: str, command: Mapping[str, Any], *, root_base: str | None = None) -> dict[str, Any]:

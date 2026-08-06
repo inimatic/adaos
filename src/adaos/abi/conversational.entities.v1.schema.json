@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversational.entities.v1",
+  "title": "AdaOS Conversational Entity Source",
+  "type": "object",
+  "required": ["schema", "package_id", "entities"],
+  "properties": {
+    "schema": { "const": "adaos.conversational.entities.v1" },
+    "package_id": { "$ref": "#/$defs/id" },
+    "entities": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["id", "value_schema", "values"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "value_schema": { "type": "object" },
+          "values": {
+            "type": "array",
+            "maxItems": 5000,
+            "items": {
+              "type": "object",
+              "required": ["value", "aliases"],
+              "properties": {
+                "value": {},
+                "aliases": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "type": "object",
+                    "required": ["text", "locale"],
+                    "properties": {
+                      "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                      "locale": { "type": "string", "minLength": 2, "maxLength": 40 }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "metadata": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$" } },
+  "additionalProperties": false
+}

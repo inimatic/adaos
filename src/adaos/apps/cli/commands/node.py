@@ -11,6 +11,15 @@ import typer
 
 from adaos.services.node_config import load_config, save_config, set_role as cfg_set_role
 from adaos.services.node_runtime_state import save_node_runtime_state
+from adaos.services.runtime_topology import (
+    DEFAULT_CANDIDATE_RUNTIME_PORT,
+    DEFAULT_DEV_RUNTIME_PORT,
+    DEFAULT_RUNTIME_PORT,
+    DEFAULT_SUPERVISOR_PORT,
+    LOCAL_RUNTIME_PORTS,
+    DEFAULT_LOOPBACK_HOST,
+    LOCALHOST_HOST,
+)
 from adaos.apps.cli.active_control import resolve_control_token
 
 app = typer.Typer(help="Node operations (join/status/role).")
@@ -55,7 +64,7 @@ def _supervisor_public_base_url(control: str) -> str | None:
     if not parsed.scheme or not parsed.hostname:
         return None
     port = parsed.port
-    target_port = 8776 if port in {None, 8777, 8778} else port
+    target_port = DEFAULT_SUPERVISOR_PORT if port in {None, DEFAULT_RUNTIME_PORT, DEFAULT_CANDIDATE_RUNTIME_PORT} else port
     netloc = f"{parsed.hostname}:{target_port}"
     return urlunparse((parsed.scheme, netloc, "", "", "", ""))
 
@@ -112,7 +121,7 @@ def _supervisor_runtime_control_candidates(control: str, token: str) -> list[str
     except Exception:
         parsed = None
         port = None
-    if port not in {8777, 8778, 8779}:
+    if port not in set(LOCAL_RUNTIME_PORTS):
         return []
     candidates: list[str] = []
     seen: set[str] = set()
@@ -132,12 +141,12 @@ def _supervisor_runtime_control_candidates(control: str, token: str) -> list[str
                 _append_control_candidate(candidates, seen, raw_url)
     scheme = parsed.scheme if parsed is not None and parsed.scheme else "http"
     for raw_url in (
-        f"{scheme}://127.0.0.1:8777",
-        f"{scheme}://127.0.0.1:8778",
-        f"{scheme}://127.0.0.1:8779",
-        f"{scheme}://localhost:8777",
-        f"{scheme}://localhost:8778",
-        f"{scheme}://localhost:8779",
+        f"{scheme}://{DEFAULT_LOOPBACK_HOST}:{DEFAULT_RUNTIME_PORT}",
+        f"{scheme}://{DEFAULT_LOOPBACK_HOST}:{DEFAULT_CANDIDATE_RUNTIME_PORT}",
+        f"{scheme}://{DEFAULT_LOOPBACK_HOST}:{DEFAULT_DEV_RUNTIME_PORT}",
+        f"{scheme}://{LOCALHOST_HOST}:{DEFAULT_RUNTIME_PORT}",
+        f"{scheme}://{LOCALHOST_HOST}:{DEFAULT_CANDIDATE_RUNTIME_PORT}",
+        f"{scheme}://{LOCALHOST_HOST}:{DEFAULT_DEV_RUNTIME_PORT}",
     ):
         _append_control_candidate(candidates, seen, raw_url)
     return candidates

@@ -23,11 +23,18 @@ from adaos.services.core_slots import active_slot_manifest, slot_status
 from adaos.services.core_update import read_last_result as read_core_update_last_result
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update_policy import core_update_reactions_disabled_reason
+from adaos.services.env_policy import env_bool
 from adaos.services.node_config import load_config, normalize_node_names, set_node_names as persist_node_names
 from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.services.node_runtime_state import load_member_hub_token
 from adaos.services.capacity import get_local_capacity
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
+from adaos.services.runtime_topology import (
+    DEFAULT_RUNTIME_PORT,
+    http_base,
+    runtime_fallback_http_bases,
+    supervisor_base_candidates_from_env,
+)
 from adaos.services.skill.manager import SkillManager
 from adaos.services.yjs.doc import apply_update_to_live_room
 from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_webspace, suppress_ystore_write_notifications
@@ -1869,67 +1876,35 @@ class MemberLinkClient:
 
     @staticmethod
     def _local_supervisor_bases() -> list[str]:
-        truthy = {"1", "true", "yes", "on"}
-        enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in truthy
-        autostart_managed = str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in truthy
-        explicit_url = str(os.getenv("ADAOS_SUPERVISOR_URL") or "").strip().rstrip("/")
-        explicit_host = str(os.getenv("ADAOS_SUPERVISOR_HOST") or "").strip()
-        explicit_port = str(os.getenv("ADAOS_SUPERVISOR_PORT") or "").strip()
-        if not (enabled or autostart_managed or explicit_url or explicit_host or explicit_port):
-            return []
-        candidates: list[str] = []
-        if explicit_url:
-            candidates.append(explicit_url)
-        host = explicit_host or "127.0.0.1"
-        port = explicit_port or "8776"
-        candidates.append(f"http://{host}:{port}")
-        candidates.append("http://127.0.0.1:8776")
-        unique: list[str] = []
-        for item in candidates:
-            if item and item not in unique:
-                unique.append(item)
-        return unique
+        return supervisor_base_candidates_from_env(require_signal=True)
 
     @staticmethod
     def _resolve_local_control_base() -> str:
         candidates: list[str] = []
         env_type = str(os.getenv("ENV_TYPE") or "").strip().lower()
-        supervisor_enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        autostart_managed = str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
+        autostart_managed = env_bool("ADAOS_AUTOSTART_MANAGED")
         allow_supervisor_probe = bool(supervisor_enabled or autostart_managed or env_type != "dev")
         supervisor_candidates = []
         if allow_supervisor_probe:
             supervisor_candidates.extend(
-                [
-                    "http://127.0.0.1:8776",
-                    "http://localhost:8776",
-                ]
+                supervisor_base_candidates_from_env(
+                    require_signal=False,
+                    include_localhost=True,
+                )
             )
         for raw in (
             os.getenv("ADAOS_SELF_BASE_URL"),
             os.getenv("ADAOS_CONTROL_URL"),
             os.getenv("ADAOS_CONTROL_BASE"),
-            "http://127.0.0.1:8777",
-            "http://127.0.0.1:8778",
-            "http://127.0.0.1:8779",
-            "http://localhost:8777",
-            "http://localhost:8778",
-            "http://localhost:8779",
         ):
             text = str(raw or "").strip().rstrip("/")
             if not text or text in candidates:
                 continue
             candidates.append(text)
+        for raw in runtime_fallback_http_bases(include_localhost=True, order="host"):
+            if raw not in candidates:
+                candidates.append(raw)
         with requests.Session() as sess:
             try:
                 sess.trust_env = False
@@ -1968,7 +1943,7 @@ class MemberLinkClient:
                     return base
                 except Exception:
                     continue
-        return candidates[0] if candidates else "http://127.0.0.1:8777"
+        return candidates[0] if candidates else http_base(port=DEFAULT_RUNTIME_PORT)
 
     async def _on_core_update_request(self, ws, msg: dict[str, Any]) -> None:
         action = str(msg.get("action") or "").strip().lower()

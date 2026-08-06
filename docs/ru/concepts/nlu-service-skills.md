@@ -11,11 +11,15 @@ General service-skill docs: `docs/concepts/service-skills.md`.
 
 ## Event interface
 
-The hub NLU pipeline uses:
+The current hub NLU pipeline uses these compatibility events:
 
 - `nlp.intent.detect.request { text, webspace_id, request_id, _meta }`
 - `nlp.intent.detected { intent, confidence, slots, text, webspace_id, request_id, via }`
 - `nlp.intent.not_obtained { reason, text, webspace_id, request_id, via }`
+
+Provider bridges must preserve evidence for canonical `IntentProposal`. The
+target path admits that proposal as a workflow command or skill invocation;
+`nlp.intent.detected` is not protected-effect authority.
 
 ## Rasa NLU service skill
 

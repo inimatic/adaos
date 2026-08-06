@@ -30,6 +30,9 @@ replayable and auditable.
 - [Builder](../architecture/builder.md) and
   [Builder Roadmap](../architecture/builder-roadmap.md): handoff when a
   descriptor or capability is missing.
+- [Conversational Control Interface](../architecture/conversational-interface.md):
+  shared input/output contract, NLU data lifecycle, Builder promotion boundary,
+  and conversation-story tests.
 
 ## Evolution Invariants
 
@@ -45,6 +48,9 @@ These invariants are stronger than individual milestones:
 - Local learned behavior is separate from reusable skill/scenario artifacts.
 - Every durable learned artifact has scope, provenance, privacy policy,
   rollback pointer, and verification evidence.
+- NLU Teacher improves interaction with the deterministic design-time skeleton;
+  it does not author workflow definitions, protected effects, or public package
+  source directly.
 - Missing descriptors and missing capabilities are not treated as normal NLU
   misses. They become `descriptor_fix` or `development_task` candidates.
 - A repeated request should demonstrate what the system learned without another
@@ -67,7 +73,8 @@ Each gate must define:
 - `execution path`: normal AdaOS dispatcher, query/read model, UI affordance
   activation, process command, or Builder draft.
 - `verification`: phrase replay, action preview, UI/client acknowledgement,
-  query result contract, process acknowledgement, or golden conversation.
+  query result contract, process acknowledgement, conversation story, or
+  runtime trace promoted into a story candidate.
 - `rollback`: how the artifact can be removed or superseded.
 - `operator evidence`: what NLU Teacher or logs show.
 
@@ -236,9 +243,10 @@ Live-trial blocker:
   voice-surface bindings over stale regex hypotheses, so a bad earlier
   candidate should no longer block the correct Infrastate inventory binding.
 - Skill-owned actions can now be learned as training examples without scenario
-  mapping. Candidate Apply carries `action_candidate` into the skill artifact,
-  persists a `skillTool` action under `skill.yaml` `nlu.intents`, and the
-  dispatcher executes that published skill action through the normal tool path.
+  mapping. Candidate Apply carries `action_candidate` into a scoped example
+  overlay and promotion candidate, including the proposed `skillTool` binding;
+  the dispatcher can execute the runtime binding through the normal tool path
+  without Teacher editing `skill.yaml`.
   This is the first deterministic route for phrases such as ReDevice slideshow
   controls that belong to a skill rather than to a core UI modal.
 
@@ -477,6 +485,12 @@ Acceptance checklist:
 
 - [x] `[must]` Accepted Teacher artifacts carry promotion, provenance, privacy,
   portability, and rollback metadata.
+- [ ] `[must]` Promotion candidates targeting reusable behavior identify the
+  owning `conversational/` package files, affected workflow commands/entities/
+  outputs/stories, and the Builder Change that will review the patch. Example
+  and matcher candidates now identify their target package file, bounded patch,
+  allowed paths, acceptance criteria, evidence refs, and intended Change id;
+  affected semantic-id expansion and durable Change creation remain open.
 - [ ] `[must]` Promotion flow checks scope, private entities, target owner,
   duplicate/conflict risk, and regression suite before repo push.
 - [ ] `[must]` Skill/scenario push validates voice descriptors, aliases, examples,
@@ -501,10 +515,14 @@ Result: learned binding quarantined; Builder repair task created
 
 Acceptance checklist:
 
-- [ ] `[must]` Golden conversations can assert NLU result, action preview,
-  dispatch acknowledgement, UI outcome, and result-mode behavior.
-- [ ] `[must]` Failed golden conversations create quarantine or repair evidence,
-  not silent pass/fail text.
+- [ ] `[must]` Conversation stories can assert NLU result, action preview,
+  dispatch acknowledgement, workflow state transition, semantic output, UI
+  outcome, and result-mode behavior. Current deterministic stories assert
+  proposal, workflow transition/state, semantic output, repair,
+  `ConversationInteraction`, and channel fallback; provider parsing, dispatch
+  acknowledgement, and concrete UI outcome remain open.
+- [ ] `[must]` Failed conversation stories create quarantine, Teacher candidate,
+  or Builder repair evidence, not silent pass/fail text.
 - [ ] `[must]` Rollback restores the previous local learned behavior or removes
   the faulty overlay without touching unrelated user artifacts.
 - [ ] `[should]` Regression coverage is visible by capability owner.
@@ -610,7 +628,9 @@ The recommended delivery order is:
    STT, and normal Voice/NLU dispatch.
 6. Add Gate 8 and Gate 9 to route gaps into Builder.
 7. Add Gate 10 and Gate 11 before broad promotion or public reuse.
-8. Add Gate 12 metrics continuously, but keep dashboards secondary until the
+8. Add static conversation-story and workflow/statechart reports before
+   interactive replay or studio work.
+9. Add Gate 12 metrics continuously, but keep dashboards secondary until the
    event questions are stable.
 
 This order intentionally forms a spiral. Each pass adds capability surface,

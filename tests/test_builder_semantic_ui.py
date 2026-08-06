@@ -142,3 +142,92 @@ def test_semantic_rename_rejects_stale_revision_without_filesystem_mutation(
 
     assert (root / "webui.json").read_bytes() == before
     assert not (root / "ui_revisions" / "002.json").exists()
+
+
+def test_semantic_field_add_and_remove_are_revisioned_and_reversible(
+    semantic_project: tuple[BuilderSemanticUIService, BuilderWorkflowService, Path],
+) -> None:
+    service, _workflow, root = semantic_project
+    added = service.apply(
+        {
+            "schema": "adaos.builder.semantic_ui_change.v1",
+            "operation_id": "RUN-add-recipe-notes",
+            "change_id": "CH-recipes-label",
+            "project_ref": "scenario:recipes",
+            "operation": "add",
+            "target_ref": "widget:recipe-list",
+            "source_revision": "001",
+            "value": {
+                "collection": "fields",
+                "index": 1,
+                "item": {"id": "recipe-notes", "type": "text", "label": "Notes"},
+            },
+            "risk": "local_reversible",
+        }
+    )
+    assert added["revision"] == "002"
+    assert added["undo"]["target_ref"] == "field:recipe-list:recipe-notes"
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    fields = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"][0]["fields"]
+    assert [item["id"] for item in fields] == ["recipe-name", "recipe-notes"]
+
+    removed = service.apply(
+        {
+            "schema": "adaos.builder.semantic_ui_change.v1",
+            "operation_id": "RUN-remove-recipe-notes",
+            "change_id": "CH-recipes-label",
+            "project_ref": "scenario:recipes",
+            "operation": "remove",
+            "target_ref": "field:recipe-list:recipe-notes",
+            "source_revision": "002",
+            "value": None,
+            "risk": "local_reversible",
+        }
+    )
+    assert removed["revision"] == "003"
+    assert removed["undo"] == {
+        "operation": "add",
+        "parent_ref": "widget:recipe-list",
+        "collection": "fields",
+        "index": 1,
+        "value": {"id": "recipe-notes", "type": "text", "label": "Notes"},
+    }
+
+
+def test_semantic_data_mode_switch_does_not_create_ui_revision(
+    semantic_project: tuple[BuilderSemanticUIService, BuilderWorkflowService, Path],
+) -> None:
+    service, workflow, root = semantic_project
+    before = workflow.describe("scenario", "recipes")
+    configured = workflow.configure_binding_profile(
+        "scenario",
+        "recipes",
+        {
+            "profile_id": "fixture-recipes",
+            "mode": "fixture",
+            "logical_schema_ref": "schema:recipes:prototype",
+            "source_ref": "fixture:recipes:sample",
+            "owner": "builder",
+        },
+        expected_binding_generation=before["data_binding"]["generation"],
+    )["workflow"]
+
+    result = service.apply(
+        {
+            "schema": "adaos.builder.semantic_ui_change.v1",
+            "operation_id": "RUN-select-fixture",
+            "change_id": "CH-recipes-label",
+            "project_ref": "scenario:recipes",
+            "operation": "set_data_mode",
+            "target_ref": "widget:recipe-list",
+            "source_revision": "001",
+            "value": {"profile_id": "fixture-recipes"},
+            "risk": "local_reversible",
+        }
+    )
+
+    assert result["ui_revision_changed"] is False
+    assert result["revision"] == "001"
+    assert result["binding"]["selected_mode"] == "fixture"
+    assert not (root / "ui_revisions" / "002.json").exists()
+    assert configured["prototype"]["head_revision"] == "001"

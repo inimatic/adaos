@@ -123,7 +123,7 @@ commands.
 Open the public client:
 
 ```text
-https://inimatic.com/?zone=ru&mode=login
+https://inimatic.com/?intent=auth.login&zone=ru
 ```
 
 Create a member join-code on the hub:

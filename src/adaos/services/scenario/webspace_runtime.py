@@ -3,28 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 import atexit
 import asyncio
 import base64
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 import hashlib
 import json
 import logging
 import os
 import re
 import secrets
-import subprocess
 import sys
-import tempfile
-import threading
 import time
-import traceback
 
 import y_py as Y
-import yaml
 
 from adaos.domain.project_events import (
     BUILDER_CONTEXT_SELECTED,
@@ -63,51 +55,216 @@ from adaos.services.webui_contract import (
 )
 from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
+from .webspace_components import (
+    MaterializationExecutorOwner,
+    WebspaceMaterializationOperations,
+    WebspaceMaterializationService,
+    RebuildOperations,
+    WebspaceCacheState,
+    WebspaceProjectionService,
+    WebspaceRecoveryCoordinator,
+    WebspaceRebuildService,
+    WebspaceResolutionOperations,
+    WebspaceResolutionService,
+    ScenarioSwitchOperations,
+    WebspaceScenarioSwitchingService,
+    WebspaceSkillCatalogOperations,
+    WebspaceSkillCatalogService,
+    WebspaceTaskState,
+    WebspaceTaskSchedulingOperations,
+    WebspaceTaskSchedulingService,
+)
 from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
-_SCENARIO_SWITCH_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WEBSPACE_REBUILD_STATUS: dict[str, Dict[str, Any]] = {}
-_WEBSPACE_RECOVERY_COMMAND_CACHE: dict[str, Dict[str, Any]] = {}
-_WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT = 256
-_SKILL_RUNTIME_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_SKILL_RUNTIME_REBUILD_PENDING: dict[str, Dict[str, Any]] = {}
-_SKILL_RUNTIME_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
-_WEBSPACE_LISTING_SYNC_TASK: asyncio.Task[Any] | None = None
-_WORKFLOW_SYNC_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WORKFLOW_SYNC_PENDING: dict[str, Dict[str, Any]] = {}
-_WORKFLOW_SYNC_STATS: dict[str, Dict[str, Any]] = {}
-_LIVE_ROOM_REFRESH_TASKS: dict[str, asyncio.Task[Any]] = {}
-_LIVE_ROOM_REFRESH_PENDING: dict[str, Dict[str, Any]] = {}
-_LIVE_ROOM_REFRESH_STATS: dict[str, Dict[str, Any]] = {}
-_BUILDER_YSTORE_BACKUP_TASKS: dict[str, asyncio.Task[Any]] = {}
-_WEBUI_DECL_CACHE: dict[str, tuple[tuple[str, int, int], Dict[str, Any]]] = {}
+_TASK_STATE = WebspaceTaskState()
+_TASK_SCHEDULING_SERVICE = WebspaceTaskSchedulingService()
+_CACHE_STATE = WebspaceCacheState()
+_MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
+_MATERIALIZATION_SERVICE = WebspaceMaterializationService()
+_PROJECTION_SERVICE = WebspaceProjectionService()
+_RECOVERY_COORDINATOR = WebspaceRecoveryCoordinator(command_cache_limit=256)
+_REBUILD_SERVICE = WebspaceRebuildService()
+_RESOLUTION_SERVICE = WebspaceResolutionService()
+_SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
+_SKILL_CATALOG_SERVICE = WebspaceSkillCatalogService()
 _SKILL_DECLS_CACHE_TTL_S = 300.0
-_SKILL_DECLS_CACHE: dict[str, tuple[float, str, List[Dict[str, Any]]]] = {}
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
-_SKILL_SOURCE_FINGERPRINT_CACHE: dict[str, tuple[float, str]] = {}
-_MEMBER_SNAPSHOT_REBUILD_AT: dict[str, float] = {}
-_MEMBER_SNAPSHOT_REBUILD_TASKS: dict[str, asyncio.Task[Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS: dict[str, asyncio.Task[Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_DIRTY: dict[str, Dict[str, Any]] = {}
-_MATERIALIZATION_CPU_EXECUTOR: ThreadPoolExecutor | None = None
-_MATERIALIZATION_CPU_EXECUTOR_LOCK = threading.Lock()
 
 
 def _is_control_flow_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
-_MEMBER_SNAPSHOT_REBUILD_STATS: dict[str, Dict[str, Any]] = {}
-_MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT: dict[str, str] = {}
-_RESOLVED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
-_MATERIALIZED_WEBSPACE_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
-_DESKTOP_SCENARIOS_CACHE: dict[str, tuple[float, tuple[tuple[str, int, int], ...], list[Tuple[str, str]]]] = {}
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
-_LOCAL_NODE_DISPLAY_CACHE: tuple[float, dict[str, Any]] = (0.0, {})
+
+
+def _materialization_operations() -> WebspaceMaterializationOperations:
+    return WebspaceMaterializationOperations(
+        build_materialization_snapshot_from_resolved=_build_materialization_snapshot_from_resolved,
+        clone_json_like=_clone_json_like,
+        coerce_dict=_coerce_dict,
+        copy_timing_map=_copy_timing_map,
+        default_materialization_required_branches=_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES,
+        describe_webspace_rebuild_state=describe_webspace_rebuild_state,
+        effective_branch_paths=_EFFECTIVE_BRANCH_PATHS,
+        finalize_timing_map=_finalize_timing_map,
+        get_cached_materialized_worker_result=_get_cached_materialized_worker_result,
+        get_ystore_for_webspace=get_ystore_for_webspace,
+        materialization_worker_enabled=_materialization_worker_enabled,
+        materialized_payload_inputs=_materialized_payload_inputs,
+        normalize_materialization_required_branches=_normalize_materialization_required_branches,
+        open_readonly_operational_ydoc=_open_readonly_operational_ydoc,
+        open_rebuild_ydoc_session=_open_rebuild_ydoc_session,
+        raise_if_rebuild_request_superseded=_raise_if_rebuild_request_superseded,
+        record_timing=_record_timing,
+        remember_materialized_worker_result=_remember_materialized_worker_result,
+        resolved_outputs_from_cache_payload=_resolved_outputs_from_cache_payload,
+        run_materialization_cpu=_run_materialization_cpu,
+        run_materialization_worker=_run_materialization_worker,
+        scenario_materialization_contract=_scenario_materialization_contract,
+        schedule_builder_ystore_snapshot_backup=_schedule_builder_ystore_snapshot_backup,
+        set_map_value_if_changed=_set_map_value_if_changed,
+        set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        ystore_write_metadata=ystore_write_metadata,
+    )
+
+
+def _task_scheduling_operations() -> WebspaceTaskSchedulingOperations:
+    return WebspaceTaskSchedulingOperations(
+        clone_json_like=_clone_json_like,
+        complete_scenario_switch_rebuild=_complete_scenario_switch_rebuild,
+        copy_timing_map=_copy_timing_map,
+        derive_phase_timings=_derive_phase_timings,
+        elapsed_ms=_elapsed_ms,
+        is_control_flow_base_exception=_is_control_flow_base_exception,
+        live_room_refresh_debounce_s=_live_room_refresh_debounce_s,
+        live_room_refresh_stats=_live_room_refresh_stats,
+        logger=_log,
+        mark_member_snapshot_rebuild_dirty=_mark_member_snapshot_rebuild_dirty,
+        member_snapshot_rebuild_request_id=_member_snapshot_rebuild_request_id,
+        member_snapshot_rebuild_stats=_member_snapshot_rebuild_stats,
+        pending_materialization_snapshot=_pending_materialization_snapshot,
+        rebuild_webspace_from_sources=rebuild_webspace_from_sources,
+        scenario_switch_background_route_yield_s=_scenario_switch_background_route_yield_s,
+        scenario_switching=_SCENARIO_SWITCHING,
+        scenario_workflow_runtime_type=ScenarioWorkflowRuntime,
+        schedule_member_snapshot_rebuild=_schedule_member_snapshot_rebuild,
+        seed_member_snapshot_ydoc_defaults=_seed_member_snapshot_ydoc_defaults,
+        set_webspace_rebuild_status=_set_webspace_rebuild_status,
+        set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        task_state=_TASK_STATE,
+        workflow_sync_debounce_s=_workflow_sync_debounce_s,
+        workflow_sync_stats=_workflow_sync_stats,
+    )
+
+
+def _skill_catalog_operations() -> WebspaceSkillCatalogOperations:
+    return WebspaceSkillCatalogOperations(
+        apply_node_context_to_ui=_apply_node_context_to_ui,
+        apply_webui_load_hint=_apply_webui_load_hint,
+        cache_state=_CACHE_STATE,
+        catalog_entry_is_foreign_relay=_catalog_entry_is_foreign_relay,
+        clone_json_like=_clone_json_like,
+        coerce_dict=_coerce_dict,
+        detached_member_node_ids=_detached_member_node_ids,
+        fingerprint_json_like=_fingerprint_json_like,
+        get_local_capacity=get_local_capacity,
+        load_config=load_config,
+        local_node_id=_local_node_id,
+        logger=_log,
+        looks_like_skill_ui_interface=_looks_like_skill_ui_interface,
+        mark_modal_def=_mark_modal_def,
+        member_device_inventory_display_map=_member_device_inventory_display_map,
+        node_scope_data_path=node_scope_data_path,
+        node_scoped_catalog_id=_node_scoped_catalog_id,
+        node_scoped_data_path_node_id=_node_scoped_data_path_node_id,
+        node_scoped_modal_ids=_node_scoped_modal_ids,
+        normalize_webio_receiver=_normalize_webio_receiver,
+        normalize_webui_modal_def=_normalize_webui_modal_def,
+        remote_member_node_display=_remote_member_node_display,
+        scenario_exists_for_switch=_scenario_exists_for_switch,
+        scope_remote_catalog_entry_id=_scope_remote_catalog_entry_id,
+        skill_decls_cache_ttl_s=_skill_decls_cache_ttl_s,
+    )
+
+
+def _resolution_operations() -> WebspaceResolutionOperations:
+    return WebspaceResolutionOperations(
+        apply_node_context_to_ui=_apply_node_context_to_ui,
+        apply_node_display_to_entry=_apply_node_display_to_entry,
+        build_materialization_snapshot=_build_materialization_snapshot,
+        clone_json_like=_clone_json_like,
+        clone_skill_ui_interface=_clone_skill_ui_interface,
+        coerce_dict=_coerce_dict,
+        coerce_live_branch_subset=_coerce_live_branch_subset,
+        decl_is_node_owned=_decl_is_node_owned,
+        dedupe_str_list=_dedupe_str_list,
+        default_materialization_required_branches=_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES,
+        deferred_off_focus_load=_DEFERRED_OFF_FOCUS_LOAD,
+        describe_webspace_rebuild_state=describe_webspace_rebuild_state,
+        detached_member_node_ids=_detached_member_node_ids,
+        effective_branch_paths=_EFFECTIVE_BRANCH_PATHS,
+        elapsed_ms=_elapsed_ms,
+        extract_scenario_sections_from_content=_extract_scenario_sections_from_content,
+        fingerprint_json_like=_fingerprint_json_like,
+        has_effective_branch_value=_has_effective_branch_value,
+        is_y_map_value=_is_y_map_value,
+        load_config=load_config,
+        local_node_id=_local_node_id,
+        log_webui_contract_issues=log_webui_contract_issues,
+        logger=_log,
+        mapping_get=_mapping_get,
+        mapping_items=_mapping_items,
+        mark_entry=_mark_entry,
+        mark_modal_def=_mark_modal_def,
+        materialize_scenario_resource_descriptor=_materialize_scenario_resource_descriptor,
+        materialize_skill_resource_descriptor=_materialize_skill_resource_descriptor,
+        materialized_system_resource_descriptors=_materialized_system_resource_descriptors,
+        merge_by_id=_merge_by_id,
+        merge_installed_with_auto=_merge_installed_with_auto,
+        merge_registry_lists=_merge_registry_lists,
+        merge_webio_receivers=_merge_webio_receivers,
+        node_display_from_config=node_display_from_config,
+        node_scoped_catalog_id=_node_scoped_catalog_id,
+        node_scoped_modal_ids=_node_scoped_modal_ids,
+        normalize_materialization_required_branches=_normalize_materialization_required_branches,
+        normalize_overlay_widget_entries=_normalize_overlay_widget_entries,
+        patch_map_value_from_previous=_patch_map_value_from_previous,
+        preserve_live_remote_catalog_entries=_preserve_live_remote_catalog_entries,
+        preserve_live_remote_modals=_preserve_live_remote_modals,
+        preserve_live_remote_registry_tokens=_preserve_live_remote_registry_tokens,
+        preserve_live_state_on_rebuild_enabled=_preserve_live_state_on_rebuild_enabled,
+        raise_if_rebuild_request_superseded=_raise_if_rebuild_request_superseded,
+        read_effective_branch_fingerprints=_read_effective_branch_fingerprints,
+        read_node_scoped_scenario_entry=_read_node_scoped_scenario_entry,
+        record_timing=_record_timing,
+        refresh_pinned_widgets_from_catalog_entries=_refresh_pinned_widgets_from_catalog_entries,
+        replace_map_value=_replace_map_value,
+        resolved_output_branch_fingerprints=_resolved_output_branch_fingerprints,
+        resolve_scenario_sections_in_doc=_resolve_scenario_sections_in_doc,
+        resolver_inputs_type=WebspaceResolverInputs,
+        resolver_outputs_type=WebspaceResolverOutputs,
+        runtime_environment_payload=runtime_environment_payload,
+        scenario_loader_space=_scenario_loader_space,
+        scenario_materialization_contract=_scenario_materialization_contract,
+        scenario_supports_catalog_controls=_scenario_supports_catalog_controls,
+        scenarios_loader=scenarios_loader,
+        set_map_value_if_changed=_set_map_value_if_changed,
+        set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        trust_previous_materialized_branch_fingerprints_enabled=(
+            _trust_previous_materialized_branch_fingerprints_enabled
+        ),
+        validate_application_ui_contract=validate_application_ui_contract,
+        whole_branch_replace_paths=_WHOLE_BRANCH_REPLACE_PATHS,
+        write_effective_branch_fingerprints=_write_effective_branch_fingerprints,
+        workspace_index=workspace_index,
+    )
+
+
 _EFFECTIVE_BRANCH_PATHS = (
     "ui.application",
     "data.catalog",
@@ -120,6 +277,7 @@ _EFFECTIVE_BRANCH_PATHS = (
 )
 _DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES = (
     "ui.application",
+    "ui.application.desktop.pageSchema",
     "data.catalog",
     "data.installed",
     "data.desktop",
@@ -293,7 +451,7 @@ def _skill_runtime_rebuild_debounce_s() -> float:
 
 def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    stats = _SKILL_RUNTIME_REBUILD_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -302,7 +460,7 @@ def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
             "completed_total": 0,
             "failed_total": 0,
         }
-        _SKILL_RUNTIME_REBUILD_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_STATS, key, stats)
     return stats
 
 
@@ -314,7 +472,7 @@ def _merge_skill_runtime_rebuild_request(
     reason: str,
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    pending = _SKILL_RUNTIME_REBUILD_PENDING.get(key)
+    pending = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
     if pending is None:
         pending = {
             "webspace_id": key,
@@ -325,7 +483,7 @@ def _merge_skill_runtime_rebuild_request(
             "updated_at": time.time(),
             "request_count": 0,
         }
-        _SKILL_RUNTIME_REBUILD_PENDING[key] = pending
+        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key, pending)
     action_token = str(action or "").strip() or "skill_runtime_sync"
     reason_token = str(reason or "").strip() or action_token
     pending["request_count"] = int(pending.get("request_count") or 0) + 1
@@ -373,8 +531,8 @@ def schedule_skill_runtime_rebuild(
         source_of_truth=source_of_truth,
         reason=reason or action,
     )
-    existing = _SKILL_RUNTIME_REBUILD_TASKS.get(key)
-    if existing is not None and not existing.done():
+    existing = _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key)
+    if existing is not None:
         stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
         return {
             "scheduled": True,
@@ -396,13 +554,13 @@ def _start_skill_runtime_rebuild_task(
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     stats = stats or _skill_runtime_rebuild_stats(key)
-    pending = pending or _SKILL_RUNTIME_REBUILD_PENDING.get(key) or {}
+    pending = pending or _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key) or {}
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     task = asyncio.create_task(
         _run_skill_runtime_rebuild_coalesced(key),
         name=f"skill-runtime-rebuild:{key}",
     )
-    _SKILL_RUNTIME_REBUILD_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.SKILL_RUNTIME, key, task)
     return {
         "scheduled": True,
         "mode": "coalesced",
@@ -422,7 +580,7 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
             delay_s = _skill_runtime_rebuild_debounce_s()
             if delay_s > 0:
                 await asyncio.sleep(delay_s)
-            pending = _SKILL_RUNTIME_REBUILD_PENDING.pop(key, None)
+            pending = _TASK_STATE.pop_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
             if not pending:
                 return
             actions = list(pending.get("actions") or [])
@@ -453,13 +611,15 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
                     action,
                     exc_info=True,
                 )
-            if key not in _SKILL_RUNTIME_REBUILD_PENDING:
+            if not _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key):
                 return
     finally:
         current = asyncio.current_task()
-        if _SKILL_RUNTIME_REBUILD_TASKS.get(key) is current:
-            _SKILL_RUNTIME_REBUILD_TASKS.pop(key, None)
-        if key in _SKILL_RUNTIME_REBUILD_PENDING and key not in _SKILL_RUNTIME_REBUILD_TASKS:
+        _TASK_STATE.pop_task(_TASK_STATE.SKILL_RUNTIME, key, expected=current)
+        if (
+            _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
+            and _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key) is None
+        ):
             _start_skill_runtime_rebuild_task(key)
 
 
@@ -497,7 +657,7 @@ def _member_snapshot_desktop_material_fingerprint(node_id: str) -> str:
 
 
 def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
-    stats = _MEMBER_SNAPSHOT_REBUILD_STATS.get(task_key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -516,20 +676,20 @@ def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
             "last_completed_request_id": "",
             "last_delayed_request_id": "",
         }
-        _MEMBER_SNAPSHOT_REBUILD_STATS[task_key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key, stats)
     return stats
 
 
 def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, Any]:
     items: list[Dict[str, Any]] = []
     now_ts = time.time()
-    for task_key, raw_stats in list(_MEMBER_SNAPSHOT_REBUILD_STATS.items()):
+    for task_key, raw_stats in _TASK_STATE.record_items(_TASK_STATE.MEMBER_SNAPSHOT_STATS):
         if not isinstance(raw_stats, dict):
             continue
         node_id, _, webspace_id = str(task_key or "").partition("\0")
-        dirty = dict(_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {})
-        task = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-        delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
+        dirty = dict(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {})
+        task = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+        delayed = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
         last_requested_at = float(raw_stats.get("last_requested_at") or 0.0)
         last_completed_at = float(raw_stats.get("last_completed_at") or 0.0)
         items.append(
@@ -605,7 +765,7 @@ def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
 
 
 def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str, request_id: str | None = None) -> None:
-    dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key)
+    dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key)
     if dirty is None:
         dirty = {
             "count": 0,
@@ -619,7 +779,7 @@ def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str
     dirty["last_mode"] = str(mode or "").strip() or "coalesced"
     dirty["last_requested_at"] = time.time()
     dirty["last_request_id"] = str(request_id or "").strip() or str(dirty.get("last_request_id") or "").strip()
-    _MEMBER_SNAPSHOT_REBUILD_DIRTY[task_key] = dirty
+    _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key, dirty)
     stats = _member_snapshot_rebuild_stats(task_key)
     if mode == "task_running":
         stats["coalesced_running_total"] = int(stats.get("coalesced_running_total") or 0) + 1
@@ -639,8 +799,8 @@ def _schedule_member_snapshot_rebuild_delayed(
     request_id: str | None = None,
 ) -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
-    existing = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
-    if existing is not None and not existing.done():
+    existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
+    if existing is not None:
         return
     delayed_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
         webspace_id=webspace_id,
@@ -652,31 +812,34 @@ def _schedule_member_snapshot_rebuild_delayed(
     async def _runner() -> None:
         try:
             await asyncio.sleep(max(0.0, float(delay_s)))
-            if task_key not in _MEMBER_SNAPSHOT_REBUILD_DIRTY:
+            if not _TASK_STATE.has_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key):
                 return
-            current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-            if current is not None and not current.done():
+            current = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+            if current is not None:
                 return
-            _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
+            _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, task_key, time.monotonic())
             stats = _member_snapshot_rebuild_stats(task_key)
             stats["delayed_total"] = int(stats.get("delayed_total") or 0) + 1
-            delayed_reason = str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
+            dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {}
+            delayed_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
             _schedule_member_snapshot_rebuild(
                 webspace_id=webspace_id,
                 node_id=node_id,
                 reason=f"{delayed_reason}:delayed",
-                request_id=str((_MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}).get("last_request_id") or delayed_request_id),
+                request_id=str(dirty.get("last_request_id") or delayed_request_id),
             )
         finally:
-            current_delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.get(task_key)
-            if current_delayed is task:
-                _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
+            _TASK_STATE.pop_task(
+                _TASK_STATE.MEMBER_SNAPSHOT_DELAYED,
+                task_key,
+                expected=task,
+            )
 
     task = asyncio.create_task(
         _runner(),
         name=f"member-snapshot-rebuild-delayed:{webspace_id}:{node_id}",
     )
-    _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS[task_key] = task
+    _TASK_STATE.put_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key, task)
 
 
 def _webspace_runtime_async_write_meta(*, root_names: list[str], source: str):
@@ -754,78 +917,6 @@ def _reload_command_dedupe_ttl_s() -> float:
     return value
 
 
-def _recovery_command_cache_key(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    cmd_id: str,
-) -> str:
-    raw = {
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-        "cmd_id": str(cmd_id or "").strip(),
-    }
-    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:16]
-
-
-def _claim_recovery_command_once(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    cmd_id: str | None,
-    fingerprint: str,
-) -> tuple[bool, dict[str, Any] | None]:
-    cmd_id = str(cmd_id or "").strip()
-    ttl_s = _reload_command_dedupe_ttl_s()
-    if not cmd_id or ttl_s <= 0.0:
-        return True, None
-
-    now = time.time()
-    expired = [
-        key
-        for key, entry in _WEBSPACE_RECOVERY_COMMAND_CACHE.items()
-        if now - float(entry.get("ts") or 0.0) > ttl_s
-    ]
-    for key in expired:
-        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(key, None)
-    while len(_WEBSPACE_RECOVERY_COMMAND_CACHE) >= _WEBSPACE_RECOVERY_COMMAND_CACHE_LIMIT:
-        oldest_key = min(
-            _WEBSPACE_RECOVERY_COMMAND_CACHE,
-            key=lambda item: float(_WEBSPACE_RECOVERY_COMMAND_CACHE[item].get("ts") or 0.0),
-        )
-        _WEBSPACE_RECOVERY_COMMAND_CACHE.pop(oldest_key, None)
-
-    key = _recovery_command_cache_key(
-        webspace_id=webspace_id,
-        action=action,
-        scenario_id=scenario_id,
-        cmd_id=cmd_id,
-    )
-    existing = _WEBSPACE_RECOVERY_COMMAND_CACHE.get(key)
-    if existing:
-        duplicate = dict(existing)
-        duplicate["age_s"] = round(max(0.0, now - float(existing.get("ts") or now)), 3)
-        duplicate["ttl_s"] = ttl_s
-        duplicate["cmd_id"] = cmd_id
-        duplicate["cache_key"] = key
-        return False, duplicate
-
-    _WEBSPACE_RECOVERY_COMMAND_CACHE[key] = {
-        "ts": now,
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-        "fingerprint": str(fingerprint or "").strip(),
-        "cmd_id": cmd_id,
-        "cache_key": key,
-    }
-    return True, None
-
-
 def _project_scenario_timeout_s() -> float:
     raw = str(os.getenv("ADAOS_WEBSPACE_PROJECT_SCENARIO_TIMEOUT_S") or "").strip()
     if not raw:
@@ -871,7 +962,7 @@ def _local_node_label() -> str:
 
 
 def _local_node_display() -> dict[str, Any]:
-    cached_at, cached = _LOCAL_NODE_DISPLAY_CACHE
+    cached_at, cached = _CACHE_STATE.get_local_node_display()
     now = time.monotonic()
     if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
         return dict(cached)
@@ -884,7 +975,7 @@ def _local_node_display() -> dict[str, Any]:
             "node_index": 0,
             "node_color": "",
         }
-    globals()["_LOCAL_NODE_DISPLAY_CACHE"] = (now, dict(display))
+    _CACHE_STATE.put_local_node_display(now, display)
     return dict(display)
 
 
@@ -1712,6 +1803,11 @@ def _member_device_inventory_display_map() -> dict[str, dict[str, Any]]:
             str(policy.get("effective_name") or "").strip()
             or str(policy.get("display_name") or "").strip()
         )
+        # Inventory identity defaults are not user-facing names.  Let the
+        # fresher directory/runtime projection keep its explicit label when
+        # inventory only repeats the stable node id.
+        if effective_name == node_id:
+            effective_name = ""
         display: dict[str, Any] = {}
         if effective_name:
             display["node_label"] = effective_name
@@ -1770,13 +1866,6 @@ def _merge_registry_lists(base: List[str], extras: List[List[str]]) -> List[str]
                 merged.append(token)
     return merged
 
-
-def _filter_installed(installed: Dict[str, List[str]], apps: List[Dict[str, Any]], widgets: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    app_ids = {str(item.get("id")) for item in apps if item.get("id")}
-    widget_ids = {str(item.get("id")) for item in widgets if item.get("id")}
-    current_apps = [a for a in (installed.get("apps") or []) if a in app_ids]
-    current_widgets = [w for w in (installed.get("widgets") or []) if w in widget_ids]
-    return {"apps": current_apps, "widgets": current_widgets}
 
 def _dedupe_str_list(values: Any) -> List[str]:
     # YJS may return YArray-like values which are iterable but not `list`.
@@ -2667,10 +2756,9 @@ def _get_cached_resolved_outputs(fingerprint: str) -> WebspaceResolverOutputs | 
     token = str(fingerprint or "").strip()
     if not token:
         return None
-    cached = _RESOLVED_WEBSPACE_CACHE.get(token)
+    cached = _CACHE_STATE.get_resolved_webspace(token)
     if not isinstance(cached, Mapping):
         return None
-    _RESOLVED_WEBSPACE_CACHE.move_to_end(token)
     return _resolved_outputs_from_cache_payload(cached)
 
 
@@ -2732,14 +2820,12 @@ def _remember_resolved_outputs(fingerprint: str, resolved: WebspaceResolverOutpu
     if payload_size > max_bytes:
         return
     payload["_cache_size_bytes"] = payload_size
-    _RESOLVED_WEBSPACE_CACHE[token] = payload
-    _RESOLVED_WEBSPACE_CACHE.move_to_end(token)
-    while (
-        len(_RESOLVED_WEBSPACE_CACHE) > _RESOLVED_WEBSPACE_CACHE_LIMIT
-        or sum(int(item.get("_cache_size_bytes") or 0) for item in _RESOLVED_WEBSPACE_CACHE.values())
-        > max_bytes
-    ):
-        _RESOLVED_WEBSPACE_CACHE.popitem(last=False)
+    _CACHE_STATE.put_resolved_webspace(
+        token,
+        payload,
+        max_entries=_RESOLVED_WEBSPACE_CACHE_LIMIT,
+        max_bytes=max_bytes,
+    )
 
 
 def _materialized_webspace_cache_enabled() -> bool:
@@ -2906,14 +2992,12 @@ def _remember_materialized_worker_result_in_memory(
     if cached_size > max_bytes:
         return
     cached_value["_cache_size_bytes"] = cached_size
-    _MATERIALIZED_WEBSPACE_CACHE[cache_key] = cached_value
-    _MATERIALIZED_WEBSPACE_CACHE.move_to_end(cache_key)
-    while (
-        len(_MATERIALIZED_WEBSPACE_CACHE) > _materialized_webspace_cache_limit()
-        or sum(int(item.get("_cache_size_bytes") or 0) for item in _MATERIALIZED_WEBSPACE_CACHE.values())
-        > max_bytes
-    ):
-        _MATERIALIZED_WEBSPACE_CACHE.popitem(last=False)
+    _CACHE_STATE.put_materialized_webspace(
+        cache_key,
+        cached_value,
+        max_entries=_materialized_webspace_cache_limit(),
+        max_bytes=max_bytes,
+    )
 
 
 def _load_materialized_worker_result_from_disk(
@@ -3036,14 +3120,13 @@ def _get_cached_materialized_worker_result(
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     if not key:
         return None
-    cached = _MATERIALIZED_WEBSPACE_CACHE.get(key)
+    cached = _CACHE_STATE.get_materialized_webspace(key)
     if not isinstance(cached, Mapping):
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
     cloned = _clone_materialized_worker_result(cached, cache_key=key, require_snapshot=require_snapshot)
     if cloned is None:
-        _MATERIALIZED_WEBSPACE_CACHE.pop(key, None)
+        _CACHE_STATE.discard_materialized_webspace(key)
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
-    _MATERIALIZED_WEBSPACE_CACHE.move_to_end(key)
     return cloned
 
 
@@ -3058,7 +3141,7 @@ def _remember_materialized_worker_result(
         return
     limit = _materialized_webspace_cache_limit()
     if limit <= 0:
-        _MATERIALIZED_WEBSPACE_CACHE.clear()
+        _CACHE_STATE.clear_materialized_webspaces()
         return
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     payload = worker_result.get("materialized_payload") if isinstance(worker_result.get("materialized_payload"), Mapping) else None
@@ -3107,11 +3190,13 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
     target = str(webspace_id or "").strip()
     if not target:
         return {"memory": 0, "disk": 0}
-    memory_removed = 0
-    for key, value in list(_MATERIALIZED_WEBSPACE_CACHE.items()):
-        if isinstance(value, Mapping) and _materialized_cache_value_matches(value, webspace_id=target, scenario_id=scenario_id):
-            _MATERIALIZED_WEBSPACE_CACHE.pop(key, None)
-            memory_removed += 1
+    memory_removed = _CACHE_STATE.discard_materialized_webspaces(
+        lambda _key, value: _materialized_cache_value_matches(
+            value,
+            webspace_id=target,
+            scenario_id=scenario_id,
+        )
+    )
     disk_removed = 0
     root = _materialized_webspace_cache_dir()
     if root is not None and root.exists():
@@ -3130,9 +3215,7 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
 
 
 def _invalidate_resolved_webspace_cache(*, scenario_id: str | None = None, reason: str | None = None) -> int:
-    count = len(_RESOLVED_WEBSPACE_CACHE)
-    if count:
-        _RESOLVED_WEBSPACE_CACHE.clear()
+    count = _CACHE_STATE.clear_resolved_webspaces()
     try:
         _log.debug(
             "invalidated resolved webspace cache scenario=%s reason=%s count=%d",
@@ -3599,7 +3682,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
     mode = _scenario_loader_space(source_mode)
     cache_key = mode
     now = time.monotonic()
-    cached = _SKILL_SOURCE_FINGERPRINT_CACHE.get(cache_key)
+    cached = _CACHE_STATE.get_skill_source_fingerprint(cache_key)
     if cached is not None and now - float(cached[0]) <= _skill_source_fingerprint_cache_ttl_s():
         return str(cached[1] or "")
     try:
@@ -3658,7 +3741,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
             "stamps": stamps,
         }
     )
-    _SKILL_SOURCE_FINGERPRINT_CACHE[cache_key] = (now, fingerprint)
+    _CACHE_STATE.put_skill_source_fingerprint(cache_key, now, fingerprint)
     return fingerprint
 
 
@@ -3903,37 +3986,23 @@ def _materialization_cpu_workers() -> int:
     return max(1, min(value, 4))
 
 
-def _get_materialization_cpu_executor() -> ThreadPoolExecutor:
-    global _MATERIALIZATION_CPU_EXECUTOR
-
-    executor = _MATERIALIZATION_CPU_EXECUTOR
-    if executor is not None:
-        return executor
-    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
-        executor = _MATERIALIZATION_CPU_EXECUTOR
-        if executor is None:
-            executor = ThreadPoolExecutor(
-                max_workers=_materialization_cpu_workers(),
-                thread_name_prefix="adaos-materialize",
-            )
-            _MATERIALIZATION_CPU_EXECUTOR = executor
-    return executor
-
-
 def _shutdown_materialization_cpu_executor() -> None:
-    global _MATERIALIZATION_CPU_EXECUTOR
-
-    with _MATERIALIZATION_CPU_EXECUTOR_LOCK:
-        executor = _MATERIALIZATION_CPU_EXECUTOR
-        _MATERIALIZATION_CPU_EXECUTOR = None
-    if executor is not None:
-        executor.shutdown(wait=False, cancel_futures=True)
+    _MATERIALIZATION_EXECUTOR.shutdown()
 
 
 async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) -> Any:
-    loop = asyncio.get_running_loop()
-    call = partial(function, *args, **kwargs)
-    return await loop.run_in_executor(_get_materialization_cpu_executor(), call)
+    # CLI one-shot execution has no persistent owner loop.  Running a resolver
+    # that still holds any y_py-backed value in the shared CPU executor can
+    # make its YDoc finalize on the worker thread during interpreter shutdown.
+    # Keep this rare diagnostic/control path single-threaded; persistent API
+    # runtimes continue to use the bounded executor.
+    return await _MATERIALIZATION_EXECUTOR.run_cpu(
+        function,
+        *args,
+        max_workers=_materialization_cpu_workers(),
+        oneshot=str(os.getenv("ADAOS_DEV_TOOL_EXECUTION_MODE") or "").strip().lower() == "oneshot",
+        **kwargs,
+    )
 
 
 atexit.register(_shutdown_materialization_cpu_executor)
@@ -3995,179 +4064,16 @@ async def _run_materialization_worker(
         "skill_decls_fingerprint": str(skill_decls_fingerprint or "").strip() or None,
     }
 
-    started = time.perf_counter()
-    peak_rss = 0
-    with tempfile.TemporaryDirectory(prefix="adaos-materialize-") as temp_dir:
-        root = Path(temp_dir)
-        request_path = root / "request.json"
-        result_path = root / "result.json"
-        stdout_path = root / "stdout.log"
-        stderr_path = root / "stderr.log"
-        request_path.write_text(
-            json.dumps(request, ensure_ascii=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        cmd = [
-            sys.executable,
-            "-m",
-            "adaos.services.scenario.materialization_worker",
-            str(request_path),
-            str(result_path),
-        ]
-        env = os.environ.copy()
-        env["ADAOS_MATERIALIZATION_WORKER"] = "0"
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
-
-        with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open(
-            "w", encoding="utf-8"
-        ) as stderr_file:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                creationflags=creationflags,
-            )
-            try:
-                import psutil
-
-                process = psutil.Process(proc.pid)
-            except Exception:
-                process = None
-
-            def _process_tree() -> list[Any]:
-                if process is None:
-                    return []
-                try:
-                    return [process, *process.children(recursive=True)]
-                except Exception:
-                    return [process]
-
-            def _process_tree_rss() -> int:
-                total = 0
-                for item in _process_tree():
-                    try:
-                        total += int(item.memory_info().rss)
-                    except Exception:
-                        continue
-                return total
-
-            async def _stop_process_tree() -> None:
-                descendants = _process_tree()[1:]
-                for child in reversed(descendants):
-                    try:
-                        child.terminate()
-                    except Exception:
-                        continue
-                if proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            pass
-                        await proc.wait()
-                deadline = time.monotonic() + 5.0
-                alive = list(descendants)
-                while alive and time.monotonic() < deadline:
-                    remaining = []
-                    for child in alive:
-                        try:
-                            if child.is_running():
-                                remaining.append(child)
-                        except Exception:
-                            continue
-                    alive = remaining
-                    if alive:
-                        await asyncio.sleep(0.05)
-                for child in alive:
-                    try:
-                        child.kill()
-                    except Exception:
-                        continue
-
-            timeout_s = _materialization_worker_timeout_s()
-            max_rss = _materialization_worker_max_rss_bytes()
-            failure: str | None = None
-            wait_task = asyncio.create_task(proc.wait())
-            try:
-                while not wait_task.done():
-                    elapsed_s = time.perf_counter() - started
-                    if elapsed_s > timeout_s:
-                        failure = "materialization_worker_timeout"
-                        break
-                    if process is not None:
-                        try:
-                            current_rss = _process_tree_rss()
-                            peak_rss = max(peak_rss, current_rss)
-                            if current_rss > max_rss:
-                                failure = "materialization_worker_rss_limit"
-                                break
-                        except Exception:
-                            process = None
-                    try:
-                        await asyncio.wait_for(asyncio.shield(wait_task), timeout=0.05)
-                    except asyncio.TimeoutError:
-                        continue
-                if failure:
-                    await _stop_process_tree()
-                    await wait_task
-                    raise RuntimeError(
-                        f"{failure}: elapsed_ms={_elapsed_ms(started)} peak_rss_bytes={peak_rss}"
-                    )
-                returncode = int(await wait_task)
-            except BaseException:
-                await _stop_process_tree()
-                if not wait_task.done():
-                    await asyncio.shield(wait_task)
-                raise
-
-        stderr_tail = ""
-        try:
-            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        except Exception:
-            pass
-        if not result_path.exists():
-            raise RuntimeError(
-                f"materialization_worker_no_result: returncode={returncode} stderr={stderr_tail}"
-            )
-        result_size = int(result_path.stat().st_size)
-        if result_size > _materialization_worker_max_result_bytes():
-            raise RuntimeError(f"materialization_worker_result_limit: bytes={result_size}")
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        if not isinstance(result, dict) or returncode != 0 or not bool(result.get("ok")):
-            detail = str(result.get("detail") if isinstance(result, dict) else "")
-            raise RuntimeError(
-                f"materialization_worker_failed: returncode={returncode} detail={detail} stderr={stderr_tail}"
-            )
-        child_final_rss = int(result.get("worker_rss_bytes") or 0)
-        worker_peak_rss = max(peak_rss, child_final_rss)
-        if worker_peak_rss > max_rss:
-            raise RuntimeError(
-                f"materialization_worker_rss_limit: peak_rss_bytes={worker_peak_rss}"
-            )
-        result["worker_peak_rss_bytes"] = worker_peak_rss
-        result["worker_result_bytes"] = result_size
-        result["worker_parent_elapsed_ms"] = _elapsed_ms(started)
-        snapshot_b64 = result.pop("snapshot_update_b64", None)
-        state_vector_b64 = result.pop("state_vector_b64", None)
-        if isinstance(snapshot_b64, str):
-            result["snapshot_update"] = base64.b64decode(snapshot_b64.encode("ascii"))
-        if isinstance(state_vector_b64, str):
-            result["state_vector"] = base64.b64decode(state_vector_b64.encode("ascii"))
-        payload = result.get("materialized_payload")
-        if isinstance(payload, Mapping):
-            result["entry"] = _resolved_outputs_from_cache_payload(payload).to_registry_entry()
-        return result
-
+    return await _MATERIALIZATION_EXECUTOR.run_worker(
+        request,
+        timeout_s=_materialization_worker_timeout_s(),
+        max_rss_bytes=_materialization_worker_max_rss_bytes(),
+        max_result_bytes=_materialization_worker_max_result_bytes(),
+        result_adapter=lambda payload: _resolved_outputs_from_cache_payload(payload).to_registry_entry(),
+    )
 
 def _scenario_switch_mode() -> str:
-    return "pointer_only"
+    return _SCENARIO_SWITCHING.mode()
 
 
 def _extract_scenario_sections_from_content(content: Mapping[str, Any] | None) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -4639,7 +4545,7 @@ def _pending_materialization_snapshot(
 
 def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     current.update(fields)
     if str(current.get("status") or "").strip() == "ready" and "invalidation_reason" not in fields:
         current.pop("invalidation_reason", None)
@@ -4647,7 +4553,7 @@ def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, A
         current.pop("materialized_payload", None)
     current["webspace_id"] = target
     current["updated_at"] = time.time()
-    _WEBSPACE_REBUILD_STATUS[target] = current
+    _TASK_STATE.put_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target, current)
     return dict(current)
 
 
@@ -4660,7 +4566,7 @@ def invalidate_webspace_materialization_cache(
     scenario_id: str | None = None,
 ) -> dict[str, Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     current_materialization = (
         current.get("materialization") if isinstance(current.get("materialization"), Mapping) else {}
     )
@@ -4685,8 +4591,8 @@ def invalidate_webspace_materialization_cache(
         materialization["previous_observed_at"] = current_materialization.get("observed_at")
     explicit_scenario = str(scenario_id or "").strip() or None
     dropped_cache = _drop_materialized_cache_for_webspace(target, scenario_id=explicit_scenario)
-    _SKILL_DECLS_CACHE.clear()
-    _SKILL_SOURCE_FINGERPRINT_CACHE.clear()
+    _CACHE_STATE.clear_skill_declarations()
+    _CACHE_STATE.clear_skill_source_fingerprints()
     materialization["cache_dropped"] = dropped_cache
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
     return _set_webspace_rebuild_status(
@@ -4934,7 +4840,7 @@ def _set_webspace_rebuild_status_if_current(webspace_id: str, request_id: str | 
     target = str(webspace_id or "").strip()
     request_token = str(request_id or "").strip()
     if request_token:
-        current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+        current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
         current_request = str(current.get("request_id") or "").strip()
         if current_request and current_request != request_token:
             return current
@@ -4965,7 +4871,7 @@ def _raise_if_rebuild_request_superseded(webspace_id: str, request_id: str | Non
 
 def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_WEBSPACE_REBUILD_STATUS.get(target) or {})
+    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
     if not current:
         return {
             "webspace_id": target,
@@ -5033,7 +4939,7 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
 
 def get_webspace_rebuild_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
     target = str(webspace_id or "").strip()
-    current = _WEBSPACE_REBUILD_STATUS.get(target)
+    current = _TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target)
     if not isinstance(current, Mapping):
         return None
     if str(current.get("status") or "").strip() != "ready" or bool(current.get("pending")):
@@ -5100,7 +5006,7 @@ class WebspaceScenarioRuntime:
             root = self.ctx.paths.scenarios_dir()
             now = time.monotonic()
             cache_key = f"{space}:{root}"
-            cached = _DESKTOP_SCENARIOS_CACHE.get(cache_key)
+            cached = _CACHE_STATE.get_desktop_scenarios(cache_key)
             if cached is not None and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S:
                 return list(cached[2])
             children = [child for child in root.iterdir() if child.is_dir()]
@@ -5115,7 +5021,7 @@ class WebspaceScenarioRuntime:
                 )
             )
             if cached is not None and cached[1] == stamp:
-                _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(cached[2]))
+                _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, cached[2])
                 return list(cached[2])
             for child in children:
                 scenario_id = child.name
@@ -5133,469 +5039,46 @@ class WebspaceScenarioRuntime:
                     continue
                 title = str(manifest.get("title") or manifest.get("name") or scenario_id)
                 entries.append((scenario_id, title))
-            _DESKTOP_SCENARIOS_CACHE[cache_key] = (now, stamp, list(entries))
+            _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
         return entries
 
     # --- helpers ---------------------------------------------------------
 
-    def _load_webui(self, skill_name: str, space: str, *, log_missing: bool = False) -> Dict[str, Any]:
-        paths = self.ctx.paths
-        base = paths.dev_skills_dir() if space == "dev" else paths.skills_dir()
-        skill_dir = Path(base) / skill_name
-        path = skill_dir / "webui.json"
-        manifest_path = skill_dir / "skill.yaml"
-        if not path.exists():
-            try:
-                repo_root_attr = getattr(paths, "repo_root", None)
-                repo_root = repo_root_attr() if callable(repo_root_attr) else repo_root_attr
-                if repo_root:
-                    fallback_dir = (
-                        Path(repo_root).expanduser().resolve() / ".adaos" / "workspace" / "skills" / skill_name
-                    )
-                    fallback = fallback_dir / "webui.json"
-                    if fallback.exists():
-                        path = fallback
-                        manifest_path = fallback_dir / "skill.yaml"
-            except Exception:
-                pass
-        if not path.exists():
-            _WEBUI_DECL_CACHE.pop(str(path), None)
-            if log_missing and _log.isEnabledFor(logging.DEBUG):
-                stack = " <- ".join(
-                    f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
-                    for frame in traceback.extract_stack(limit=8)[:-1]
-                )
-                _log.debug("webui.json missing for %s (%s) caller=%s", skill_name, space, stack)
-            return {}
-        cache_key = str(path.resolve())
-        try:
-            stat = path.stat()
-            stamp_parts: list[Any] = [cache_key, int(stat.st_mtime_ns), int(stat.st_size)]
-            if manifest_path.exists():
-                manifest_stat = manifest_path.stat()
-                stamp_parts.extend(
-                    [
-                        str(manifest_path.resolve()),
-                        int(manifest_stat.st_mtime_ns),
-                        int(manifest_stat.st_size),
-                    ]
-                )
-            stamp = tuple(stamp_parts)
-        except Exception:
-            stamp = None
-        if stamp is not None:
-            cached = _WEBUI_DECL_CACHE.get(cache_key)
-            if cached is not None and cached[0] == stamp:
-                return cached[1]
-        try:
-            # Accept UTF-8 with BOM produced by some Windows/PowerShell editors.
-            raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        except Exception as exc:
-            _log.warning("failed to read webui.json for %s: %s", skill_name, exc)
-            if stamp is not None:
-                _WEBUI_DECL_CACHE[cache_key] = (stamp, {})
-            return {}
-        if not isinstance(raw, dict):
-            _log.warning("webui.json must be an object for %s", skill_name)
-            if stamp is not None:
-                _WEBUI_DECL_CACHE[cache_key] = (stamp, {})
-            return {}
+    def _load_webui(
+        self,
+        skill_name: str,
+        space: str,
+        *,
+        log_missing: bool = False,
+    ) -> dict[str, Any] | None:
+        return _SKILL_CATALOG_SERVICE.load_webui(
+            self,
+            _skill_catalog_operations(),
+            skill_name,
+            space,
+            log_missing=log_missing,
+        )
 
-        catalog = raw.get("catalog") or {}
-        apps = raw.get("apps") or catalog.get("apps") or []
-        widgets = raw.get("widgets") or catalog.get("widgets") or []
-        resources = raw.get("resources") or catalog.get("resources") or {}
-        ui_interface = raw.get("interface") or raw.get("uiInterface") or {}
-        registry = raw.get("registry") or {}
-        reg_modals_raw = registry.get("modals") or {}
-        reg_widgets_raw = registry.get("widgets") or {}
-        ydoc_defaults = raw.get("ydoc_defaults") or {}
-        raw_contrib = raw.get("contributions") or []
-        contributions = [c for c in raw_contrib if isinstance(c, dict)]
-        webio_raw = raw.get("webio") or {}
-        webio_receivers_raw = webio_raw.get("receivers") if isinstance(webio_raw, dict) else {}
-        ui_owner = "shared" if skill_name == "web_desktop_skill" else "node"
-        try:
-            if manifest_path.exists():
-                manifest_raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-                if isinstance(manifest_raw, dict):
-                    owner_token = str(manifest_raw.get("webui_owner") or manifest_raw.get("ui_owner") or "").strip().lower()
-                    if owner_token in {"shared", "node"}:
-                        ui_owner = owner_token
-        except Exception:
-            _log.debug("failed to read skill manifest ownership for %s", skill_name, exc_info=True)
+    def _collect_skill_decls(
+        self,
+        mode: str = "mixed",
+        *,
+        include_remote: bool = True,
+    ) -> list[dict[str, Any]]:
+        return _SKILL_CATALOG_SERVICE.collect_skill_decls(
+            self,
+            _skill_catalog_operations(),
+            mode,
+            include_remote=include_remote,
+        )
 
-        payload = {
-            "skill": skill_name,
-            "space": space,
-            "source_path": str(path.parent.resolve()),
-            "node_id": _local_node_id(),
-            "ui_owner": ui_owner,
-            "apps": [_apply_webui_load_hint(it) for it in apps if isinstance(it, dict)],
-            "widgets": [_apply_webui_load_hint(it) for it in widgets if isinstance(it, dict)],
-            "resources": _coerce_dict(resources),
-            "interface": _coerce_dict(ui_interface),
-            "registry": {
-                "modals": (
-                    {str(k): _normalize_webui_modal_def(v) for k, v in reg_modals_raw.items()}
-                    if isinstance(reg_modals_raw, dict)
-                    else [str(x) for x in reg_modals_raw if isinstance(x, (str, int))]
-                ),
-                "widgets": (
-                    {str(k): _apply_webui_load_hint(v) for k, v in reg_widgets_raw.items()}
-                    if isinstance(reg_widgets_raw, dict)
-                    else [str(x) for x in reg_widgets_raw if isinstance(x, (str, int))]
-                ),
-            },
-            "ydoc_defaults": ydoc_defaults if isinstance(ydoc_defaults, dict) else {},
-            "contributions": contributions,
-            "webio": {
-                "receivers": (
-                    {str(k): _normalize_webio_receiver(v) for k, v in webio_receivers_raw.items() if str(k).strip()}
-                    if isinstance(webio_receivers_raw, dict)
-                    else {}
-                ),
-            },
-        }
-        if stamp is not None:
-            _WEBUI_DECL_CACHE[cache_key] = (stamp, payload)
-        return payload
-
-    def _collect_skill_decls(self, mode: str = "mixed", *, include_remote: bool = True) -> List[Dict[str, Any]]:
-        cache_key = f"{str(mode or '').strip() or 'mixed'}:{1 if include_remote else 0}"
-        now = time.monotonic()
-        cached = _SKILL_DECLS_CACHE.get(cache_key)
-        if cached is not None and now - float(cached[0]) <= _skill_decls_cache_ttl_s():
-            try:
-                self._last_skill_decls_fingerprint = str(cached[1] or "")
-            except Exception:
-                pass
-            try:
-                return list(cached[2])
-            except Exception:
-                return [dict(item) for item in cached[2] if isinstance(item, dict)]
-
-        try:
-            cap = get_local_capacity()
-            skills = cap.get("skills") or []
-        except Exception:
-            skills = []
-        if not isinstance(skills, list):
-            skills = []
-
-        decls: List[Dict[str, Any]] = []
-        for rec in skills:
-            if not isinstance(rec, dict) or not rec.get("active", True):
-                continue
-            name = rec.get("name") or rec.get("id")
-            if not name:
-                continue
-            skill_name = str(name)
-
-            if mode == "workspace":
-                # Workspace mode: always use default webui.json regardless of
-                # dev flag so that skills remain visible even when a dev
-                # variant exists.
-                decl = self._load_webui(skill_name, "default")
-                if decl:
-                    decls.append(decl)
-                continue
-
-            if mode == "dev":
-                # Dev mode: include all active skills but prefer dev webui.json
-                # when present, falling back to workspace webui.json.
-                decl = self._load_webui(skill_name, "dev")
-                if not decl:
-                    decl = self._load_webui(skill_name, "default")
-                if decl:
-                    decls.append(decl)
-                continue
-
-            # Mixed mode: include both dev and default variants as-is.
-            space = "dev" if rec.get("dev") else "default"
-            decl = self._load_webui(skill_name, space)
-            if decl:
-                decls.append(decl)
-
-        # Always ensure desktop skill's own webui.json is loaded so that
-        # base desktop modals remain available even if not listed in capacity.
-        try:
-            desktop_decl = self._load_webui("web_desktop_skill", "default")
-        except Exception:
-            desktop_decl = {}
-        if isinstance(desktop_decl, dict) and desktop_decl:
-            decls.append(desktop_decl)
-
-        if include_remote and mode != "dev":
-            decls.extend(self._collect_remote_skill_decls())
-
-        fingerprint = _fingerprint_json_like(decls)
-        try:
-            self._last_skill_decls_fingerprint = fingerprint
-        except Exception:
-            pass
-        _SKILL_DECLS_CACHE[cache_key] = (now, fingerprint, _clone_json_like(decls))
-        return decls
-
-    def _collect_remote_skill_decls(self) -> List[Dict[str, Any]]:
-        try:
-            conf = load_config()
-        except Exception:
-            conf = None
-        if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
-            return []
-        try:
-            from adaos.services.registry.subnet_directory import get_directory
-
-            nodes = get_directory().list_known_nodes()
-        except Exception:
-            nodes = []
-        local_node_id = _local_node_id()
-        detached_node_ids = _detached_member_node_ids()
-        inventory_display = _member_device_inventory_display_map()
-        decls: List[Dict[str, Any]] = []
-        for node in nodes:
-            if not isinstance(node, Mapping):
-                continue
-            node_id = str(node.get("node_id") or "").strip()
-            if not node_id or node_id == local_node_id:
-                continue
-            if node_id in detached_node_ids:
-                continue
-            runtime_projection = (
-                node.get("runtime_projection")
-                if isinstance(node.get("runtime_projection"), Mapping)
-                else {}
-            )
-            snapshot = (
-                runtime_projection.get("snapshot")
-                if isinstance(runtime_projection.get("snapshot"), Mapping)
-                else {}
-            )
-            snapshot_node_id = str(snapshot.get("node_id") or "").strip() if isinstance(snapshot, Mapping) else ""
-            if snapshot_node_id and snapshot_node_id != node_id:
-                continue
-            catalog = (
-                snapshot.get("desktop_catalog")
-                if isinstance(snapshot.get("desktop_catalog"), Mapping)
-                else {}
-            )
-            apps = catalog.get("apps") if isinstance(catalog.get("apps"), list) else []
-            widgets = catalog.get("widgets") if isinstance(catalog.get("widgets"), list) else []
-            registry = catalog.get("registry") if isinstance(catalog.get("registry"), Mapping) else {}
-            resources = catalog.get("resources") if isinstance(catalog.get("resources"), Mapping) else {}
-            raw_catalog_interface = catalog.get("interface") if isinstance(catalog.get("interface"), Mapping) else {}
-            ui_interface = raw_catalog_interface if _looks_like_skill_ui_interface(raw_catalog_interface) else {}
-            ui_interfaces = catalog.get("interfaces") if isinstance(catalog.get("interfaces"), Mapping) else {}
-            if not ui_interfaces and raw_catalog_interface and not ui_interface:
-                ui_interfaces = raw_catalog_interface
-            webio = catalog.get("webio") if isinstance(catalog.get("webio"), Mapping) else {}
-            ydoc_defaults = catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), Mapping) else {}
-            if not apps and not widgets and not registry and not resources and not ui_interface and not ui_interfaces and not webio and not ydoc_defaults:
-                capacity = node.get("capacity") if isinstance(node.get("capacity"), Mapping) else {}
-                skills = capacity.get("skills") if isinstance(capacity.get("skills"), list) else []
-                fallback_apps: list[dict[str, Any]] = []
-                fallback_widgets: list[dict[str, Any]] = []
-                fallback_registry: Dict[str, Any] = {"modals": {}, "widgets": {}}
-                fallback_resources: Dict[str, Any] = {}
-                fallback_interface: Dict[str, Any] = {}
-                fallback_interfaces: Dict[str, Any] = {}
-                fallback_webio: Dict[str, Any] = {"receivers": {}}
-                fallback_ydoc_defaults: Dict[str, Any] = {}
-                seen_skills: set[str] = set()
-                for rec in skills:
-                    if not isinstance(rec, Mapping):
-                        continue
-                    skill_name = str(rec.get("name") or rec.get("skill") or "").strip()
-                    if not skill_name or skill_name in seen_skills:
-                        continue
-                    seen_skills.add(skill_name)
-                    try:
-                        local_decl = self._load_webui(skill_name, "default")
-                    except Exception:
-                        local_decl = None
-                    if not isinstance(local_decl, Mapping) or not local_decl:
-                        continue
-                    local_apps = local_decl.get("apps") if isinstance(local_decl.get("apps"), list) else []
-                    local_widgets = local_decl.get("widgets") if isinstance(local_decl.get("widgets"), list) else []
-                    fallback_apps.extend([dict(item) for item in local_apps if isinstance(item, dict)])
-                    fallback_widgets.extend([dict(item) for item in local_widgets if isinstance(item, dict)])
-                    local_registry = local_decl.get("registry") if isinstance(local_decl.get("registry"), Mapping) else {}
-                    for group in ("modals", "widgets"):
-                        src = local_registry.get(group) if isinstance(local_registry.get(group), Mapping) else {}
-                        dst = fallback_registry.setdefault(group, {})
-                        if isinstance(dst, dict):
-                            for key, value in src.items():
-                                dst.setdefault(str(key), value)
-                    local_resources = local_decl.get("resources") if isinstance(local_decl.get("resources"), Mapping) else {}
-                    for key, value in local_resources.items():
-                        fallback_resources.setdefault(str(key), value)
-                    local_interface = local_decl.get("interface") if isinstance(local_decl.get("interface"), Mapping) else {}
-                    if local_interface and not fallback_interface:
-                        fallback_interface = _clone_json_like(local_interface)
-                    if local_interface and skill_name:
-                        fallback_interfaces.setdefault(skill_name, _clone_json_like(local_interface))
-                    local_webio = local_decl.get("webio") if isinstance(local_decl.get("webio"), Mapping) else {}
-                    local_receivers = local_webio.get("receivers") if isinstance(local_webio.get("receivers"), Mapping) else {}
-                    receivers_dst = fallback_webio.setdefault("receivers", {})
-                    if isinstance(receivers_dst, dict):
-                        for key, value in local_receivers.items():
-                            receivers_dst.setdefault(str(key), value)
-                    local_defaults = local_decl.get("ydoc_defaults") if isinstance(local_decl.get("ydoc_defaults"), Mapping) else {}
-                    for key, value in local_defaults.items():
-                        fallback_ydoc_defaults.setdefault(str(key), value)
-                apps = fallback_apps
-                widgets = fallback_widgets
-                registry = fallback_registry
-                resources = fallback_resources
-                ui_interface = fallback_interface
-                ui_interfaces = fallback_interfaces
-                webio = fallback_webio
-                ydoc_defaults = fallback_ydoc_defaults
-            if not apps and not widgets and not registry and not resources and not ui_interface and not ui_interfaces and not webio and not ydoc_defaults:
-                continue
-            display = _remote_member_node_display(node, inventory_display=inventory_display)
-            modal_id_map = _node_scoped_modal_ids(registry, node_id=node_id)
-            decl: Dict[str, Any] = {
-                "skill": f"subnet.member.{node_id}",
-                "space": "default",
-                "node_id": node_id,
-                "apps": [],
-                "widgets": [],
-                "resources": {},
-                "interface": _coerce_dict(ui_interface),
-                "interfaces": {},
-                "registry": {"modals": {}, "widgets": {}},
-                "webio": {"receivers": {}},
-                "ydoc_defaults": {},
-                "contributions": [],
-            }
-            mod_spec = registry.get("modals") if isinstance(registry.get("modals"), Mapping) else {}
-            if isinstance(mod_spec, Mapping):
-                for key, value in mod_spec.items():
-                    token = str(key or "").strip()
-                    if not token:
-                        continue
-                    scoped_token = modal_id_map.get(token, _node_scoped_catalog_id(node_id, token))
-                    decl["registry"]["modals"][scoped_token] = _mark_modal_def(
-                        _apply_node_context_to_ui(
-                            value,
-                            display,
-                            node_id=node_id,
-                            modal_id_map=modal_id_map,
-                            override_node_display=True,
-                        ),
-                        source=f"skill:subnet.member.{node_id}",
-                        skill=f"subnet.member.{node_id}",
-                        dev=False,
-                    )
-            wid_spec = registry.get("widgets") if isinstance(registry.get("widgets"), Mapping) else {}
-            if isinstance(wid_spec, Mapping):
-                for key, value in wid_spec.items():
-                    token = str(key or "").strip()
-                    if not token:
-                        continue
-                    scoped_token = _node_scoped_catalog_id(node_id, token)
-                    decl["registry"]["widgets"][scoped_token] = _apply_node_context_to_ui(
-                        value,
-                        display,
-                        node_id=node_id,
-                        modal_id_map=modal_id_map,
-                        override_node_display=True,
-                    )
-            if isinstance(resources, Mapping):
-                for key, value in resources.items():
-                    token = str(key or "").strip()
-                    if token:
-                        decl["resources"][token] = _clone_json_like(value)
-            if isinstance(ui_interfaces, Mapping):
-                for key, value in ui_interfaces.items():
-                    token = str(key or "").strip()
-                    if token and isinstance(value, Mapping):
-                        decl["interfaces"][token] = _clone_json_like(value)
-            webio_receivers = webio.get("receivers") if isinstance(webio.get("receivers"), Mapping) else {}
-            if isinstance(webio_receivers, Mapping):
-                for key, value in webio_receivers.items():
-                    token = str(key or "").strip()
-                    if token:
-                        decl["webio"]["receivers"][token] = _normalize_webio_receiver(value)
-            for path, value in ydoc_defaults.items():
-                token = str(path or "").strip()
-                if token:
-                    scoped_node_id = _node_scoped_data_path_node_id(token)
-                    if scoped_node_id and scoped_node_id != node_id:
-                        continue
-                    decl["ydoc_defaults"][node_scope_data_path(token, node_id)] = _clone_json_like(value)
-            for item in apps:
-                if not isinstance(item, dict):
-                    continue
-                if _catalog_entry_is_foreign_relay(item, node_id=node_id):
-                    continue
-                scenario_id = str(item.get("scenario_id") or "").strip()
-                if scenario_id and not _scenario_exists_for_switch(scenario_id, space="workspace"):
-                    continue
-                entry = _scope_remote_catalog_entry_id(
-                    _apply_node_context_to_ui(
-                        item,
-                        display,
-                        node_id=node_id,
-                        modal_id_map=modal_id_map,
-                        override_node_display=True,
-                    ),
-                    node_id=node_id,
-                )
-                decl["apps"].append(entry)
-                app_id = str(entry.get("id") or "").strip()
-                if app_id:
-                    decl["contributions"].append(
-                        {
-                            "extensionPoint": "desktop.apps",
-                            "type": "app",
-                            "id": app_id,
-                            "autoInstall": True,
-                        }
-                    )
-            for item in widgets:
-                if not isinstance(item, dict):
-                    continue
-                if _catalog_entry_is_foreign_relay(item, node_id=node_id):
-                    continue
-                entry = _scope_remote_catalog_entry_id(
-                    _apply_node_context_to_ui(
-                        item,
-                        display,
-                        node_id=node_id,
-                        modal_id_map=modal_id_map,
-                        override_node_display=True,
-                    ),
-                    node_id=node_id,
-                )
-                decl["widgets"].append(entry)
-                widget_id = str(entry.get("id") or "").strip()
-                if widget_id:
-                    decl["contributions"].append(
-                        {
-                            "extensionPoint": "desktop.widgets",
-                            "type": "widget",
-                            "id": widget_id,
-                            "autoInstall": True,
-                        }
-                    )
-            if (
-                decl["apps"]
-                or decl["widgets"]
-                or decl["resources"]
-                or decl["interface"]
-                or decl["interfaces"]
-                or decl["registry"]["modals"]
-                or decl["registry"]["widgets"]
-                or decl["webio"]["receivers"]
-                or decl["ydoc_defaults"]
-            ):
-                decls.append(decl)
-        return decls
+    def _collect_remote_skill_decls(self) -> list[dict[str, Any]]:
+        return _SKILL_CATALOG_SERVICE.collect_remote_skill_decls(
+            self,
+            _skill_catalog_operations(),
+        )
 
     def _apply_ydoc_defaults_in_txn(self, ydoc: Y.YDoc, txn: Any, decls: List[Dict[str, Any]]) -> None:  # type: ignore[override]
         spec: Dict[str, Any] = {}
@@ -5663,164 +5146,16 @@ class WebspaceScenarioRuntime:
         skill_decls_fingerprint_override: str | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
-        collect_timings: Dict[str, float] = {}
-        self._last_collect_inputs_timings_ms = None
-        stage_started = time.perf_counter()
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        registry_map = ydoc.get_map("registry")
-
-        scenario_id = (
-            str(scenario_id_override or "").strip()
-            or str(ui_map.get("current_scenario") or "web_desktop").strip()
-            or "web_desktop"
-        )
-        scenarios_ui = _mapping_get(ui_map, "scenarios") or {}
-        scenario_ui_entry = _read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
-        scenario_ui_application = _coerce_dict(scenario_ui_entry.get("application") or {})
-        scenario_registry_map = _mapping_get(registry_map, "scenarios") or {}
-        scenario_registry_entry = _read_node_scoped_scenario_entry(scenario_registry_map, scenario_id)
-        scenario_data_map = _mapping_get(data_map, "scenarios") or {}
-        scenario_data_entry = _read_node_scoped_scenario_entry(scenario_data_map, scenario_id)
-        scenario_catalog = _coerce_dict(scenario_data_entry.get("catalog") or {})
-        _record_timing(collect_timings, "collect_inputs_read_doc", stage_started)
-
-        mode = "mixed"
-        metadata: Dict[str, Any] = {}
-        overlay_snapshot: Dict[str, Any] = {}
-        stage_started = time.perf_counter()
-        try:
-            row = workspace_index.get_workspace(webspace_id)
-            if row:
-                mode = row.effective_source_mode
-                metadata = {
-                    "title": row.title,
-                    "kind": row.effective_kind,
-                    "source_mode": row.effective_source_mode,
-                    "home_scenario": row.effective_home_scenario,
-                    "is_dev": row.is_dev,
-                }
-                if getattr(row, "has_ui_overlay", False):
-                    overlay_snapshot = {
-                        "installed": _coerce_dict(getattr(row, "installed_overlay", {}) or {}),
-                        "pinnedWidgets": _normalize_overlay_widget_entries(
-                            getattr(row, "pinned_widgets_overlay", []) or []
-                        ),
-                        "topbar": list(getattr(row, "topbar_overlay", []) or []),
-                        "pageSchema": _coerce_dict(getattr(row, "page_schema_overlay", {}) or {}),
-                        "iconOrder": list(getattr(row, "icon_order_overlay", []) or []),
-                        "widgetOrder": list(getattr(row, "widget_order_overlay", []) or []),
-                        "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
-                        "source": "workspace_manifest_overlay",
-                    }
-        except Exception:
-            mode = "mixed"
-            metadata = {}
-        _record_timing(collect_timings, "collect_inputs_manifest", stage_started)
-
-        stage_started = time.perf_counter()
-        if isinstance(scenario_content_override, Mapping) and scenario_content_override:
-            scenario_app_ui, base_catalog, registry_entry = _extract_scenario_sections_from_content(
-                scenario_content_override
-            )
-            scenario_source = "builder_preview_override"
-            legacy_fallback = False
-        else:
-            scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = _resolve_scenario_sections_in_doc(
-                ydoc,
-                webspace_id=webspace_id,
-                scenario_id=scenario_id,
-                source_mode=mode,
-            )
-        _record_timing(collect_timings, "collect_inputs_scenario_sections", stage_started)
-        if metadata:
-            metadata = dict(metadata)
-        metadata["scenario_source"] = scenario_source
-        metadata["legacy_scenario_fallback"] = legacy_fallback
-        metadata["materialization"] = _scenario_materialization_contract(
-            scenario_id,
-            source_mode=mode,
-            identity=materialization_identity,
-        )
-
-        preserve_live_state = _preserve_live_state_on_rebuild_enabled()
-        stage_started = time.perf_counter()
-        if preserve_live_state:
-            live_application = _coerce_live_branch_subset(
-                _mapping_get(ui_map, "application") or {},
-                ("modals", "interfaces"),
-            )
-            live_catalog = _coerce_live_branch_subset(
-                _mapping_get(data_map, "catalog") or {},
-                ("apps", "widgets"),
-            )
-            live_registry = _coerce_live_branch_subset(
-                _mapping_get(registry_map, "merged") or {},
-                ("modals", "widgets"),
-            )
-            live_desktop = _coerce_live_branch_subset(
-                _mapping_get(data_map, "desktop") or {},
-                ("installed", "topbar", "pageSchema", "pinnedWidgets", "iconOrder", "widgetOrder", "hiddenSections"),
-            )
-            live_routing = _coerce_live_branch_subset(
-                _mapping_get(data_map, "routing") or {},
-                ("routes",),
-            )
-        else:
-            live_application = {}
-            live_catalog = {}
-            live_registry = {}
-            live_desktop = {}
-            live_routing = {}
-        _record_timing(collect_timings, "collect_inputs_live_state", stage_started)
-
-        stage_started = time.perf_counter()
-        if skill_decls_override is None:
-            try:
-                self._last_skill_decls_fingerprint = ""
-            except Exception:
-                pass
-            skill_decls = self._collect_skill_decls(mode=mode)
-            skill_decls_fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
-        else:
-            skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
-            skill_decls_fingerprint = str(skill_decls_fingerprint_override or "").strip()
-            if not skill_decls_fingerprint:
-                skill_decls_fingerprint = _fingerprint_json_like(skill_decls)
-            self._last_skill_decls_fingerprint = skill_decls_fingerprint
-        _record_timing(collect_timings, "collect_inputs_skill_decls", stage_started)
-
-        stage_started = time.perf_counter()
-        desktop_scenarios = self._list_desktop_scenarios(space=mode)
-        _record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
-        self._last_collect_inputs_timings_ms = collect_timings
-
-        return WebspaceResolverInputs(
-            webspace_id=webspace_id,
-            scenario_id=str(scenario_id),
-            source_mode=mode,
-            metadata=metadata,
-            scenario_application=scenario_app_ui,
-            scenario_catalog=base_catalog,
-            scenario_registry=registry_entry,
-            overlay_snapshot=overlay_snapshot,
-            live_state={
-                "application": live_application,
-                "catalog": live_catalog,
-                "registry": live_registry,
-                "desktop": live_desktop,
-                "routing": live_routing,
-            },
-            compatibility_cache_presence={
-                "scenario_ui_application": bool(scenario_ui_application),
-                "scenario_registry_entry": bool(scenario_registry_entry),
-                "scenario_catalog": bool(scenario_catalog),
-            },
-            skill_decls=skill_decls,
-            skill_decls_fingerprint=skill_decls_fingerprint,
-            desktop_scenarios=desktop_scenarios,
-            scenario_source=scenario_source,
-            legacy_scenario_fallback=legacy_fallback,
+        return _RESOLUTION_SERVICE.collect_inputs(
+            self,
+            _resolution_operations(),
+            ydoc,
+            webspace_id,
+            materialization_identity=materialization_identity,
+            scenario_id_override=scenario_id_override,
+            skill_decls_override=skill_decls_override,
+            skill_decls_fingerprint_override=skill_decls_fingerprint_override,
+            scenario_content_override=scenario_content_override,
         )
 
     def resolve_webspace(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
@@ -5875,446 +5210,7 @@ class WebspaceScenarioRuntime:
         return resolved
 
     def _resolve_webspace_uncached(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
-
-        scenario_id = str(inputs.scenario_id or "").strip() or "web_desktop"
-        source_mode = str(inputs.source_mode or "").strip() or "mixed"
-        scenario_application = _coerce_dict(inputs.scenario_application or {})
-        scenario_desktop = _coerce_dict(scenario_application.get("desktop") or {})
-        scenario_catalog = _coerce_dict(inputs.scenario_catalog or {})
-        scenario_registry = _coerce_dict(inputs.scenario_registry or {})
-        scenario_apps = [it for it in (scenario_catalog.get("apps") or []) if isinstance(it, Mapping)]
-        scenario_widgets = [it for it in (scenario_catalog.get("widgets") or []) if isinstance(it, Mapping)]
-        raw_scenario_resources = _coerce_dict(
-            scenario_application.get("resources") or scenario_catalog.get("resources") or {}
-        )
-        scenario_resources: Dict[str, Any] = {}
-        scenario_space = _scenario_loader_space(source_mode)
-        try:
-            scenario_dir = scenarios_loader.scenario_root_for_space(scenario_id, scenario_space)
-        except Exception:
-            scenario_dir = None
-        for key, value in raw_scenario_resources.items():
-            token = str(key or "").strip()
-            if token:
-                scenario_resources[token] = _materialize_scenario_resource_descriptor(
-                    token,
-                    value,
-                    scenario_id=scenario_id,
-                    scenario_dir=scenario_dir,
-                )
-        base_registry_modals = [str(x) for x in (scenario_registry.get("modals") or [])]
-        base_registry_widgets = [str(x) for x in (scenario_registry.get("widgets") or [])]
-
-        skill_decls = list(inputs.skill_decls or [])
-        skill_apps: List[Dict[str, Any]] = []
-        skill_widgets: List[Dict[str, Any]] = []
-        skill_resources: Dict[str, Any] = {}
-        skill_interfaces: Dict[str, Any] = {}
-        skill_registry_modals: List[List[str]] = []
-        skill_registry_widgets: List[List[str]] = []
-        auto_widget_ids: set[str] = set()
-        auto_app_ids: set[str] = set()
-        active_remote_node_ids: set[str] = set()
-        detached_remote_node_ids = _detached_member_node_ids()
-        local_display = node_display_from_config(load_config())
-
-        for decl in skill_decls:
-            skill_name = decl.get("skill") or ""
-            space = decl.get("space") or "default"
-            node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _decl_is_node_owned(decl)
-            if node_id and str(skill_name or "").strip().startswith("subnet.member."):
-                active_remote_node_ids.add(node_id)
-            decl_display = {
-                "node_label": str(decl.get("node_label") or "").strip(),
-                "node_compact_label": str(decl.get("node_compact_label") or "").strip(),
-                "node_color": str(decl.get("node_color") or "").strip(),
-                "node_index": decl.get("node_index"),
-            }
-            if not any(decl_display.values()):
-                decl_display = local_display
-            source = f"skill:{skill_name}"
-            dev_flag = space == "dev"
-            reg = decl.get("registry") or {}
-            modal_id_map = _node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
-            for app in decl.get("apps") or []:
-                if isinstance(app, dict):
-                    entry = _mark_entry(app, source=source, dev=dev_flag)
-                    if node_owned and node_id:
-                        entry = _apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                    skill_apps.append(_apply_node_display_to_entry(entry, decl_display, node_id=node_id))
-            for widget in decl.get("widgets") or []:
-                if isinstance(widget, dict):
-                    entry = _mark_entry(widget, source=source, dev=dev_flag)
-                    if node_owned and node_id:
-                        entry = _apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                    skill_widgets.append(_apply_node_display_to_entry(entry, decl_display, node_id=node_id))
-            raw_resources = decl.get("resources") if isinstance(decl.get("resources"), Mapping) else {}
-            skill_source_path = str(decl.get("source_path") or "").strip() or None
-            for key, value in raw_resources.items():
-                token = str(key or "").strip()
-                if token and token not in skill_resources:
-                    skill_resources[token] = _materialize_skill_resource_descriptor(
-                        token,
-                        value,
-                        skill_name=skill_name,
-                        skill_dir=skill_source_path,
-                    )
-            raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
-            if raw_interface and skill_name:
-                interface_copy = _clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)
-                if interface_copy:
-                    skill_interfaces.setdefault(str(skill_name), interface_copy)
-            raw_interfaces = decl.get("interfaces") if isinstance(decl.get("interfaces"), Mapping) else {}
-            for interface_skill, raw_skill_interface in raw_interfaces.items():
-                interface_skill_name = str(interface_skill or "").strip()
-                if not interface_skill_name or not isinstance(raw_skill_interface, Mapping):
-                    continue
-                interface_copy = _clone_skill_ui_interface(
-                    raw_skill_interface,
-                    skill=interface_skill_name,
-                    source=f"skill:{interface_skill_name}",
-                )
-                if interface_copy:
-                    skill_interfaces.setdefault(interface_skill_name, interface_copy)
-            mod_spec = reg.get("modals") or {}
-            if isinstance(mod_spec, dict):
-                skill_registry_modals.append([modal_id_map.get(str(k), str(k)) for k in mod_spec.keys()])
-            else:
-                skill_registry_modals.append([str(x) for x in mod_spec])
-            wid_spec = reg.get("widgets") or {}
-            if isinstance(wid_spec, dict):
-                skill_registry_widgets.append([
-                    _node_scoped_catalog_id(node_id, str(k)) if node_owned and node_id else str(k)
-                    for k in wid_spec.keys()
-                ])
-            else:
-                skill_registry_widgets.append([str(x) for x in wid_spec])
-            for contrib in decl.get("contributions") or []:
-                if not isinstance(contrib, dict):
-                    continue
-                ep = str(contrib.get("extensionPoint") or "")
-                ctype = str(contrib.get("type") or "")
-                cid = str(contrib.get("id") or "")
-                auto = bool(contrib.get("autoInstall"))
-                if not cid or not auto:
-                    continue
-                if ep == "desktop.widgets" and ctype == "widget":
-                    auto_widget_ids.add(cid)
-                if ep == "desktop.apps" and ctype == "app":
-                    auto_app_ids.add(cid)
-
-        merged_apps = [
-            _apply_node_display_to_entry(
-                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
-                local_display,
-                node_id=_local_node_id(),
-            )
-            for it in scenario_apps
-        ]
-        merged_widgets = [
-            _apply_node_display_to_entry(
-                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
-                local_display,
-                node_id=_local_node_id(),
-            )
-            for it in scenario_widgets
-        ]
-
-        extra_apps: List[Dict[str, Any]] = []
-        for sid, title in inputs.desktop_scenarios:
-            if sid == scenario_id:
-                continue
-            app_id = f"scenario:{sid}"
-            extra_apps.append(
-                _apply_node_display_to_entry(
-                    _mark_entry(
-                        {
-                            "id": app_id,
-                            "title": title,
-                            "icon": "apps-outline",
-                            "scenario_id": sid,
-                        },
-                        source=f"scenario:{sid}",
-                        dev=False,
-                    ),
-                    local_display,
-                    node_id=_local_node_id(),
-                )
-            )
-            auto_app_ids.add(app_id)
-
-        merged_apps = _merge_by_id(merged_apps + extra_apps + skill_apps)
-        merged_widgets = _merge_by_id(merged_widgets + skill_widgets)
-        merged_resources = {
-            **_materialized_system_resource_descriptors(),
-            **scenario_resources,
-            **skill_resources,
-        }
-        live_catalog = _coerce_dict((inputs.live_state or {}).get("catalog") or {})
-        merged_apps = _preserve_live_remote_catalog_entries(
-            merged_apps,
-            current_items=live_catalog.get("apps"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        merged_widgets = _preserve_live_remote_catalog_entries(
-            merged_widgets,
-            current_items=live_catalog.get("widgets"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        supports_catalog_controls = _scenario_supports_catalog_controls(
-            scenario_id,
-            scenario_application,
-        )
-        default_modal_ids = ["scenario_switcher"]
-        if supports_catalog_controls:
-            default_modal_ids = ["apps_catalog", "widgets_catalog", *default_modal_ids]
-        merged_registry = {
-            "modals": _merge_registry_lists(
-                base_registry_modals,
-                skill_registry_modals + [default_modal_ids],
-            ),
-            "widgets": _merge_registry_lists(base_registry_widgets, skill_registry_widgets),
-        }
-
-        installed_current = _coerce_dict((inputs.overlay_snapshot or {}).get("installed") or {})
-        overlay_has_pinned_widgets = "pinnedWidgets" in (inputs.overlay_snapshot or {})
-        overlay_pinned_widgets = _normalize_overlay_widget_entries((inputs.overlay_snapshot or {}).get("pinnedWidgets"))
-        overlay_icon_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("iconOrder"))
-        overlay_widget_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("widgetOrder"))
-        overlay_hidden_sections = _dedupe_str_list((inputs.overlay_snapshot or {}).get("hiddenSections"))
-        scenario_pinned_widgets = _normalize_overlay_widget_entries(scenario_desktop.get("pinnedWidgets"))
-        scenario_topbar = list(scenario_desktop.get("topbar") or []) if isinstance(scenario_desktop.get("topbar"), list) else []
-        scenario_page_schema = _coerce_dict(scenario_desktop.get("pageSchema") or {})
-        installed_with_auto = _merge_installed_with_auto(
-            installed_current,
-            auto_apps=auto_app_ids,
-            auto_widgets=auto_widget_ids,
-        )
-
-        merged_modals_map: Dict[str, Any] = {}
-        base_modals_map = _coerce_dict(scenario_application.get("modals") or {})
-        for key, value in base_modals_map.items():
-            merged_modals_map[str(key)] = value
-        for decl in skill_decls:
-            reg = decl.get("registry") or {}
-            mod_spec = reg.get("modals") or {}
-            if not isinstance(mod_spec, dict):
-                continue
-            skill_name = str(decl.get("skill") or "").strip()
-            node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _decl_is_node_owned(decl)
-            decl_display = {
-                "node_label": str(decl.get("node_label") or "").strip(),
-                "node_compact_label": str(decl.get("node_compact_label") or "").strip(),
-                "node_color": str(decl.get("node_color") or "").strip(),
-                "node_index": decl.get("node_index"),
-            }
-            if not any(decl_display.values()):
-                decl_display = local_display
-            modal_id_map = _node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
-            for key, value in mod_spec.items():
-                raw_token = str(key)
-                token = modal_id_map.get(raw_token, raw_token)
-                if token and token not in merged_modals_map:
-                    modal_def = (
-                        _apply_node_context_to_ui(value, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                        if node_owned and node_id
-                        else value
-                    )
-                    merged_modals_map[token] = _mark_modal_def(
-                        modal_def,
-                        source=f"skill:{skill_name}" if skill_name else "skill:unknown",
-                        skill=skill_name,
-                        dev=str(decl.get("space") or "default").strip().lower() == "dev",
-                    )
-
-        if supports_catalog_controls and "apps_catalog" not in merged_modals_map:
-            merged_modals_map["apps_catalog"] = {
-                "title": "Available Apps",
-                "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                "schema": {
-                    "id": "apps_catalog",
-                    "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                    "layout": {
-                        "type": "single",
-                        "areas": [{"id": "main", "role": "main"}],
-                    },
-                    "widgets": [
-                        {
-                            "id": "apps-list",
-                            "type": "collection.grid",
-                            "area": "main",
-                            "title": "Apps",
-                            "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                            "dataSource": {
-                                "kind": "y",
-                                "path": "data/catalog/apps",
-                            },
-                            "actions": [
-                                {
-                                    "on": "select",
-                                    "type": "callHost",
-                                    "target": "desktop.toggleInstall",
-                                    "params": {
-                                        "type": "app",
-                                        "id": "$event.id",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                },
-            }
-        if supports_catalog_controls and "widgets_catalog" not in merged_modals_map:
-            merged_modals_map["widgets_catalog"] = {
-                "title": "Available Widgets",
-                "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                "schema": {
-                    "id": "widgets_catalog",
-                    "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                    "layout": {
-                        "type": "single",
-                        "areas": [{"id": "main", "role": "main"}],
-                    },
-                    "widgets": [
-                        {
-                            "id": "widgets-list",
-                            "type": "collection.grid",
-                            "area": "main",
-                            "title": "Widgets",
-                            "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                            "dataSource": {
-                                "kind": "y",
-                                "path": "data/catalog/widgets",
-                            },
-                            "actions": [
-                                {
-                                    "on": "select",
-                                    "type": "callHost",
-                                    "target": "desktop.toggleInstall",
-                                    "params": {
-                                        "type": "widget",
-                                        "id": "$event.id",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                },
-            }
-
-        live_application = _coerce_dict((inputs.live_state or {}).get("application") or {})
-        merged_modals_map = _preserve_live_remote_modals(
-            merged_modals_map,
-            current_modals=live_application.get("modals"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-
-        live_registry = _coerce_dict((inputs.live_state or {}).get("registry") or {})
-        merged_registry["modals"] = _preserve_live_remote_registry_tokens(
-            list(merged_registry.get("modals") or []),
-            current_tokens=live_registry.get("modals"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        merged_registry["widgets"] = _preserve_live_remote_registry_tokens(
-            list(merged_registry.get("widgets") or []),
-            current_tokens=live_registry.get("widgets"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-
-        app_with_modals: Dict[str, Any] = dict(scenario_application)
-        if merged_modals_map:
-            app_with_modals["modals"] = merged_modals_map
-        if merged_resources:
-            app_with_modals["resources"] = merged_resources
-        if skill_interfaces:
-            merged_interfaces = _coerce_dict(app_with_modals.get("interfaces") or {})
-            for key, value in skill_interfaces.items():
-                merged_interfaces.setdefault(str(key), _clone_json_like(value))
-            app_with_modals["interfaces"] = merged_interfaces
-        desktop_config = _coerce_dict(app_with_modals.get("desktop") or {})
-        desktop_config["topbar"] = scenario_topbar
-        desktop_config["pageSchema"] = scenario_page_schema
-        pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
-        desktop_config["pinnedWidgets"] = _refresh_pinned_widgets_from_catalog_entries(
-            pinned_widgets_source,
-            merged_widgets,
-        )
-        desktop_config["iconOrder"] = list(overlay_icon_order)
-        desktop_config["widgetOrder"] = list(overlay_widget_order)
-        desktop_config["hiddenSections"] = list(overlay_hidden_sections)
-        app_with_modals["desktop"] = desktop_config
-        webui_contract_issues = validate_application_ui_contract(
-            app_with_modals,
-            source=f"webspace:{inputs.webspace_id}:ui.application",
-        )
-        if webui_contract_issues:
-            diagnostics = _coerce_dict(app_with_modals.get("diagnostics") or {})
-            diagnostics["webui_contract"] = {
-                "schema": "adaos.ui.webui_contract.diagnostics.v1",
-                "status": "invalid"
-                if any(issue.level == "error" for issue in webui_contract_issues)
-                else "warning",
-                "issue_count": len(webui_contract_issues),
-                "error_count": sum(1 for issue in webui_contract_issues if issue.level == "error"),
-                "warning_count": sum(1 for issue in webui_contract_issues if issue.level == "warning"),
-                "issues": [issue.to_dict() for issue in webui_contract_issues[:40]],
-            }
-            app_with_modals["diagnostics"] = diagnostics
-            log_webui_contract_issues(
-                webui_contract_issues,
-                webspace_id=inputs.webspace_id,
-                source="webspace.materialization",
-            )
-
-        desktop_next = _coerce_dict((inputs.live_state or {}).get("desktop") or {})
-        desktop_installed = _coerce_dict(desktop_next.get("installed") or {})
-        desktop_installed["apps"] = list(installed_with_auto.get("apps") or [])
-        desktop_installed["widgets"] = list(installed_with_auto.get("widgets") or [])
-        desktop_next["installed"] = desktop_installed
-        desktop_next["topbar"] = list(desktop_config.get("topbar") or [])
-        desktop_next["pageSchema"] = _coerce_dict(desktop_config.get("pageSchema") or {})
-        desktop_next["pinnedWidgets"] = list(desktop_config.get("pinnedWidgets") or [])
-        desktop_next["iconOrder"] = list(desktop_config.get("iconOrder") or [])
-        desktop_next["widgetOrder"] = list(desktop_config.get("widgetOrder") or [])
-        desktop_next["hiddenSections"] = list(desktop_config.get("hiddenSections") or [])
-
-        webio_dict = _merge_webio_receivers(skill_decls)
-
-        routing_dict = _coerce_dict((inputs.live_state or {}).get("routing") or {})
-        routes = routing_dict.get("routes")
-        routing_dict = {**routing_dict, "routes": _coerce_dict(routes)}
-
-        resolved = WebspaceResolverOutputs(
-            webspace_id=inputs.webspace_id,
-            scenario_id=scenario_id,
-            source_mode=source_mode,
-            application=app_with_modals,
-            catalog={
-                "apps": [dict(it) for it in merged_apps],
-                "widgets": [dict(it) for it in merged_widgets],
-                "resources": _clone_json_like(merged_resources),
-            },
-            registry={
-                "modals": list(merged_registry.get("modals") or []),
-                "widgets": list(merged_registry.get("widgets") or []),
-            },
-            installed={
-                "apps": list(installed_with_auto.get("apps") or []),
-                "widgets": list(installed_with_auto.get("widgets") or []),
-            },
-            desktop=desktop_next,
-            webio=webio_dict,
-            routing=routing_dict,
-            skill_decls=skill_decls,
-        )
-        return resolved
+        return _RESOLUTION_SERVICE.resolve(self, _resolution_operations(), inputs)
 
     def _apply_resolved_state_in_doc(
         self,
@@ -6331,517 +5227,21 @@ class WebspaceScenarioRuntime:
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
     ) -> None:
-        _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
-        effective_inputs = inputs or WebspaceResolverInputs(
-            webspace_id=webspace_id,
-            scenario_id=str(resolved.scenario_id or ""),
-            source_mode=str(resolved.source_mode or ""),
+        _RESOLUTION_SERVICE.apply(
+            self,
+            _resolution_operations(),
+            ydoc,
+            webspace_id,
+            resolved,
+            inputs=inputs,
+            previous_resolved=previous_resolved,
+            resolved_branch_fingerprints_override=resolved_branch_fingerprints_override,
+            previous_branch_fingerprints_override=previous_branch_fingerprints_override,
+            expected_request_id=expected_request_id,
+            single_transaction=single_transaction,
+            materialization_status_per_phase=materialization_status_per_phase,
+            force_selector_write=force_selector_write,
         )
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        registry_map = ydoc.get_map("registry")
-        runtime_map = ydoc.get_map("runtime")
-        materialization_contract = _coerce_dict(effective_inputs.metadata.get("materialization") or {})
-        if not materialization_contract:
-            materialization_contract = _scenario_materialization_contract(
-                resolved.scenario_id,
-                source_mode=resolved.source_mode,
-            )
-        runtime_environment = dict(runtime_environment_payload())
-        runtime_environment["materialization"] = materialization_contract
-        target_paths = _EFFECTIVE_BRANCH_PATHS
-        changed_paths: List[str] = []
-        diff_applied_paths: List[str] = []
-        patch_applied_paths: List[str] = []
-        patch_actual_verified_paths: List[str] = []
-        patch_fingerprint_mismatch_paths: List[str] = []
-        patch_fallback_paths: List[str] = []
-        patch_fallback_reasons: Dict[str, str] = {}
-        replaced_paths: List[str] = []
-        failed_paths: List[str] = []
-        fingerprint_unchanged_paths: List[str] = []
-        trusted_fingerprint_unchanged_paths: List[str] = []
-        trusted_previous_fingerprint_patch_paths: List[str] = []
-        stale_fingerprint_paths: List[str] = []
-        defaults_failed = False
-        selector_changed = False
-        selector_reasserted = False
-        selector_apply_mode = "not_attempted"
-        phase_summaries: Dict[str, Dict[str, Any]] = {}
-        phase_timings_ms: Dict[str, float] = {}
-        branch_timings_ms: Dict[str, Dict[str, float]] = {}
-        branch_apply_modes: Dict[str, str] = {}
-        compatibility_presence = dict(effective_inputs.compatibility_cache_presence or {})
-        resolved_branch_fingerprints = {
-            str(key): str(value)
-            for key, value in (resolved_branch_fingerprints_override or {}).items()
-            if str(key).strip() and str(value or "").strip()
-        }
-        if not all(path in resolved_branch_fingerprints for path in _EFFECTIVE_BRANCH_PATHS if path != "runtime.environment"):
-            fallback_fingerprints = _resolved_output_branch_fingerprints(resolved)
-            for path, fingerprint in fallback_fingerprints.items():
-                resolved_branch_fingerprints.setdefault(path, fingerprint)
-        resolved_branch_fingerprints["runtime.environment"] = _fingerprint_json_like(runtime_environment)
-        previous_branch_values: Dict[str, Any] = {}
-        previous_branch_fingerprints: Dict[str, str] = {}
-        if previous_resolved is not None:
-            previous_branch_values = {
-                "ui.application": previous_resolved.application,
-                "data.catalog": previous_resolved.catalog,
-                "data.installed": previous_resolved.installed,
-                "data.desktop": previous_resolved.desktop,
-                "data.webio": previous_resolved.webio,
-                "data.routing": previous_resolved.routing,
-                "registry.merged": previous_resolved.registry,
-            }
-            previous_branch_fingerprints = {
-                str(key): str(value)
-                for key, value in (previous_branch_fingerprints_override or {}).items()
-                if str(key).strip() and str(value or "").strip()
-            }
-            if not all(path in previous_branch_fingerprints for path in previous_branch_values):
-                fallback_previous_fingerprints = _resolved_output_branch_fingerprints(previous_resolved)
-                for path, fingerprint in fallback_previous_fingerprints.items():
-                    previous_branch_fingerprints.setdefault(path, fingerprint)
-        persisted_branch_fingerprints = _read_effective_branch_fingerprints(registry_map)
-        effective_branch_fingerprints = dict(persisted_branch_fingerprints)
-        pending_fingerprint_updates: Dict[str, str] = {}
-        transaction_total = 0
-
-        def _update_materialization_snapshot(phase_name: str) -> None:
-            application = _coerce_dict(resolved.application or {})
-            desktop = _coerce_dict(application.get("desktop") or {})
-            modals = _coerce_dict(application.get("modals") or {})
-            page_schema = _coerce_dict(desktop.get("pageSchema") or {})
-            topbar = desktop.get("topbar") if isinstance(desktop.get("topbar"), list) else []
-            page_widgets = page_schema.get("widgets") if isinstance(page_schema.get("widgets"), list) else []
-            installed = _coerce_dict(resolved.installed or {})
-            include_catalog = phase_name != "structure"
-            snapshot = _build_materialization_snapshot(
-                webspace_id=webspace_id,
-                current_scenario=resolved.scenario_id,
-                has_ui_application=bool(application),
-                has_desktop_config=bool(desktop),
-                has_desktop_page_schema=bool(page_schema),
-                has_apps_catalog_modal="apps_catalog" in modals,
-                has_widgets_catalog_modal="widgets_catalog" in modals,
-                has_catalog_apps=include_catalog and isinstance(resolved.catalog.get("apps"), list),
-                has_catalog_widgets=include_catalog and isinstance(resolved.catalog.get("widgets"), list),
-                has_data_desktop=include_catalog and isinstance(resolved.desktop, Mapping),
-                has_installed_apps=include_catalog and isinstance(installed.get("apps"), list),
-                has_installed_widgets=include_catalog and isinstance(installed.get("widgets"), list),
-                has_scenario_ui_application=bool(compatibility_presence.get("scenario_ui_application")),
-                has_scenario_registry_entry=bool(compatibility_presence.get("scenario_registry_entry")),
-                has_scenario_catalog=bool(compatibility_presence.get("scenario_catalog")),
-                has_data_webio=include_catalog and isinstance(resolved.webio, Mapping),
-                has_data_routing=include_catalog and isinstance(resolved.routing, Mapping),
-                has_registry_merged=bool(resolved.registry),
-                catalog_apps_count=len(resolved.catalog.get("apps") or []) if include_catalog else 0,
-                catalog_widgets_count=len(resolved.catalog.get("widgets") or []) if include_catalog else 0,
-                installed_apps_count=len(installed.get("apps") or []) if include_catalog else 0,
-                installed_widgets_count=len(installed.get("widgets") or []) if include_catalog else 0,
-                topbar_count=len(topbar),
-                page_widget_count=len(page_widgets),
-                rebuild_state=describe_webspace_rebuild_state(webspace_id),
-                required_branches=_normalize_materialization_required_branches(materialization_contract)
-                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-                snapshot_source=f"semantic_rebuild:{phase_name}",
-                stale=False,
-            )
-            current_request_id = str(describe_webspace_rebuild_state(webspace_id).get("request_id") or "").strip() or None
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                current_request_id,
-                materialization=snapshot,
-            )
-
-        def _apply_branch(
-            txn: Any,
-            path: str,
-            y_map: Any,
-            key: str,
-            value: Any,
-            *,
-            fingerprint_updates: Dict[str, str],
-            ignore_errors: bool = False,
-        ) -> None:
-            branch_started = time.perf_counter()
-            branch_timing = branch_timings_ms.setdefault(path, {})
-            fingerprint = ""
-            changed = False
-            apply_mode = "unknown"
-            stale_branch = False
-            try:
-                stage_started = time.perf_counter()
-                fingerprint = str(resolved_branch_fingerprints.get(path) or "").strip()
-                branch_timing["fingerprint_lookup"] = _elapsed_ms(stage_started)
-                actual_branch_fingerprint: str | None = None
-                if (
-                    fingerprint
-                    and str(effective_branch_fingerprints.get(path) or "").strip() == fingerprint
-                ):
-                    stage_started = time.perf_counter()
-                    trusted_previous_fingerprint = str(previous_branch_fingerprints.get(path) or "").strip()
-                    if (
-                        trusted_previous_fingerprint == fingerprint
-                        and _trust_previous_materialized_branch_fingerprints_enabled()
-                    ):
-                        has_value = _has_effective_branch_value(y_map, key)
-                        branch_timing["presence_check"] = _elapsed_ms(stage_started)
-                        if has_value:
-                            fingerprint_unchanged_paths.append(path)
-                            trusted_fingerprint_unchanged_paths.append(path)
-                            fingerprint_updates[path] = fingerprint
-                            pending_fingerprint_updates[path] = fingerprint
-                            branch_apply_modes[path] = "trusted_previous_fingerprint_unchanged"
-                            return
-                    else:
-                        try:
-                            actual_branch_fingerprint = _fingerprint_json_like(y_map.get(key))
-                        except Exception:
-                            actual_branch_fingerprint = ""
-                        branch_timing["actual_fingerprint"] = _elapsed_ms(stage_started)
-                        if actual_branch_fingerprint == fingerprint:
-                            fingerprint_unchanged_paths.append(path)
-                            fingerprint_updates[path] = fingerprint
-                            pending_fingerprint_updates[path] = fingerprint
-                            branch_apply_modes[path] = "fingerprint_unchanged"
-                            return
-                    if path not in stale_fingerprint_paths:
-                        stale_fingerprint_paths.append(path)
-                    stale_branch = True
-
-                # Continue into previous-payload patching when the stored
-                # fingerprint was trusted but the branch is missing, or when
-                # the verified live branch did not match the stored token.
-                stage_started = time.perf_counter()
-                previous_fingerprint = str(previous_branch_fingerprints.get(path) or "").strip()
-                previous_fingerprint_matches = False
-                if previous_fingerprint and path in previous_branch_values and path not in _WHOLE_BRANCH_REPLACE_PATHS:
-                    verify_started = time.perf_counter()
-                    trusted_previous_state = (
-                        _trust_previous_materialized_branch_fingerprints_enabled()
-                        and str(effective_branch_fingerprints.get(path) or "").strip() == previous_fingerprint
-                    )
-                    if trusted_previous_state:
-                        previous_fingerprint_matches = True
-                        trusted_previous_fingerprint_patch_paths.append(path)
-                        branch_timing["previous_fingerprint_trusted"] = _elapsed_ms(verify_started)
-                    elif actual_branch_fingerprint is None:
-                        try:
-                            actual_branch_fingerprint = _fingerprint_json_like(y_map.get(key))
-                        except Exception:
-                            actual_branch_fingerprint = ""
-                        branch_timing["previous_actual_fingerprint"] = _elapsed_ms(verify_started)
-                    else:
-                        branch_timing["previous_actual_fingerprint_reused"] = _elapsed_ms(verify_started)
-                    if trusted_previous_state or actual_branch_fingerprint == previous_fingerprint:
-                        previous_fingerprint_matches = True
-                        patch_actual_verified_paths.append(path)
-                    else:
-                        patch_fingerprint_mismatch_paths.append(path)
-                branch_timing["previous_check"] = _elapsed_ms(stage_started)
-
-                stage_started = time.perf_counter()
-                try:
-                    if stale_branch:
-                        changed, apply_mode = _replace_map_value(y_map, txn, key, value)
-                    elif (
-                        path in previous_branch_values
-                        and previous_fingerprint
-                        and previous_fingerprint_matches
-                        and path not in _WHOLE_BRANCH_REPLACE_PATHS
-                    ):
-                        try:
-                            current_for_patch = y_map.get(key)
-                        except Exception:
-                            current_for_patch = None
-                        if not _is_y_map_value(current_for_patch):
-                            patch_fallback_paths.append(path)
-                            patch_fallback_reasons[path] = f"current_not_y_map:{type(current_for_patch).__name__}"
-                            changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                        elif _mapping_items(value) is None or _mapping_items(previous_branch_values[path]) is None:
-                            patch_fallback_paths.append(path)
-                            patch_fallback_reasons[path] = "non_mapping_payload"
-                            changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                        else:
-                            changed, apply_mode = _patch_map_value_from_previous(
-                                y_map,
-                                txn,
-                                key,
-                                value,
-                                previous_branch_values[path],
-                            )
-                    elif path in _WHOLE_BRANCH_REPLACE_PATHS:
-                        changed, apply_mode = _replace_map_value(y_map, txn, key, value)
-                    else:
-                        changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                finally:
-                    branch_timing["apply"] = _elapsed_ms(stage_started)
-            except Exception:
-                branch_apply_modes[path] = "failed"
-                if not ignore_errors:
-                    raise
-                failed_paths.append(path)
-                return
-            finally:
-                branch_timing["total"] = _elapsed_ms(branch_started)
-            if fingerprint:
-                effective_branch_fingerprints[path] = fingerprint
-                fingerprint_updates[path] = fingerprint
-                pending_fingerprint_updates[path] = fingerprint
-            branch_apply_modes[path] = f"{'changed' if changed else 'unchanged'}:{apply_mode}"
-            if changed:
-                changed_paths.append(path)
-                if apply_mode == "diff":
-                    diff_applied_paths.append(path)
-                elif apply_mode == "patch":
-                    patch_applied_paths.append(path)
-                else:
-                    replaced_paths.append(path)
-
-        def _apply_phase(
-            name: str,
-            branch_specs: tuple[tuple[str, Any, str, Any, bool], ...],
-            *,
-            apply_defaults: bool = False,
-            flush_fingerprints: bool = False,
-            shared_txn: Any | None = None,
-        ) -> None:
-            nonlocal defaults_failed
-            nonlocal transaction_total
-            nonlocal selector_changed
-            nonlocal selector_reasserted
-            nonlocal selector_apply_mode
-            _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
-            phase_started = time.perf_counter()
-            phase_changed_before = len(changed_paths)
-            phase_diff_before = len(diff_applied_paths)
-            phase_patch_before = len(patch_applied_paths)
-            phase_replaced_before = len(replaced_paths)
-            phase_failed_before = len(failed_paths)
-            phase_fingerprint_unchanged_before = len(fingerprint_unchanged_paths)
-            phase_trusted_fingerprint_unchanged_before = len(trusted_fingerprint_unchanged_paths)
-            phase_stale_fingerprint_before = len(stale_fingerprint_paths)
-            phase_defaults_failed = False
-
-            def _apply_phase_body(txn: Any) -> None:
-                nonlocal defaults_failed
-                nonlocal selector_changed
-                nonlocal selector_reasserted
-                nonlocal selector_apply_mode
-                phase_fingerprint_updates: Dict[str, str] = {}
-                if apply_defaults:
-                    try:
-                        self._apply_ydoc_defaults_in_txn(ydoc, txn, resolved.skill_decls)
-                    except Exception:
-                        defaults_failed = True
-                        phase_defaults_failed = True
-                        _log.warning("failed to apply ydoc_defaults for webspace=%s", webspace_id, exc_info=True)
-
-                if name == "structure":
-                    selector_target = str(resolved.scenario_id or "").strip()
-                    if selector_target:
-                        if force_selector_write:
-                            selector_changed = ui_map.get("current_scenario") != selector_target
-                            ui_map.set(txn, "current_scenario", selector_target)
-                            selector_reasserted = True
-                            selector_apply_mode = "reasserted"
-                        else:
-                            selector_changed, selector_apply_mode = _set_map_value_if_changed(
-                                ui_map,
-                                txn,
-                                "current_scenario",
-                                selector_target,
-                            )
-
-                for path, y_map, key, value, ignore_errors in branch_specs:
-                    _apply_branch(
-                        txn,
-                        path,
-                        y_map,
-                        key,
-                        value,
-                        fingerprint_updates=phase_fingerprint_updates,
-                        ignore_errors=ignore_errors,
-                    )
-                if flush_fingerprints and pending_fingerprint_updates:
-                    _write_effective_branch_fingerprints(
-                        registry_map,
-                        txn,
-                        current=effective_branch_fingerprints,
-                        updates=pending_fingerprint_updates,
-                    )
-
-            if shared_txn is None:
-                with ydoc.begin_transaction() as txn:
-                    transaction_total += 1
-                    _apply_phase_body(txn)
-            else:
-                _apply_phase_body(shared_txn)
-
-            phase_changed_paths = list(changed_paths[phase_changed_before:])
-            phase_diff_paths = list(diff_applied_paths[phase_diff_before:])
-            phase_patch_paths = list(patch_applied_paths[phase_patch_before:])
-            phase_replaced_paths = list(replaced_paths[phase_replaced_before:])
-            phase_failed_paths = list(failed_paths[phase_failed_before:])
-            phase_fingerprint_unchanged_paths = list(fingerprint_unchanged_paths[phase_fingerprint_unchanged_before:])
-            phase_trusted_fingerprint_unchanged_paths = list(
-                trusted_fingerprint_unchanged_paths[phase_trusted_fingerprint_unchanged_before:]
-            )
-            phase_stale_fingerprint_paths = list(stale_fingerprint_paths[phase_stale_fingerprint_before:])
-            phase_paths = [path for path, _y_map, _key, _value, _ignore_errors in branch_specs]
-            phase_branch_timings = {
-                path: dict(branch_timings_ms.get(path) or {})
-                for path in phase_paths
-                if branch_timings_ms.get(path)
-            }
-            phase_branch_modes = {
-                path: str(branch_apply_modes.get(path) or "")
-                for path in phase_paths
-                if str(branch_apply_modes.get(path) or "")
-            }
-            branch_count = len(branch_specs)
-            phase_summary: Dict[str, Any] = {
-                "branch_count": branch_count,
-                "changed_branches": len(phase_changed_paths),
-                "unchanged_branches": branch_count - len(phase_changed_paths) - len(phase_failed_paths),
-                "failed_branches": len(phase_failed_paths),
-                "changed_paths": phase_changed_paths,
-            }
-            if phase_diff_paths:
-                phase_summary["diff_applied_branches"] = len(phase_diff_paths)
-                phase_summary["diff_applied_paths"] = phase_diff_paths
-            if phase_patch_paths:
-                phase_summary["patch_applied_branches"] = len(phase_patch_paths)
-                phase_summary["patch_applied_paths"] = phase_patch_paths
-            if phase_replaced_paths:
-                phase_summary["replaced_branches"] = len(phase_replaced_paths)
-                phase_summary["replaced_paths"] = phase_replaced_paths
-            if phase_fingerprint_unchanged_paths:
-                phase_summary["fingerprint_unchanged_branches"] = len(phase_fingerprint_unchanged_paths)
-                phase_summary["fingerprint_unchanged_paths"] = phase_fingerprint_unchanged_paths
-            if phase_trusted_fingerprint_unchanged_paths:
-                phase_summary["trusted_fingerprint_unchanged_branches"] = len(
-                    phase_trusted_fingerprint_unchanged_paths
-                )
-                phase_summary["trusted_fingerprint_unchanged_paths"] = phase_trusted_fingerprint_unchanged_paths
-            if phase_stale_fingerprint_paths:
-                phase_summary["stale_fingerprint_branches"] = len(phase_stale_fingerprint_paths)
-                phase_summary["stale_fingerprint_paths"] = phase_stale_fingerprint_paths
-            if phase_failed_paths:
-                phase_summary["failed_paths"] = phase_failed_paths
-            if phase_defaults_failed:
-                phase_summary["defaults_failed"] = True
-            if phase_branch_timings:
-                phase_summary["branch_timings_ms"] = phase_branch_timings
-            if phase_branch_modes:
-                phase_summary["branch_apply_modes"] = phase_branch_modes
-            phase_summaries[name] = phase_summary
-            phase_timings_ms[f"apply_{name}"] = _elapsed_ms(phase_started)
-            if materialization_status_per_phase:
-                _update_materialization_snapshot(name)
-
-        structure_specs = (
-            ("ui.application", ui_map, "application", resolved.application, False),
-            ("registry.merged", registry_map, "merged", resolved.registry, False),
-            ("runtime.environment", runtime_map, "environment", runtime_environment, False),
-        )
-        interactive_specs = (
-            ("data.catalog", data_map, "catalog", resolved.catalog, False),
-            ("data.installed", data_map, "installed", resolved.installed, False),
-            ("data.desktop", data_map, "desktop", resolved.desktop, True),
-            ("data.webio", data_map, "webio", resolved.webio, True),
-            ("data.routing", data_map, "routing", resolved.routing, True),
-        )
-        if single_transaction:
-            combined_started = time.perf_counter()
-            with ydoc.begin_transaction() as txn:
-                transaction_total += 1
-                _apply_phase(
-                    "structure",
-                    structure_specs,
-                    apply_defaults=True,
-                    flush_fingerprints=False,
-                    shared_txn=txn,
-                )
-                _apply_phase(
-                    "interactive",
-                    interactive_specs,
-                    flush_fingerprints=True,
-                    shared_txn=txn,
-                )
-            phase_timings_ms["apply_combined_transaction"] = _elapsed_ms(combined_started)
-        else:
-            _apply_phase(
-                "structure",
-                structure_specs,
-                apply_defaults=True,
-                flush_fingerprints=False,
-            )
-            _apply_phase(
-                "interactive",
-                interactive_specs,
-                flush_fingerprints=True,
-            )
-        if not materialization_status_per_phase:
-            _update_materialization_snapshot("interactive")
-
-        self._last_apply_summary = {
-            "branch_count": len(target_paths),
-            "changed_branches": len(changed_paths),
-            "unchanged_branches": len(target_paths) - len(changed_paths) - len(failed_paths),
-            "failed_branches": len(failed_paths),
-            "changed_paths": list(changed_paths),
-            "defaults_failed": defaults_failed,
-            "transaction_total": transaction_total,
-            "phases": phase_summaries,
-            "branch_timings_ms": {path: dict(values) for path, values in branch_timings_ms.items()},
-            "branch_apply_modes": dict(branch_apply_modes),
-            "selector_changed": bool(selector_changed),
-            "selector_reasserted": bool(selector_reasserted),
-            "selector_apply_mode": selector_apply_mode,
-        }
-        if diff_applied_paths:
-            self._last_apply_summary["diff_applied_branches"] = len(diff_applied_paths)
-            self._last_apply_summary["diff_applied_paths"] = list(diff_applied_paths)
-        if patch_applied_paths:
-            self._last_apply_summary["patch_applied_branches"] = len(patch_applied_paths)
-            self._last_apply_summary["patch_applied_paths"] = list(patch_applied_paths)
-        if patch_actual_verified_paths:
-            self._last_apply_summary["patch_actual_verified_branches"] = len(patch_actual_verified_paths)
-            self._last_apply_summary["patch_actual_verified_paths"] = list(patch_actual_verified_paths)
-        if patch_fingerprint_mismatch_paths:
-            self._last_apply_summary["patch_fingerprint_mismatch_branches"] = len(patch_fingerprint_mismatch_paths)
-            self._last_apply_summary["patch_fingerprint_mismatch_paths"] = list(patch_fingerprint_mismatch_paths)
-        if patch_fallback_paths:
-            self._last_apply_summary["patch_fallback_branches"] = len(patch_fallback_paths)
-            self._last_apply_summary["patch_fallback_paths"] = list(patch_fallback_paths)
-            self._last_apply_summary["patch_fallback_reasons"] = dict(patch_fallback_reasons)
-        if replaced_paths:
-            self._last_apply_summary["replaced_branches"] = len(replaced_paths)
-            self._last_apply_summary["replaced_paths"] = list(replaced_paths)
-        if fingerprint_unchanged_paths:
-            self._last_apply_summary["fingerprint_unchanged_branches"] = len(fingerprint_unchanged_paths)
-            self._last_apply_summary["fingerprint_unchanged_paths"] = list(fingerprint_unchanged_paths)
-        if trusted_fingerprint_unchanged_paths:
-            self._last_apply_summary["trusted_fingerprint_unchanged_branches"] = len(
-                trusted_fingerprint_unchanged_paths
-            )
-            self._last_apply_summary["trusted_fingerprint_unchanged_paths"] = list(trusted_fingerprint_unchanged_paths)
-        if trusted_previous_fingerprint_patch_paths:
-            self._last_apply_summary["trusted_previous_fingerprint_patch_branches"] = len(
-                trusted_previous_fingerprint_patch_paths
-            )
-            self._last_apply_summary["trusted_previous_fingerprint_patch_paths"] = list(
-                trusted_previous_fingerprint_patch_paths
-            )
-        if stale_fingerprint_paths:
-            self._last_apply_summary["stale_fingerprint_branches"] = len(stale_fingerprint_paths)
-            self._last_apply_summary["stale_fingerprint_paths"] = list(stale_fingerprint_paths)
-        if failed_paths:
-            self._last_apply_summary["failed_paths"] = list(failed_paths)
-        self._last_apply_phase_timings_ms = phase_timings_ms or None
 
     def apply_materialized_payload_to_doc(
         self,
@@ -7107,203 +5507,19 @@ class WebspaceScenarioRuntime:
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
-        """Resolve a materialized payload without mutating an intermediate YDoc."""
-        materialize_started = time.perf_counter()
-        timings: Dict[str, float] = {}
-        ydoc_timings: Dict[str, float] = {"payload_only": 0.0}
-        self._last_resolver_debug = None
-        self._last_collect_inputs_timings_ms = None
-        self._last_apply_summary = None
-        self._last_apply_phase_timings_ms = None
-        self._last_materialized_payload = None
-        self._last_rebuild_ydoc_timings_ms = None
-        self._last_rebuild_snapshot_update = None
-        self._last_rebuild_state_vector = None
-        self._last_worker_diagnostics = None
-
-        use_process_worker = (
-            _materialization_worker_enabled()
-            and isolate_process is not False
-            and not scenario_content_override
-            and not skill_source_mode
+        return await _MATERIALIZATION_SERVICE.resolve_payload(
+            self,
+            _materialization_operations(),
+            webspace_id,
+            request_id=request_id,
+            scenario_id=scenario_id,
+            materialization_identity=materialization_identity,
+            isolate_process=isolate_process,
+            skill_decls_snapshot=skill_decls_snapshot,
+            skill_decls_fingerprint=skill_decls_fingerprint,
+            scenario_content_override=scenario_content_override,
+            skill_source_mode=skill_source_mode,
         )
-        if use_process_worker:
-            stage_started = time.perf_counter()
-            worker_result = _get_cached_materialized_worker_result(
-                materialization_identity,
-                cache_mode="payload_only",
-                require_snapshot=False,
-            )
-            if worker_result is not None:
-                _record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
-                ydoc_timings["materialization_cache_hit"] = 0.0
-            else:
-                prepared_skill_decls = skill_decls_snapshot
-                prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-                if prepared_skill_decls is None:
-                    prepare_started = time.perf_counter()
-                    prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                        self._prepare_materialization_skill_decls_sync,
-                        webspace_id,
-                        skill_source_mode,
-                    )
-                    _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
-                worker_result = await _run_materialization_worker(
-                    webspace_id,
-                    mode="payload_only",
-                    request_id=request_id,
-                    scenario_id=scenario_id,
-                    materialization_identity=materialization_identity,
-                    skill_decls_snapshot=prepared_skill_decls,
-                    skill_decls_fingerprint=prepared_skill_fingerprint,
-                )
-                _record_timing(ydoc_timings, "payload_worker", stage_started)
-                ydoc_timings["materialization_cache_miss"] = 0.0
-                _remember_materialized_worker_result(
-                    materialization_identity,
-                    worker_result,
-                    cache_mode="payload_only",
-                    require_snapshot=False,
-                )
-            _raise_if_rebuild_request_superseded(webspace_id, request_id)
-            payload = worker_result.get("materialized_payload")
-            if not isinstance(payload, Mapping):
-                raise RuntimeError("materialization_worker_missing_payload")
-            self._last_materialized_payload = dict(payload)
-            self._last_rebuild_timings_ms = _copy_timing_map(
-                worker_result.get("rebuild_timings_ms")
-            )
-            self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
-            self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
-            self._last_apply_phase_timings_ms = _copy_timing_map(
-                worker_result.get("apply_phase_timings_ms")
-            )
-            self._last_worker_diagnostics = {
-                "mode": "payload_only",
-                "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
-                "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
-                "init_ms": worker_result.get("worker_init_ms"),
-                "materialize_ms": worker_result.get("worker_materialize_ms"),
-                "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
-                "result_bytes": worker_result.get("worker_result_bytes"),
-                "materialization_cache": dict(worker_result.get("materialization_cache") or {})
-                if isinstance(worker_result.get("materialization_cache"), Mapping)
-                else None,
-            }
-            worker_ydoc_timings = _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {}
-            worker_ydoc_timings["worker_process"] = round(
-                float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
-                3,
-            )
-            self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(
-                worker_ydoc_timings,
-                started_at=materialize_started,
-            )
-            resolved = _resolved_outputs_from_cache_payload(payload)
-            inputs = _materialized_payload_inputs(
-                webspace_id,
-                payload,
-                resolved,
-                materialization_identity=materialization_identity,
-            )
-            materialization_contract = _coerce_dict(inputs.metadata.get("materialization") or {})
-            materialization_snapshot = _build_materialization_snapshot_from_resolved(
-                webspace_id=webspace_id,
-                resolved=resolved,
-                compatibility_presence=inputs.compatibility_cache_presence,
-                rebuild_state=describe_webspace_rebuild_state(webspace_id),
-                required_branches=_normalize_materialization_required_branches(materialization_contract)
-                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-                snapshot_source="semantic_rebuild:payload_worker",
-                phase_name="complete",
-                stale=False,
-            )
-            if str(request_id or "").strip():
-                _set_webspace_rebuild_status_if_current(
-                    webspace_id,
-                    request_id,
-                    materialization=materialization_snapshot,
-                )
-            return resolved.to_registry_entry()
-
-        prepared_skill_decls = skill_decls_snapshot
-        prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-        if prepared_skill_decls is None:
-            stage_started = time.perf_counter()
-            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                self._prepare_materialization_skill_decls_sync,
-                webspace_id,
-                skill_source_mode,
-            )
-            _record_timing(timings, "prepare_skill_decls", stage_started)
-
-        operational_doc_started = time.perf_counter()
-        operational_doc_close_started = operational_doc_started
-        async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
-            _record_timing(timings, "open_operational_doc", operational_doc_started)
-            _raise_if_rebuild_request_superseded(webspace_id, request_id)
-            stage_started = time.perf_counter()
-            inputs = self._collect_resolver_inputs_in_doc(
-                ydoc,
-                webspace_id,
-                materialization_identity=materialization_identity,
-                scenario_id_override=scenario_id,
-                skill_decls_override=prepared_skill_decls,
-                skill_decls_fingerprint_override=prepared_skill_fingerprint,
-                scenario_content_override=scenario_content_override,
-            )
-            _record_timing(timings, "collect_inputs", stage_started)
-            collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
-            timings.update(collect_phase_timings)
-
-            resolved, payload, worker_timings = await _run_materialization_cpu(
-                self._resolve_materialized_payload_from_inputs_sync,
-                inputs,
-            )
-            timings.update(worker_timings)
-            operational_doc_close_started = time.perf_counter()
-        _record_timing(timings, "close_operational_doc", operational_doc_close_started)
-
-        _raise_if_rebuild_request_superseded(webspace_id, request_id)
-        self._last_materialized_payload = payload
-        materialization_contract = _coerce_dict(inputs.metadata.get("materialization") or {})
-        if not materialization_contract:
-            materialization_contract = _scenario_materialization_contract(
-                resolved.scenario_id,
-                source_mode=resolved.source_mode,
-            )
-        materialization_snapshot = _build_materialization_snapshot_from_resolved(
-            webspace_id=webspace_id,
-            resolved=resolved,
-            compatibility_presence=inputs.compatibility_cache_presence,
-            rebuild_state=describe_webspace_rebuild_state(webspace_id),
-            required_branches=_normalize_materialization_required_branches(materialization_contract)
-            or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-            snapshot_source="semantic_rebuild:payload_only",
-            phase_name="complete",
-            stale=False,
-        )
-        if str(request_id or "").strip():
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                materialization=materialization_snapshot,
-            )
-
-        stage_started = time.perf_counter()
-        entry = resolved.to_registry_entry()
-        _record_timing(timings, "to_registry_entry", stage_started)
-        self._last_rebuild_timings_ms = _finalize_timing_map(timings, started_at=materialize_started)
-        self._last_apply_summary = {
-            "branch_count": len(_EFFECTIVE_BRANCH_PATHS),
-            "changed_branches": 0,
-            "unchanged_branches": 0,
-            "failed_branches": 0,
-            "payload_only": True,
-        }
-        self._last_apply_phase_timings_ms = None
-        self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(ydoc_timings, started_at=materialize_started)
-        return entry
 
     # --- public API ------------------------------------------------------
 
@@ -7408,174 +5624,18 @@ class WebspaceScenarioRuntime:
         fresh_doc: bool = False,
         replace_ystore_snapshot: bool = False,
     ) -> WebUIRegistryEntry:
-        """
-        Async counterpart of :meth:`compute_registry_for_webspace` for use
-        inside running event loops.
-        """
-        rebuild_started = time.perf_counter()
-        ydoc_timings: Dict[str, float] = {}
-        self._last_rebuild_ydoc_timings_ms = None
-        self._last_rebuild_snapshot_update = None
-        self._last_rebuild_state_vector = None
-        self._last_materialized_payload = None
-        self._last_worker_diagnostics = None
-        use_live_room = bool(publish_live_room) if prefer_live_room is None else bool(prefer_live_room)
-        try:
-            if fresh_doc:
-                ystore = get_ystore_for_webspace(webspace_id) if replace_ystore_snapshot else None
-                if ystore is not None:
-                    stage_started = time.perf_counter()
-                    await ystore.start()
-                    _record_timing(ydoc_timings, "ystore_start", stage_started)
-                else:
-                    ydoc_timings["ystore_start"] = 0.0
-                try:
-                    stage_started = time.perf_counter()
-                    worker_result = _get_cached_materialized_worker_result(materialization_identity)
-                    if worker_result is not None:
-                        _record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
-                        ydoc_timings["fresh_doc_worker"] = 0.0
-                        ydoc_timings["materialization_cache_hit"] = 0.0
-                    else:
-                        if _materialization_worker_enabled():
-                            prepare_started = time.perf_counter()
-                            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                                self._prepare_materialization_skill_decls_sync,
-                                webspace_id,
-                            )
-                            _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
-                            worker_result = await _run_materialization_worker(
-                                webspace_id,
-                                mode="fresh_doc",
-                                request_id=request_id,
-                                scenario_id=initial_scenario_id,
-                                materialization_identity=materialization_identity,
-                                skill_decls_snapshot=prepared_skill_decls,
-                                skill_decls_fingerprint=prepared_skill_fingerprint,
-                            )
-                        else:
-                            worker_result = await _run_materialization_cpu(
-                                self._rebuild_fresh_doc_snapshot_sync,
-                                webspace_id,
-                                request_id=request_id,
-                                initial_scenario_id=initial_scenario_id,
-                                materialization_identity=materialization_identity,
-                            )
-                        _record_timing(ydoc_timings, "fresh_doc_worker", stage_started)
-                        ydoc_timings["materialization_cache_miss"] = 0.0
-                        _remember_materialized_worker_result(materialization_identity, worker_result)
-                    _raise_if_rebuild_request_superseded(webspace_id, request_id)
-                    entry = worker_result["entry"]
-                    snapshot_update = bytes(worker_result.get("snapshot_update") or b"")
-                    state_vector = bytes(worker_result.get("state_vector") or b"")
-                    self._last_rebuild_snapshot_update = snapshot_update
-                    self._last_rebuild_state_vector = state_vector
-                    materialized_payload = worker_result.get("materialized_payload")
-                    self._last_materialized_payload = (
-                        _clone_json_like(materialized_payload)
-                        if isinstance(materialized_payload, Mapping)
-                        else None
-                    )
-                    worker_ydoc_timings = _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {}
-                    for timing_key, timing_value in worker_ydoc_timings.items():
-                        if timing_key == "total":
-                            continue
-                        ydoc_timings[timing_key] = timing_value
-                    if worker_result.get("worker_parent_elapsed_ms") is not None:
-                        ydoc_timings["worker_process"] = round(
-                            float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
-                            3,
-                        )
-                        self._last_worker_diagnostics = {
-                            "mode": "fresh_doc",
-                            "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
-                            "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
-                            "init_ms": worker_result.get("worker_init_ms"),
-                            "materialize_ms": worker_result.get("worker_materialize_ms"),
-                            "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
-                            "result_bytes": worker_result.get("worker_result_bytes"),
-                        }
-                    self._last_rebuild_timings_ms = _copy_timing_map(worker_result.get("rebuild_timings_ms"))
-                    self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
-                    self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
-                    self._last_apply_phase_timings_ms = _copy_timing_map(
-                        worker_result.get("apply_phase_timings_ms")
-                    )
-                    if ystore is not None:
-                        stage_started = time.perf_counter()
-                        async with ystore_write_metadata(
-                            root_names=["ui", "data", "registry", "runtime"],
-                            source="webspace_runtime.rebuild_async.replace_snapshot",
-                            owner="core:webspace_runtime",
-                            channel="core.webspace_runtime.snapshot_replace",
-                            governed=True,
-                        ):
-                            replace_result = await ystore.replace_snapshot_update(
-                                snapshot_update,
-                                state_vector=state_vector,
-                                backup_kind="builder_revision_apply_snapshot_replace",
-                                persist_snapshot=False,
-                                notify=False,
-                            )
-                        _record_timing(ydoc_timings, "ystore_replace_snapshot", stage_started)
-                        backup_schedule = _schedule_builder_ystore_snapshot_backup(
-                            webspace_id,
-                            reason="builder_revision_apply_snapshot_replace_deferred",
-                        )
-                        ydoc_timings["ystore_backup_deferred"] = 0.0 if backup_schedule.get("scheduled") else -1.0
-                        if isinstance(replace_result, Mapping):
-                            try:
-                                ydoc_timings["ystore_replace_persist"] = round(
-                                    float(replace_result.get("persist_ms") or 0.0),
-                                    3,
-                                )
-                            except Exception:
-                                pass
-                            try:
-                                ydoc_timings["ystore_replace_notify"] = round(
-                                    float(replace_result.get("notify_ms") or 0.0),
-                                    3,
-                                )
-                            except Exception:
-                                pass
-                    else:
-                        ydoc_timings["ystore_replace_snapshot"] = 0.0
-                    ydoc_timings["encode_diff"] = 0.0
-                    ydoc_timings["ystore_write_update"] = 0.0
-                    ydoc_timings["room_update"] = 0.0
-                    return entry
-                finally:
-                    if ystore is not None:
-                        stage_started = time.perf_counter()
-                        try:
-                            ystore.stop()
-                        except Exception:
-                            pass
-                        _record_timing(ydoc_timings, "ystore_stop", stage_started)
-            async with _open_rebuild_ydoc_session(
-                webspace_id,
-                timings=ydoc_timings,
-                publish_live_room=publish_live_room,
-                prefer_live_room=use_live_room,
-            ) as ydoc:
-                seed_scenario = str(initial_scenario_id or "").strip()
-                if seed_scenario:
-                    stage_started = time.perf_counter()
-                    ui_map = ydoc.get_map("ui")
-                    with ydoc.begin_transaction() as txn:
-                        _set_map_value_if_changed(ui_map, txn, "current_scenario", seed_scenario)
-                    _record_timing(ydoc_timings, "seed_initial_scenario", stage_started)
-                stage_started = time.perf_counter()
-                entry = self._rebuild_in_doc(
-                    ydoc,
-                    webspace_id,
-                    expected_request_id=request_id,
-                    materialization_identity=materialization_identity,
-                )
-                _record_timing(ydoc_timings, "in_doc_rebuild", stage_started)
-                return entry
-        finally:
-            self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(ydoc_timings, started_at=rebuild_started)
+        return await _MATERIALIZATION_SERVICE.rebuild(
+            self,
+            _materialization_operations(),
+            webspace_id,
+            request_id=request_id,
+            publish_live_room=publish_live_room,
+            prefer_live_room=prefer_live_room,
+            initial_scenario_id=initial_scenario_id,
+            materialization_identity=materialization_identity,
+            fresh_doc=fresh_doc,
+            replace_ystore_snapshot=replace_ystore_snapshot,
+        )
 
 
 # --- webspace helpers ---------------------------------------------------
@@ -7645,26 +5705,6 @@ def _payload_command_trace(payload: Dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _recovery_request_fingerprint(
-    *,
-    webspace_id: str,
-    action: str,
-    scenario_id: str | None,
-    command_trace: Mapping[str, Any] | None = None,
-) -> str:
-    trace = command_trace if isinstance(command_trace, Mapping) else {}
-    trace_fp = str(trace.get("gateway_command_fingerprint") or "").strip()
-    if trace_fp:
-        return trace_fp
-    raw = {
-        "webspace_id": str(webspace_id or "").strip() or "default",
-        "action": str(action or "").strip() or "reload",
-        "scenario_id": str(scenario_id or "").strip() or None,
-    }
-    encoded = json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    return hashlib.sha1(encoded).hexdigest()[:12]
-
-
 async def _resolve_rebuild_scenario_target(
     webspace_id: str,
     requested_scenario_id: str | None,
@@ -7704,7 +5744,7 @@ async def _resolve_rebuild_scenario_target(
 def _resolve_projection_refresh_space(webspace_id: str) -> str:
     try:
         row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-        return "dev" if str(getattr(row, "effective_source_mode", "") or "").strip().lower() == "dev" else "workspace"
+        return _PROJECTION_SERVICE.space_for_source(getattr(row, "effective_source_mode", ""))
     except Exception:
         return "workspace"
 
@@ -7716,60 +5756,28 @@ async def _refresh_projection_rules_for_rebuild(
     scenario_id: str | None = None,
     scenario_resolution: str | None = None,
 ) -> dict[str, Any]:
-    target_scenario = str(scenario_id or "").strip() or None
-    target_resolution = str(scenario_resolution or "").strip() or None
-    if not target_scenario or not target_resolution:
-        try:
-            _state, resolved_scenario, resolved_resolution = await _resolve_rebuild_scenario_target(
-                webspace_id,
-                target_scenario,
-                prefer_manifest_home_before_current=False,
-            )
-            if not target_scenario:
-                target_scenario = resolved_scenario
-            if not target_resolution:
-                target_resolution = resolved_resolution
-        except Exception:
-            _log.debug("failed to resolve projection refresh target for webspace=%s", webspace_id, exc_info=True)
-            target_scenario = target_scenario or None
-            target_resolution = target_resolution or None
-    target_space = _resolve_projection_refresh_space(webspace_id)
-    if not target_scenario:
-        return {
-            "attempted": False,
-            "scenario_id": None,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": 0,
-            "source": "none",
-        }
-    try:
-        rules_loaded = int(ctx.projections.load_from_scenario(target_scenario, space=target_space) or 0)
-        return {
-            "attempted": True,
-            "scenario_id": target_scenario,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": rules_loaded,
-            "source": "scenario_manifest",
-        }
-    except Exception as exc:
-        try:
-            replace_scenario_entries = getattr(ctx.projections, "replace_scenario_entries", None)
-            if callable(replace_scenario_entries):
-                replace_scenario_entries([], scenario_id=target_scenario, space=target_space)
-        except Exception:
-            _log.debug("failed to clear stale scenario data_projections for scenario=%s", target_scenario, exc_info=True)
-        _log.debug("failed to refresh data_projections for scenario=%s", target_scenario, exc_info=True)
-        return {
-            "attempted": True,
-            "scenario_id": target_scenario,
-            "scenario_resolution": target_resolution,
-            "space": target_space,
-            "rules_loaded": 0,
-            "source": "scenario_manifest",
-            "error": f"{exc.__class__.__name__}: {exc}",
-        }
+    async def _resolve_target(target: str, requested: str | None):
+        return await _resolve_rebuild_scenario_target(
+            target,
+            requested,
+            prefer_manifest_home_before_current=False,
+        )
+
+    result = await _PROJECTION_SERVICE.refresh_for_rebuild(
+        registry=getattr(ctx, "projections", None),
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        scenario_resolution=scenario_resolution,
+        resolve_target=_resolve_target,
+        resolve_space=_resolve_projection_refresh_space,
+    )
+    if result.get("error"):
+        _log.debug(
+            "failed to refresh data_projections for scenario=%s: %s",
+            result.get("scenario_id"),
+            result["error"],
+        )
+    return result
 
 
 def _slugify_webspace_id(raw: str | None) -> str:
@@ -8023,37 +6031,12 @@ async def describe_webspace_projection_state(
     targeting and whether that matches the active scenario layer in memory.
     """
     operational = await describe_webspace_operational_state(webspace_id)
-    target_scenario = (
-        str(scenario_id or "").strip()
-        or str(operational.current_scenario or "").strip()
-        or str(operational.effective_home_scenario or "").strip()
-        or None
-    )
-
     registry = get_ctx().projections
-    snapshot: Dict[str, Any] = {}
-    try:
-        raw = registry.snapshot() if hasattr(registry, "snapshot") else {}
-        snapshot = dict(raw) if isinstance(raw, Mapping) else {}
-    except Exception:
-        snapshot = {}
-
-    active_scenario = str(snapshot.get("active_scenario_id") or "").strip() or None
-    active_space = str(snapshot.get("active_space") or "").strip() or "workspace"
-    target_space = "dev" if str(operational.source_mode or "").strip().lower() == "dev" else "workspace"
-    return {
-        "webspace_id": operational.webspace_id,
-        "target_scenario": target_scenario,
-        "target_space": target_space,
-        "active_scenario": active_scenario,
-        "active_space": active_space,
-        "active_matches_target": bool(target_scenario)
-        and active_scenario == target_scenario
-        and active_space == target_space,
-        "base_rule_count": int(snapshot.get("base_rule_count") or 0),
-        "scenario_rule_count": int(snapshot.get("scenario_rule_count") or 0),
-        "source": "projection_registry",
-    }
+    return _PROJECTION_SERVICE.describe(
+        operational=operational,
+        scenario_id=scenario_id,
+        registry=registry,
+    )
 
 
 async def _resolve_reload_scenario_target(
@@ -8249,10 +6232,9 @@ def _schedule_webspace_listing_sync(
     reason: str,
     webspace_id: str | None = None,
 ) -> dict[str, Any]:
-    global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
-
-    current = _WEBSPACE_LISTING_SYNC_TASK
-    if current is not None and not current.done():
+    task_key = "listing"
+    current = _TASK_STATE.active_task(_TASK_STATE.WEBSPACE_LISTING, task_key)
+    if current is not None:
         return {
             "scheduled": True,
             "coalesced": True,
@@ -8275,15 +6257,17 @@ def _schedule_webspace_listing_sync(
         except Exception:
             _log.warning("post-ready webspace listing sync failed reason=%s", reason, exc_info=True)
         finally:
-            global _WEBSPACE_LISTING_SYNC_TASK  # pylint: disable=global-statement
-            if _WEBSPACE_LISTING_SYNC_TASK is task:
-                _WEBSPACE_LISTING_SYNC_TASK = None
+            _TASK_STATE.pop_task(
+                _TASK_STATE.WEBSPACE_LISTING,
+                task_key,
+                expected=task,
+            )
 
     task = asyncio.create_task(
         _runner(),
         name=f"webspace-listing-sync:{str(reason or 'background')[:40]}",
     )
-    _WEBSPACE_LISTING_SYNC_TASK = task
+    _TASK_STATE.put_task(_TASK_STATE.WEBSPACE_LISTING, task_key, task)
     return {
         "scheduled": True,
         "coalesced": False,
@@ -8294,7 +6278,7 @@ def _schedule_webspace_listing_sync(
 
 def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _LIVE_ROOM_REFRESH_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -8306,7 +6290,7 @@ def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _LIVE_ROOM_REFRESH_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key, stats)
     return stats
 
 
@@ -8319,116 +6303,15 @@ def _schedule_live_room_refresh(
     materialized_payload: Mapping[str, Any] | None = None,
     materialization_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    key = str(webspace_id or "").strip()
-    if not key:
-        return {"scheduled": False, "reason": "missing_webspace"}
-
-    stats = _live_room_refresh_stats(key)
-    stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
-    stats["last_reason"] = str(reason or "").strip()
-    stats["last_requested_at"] = time.time()
-
-    request = {
-        "webspace_id": key,
-        "reason": str(reason or "").strip() or "live_room_refresh",
-    }
-    if persist_repair is not None:
-        request["persist_repair"] = bool(persist_repair)
-    if force_full_state_update:
-        request["force_full_state_update"] = True
-    if isinstance(materialized_payload, Mapping) and materialized_payload:
-        request["materialized_payload"] = _clone_json_like(materialized_payload)
-    if isinstance(materialization_identity, Mapping) and materialization_identity:
-        request["materialization_identity"] = _clone_json_like(materialization_identity)
-    current = _LIVE_ROOM_REFRESH_TASKS.get(key)
-    if current is not None and not current.done():
-        _LIVE_ROOM_REFRESH_PENDING[key] = request
-        stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
-        return {
-            "scheduled": True,
-            "deferred": True,
-            "coalesced": True,
-            "task": current.get_name(),
-        }
-
-    async def _runner(initial: dict[str, Any]) -> None:
-        current_request = dict(initial)
-        try:
-            while True:
-                delay = _live_room_refresh_debounce_s()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                pending_before_start = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
-                if pending_before_start:
-                    current_request = dict(pending_before_start)
-                active_reason = str(current_request.get("reason") or "").strip() or "live_room_refresh"
-                started = time.perf_counter()
-                try:
-                    refresh_kwargs: dict[str, Any] = {"reason": active_reason}
-                    if "persist_repair" in current_request:
-                        refresh_kwargs["persist_repair"] = bool(current_request.get("persist_repair"))
-                    request_payload = current_request.get("materialized_payload")
-                    request_identity = current_request.get("materialization_identity")
-                    if isinstance(request_payload, Mapping) and request_payload:
-                        from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room  # pylint: disable=import-outside-toplevel
-
-                        if bool(current_request.get("force_full_state_update")):
-                            refresh_kwargs["force_full_state_update"] = True
-                        await apply_materialized_payload_to_live_room(
-                            key,
-                            materialized_payload=request_payload,
-                            **refresh_kwargs,
-                            materialization_identity=(
-                                request_identity
-                                if isinstance(request_identity, Mapping) and request_identity
-                                else None
-                            ),
-                        )
-                    else:
-                        from adaos.services.yjs.gateway import reconcile_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
-                        await reconcile_live_webspace_effective_branches(
-                            key,
-                            **refresh_kwargs,
-                        )
-                    stats = _live_room_refresh_stats(key)
-                    stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
-                    stats["last_completed_at"] = time.time()
-                    _log.info(
-                        "deferred live-room refresh completed webspace=%s reason=%s duration_ms=%.3f",
-                        key,
-                        active_reason,
-                        _elapsed_ms(started),
-                    )
-                except Exception:
-                    stats = _live_room_refresh_stats(key)
-                    stats["failed_total"] = int(stats.get("failed_total") or 0) + 1
-                    _log.warning(
-                        "deferred live-room refresh failed webspace=%s reason=%s",
-                        key,
-                        active_reason,
-                        exc_info=True,
-                    )
-                next_request = _LIVE_ROOM_REFRESH_PENDING.pop(key, None)
-                if not next_request:
-                    break
-                current_request = dict(next_request)
-        finally:
-            if _LIVE_ROOM_REFRESH_TASKS.get(key) is task:
-                _LIVE_ROOM_REFRESH_TASKS.pop(key, None)
-
-    task = asyncio.create_task(
-        _runner(request),
-        name=f"live-room-refresh:{key}"[:120],
+    return _TASK_SCHEDULING_SERVICE.schedule_live_room_refresh(
+        _task_scheduling_operations(),
+        webspace_id=webspace_id,
+        reason=reason,
+        persist_repair=persist_repair,
+        force_full_state_update=force_full_state_update,
+        materialized_payload=materialized_payload,
+        materialization_identity=materialization_identity,
     )
-    _LIVE_ROOM_REFRESH_TASKS[key] = task
-    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
-    return {
-        "scheduled": True,
-        "deferred": True,
-        "coalesced": False,
-        "task": task.get_name(),
-    }
 
 
 def _schedule_builder_ystore_snapshot_backup(
@@ -8438,8 +6321,8 @@ def _schedule_builder_ystore_snapshot_backup(
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     reason_token = str(reason or "").strip() or "builder_revision_snapshot_backup"
-    current = _BUILDER_YSTORE_BACKUP_TASKS.get(key)
-    if current is not None and not current.done():
+    current = _TASK_STATE.active_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key)
+    if current is not None:
         return {
             "scheduled": True,
             "coalesced": True,
@@ -8473,11 +6356,14 @@ def _schedule_builder_ystore_snapshot_backup(
             )
 
     task = loop.create_task(_runner(), name=f"builder-ystore-backup:{key}"[:120])
-    _BUILDER_YSTORE_BACKUP_TASKS[key] = task
+    _TASK_STATE.put_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key, task)
 
     def _done(done: asyncio.Task[Any]) -> None:
-        if _BUILDER_YSTORE_BACKUP_TASKS.get(key) is done:
-            _BUILDER_YSTORE_BACKUP_TASKS.pop(key, None)
+        _TASK_STATE.pop_task(
+            _TASK_STATE.BUILDER_YSTORE_BACKUP,
+            key,
+            expected=done,
+        )
         try:
             done.result()
         except asyncio.CancelledError:
@@ -8501,7 +6387,7 @@ def _schedule_builder_ystore_snapshot_backup(
 
 def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _WORKFLOW_SYNC_STATS.get(key)
+    stats = _TASK_STATE.get_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -8514,7 +6400,7 @@ def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _WORKFLOW_SYNC_STATS[key] = stats
+        _TASK_STATE.put_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key, stats)
     return stats
 
 
@@ -8525,93 +6411,13 @@ def _schedule_workflow_sync(
     scenario_id: str,
     reason: str,
 ) -> dict[str, Any]:
-    key = str(webspace_id or "").strip()
-    scenario_token = str(scenario_id or "").strip()
-    if not key or not scenario_token:
-        return {"scheduled": False, "reason": "missing_target"}
-
-    stats = _workflow_sync_stats(key)
-    stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
-    stats["last_reason"] = str(reason or "").strip()
-    stats["last_scenario_id"] = scenario_token
-    stats["last_requested_at"] = time.time()
-
-    request = {
-        "webspace_id": key,
-        "scenario_id": scenario_token,
-        "reason": str(reason or "").strip() or "workflow_sync",
-    }
-    current = _WORKFLOW_SYNC_TASKS.get(key)
-    if current is not None and not current.done():
-        _WORKFLOW_SYNC_PENDING[key] = request
-        stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
-        return {
-            "scheduled": True,
-            "deferred": True,
-            "coalesced": True,
-            "task": current.get_name(),
-            "scenario_id": scenario_token,
-        }
-
-    async def _runner(initial: dict[str, Any]) -> None:
-        current_request = dict(initial)
-        try:
-            while True:
-                delay = _workflow_sync_debounce_s()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                pending_before_start = _WORKFLOW_SYNC_PENDING.pop(key, None)
-                if pending_before_start:
-                    current_request = dict(pending_before_start)
-                started = time.perf_counter()
-                active_scenario = str(current_request.get("scenario_id") or "").strip()
-                active_reason = str(current_request.get("reason") or "").strip() or "workflow_sync"
-                try:
-                    wf = ScenarioWorkflowRuntime(ctx)
-                    await wf.sync_workflow_for_webspace(active_scenario, key)
-                    stats = _workflow_sync_stats(key)
-                    stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
-                    stats["last_completed_at"] = time.time()
-                    _log.info(
-                        "deferred workflow sync completed webspace=%s scenario=%s reason=%s duration_ms=%.3f",
-                        key,
-                        active_scenario,
-                        active_reason,
-                        _elapsed_ms(started),
-                    )
-                except BaseException as exc:
-                    if _is_control_flow_base_exception(exc):
-                        raise
-                    stats = _workflow_sync_stats(key)
-                    stats["failed_total"] = int(stats.get("failed_total") or 0) + 1
-                    _log.warning(
-                        "deferred workflow sync failed webspace=%s scenario=%s reason=%s",
-                        key,
-                        active_scenario,
-                        active_reason,
-                        exc_info=True,
-                    )
-                next_request = _WORKFLOW_SYNC_PENDING.pop(key, None)
-                if not next_request:
-                    break
-                current_request = dict(next_request)
-        finally:
-            if _WORKFLOW_SYNC_TASKS.get(key) is task:
-                _WORKFLOW_SYNC_TASKS.pop(key, None)
-
-    task = asyncio.create_task(
-        _runner(request),
-        name=f"workflow-sync:{key}:{scenario_token}"[:120],
+    return _TASK_SCHEDULING_SERVICE.schedule_workflow_sync(
+        _task_scheduling_operations(),
+        ctx,
+        webspace_id=webspace_id,
+        scenario_id=scenario_id,
+        reason=reason,
     )
-    _WORKFLOW_SYNC_TASKS[key] = task
-    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
-    return {
-        "scheduled": True,
-        "deferred": True,
-        "coalesced": False,
-        "task": task.get_name(),
-        "scenario_id": scenario_token,
-    }
 
 
 class WebspaceService:
@@ -8918,32 +6724,29 @@ async def _project_webspace_from_scenario(
         source_mode,
         emit_event,
     )
-    try:
-        mgr = _build_scenario_manager()
-        timeout_s = _project_scenario_timeout_s()
-        projection = mgr.sync_to_yjs_async(
+    timeout_s = _project_scenario_timeout_s()
+    result = await _PROJECTION_SERVICE.project(
+        operation=lambda: _build_scenario_manager().sync_to_yjs_async(
             scenario_id or "web_desktop",
             webspace_id,
             space=source_mode,
             emit_event=emit_event,
-        )
-        if timeout_s > 0.0:
-            await asyncio.wait_for(projection, timeout=timeout_s)
-        else:
-            await projection
-    except asyncio.TimeoutError:
+        ),
+        timeout_s=timeout_s,
+    )
+    if result["status"] == "timed_out":
         _log.warning(
             "timed out projecting webspace=%s from scenario=%s timeout_s=%s",
             webspace_id,
             scenario_id,
             _project_scenario_timeout_s(),
         )
-    except Exception:
+    elif result["status"] == "failed":
         _log.warning(
-            "failed to project webspace=%s from scenario=%s",
+            "failed to project webspace=%s from scenario=%s: %s",
             webspace_id,
             scenario_id,
-            exc_info=True,
+            result.get("error"),
         )
 
 
@@ -9207,10 +7010,16 @@ async def _schedule_member_snapshot_rebuild_from_event(
         stats["last_requested_at"] = time.time()
         stats["last_request_id"] = request_id
         if force_rebuild:
-            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.pop(key, None)
+            _TASK_STATE.pop_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+            )
         material_fingerprint = _member_snapshot_desktop_material_fingerprint(node_id)
         if material_fingerprint:
-            previous_fingerprint = _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT.get(key)
+            previous_fingerprint = _TASK_STATE.get_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+            )
             if previous_fingerprint == material_fingerprint and not force_rebuild:
                 stats["skipped_unchanged_total"] = int(stats.get("skipped_unchanged_total") or 0) + 1
                 stats["last_skipped_unchanged_at"] = time.time()
@@ -9223,13 +7032,17 @@ async def _schedule_member_snapshot_rebuild_from_event(
                     material_fingerprint[:12],
                 )
                 continue
-            _MEMBER_SNAPSHOT_REBUILD_MATERIAL_FINGERPRINT[key] = material_fingerprint
+            _TASK_STATE.put_record(
+                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+                key,
+                material_fingerprint,
+            )
             stats["last_material_fingerprint"] = material_fingerprint
-        existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(key)
-        if existing is not None and not existing.done():
+        existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, key)
+        if existing is not None:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
             continue
-        last_at = float(_MEMBER_SNAPSHOT_REBUILD_AT.get(key) or 0.0)
+        last_at = float(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key) or 0.0)
         if not force_rebuild and interval_s > 0 and last_at > 0 and now - last_at < interval_s:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window", request_id=request_id)
             _schedule_member_snapshot_rebuild_delayed(
@@ -9240,7 +7053,7 @@ async def _schedule_member_snapshot_rebuild_from_event(
                 request_id=request_id,
             )
             continue
-        _MEMBER_SNAPSHOT_REBUILD_AT[key] = now
+        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key, now)
         _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason, request_id=request_id)
 
 
@@ -9288,106 +7101,13 @@ def _schedule_member_snapshot_rebuild(
     reason: str = "subnet.member.snapshot.changed",
     request_id: str | None = None,
 ) -> None:
-    task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
-    try:
-        current_task = asyncio.current_task()
-    except RuntimeError:
-        current_task = None
-    delayed = _MEMBER_SNAPSHOT_REBUILD_DELAYED_TASKS.pop(task_key, None)
-    if delayed is not None and delayed is not current_task and not delayed.done():
-        delayed.cancel()
-    existing = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-    if existing and not existing.done():
-        _mark_member_snapshot_rebuild_dirty(task_key=task_key, reason=reason, mode="task_running", request_id=request_id)
-        return
-    stats = _member_snapshot_rebuild_stats(task_key)
-    effective_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
+    _TASK_SCHEDULING_SERVICE.schedule_member_snapshot_rebuild(
+        _task_scheduling_operations(),
         webspace_id=webspace_id,
         node_id=node_id,
+        reason=reason,
+        request_id=request_id,
     )
-    stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
-    stats["last_reason"] = str(reason or "").strip() or str(stats.get("last_reason") or "") or "subnet.member.snapshot.changed"
-    stats["last_scheduled_at"] = time.time()
-    stats["last_request_id"] = effective_request_id
-    stats["current_request_id"] = effective_request_id
-
-    async def _runner() -> None:
-        try:
-            try:
-                await _seed_member_snapshot_ydoc_defaults(webspace_id=webspace_id, node_id=node_id)
-            except Exception:
-                _log.debug(
-                    "failed to seed member snapshot defaults webspace=%s node_id=%s",
-                    webspace_id,
-                    node_id,
-                    exc_info=True,
-                )
-            _log.info(
-                "starting member snapshot rebuild webspace=%s node_id=%s request_id=%s reason=%s requested_total=%s scheduled_total=%s",
-                webspace_id,
-                node_id,
-                effective_request_id,
-                str(stats.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed",
-                int(stats.get("requested_total") or 0),
-                int(stats.get("scheduled_total") or 0),
-            )
-            result = await rebuild_webspace_from_sources(
-                webspace_id,
-                action="subnet_member_snapshot_sync",
-                source_of_truth="member_runtime_snapshot",
-                request_id=effective_request_id,
-            )
-            stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
-            stats["last_completed_at"] = time.time()
-            stats["last_completed_request_id"] = effective_request_id
-            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.get(task_key) or {}
-            _log.info(
-                "completed member snapshot rebuild webspace=%s node_id=%s request_id=%s accepted=%s error=%s requested_total=%s scheduled_total=%s rerun_total=%s coalesced_running_total=%s coalesced_interval_total=%s delayed_total=%s dirty_pending=%s",
-                webspace_id,
-                node_id,
-                effective_request_id,
-                bool(result.get("accepted")),
-                str(result.get("error") or "").strip() or None,
-                int(stats.get("requested_total") or 0),
-                int(stats.get("scheduled_total") or 0),
-                int(stats.get("rerun_total") or 0),
-                int(stats.get("coalesced_running_total") or 0),
-                int(stats.get("coalesced_interval_total") or 0),
-                int(stats.get("delayed_total") or 0),
-                int(dirty.get("count") or 0),
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "member snapshot rebuild failed webspace=%s node_id=%s",
-                webspace_id,
-                node_id,
-                exc_info=True,
-            )
-        finally:
-            current = _MEMBER_SNAPSHOT_REBUILD_TASKS.get(task_key)
-            if current is task:
-                _MEMBER_SNAPSHOT_REBUILD_TASKS.pop(task_key, None)
-            if str(stats.get("current_request_id") or "").strip() == effective_request_id:
-                stats["current_request_id"] = ""
-            dirty = _MEMBER_SNAPSHOT_REBUILD_DIRTY.pop(task_key, None)
-            if dirty:
-                stats["rerun_total"] = int(stats.get("rerun_total") or 0) + 1
-                _MEMBER_SNAPSHOT_REBUILD_AT[task_key] = time.monotonic()
-                rerun_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
-                _schedule_member_snapshot_rebuild(
-                    webspace_id=webspace_id,
-                    node_id=node_id,
-                    reason=f"{rerun_reason}:coalesced",
-                    request_id=str(dirty.get("last_request_id") or "").strip() or None,
-                )
-
-    task = asyncio.create_task(
-        _runner(),
-        name=f"member-snapshot-rebuild:{webspace_id}:{node_id}",
-    )
-    _MEMBER_SNAPSHOT_REBUILD_TASKS[task_key] = task
 
 
 async def _seed_member_snapshot_ydoc_defaults(*, webspace_id: str, node_id: str) -> None:
@@ -9497,6 +7217,56 @@ async def _on_webspace_refresh(evt: Dict[str, Any]) -> None:  # noqa: ARG001
     await svc.refresh()
 
 
+def _rebuild_operations() -> RebuildOperations:
+    return RebuildOperations(
+        scenario_workflow_runtime_type=ScenarioWorkflowRuntime,
+        webspace_scenario_runtime_type=WebspaceScenarioRuntime,
+        stale_request_error_type=_StaleRebuildRequestError,
+        builder_revision_detached_direct_live_room_updates_enabled=_builder_revision_detached_direct_live_room_updates_enabled,
+        builder_revision_fresh_doc_rebuild_enabled=_builder_revision_fresh_doc_rebuild_enabled,
+        builder_revision_projection_refresh_enabled=_builder_revision_projection_refresh_enabled,
+        builder_revision_rebuild_prefers_live_room=_builder_revision_rebuild_prefers_live_room,
+        builder_revision_replace_ystore_snapshot_enabled=_builder_revision_replace_ystore_snapshot_enabled,
+        clone_json_like=_clone_json_like,
+        compact_live_room_refresh_result_for_log=_compact_live_room_refresh_result_for_log,
+        copy_materialization_snapshot=_copy_materialization_snapshot,
+        copy_timing_map=_copy_timing_map,
+        defer_live_room_refresh_for_rebuild=_defer_live_room_refresh_for_rebuild,
+        defer_workflow_sync_for_rebuild=_defer_workflow_sync_for_rebuild,
+        derive_phase_timings=_derive_phase_timings,
+        finalize_timing_map=_finalize_timing_map,
+        invalidate_resolved_webspace_cache=_invalidate_resolved_webspace_cache,
+        is_control_flow_base_exception=_is_control_flow_base_exception,
+        log=_log,
+        pending_materialization_snapshot=_pending_materialization_snapshot,
+        project_webspace_from_scenario=_project_webspace_from_scenario,
+        publish_live_room_for_rebuild=_publish_live_room_for_rebuild,
+        rebuild_action_applies_live_payload=_rebuild_action_applies_live_payload,
+        rebuild_action_refreshes_live_room=_rebuild_action_refreshes_live_room,
+        record_timing=_record_timing,
+        refresh_live_room_after_rebuild_enabled=_refresh_live_room_after_rebuild_enabled,
+        refresh_projection_rules_for_rebuild=_refresh_projection_rules_for_rebuild,
+        resolve_projection_refresh_space=_resolve_projection_refresh_space,
+        resolve_rebuild_scenario_target=_resolve_rebuild_scenario_target,
+        scenario_switch_inline_listing_sync_enabled=_scenario_switch_inline_listing_sync_enabled,
+        scenario_switch_materialization_identity=_scenario_switch_materialization_identity,
+        schedule_live_room_refresh=_schedule_live_room_refresh,
+        schedule_workflow_sync=_schedule_workflow_sync,
+        seed_webspace_from_scenario_with_options=_seed_webspace_from_scenario_with_options,
+        semantic_rebuild_timeout_s=_semantic_rebuild_timeout_s,
+        set_rebuild_status=_set_webspace_rebuild_status,
+        set_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        sync_webspace_listing_target=_sync_webspace_listing_target,
+        write_meta=_webspace_runtime_async_write_meta,
+        workflow_sync_for_rebuild_enabled=_workflow_sync_for_rebuild_enabled,
+        async_get_ydoc=async_get_ydoc,
+        describe_rebuild_state=describe_webspace_rebuild_state,
+        emit=emit,
+        get_ctx=get_ctx,
+        scenarios_loader=scenarios_loader,
+    )
+
+
 async def rebuild_webspace_from_sources(
     webspace_id: str,
     *,
@@ -9513,802 +7283,22 @@ async def rebuild_webspace_from_sources(
     scenario_content_override: Mapping[str, Any] | None = None,
     skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Single semantic rebuild primitive for the current runtime.
-
-    Phase 3 keeps the existing storage and frontend contracts intact, but
-    routes reload/reset/restore-style operations through one backend-owned
-    materialization step so reconcile behaviour is explicit.
-    """
-    webspace_id = str(webspace_id or "").strip()
-    if not webspace_id:
-        raise ValueError("webspace_id is required")
-
-    rebuild_started = time.perf_counter()
-    timings_ms: Dict[str, float] = {}
-    requested_action = str(action or "").strip().lower() or "rebuild"
-    target_scenario = str(scenario_id or "").strip() or None
-    resolved_scenario_resolution = str(scenario_resolution or "").strip() or None
-    status_started_at = time.time()
-    if not target_scenario or not resolved_scenario_resolution:
-        stage_started = time.perf_counter()
-        _state, resolved_target_scenario, resolved_target_resolution = await _resolve_rebuild_scenario_target(
-            webspace_id,
-            target_scenario,
-            prefer_manifest_home_before_current=requested_action in {"reload", "reset"},
-        )
-        if not target_scenario:
-            target_scenario = resolved_target_scenario
-        if not resolved_scenario_resolution:
-            resolved_scenario_resolution = resolved_target_resolution
-        _record_timing(timings_ms, "resolve_rebuild_target", stage_started)
-
-    previous_status = describe_webspace_rebuild_state(webspace_id)
-    effective_switch_timings = _copy_timing_map(switch_timings_ms) or _copy_timing_map(previous_status.get("switch_timings_ms"))
-    effective_switch_mode = str(switch_mode or previous_status.get("switch_mode") or "").strip() or None
-    if requested_action == "scenario_switch_rebuild":
-        effective_switch_mode = "pointer_only"
-    effective_materialization_identity = dict(materialization_identity) if isinstance(materialization_identity, Mapping) else None
-    if effective_materialization_identity is None and requested_action == "scenario_switch_rebuild" and target_scenario:
-        stage_started = time.perf_counter()
-        try:
-            source_mode_for_identity = _resolve_projection_refresh_space(webspace_id)
-            effective_materialization_identity = _scenario_switch_materialization_identity(
-                webspace_id=webspace_id,
-                scenario_id=target_scenario,
-                source_mode=source_mode_for_identity,
-            )
-        except Exception:
-            effective_materialization_identity = None
-            _log.debug(
-                "failed to build scenario switch materialization identity webspace=%s scenario=%s",
-                webspace_id,
-                target_scenario,
-                exc_info=True,
-            )
-        _record_timing(timings_ms, "resolve_materialization_identity", stage_started)
-    running_materialization = _pending_materialization_snapshot(
+    return await _REBUILD_SERVICE.rebuild(
+        _rebuild_operations(),
         webspace_id,
-        scenario_id=target_scenario,
-        snapshot_source="rebuild:running",
-        rebuild_state=previous_status,
-    )
-    _set_webspace_rebuild_status(
-        webspace_id,
-        status="running",
-        pending=True,
-        background=bool(previous_status.get("background")),
-        request_id=request_id,
-        action=requested_action,
+        action=action,
+        scenario_id=scenario_id,
+        scenario_resolution=scenario_resolution,
         source_of_truth=source_of_truth,
-        scenario_id=target_scenario,
-        scenario_resolution=resolved_scenario_resolution,
-        switch_mode=effective_switch_mode,
-        requested_at=previous_status.get("requested_at") or status_started_at,
-        started_at=status_started_at,
-        finished_at=None,
-        error=None,
-        projection_refresh=None,
-        registry_summary=None,
-        resolver=None,
-        apply_summary=None,
-        timings_ms=None,
-        switch_timings_ms=effective_switch_timings,
-        semantic_rebuild_timings_ms=None,
-        phase_timings_ms=None,
-        materialization=running_materialization,
+        reseed_from_scenario=reseed_from_scenario,
+        event_payload=event_payload,
+        request_id=request_id,
+        switch_mode=switch_mode,
+        switch_timings_ms=switch_timings_ms,
+        materialization_identity=materialization_identity,
+        scenario_content_override=scenario_content_override,
+        skill_source_mode=skill_source_mode,
     )
-
-    reset_room_result: dict[str, Any] | None = None
-    ystore_reset = False
-    fresh_doc_rebuild = False
-    scenario_switch_payload_rebuild = requested_action == "scenario_switch_rebuild"
-
-    async def _write_reseed_pointer() -> None:
-        try:
-            async with _webspace_runtime_async_write_meta(
-                root_names=["ui"],
-                source="webspace_runtime.reseed_pointer",
-            ):
-                async with async_get_ydoc(webspace_id) as ydoc:
-                    ui_map = ydoc.get_map("ui")
-                    with ydoc.begin_transaction() as txn:
-                        ui_map.set(txn, "current_scenario", target_scenario)
-        except BaseException as exc:
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
-            _log.warning(
-                "failed to write reseed current_scenario pointer webspace=%s scenario=%s",
-                webspace_id,
-                target_scenario,
-                exc_info=True,
-            )
-
-    def _note_authoritative_selector(reason: str) -> None:
-        if not target_scenario:
-            return
-        try:
-            from adaos.services.yjs.gateway import note_authoritative_current_scenario  # pylint: disable=import-outside-toplevel
-
-            note_authoritative_current_scenario(
-                webspace_id,
-                target_scenario,
-                reason=reason,
-            )
-        except Exception:
-            _log.debug(
-                "failed to publish authoritative current_scenario lease webspace=%s scenario=%s",
-                webspace_id,
-                target_scenario,
-                exc_info=True,
-            )
-
-    if scenario_switch_payload_rebuild:
-        if not target_scenario:
-            raise ValueError("scenario_id is required for scenario switch rebuild")
-
-        timings_ms["scenario_switch_transport_preserved"] = 0.0
-
-        if _scenario_switch_inline_listing_sync_enabled():
-            stage_started = time.perf_counter()
-            await _sync_webspace_listing_target(webspace_id)
-            _record_timing(timings_ms, "scenario_switch_sync_listing", stage_started)
-        else:
-            timings_ms["scenario_switch_sync_listing_deferred"] = 0.0
-
-    should_invalidate_loader_cache = bool(
-        target_scenario
-        and (
-            reseed_from_scenario
-            or requested_action == "builder_revision_apply"
-            or str(source_of_truth or "").strip().lower() == "builder_revision"
-        )
-    )
-    if should_invalidate_loader_cache:
-        stage_started = time.perf_counter()
-        try:
-            scenarios_loader.invalidate_cache(scenario_id=target_scenario, space="workspace")
-            scenarios_loader.invalidate_cache(scenario_id=target_scenario, space="dev")
-        except Exception:
-            pass
-        _record_timing(timings_ms, "invalidate_loader_cache", stage_started)
-        stage_started = time.perf_counter()
-        _invalidate_resolved_webspace_cache(
-            scenario_id=target_scenario,
-            reason=requested_action,
-        )
-        _record_timing(timings_ms, "invalidate_resolver_cache", stage_started)
-
-    if reseed_from_scenario:
-        if not target_scenario:
-            raise ValueError("scenario_id is required when reseed_from_scenario is enabled")
-        _note_authoritative_selector(f"{requested_action}:reseed")
-        if requested_action != "reset":
-            stage_started = time.perf_counter()
-            await _write_reseed_pointer()
-            _record_timing(timings_ms, "reseed_pointer", stage_started)
-
-        if requested_action == "reset":
-            stage_started = time.perf_counter()
-            try:
-                from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-                from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
-
-                try:
-                    reset_room_result = await reset_live_webspace_room(
-                        webspace_id,
-                        close_reason="webspace_reset",
-                        persist_ystore_snapshot=False,
-                    )
-                except Exception:
-                    pass
-                try:
-                    reset_ystore_for_webspace(webspace_id)
-                    ystore_reset = True
-                except Exception:
-                    pass
-            except Exception:
-                _log.warning("failed to reset ystore for webspace=%s", webspace_id, exc_info=True)
-            _record_timing(timings_ms, "reset_runtime_state", stage_started)
-
-            stage_started = time.perf_counter()
-            await _seed_webspace_from_scenario_with_options(
-                webspace_id,
-                target_scenario,
-            )
-            _record_timing(timings_ms, "seed_from_scenario", stage_started)
-
-            stage_started = time.perf_counter()
-            await _write_reseed_pointer()
-            _record_timing(timings_ms, "reseed_pointer_after_reset", stage_started)
-        else:
-            stage_started = time.perf_counter()
-            await _project_webspace_from_scenario(
-                webspace_id,
-                target_scenario,
-                emit_event=False,
-            )
-            _record_timing(timings_ms, "project_scenario_payload", stage_started)
-
-        stage_started = time.perf_counter()
-        await _sync_webspace_listing_target(webspace_id)
-        _record_timing(timings_ms, "sync_listing", stage_started)
-
-    ctx = get_ctx()
-    stage_started = time.perf_counter()
-    if requested_action == "builder_revision_apply" and not _builder_revision_projection_refresh_enabled():
-        target_space = _resolve_projection_refresh_space(webspace_id)
-        projection_refresh = {
-            "attempted": False,
-            "scenario_id": target_scenario,
-            "scenario_resolution": resolved_scenario_resolution,
-            "space": target_space,
-            "rules_loaded": 0,
-            "source": "skipped",
-            "reason": "builder_revision_apply_reuses_existing_projection_rules",
-        }
-        _record_timing(timings_ms, "projection_refresh_skipped", stage_started)
-    else:
-        _log.info(
-            "starting projection refresh webspace=%s action=%s scenario=%s resolution=%s",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            resolved_scenario_resolution,
-        )
-        projection_refresh = await _refresh_projection_rules_for_rebuild(
-            ctx,
-            webspace_id,
-            scenario_id=target_scenario,
-            scenario_resolution=resolved_scenario_resolution,
-        )
-        _record_timing(timings_ms, "projection_refresh", stage_started)
-        _log.info(
-            "finished projection refresh webspace=%s action=%s scenario=%s result=%s elapsed_ms=%.3f",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            json.dumps(_clone_json_like(projection_refresh), ensure_ascii=True, sort_keys=True)[:1000],
-            float(timings_ms.get("projection_refresh") or 0.0),
-        )
-    runtime = WebspaceScenarioRuntime(ctx)
-    live_room_update_requested = _publish_live_room_for_rebuild(requested_action)
-    prefer_live_room = (
-        _builder_revision_rebuild_prefers_live_room()
-        if requested_action == "builder_revision_apply"
-        else bool(live_room_update_requested)
-    )
-    publish_live_room = bool(live_room_update_requested)
-    if requested_action == "builder_revision_apply" and not prefer_live_room:
-        publish_live_room = _builder_revision_detached_direct_live_room_updates_enabled()
-    payload_only_rebuild = scenario_switch_payload_rebuild or bool(scenario_content_override)
-    try:
-        stage_started = time.perf_counter()
-        rebuild_timeout_s = _semantic_rebuild_timeout_s(requested_action)
-        initial_scenario_id = (
-            target_scenario
-            if scenario_switch_payload_rebuild or requested_action == "builder_revision_apply"
-            else None
-        )
-        builder_fresh_doc_rebuild = (
-            requested_action == "builder_revision_apply" and _builder_revision_fresh_doc_rebuild_enabled()
-        )
-        if builder_fresh_doc_rebuild:
-            fresh_doc_rebuild = True
-        rebuild_kwargs = {
-            "publish_live_room": publish_live_room,
-            "prefer_live_room": prefer_live_room,
-            "initial_scenario_id": initial_scenario_id,
-            "materialization_identity": effective_materialization_identity,
-        }
-        if builder_fresh_doc_rebuild:
-            rebuild_kwargs["fresh_doc"] = True
-            rebuild_kwargs["replace_ystore_snapshot"] = _builder_revision_replace_ystore_snapshot_enabled()
-        if str(request_id or "").strip():
-            rebuild_kwargs["request_id"] = request_id
-        _log.info(
-            "starting semantic rebuild core webspace=%s action=%s scenario=%s live_room_requested=%s publish_live_room=%s prefer_live_room=%s payload_only=%s timeout_s=%s materialization_key=%s",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            bool(live_room_update_requested),
-            bool(publish_live_room),
-            bool(prefer_live_room),
-            bool(payload_only_rebuild),
-            rebuild_timeout_s,
-            (
-                effective_materialization_identity.get("key_hash")
-                if isinstance(effective_materialization_identity, Mapping)
-                else "-"
-            ),
-        )
-        if payload_only_rebuild:
-            payload_rebuild_kwargs: dict[str, Any] = {
-                "scenario_id": target_scenario,
-                "materialization_identity": effective_materialization_identity,
-                # A scenario switch resolves plain effective branches. Keep it
-                # off the event loop, but do not pay for a second runtime.
-                "isolate_process": False,
-            }
-            if scenario_content_override:
-                payload_rebuild_kwargs["scenario_content_override"] = scenario_content_override
-            if str(skill_source_mode or "").strip():
-                payload_rebuild_kwargs["skill_source_mode"] = str(skill_source_mode).strip()
-            if str(request_id or "").strip():
-                payload_rebuild_kwargs["request_id"] = request_id
-            rebuild_coro = runtime.resolve_materialized_payload_async(webspace_id, **payload_rebuild_kwargs)
-        else:
-            rebuild_coro = runtime.rebuild_webspace_async(webspace_id, **rebuild_kwargs)
-        if rebuild_timeout_s is not None:
-            timeout_cm = getattr(asyncio, "timeout", None)
-            if callable(timeout_cm):
-                async with timeout_cm(rebuild_timeout_s):
-                    entry = await rebuild_coro
-            else:
-                entry = await asyncio.wait_for(rebuild_coro, timeout=rebuild_timeout_s)
-        else:
-            entry = await rebuild_coro
-        _record_timing(timings_ms, "semantic_rebuild", stage_started)
-        _log.info(
-            "finished semantic rebuild core webspace=%s action=%s scenario=%s live_room_requested=%s publish_live_room=%s prefer_live_room=%s payload_only=%s semantic_ms=%.3f ydoc_timings=%s semantic_timings=%s",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            bool(live_room_update_requested),
-            bool(publish_live_room),
-            bool(prefer_live_room),
-            bool(payload_only_rebuild),
-            float(timings_ms.get("semantic_rebuild") or 0.0),
-            _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None)),
-            _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None)),
-        )
-    except _StaleRebuildRequestError:
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
-        semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
-        ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
-        resolver_debug = dict(getattr(runtime, "_last_resolver_debug", None) or {})
-        apply_summary = dict(getattr(runtime, "_last_apply_summary", None) or {})
-        phase_timings = _derive_phase_timings(
-            switch_timings_ms=effective_switch_timings,
-            rebuild_timings_ms=finalized_timings,
-            semantic_rebuild_timings_ms=semantic_timings,
-            switch_mode=effective_switch_mode,
-        )
-        _set_webspace_rebuild_status_if_current(
-            webspace_id,
-            request_id,
-            status="cancelled",
-            pending=False,
-            finished_at=time.time(),
-            error="stale_rebuild_superseded",
-            switch_mode=effective_switch_mode,
-            scenario_resolution=resolved_scenario_resolution,
-            projection_refresh=projection_refresh,
-            resolver=resolver_debug or None,
-            apply_summary=apply_summary or None,
-            timings_ms=finalized_timings,
-            switch_timings_ms=effective_switch_timings,
-            semantic_rebuild_timings_ms=semantic_timings,
-            ydoc_timings_ms=ydoc_timings,
-            phase_timings_ms=phase_timings,
-        )
-        _log.info(
-            "stale semantic rebuild skipped apply webspace=%s action=%s scenario=%s request_id=%s",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            request_id,
-        )
-        return {
-            "ok": False,
-            "accepted": False,
-            "action": requested_action,
-            "source_of_truth": source_of_truth,
-            "webspace_id": webspace_id,
-            "scenario_id": target_scenario,
-            "scenario_resolution": resolved_scenario_resolution,
-            "request_id": request_id,
-            "switch_mode": effective_switch_mode,
-            "projection_refresh": projection_refresh,
-            "resolver": resolver_debug or None,
-            "apply_summary": apply_summary or None,
-            "timings_ms": finalized_timings,
-            "switch_timings_ms": effective_switch_timings,
-            "semantic_rebuild_timings_ms": semantic_timings,
-            "ydoc_timings_ms": ydoc_timings,
-            "phase_timings_ms": phase_timings,
-            "error": "stale_rebuild_superseded",
-        }
-    except BaseException as exc:
-        if _is_control_flow_base_exception(exc):
-            raise
-        error_token = "webspace_rebuild_timeout" if isinstance(exc, asyncio.TimeoutError) else "webspace_rebuild_failed"
-        error_detail = f"{type(exc).__name__}: {exc}"[:1000]
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
-        semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
-        ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
-        resolver_debug = dict(getattr(runtime, "_last_resolver_debug", None) or {})
-        apply_summary = dict(getattr(runtime, "_last_apply_summary", None) or {})
-        phase_timings = _derive_phase_timings(
-            switch_timings_ms=effective_switch_timings,
-            rebuild_timings_ms=finalized_timings,
-            semantic_rebuild_timings_ms=semantic_timings,
-            switch_mode=effective_switch_mode,
-        )
-        _set_webspace_rebuild_status_if_current(
-            webspace_id,
-            request_id,
-            status="failed",
-            pending=False,
-            finished_at=time.time(),
-            error=error_token,
-            switch_mode=effective_switch_mode,
-            scenario_resolution=resolved_scenario_resolution,
-            projection_refresh=projection_refresh,
-            resolver=resolver_debug or None,
-            apply_summary=apply_summary or None,
-            timings_ms=finalized_timings,
-            switch_timings_ms=effective_switch_timings,
-            semantic_rebuild_timings_ms=semantic_timings,
-            ydoc_timings_ms=ydoc_timings,
-            phase_timings_ms=phase_timings,
-        )
-        _log.warning(
-            "failed to rebuild webspace from sources webspace=%s action=%s scenario=%s error=%s detail=%s timings_ms=%s semantic_timings_ms=%s",
-            webspace_id,
-            requested_action,
-            target_scenario,
-            error_token,
-            error_detail,
-            finalized_timings,
-            semantic_timings,
-            exc_info=True,
-        )
-        return {
-            "ok": False,
-            "accepted": False,
-            "action": requested_action,
-            "source_of_truth": source_of_truth,
-            "webspace_id": webspace_id,
-            "scenario_id": target_scenario,
-            "scenario_resolution": resolved_scenario_resolution,
-            "request_id": request_id,
-            "switch_mode": effective_switch_mode,
-            "projection_refresh": projection_refresh,
-            "resolver": resolver_debug or None,
-            "apply_summary": apply_summary or None,
-            "timings_ms": finalized_timings,
-            "switch_timings_ms": effective_switch_timings,
-            "semantic_rebuild_timings_ms": semantic_timings,
-            "ydoc_timings_ms": ydoc_timings,
-            "phase_timings_ms": phase_timings,
-            "error": error_token,
-            "error_detail": error_detail,
-        }
-
-    semantic_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_timings_ms", None))
-    ydoc_timings = _copy_timing_map(getattr(runtime, "_last_rebuild_ydoc_timings_ms", None))
-    resolver_debug = dict(getattr(runtime, "_last_resolver_debug", None) or {})
-    apply_summary = dict(getattr(runtime, "_last_apply_summary", None) or {})
-    worker_diagnostics = dict(getattr(runtime, "_last_worker_diagnostics", None) or {})
-    raw_materialized_payload = getattr(runtime, "_last_materialized_payload", None)
-    materialized_payload = (
-        dict(raw_materialized_payload)
-        if isinstance(raw_materialized_payload, Mapping)
-        else None
-    )
-    live_room_refresh_result: dict[str, Any] | None = None
-
-    should_refresh_live_room = (
-        not publish_live_room
-        and (
-            scenario_switch_payload_rebuild
-            or _refresh_live_room_after_rebuild_enabled()
-        )
-        and _rebuild_action_refreshes_live_room(requested_action)
-    )
-    force_full_state_update = bool(
-        fresh_doc_rebuild
-        and (
-            ystore_reset
-            or (requested_action == "builder_revision_apply" and payload_only_rebuild)
-        )
-    )
-    if should_refresh_live_room:
-        if _defer_live_room_refresh_for_rebuild(requested_action):
-            persist_repair = not (
-                requested_action == "builder_revision_apply"
-                and builder_fresh_doc_rebuild
-                and _builder_revision_replace_ystore_snapshot_enabled()
-                and not payload_only_rebuild
-            )
-            deferred_refresh_kwargs: dict[str, Any] = {
-                "persist_repair": persist_repair,
-                "force_full_state_update": bool(force_full_state_update and persist_repair),
-            }
-            if materialized_payload:
-                deferred_refresh_kwargs["materialized_payload"] = materialized_payload
-                deferred_refresh_kwargs["materialization_identity"] = effective_materialization_identity
-            live_room_refresh_result = _schedule_live_room_refresh(
-                webspace_id=webspace_id,
-                reason=f"semantic_rebuild:{requested_action}",
-                **deferred_refresh_kwargs,
-            )
-            timings_ms["live_room_refresh_deferred"] = 0.0
-        else:
-            stage_started = time.perf_counter()
-            try:
-                _log.info(
-                    "starting live-room refresh after semantic rebuild webspace=%s action=%s",
-                    webspace_id,
-                    requested_action,
-                )
-                if _rebuild_action_applies_live_payload(requested_action):
-                    persist_repair = not (
-                        requested_action == "builder_revision_apply"
-                        and builder_fresh_doc_rebuild
-                        and _builder_revision_replace_ystore_snapshot_enabled()
-                        and not payload_only_rebuild
-                    )
-                    refresh_kwargs: dict[str, Any] = {
-                        "reason": f"semantic_rebuild:{requested_action}",
-                        "persist_repair": persist_repair,
-                    }
-                    if materialized_payload:
-                        from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room  # pylint: disable=import-outside-toplevel
-
-                        refresh_kwargs["force_full_state_update"] = bool(
-                            force_full_state_update and persist_repair
-                        )
-                        live_room_refresh_result = await apply_materialized_payload_to_live_room(
-                            webspace_id,
-                            materialized_payload=materialized_payload,
-                            **refresh_kwargs,
-                            materialization_identity=effective_materialization_identity,
-                        )
-                    else:
-                        from adaos.services.yjs.gateway import reconcile_live_webspace_effective_branches  # pylint: disable=import-outside-toplevel
-
-                        live_room_refresh_result = await reconcile_live_webspace_effective_branches(
-                            webspace_id,
-                            **refresh_kwargs,
-                        )
-                else:
-                    from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-
-                    live_room_refresh_result = await reset_live_webspace_room(
-                        webspace_id,
-                        close_reason=f"semantic_rebuild:{requested_action}",
-                    )
-                if not isinstance(live_room_refresh_result, Mapping):
-                    live_room_refresh_result = {
-                        "ok": live_room_refresh_result is not None,
-                        "warning": "live_room_refresh_returned_non_mapping",
-                        "result_type": type(live_room_refresh_result).__name__,
-                    }
-                _log.info(
-                    "finished live-room refresh after semantic rebuild webspace=%s action=%s summary=%s",
-                    webspace_id,
-                    requested_action,
-                    json.dumps(
-                        _compact_live_room_refresh_result_for_log(live_room_refresh_result),
-                        ensure_ascii=True,
-                        sort_keys=True,
-                    ),
-                )
-            except BaseException as exc:
-                if _is_control_flow_base_exception(exc):
-                    raise
-                live_room_refresh_result = {
-                    "ok": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-                _log.warning(
-                    "failed to refresh live YRoom after detached semantic rebuild webspace=%s action=%s",
-                    webspace_id,
-                    requested_action,
-                    exc_info=True,
-                )
-            _record_timing(timings_ms, "live_room_refresh", stage_started)
-
-    if isinstance(live_room_refresh_result, Mapping):
-        refresh_payload = live_room_refresh_result.get("materialized_payload")
-        refresh_apply_summary = (
-            refresh_payload.get("apply_summary")
-            if isinstance(refresh_payload, Mapping) and isinstance(refresh_payload.get("apply_summary"), Mapping)
-            else None
-        )
-        if isinstance(refresh_apply_summary, Mapping):
-            apply_summary = dict(refresh_apply_summary)
-
-    if not target_scenario or not resolved_scenario_resolution:
-        stage_started = time.perf_counter()
-        try:
-            state_after, resolved_target_scenario, resolved_target_resolution = await _resolve_rebuild_scenario_target(
-                webspace_id,
-                target_scenario,
-                prefer_manifest_home_before_current=requested_action in {"reload", "reset"},
-            )
-            if not target_scenario:
-                target_scenario = resolved_target_scenario
-            if not resolved_scenario_resolution:
-                resolved_scenario_resolution = resolved_target_resolution
-        except Exception:
-            target_scenario = target_scenario or None
-            resolved_scenario_resolution = resolved_scenario_resolution or None
-        _record_timing(timings_ms, "resolve_active_scenario", stage_started)
-
-    workflow_sync_action = requested_action in {"scenario_switch_rebuild", "restore", "reload", "reset"}
-    should_sync_workflow = _workflow_sync_for_rebuild_enabled(requested_action)
-    workflow_sync_result: dict[str, Any] | None = None
-    if target_scenario and should_sync_workflow:
-        if _defer_workflow_sync_for_rebuild(requested_action):
-            workflow_sync_result = _schedule_workflow_sync(
-                ctx,
-                webspace_id=webspace_id,
-                scenario_id=target_scenario,
-                reason=f"semantic_rebuild:{requested_action}",
-            )
-            timings_ms["workflow_sync_deferred"] = 0.0
-        else:
-            stage_started = time.perf_counter()
-            try:
-                wf = ScenarioWorkflowRuntime(ctx)
-                await wf.sync_workflow_for_webspace(target_scenario, webspace_id)
-                workflow_sync_result = {
-                    "scheduled": False,
-                    "deferred": False,
-                    "scenario_id": target_scenario,
-                }
-            except BaseException as exc:
-                if _is_control_flow_base_exception(exc):
-                    raise
-                workflow_sync_result = {
-                    "scheduled": False,
-                    "deferred": False,
-                    "error": f"workflow_sync_failed:{type(exc).__name__}",
-                    "scenario_id": target_scenario,
-                }
-                _log.warning(
-                    "failed to sync workflow during semantic rebuild webspace=%s scenario=%s action=%s",
-                    webspace_id,
-                    target_scenario,
-                    requested_action,
-                    exc_info=True,
-                )
-            _record_timing(timings_ms, "workflow_sync", stage_started)
-    elif workflow_sync_action and target_scenario:
-        workflow_sync_result = {
-            "scheduled": False,
-            "deferred": False,
-            "skipped": True,
-            "reason": "workflow_sync_disabled_for_scenario_switch"
-            if requested_action == "scenario_switch_rebuild"
-            else "workflow_sync_disabled",
-            "scenario_id": target_scenario,
-        }
-        timings_ms["workflow_sync_skipped"] = 0.0
-    elif workflow_sync_action:
-        workflow_sync_result = {
-            "scheduled": False,
-            "deferred": False,
-            "skipped": True,
-            "reason": "scenario_unresolved",
-        }
-
-    event_topic = None
-    if requested_action in {"reload", "reset"}:
-        event_topic = "desktop.webspace.reloaded"
-    elif requested_action == "restore":
-        event_topic = "desktop.webspace.restored"
-    if event_topic:
-        stage_started = time.perf_counter()
-        try:
-            payload: dict[str, Any] = {
-                "webspace_id": webspace_id,
-                "action": requested_action,
-            }
-            if target_scenario:
-                payload["scenario_id"] = target_scenario
-            if isinstance(event_payload, dict):
-                payload.update(event_payload)
-            payload["webspace_id"] = webspace_id
-            payload["action"] = requested_action
-            if target_scenario:
-                payload["scenario_id"] = target_scenario
-            payload["_event_type"] = event_topic
-            payload.pop("recreate_room", None)
-            emit(ctx.bus, event_topic, payload, "scenario.webspace_runtime")
-        except Exception:
-            _log.debug("failed to emit %s for webspace=%s", event_topic, webspace_id, exc_info=True)
-        _record_timing(timings_ms, "event_emit", stage_started)
-
-    finalized_timings = _finalize_timing_map(timings_ms, started_at=rebuild_started)
-    phase_timings = _derive_phase_timings(
-        switch_timings_ms=effective_switch_timings,
-        rebuild_timings_ms=finalized_timings,
-        semantic_rebuild_timings_ms=semantic_timings,
-        switch_mode=effective_switch_mode,
-    )
-    final_rebuild_state = describe_webspace_rebuild_state(webspace_id)
-    final_materialization = _copy_materialization_snapshot(
-        final_rebuild_state.get("materialization") if isinstance(final_rebuild_state, Mapping) else None
-    )
-    result = {
-        "ok": True,
-        "accepted": True,
-        "action": requested_action,
-        "source_of_truth": source_of_truth,
-        "webspace_id": webspace_id,
-        "scenario_id": target_scenario,
-        "scenario_resolution": resolved_scenario_resolution,
-        "request_id": request_id,
-        "switch_mode": effective_switch_mode,
-        "projection_refresh": projection_refresh,
-        "registry_summary": {
-            "scenario_id": str(getattr(entry, "scenario_id", target_scenario) or ""),
-            "apps": len(getattr(entry, "apps", []) or []),
-            "widgets": len(getattr(entry, "widgets", []) or []),
-        },
-        "resolver": resolver_debug or None,
-        "apply_summary": apply_summary or None,
-        "timings_ms": finalized_timings,
-        "switch_timings_ms": effective_switch_timings,
-        "semantic_rebuild_timings_ms": semantic_timings,
-        "ydoc_timings_ms": ydoc_timings,
-        "materialization_worker": worker_diagnostics or None,
-        "phase_timings_ms": phase_timings,
-        "materialization": final_materialization,
-        "materialization_identity": effective_materialization_identity,
-        "live_room_update_requested": bool(live_room_update_requested),
-        "live_room_publish": bool(publish_live_room),
-        "live_room_refresh": live_room_refresh_result,
-        "workflow_sync": workflow_sync_result,
-        "fresh_doc_rebuild": bool(fresh_doc_rebuild),
-        "atomic_payload_rebuild": bool(scenario_switch_payload_rebuild),
-        "force_full_state_update": bool(force_full_state_update),
-        "payload_only_rebuild": bool(payload_only_rebuild),
-    }
-    if requested_action == "reset" or reset_room_result is not None:
-        result["reset_room"] = reset_room_result or {
-            "webspace_id": webspace_id,
-            "room_dropped": False,
-        }
-        result["ystore_reset"] = bool(ystore_reset)
-    _set_webspace_rebuild_status_if_current(
-        webspace_id,
-        request_id,
-        status="ready",
-        pending=False,
-        finished_at=time.time(),
-        error=None,
-        switch_mode=effective_switch_mode,
-        scenario_id=target_scenario,
-        scenario_resolution=resolved_scenario_resolution,
-        projection_refresh=projection_refresh,
-        registry_summary=result.get("registry_summary"),
-        resolver=resolver_debug or None,
-        apply_summary=apply_summary or None,
-        timings_ms=finalized_timings,
-        switch_timings_ms=effective_switch_timings,
-        semantic_rebuild_timings_ms=semantic_timings,
-        ydoc_timings_ms=ydoc_timings,
-        phase_timings_ms=phase_timings,
-        materialization=final_materialization,
-        materialized_payload=materialized_payload,
-        live_room_update_requested=bool(live_room_update_requested),
-        live_room_publish=bool(publish_live_room),
-        live_room_refresh=live_room_refresh_result,
-    )
-    _log.info(
-        "semantic rebuild completed webspace=%s action=%s scenario=%s timings_ms=%s semantic_timings_ms=%s",
-        webspace_id,
-        requested_action,
-        target_scenario,
-        finalized_timings,
-        semantic_timings,
-    )
-    return result
 
 
 async def _complete_scenario_switch_rebuild(
@@ -10344,149 +7334,17 @@ def _schedule_scenario_switch_rebuild(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> None:
-    switch_mode = "pointer_only"
-    request_id = str(request_id or "").strip() or secrets.token_hex(8)
-    initial_phase_timings = _derive_phase_timings(
-        switch_timings_ms=switch_timings_ms,
-        rebuild_timings_ms=None,
-        switch_mode=switch_mode,
-    )
-    initial_materialization = _pending_materialization_snapshot(
+    _TASK_SCHEDULING_SERVICE.schedule_scenario_switch_rebuild(
+        _task_scheduling_operations(),
         webspace_id,
-        scenario_id=scenario_id,
-        snapshot_source="rebuild:scheduled",
-    )
-    _set_webspace_rebuild_status(
-        webspace_id,
-        status="scheduled",
-        pending=True,
-        background=True,
-        request_id=request_id,
-        request_source=str(request_source or "").strip() or None,
-        request_client=str(request_client or "").strip() or None,
-        action="scenario_switch_rebuild",
-        source_of_truth="scenario_switch",
         scenario_id=scenario_id,
         scenario_resolution=scenario_resolution,
-        switch_mode=str(switch_mode or "") or None,
-        requested_at=time.time(),
-        started_at=None,
-        finished_at=None,
-        error=None,
-        projection_refresh=None,
-        registry_summary=None,
-        resolver=None,
-        apply_summary=None,
-        timings_ms=None,
-        switch_timings_ms=_copy_timing_map(switch_timings_ms),
-        semantic_rebuild_timings_ms=None,
-        phase_timings_ms=initial_phase_timings,
-        materialization=initial_materialization,
+        switch_mode=switch_mode,
+        switch_timings_ms=switch_timings_ms,
+        request_id=request_id,
+        request_source=request_source,
+        request_client=request_client,
     )
-    existing = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
-    if existing and not existing.done():
-        existing.cancel()
-
-    async def _runner() -> None:
-        try:
-            route_yield_s = _scenario_switch_background_route_yield_s()
-            if route_yield_s > 0:
-                await asyncio.sleep(route_yield_s)
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="running",
-                pending=True,
-                background=True,
-                switch_mode=str(switch_mode or "") or None,
-                started_at=time.time(),
-                finished_at=None,
-                error=None,
-                projection_refresh=None,
-                registry_summary=None,
-                resolver=None,
-                apply_summary=None,
-                timings_ms=None,
-                semantic_rebuild_timings_ms=None,
-                materialization=_pending_materialization_snapshot(
-                    webspace_id,
-                    scenario_id=scenario_id,
-                    snapshot_source="rebuild:running",
-                ),
-            )
-            result = await _complete_scenario_switch_rebuild(
-                webspace_id,
-                scenario_id=scenario_id,
-                scenario_resolution=scenario_resolution,
-                request_id=request_id,
-                switch_mode=switch_mode,
-                switch_timings_ms=None,
-            )
-            if not bool(result.get("accepted")):
-                if str(result.get("error") or "").strip() == "stale_rebuild_superseded":
-                    return
-                _set_webspace_rebuild_status_if_current(
-                    webspace_id,
-                    request_id,
-                    status="failed",
-                    pending=False,
-                    background=True,
-                    finished_at=time.time(),
-                    error=str(result.get("error") or "scenario_switch_rebuild_failed"),
-                    switch_mode=str(switch_mode or "") or None,
-                    projection_refresh=result.get("projection_refresh"),
-                    resolver=result.get("resolver"),
-                    apply_summary=result.get("apply_summary"),
-                    timings_ms=_copy_timing_map(result.get("timings_ms")),
-                    switch_timings_ms=_copy_timing_map(result.get("switch_timings_ms") or switch_timings_ms),
-                    semantic_rebuild_timings_ms=_copy_timing_map(result.get("semantic_rebuild_timings_ms")),
-                    phase_timings_ms=_copy_timing_map(result.get("phase_timings_ms")),
-                )
-                _log.warning(
-                    "background scenario switch rebuild rejected webspace=%s scenario=%s error=%s",
-                    webspace_id,
-                    scenario_id,
-                    result.get("error"),
-                )
-        except asyncio.CancelledError:
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="cancelled",
-                pending=False,
-                background=True,
-                finished_at=time.time(),
-                error="cancelled",
-            )
-            raise
-        except BaseException as exc:
-            if _is_control_flow_base_exception(exc):
-                raise
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                status="failed",
-                pending=False,
-                background=True,
-                finished_at=time.time(),
-                error=f"background_scenario_switch_rebuild_failed:{type(exc).__name__}",
-            )
-            _log.warning(
-                "background scenario switch rebuild failed webspace=%s scenario=%s",
-                webspace_id,
-                scenario_id,
-                exc_info=True,
-            )
-        finally:
-            current = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
-            if current is task:
-                _SCENARIO_SWITCH_REBUILD_TASKS.pop(webspace_id, None)
-
-    task = asyncio.create_task(
-        _runner(),
-        name=f"webspace-scenario-switch:{webspace_id}:{scenario_id}",
-    )
-    _SCENARIO_SWITCH_REBUILD_TASKS[webspace_id] = task
 
 
 async def reload_webspace_from_scenario(
@@ -10531,129 +7389,40 @@ async def reload_webspace_from_scenario(
         }
 
     command_trace = _payload_command_trace(event_payload or {})
-    recovery_fingerprint = _recovery_request_fingerprint(
+    rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
+    recovery_decision = _RECOVERY_COORDINATOR.begin(
         webspace_id=webspace_id,
         action=requested_action,
         scenario_id=scenario_id,
         command_trace=command_trace,
+        previous_state=rebuild_state_before,
+        command_ttl_s=_reload_command_dedupe_ttl_s(),
+        duplicate_window_s=_reload_dedupe_window_s(),
+        pending_stale_after_s=_reload_pending_stale_after_s(),
     )
-    claimed_command, duplicate_command = _claim_recovery_command_once(
-        webspace_id=webspace_id,
-        action=requested_action,
-        scenario_id=scenario_id,
-        cmd_id=command_trace.get("cmd_id"),
-        fingerprint=recovery_fingerprint,
-    )
-    if not claimed_command:
-        duplicate_total = int(describe_webspace_rebuild_state(webspace_id).get("recovery_duplicate_total") or 0) + 1
-        _set_webspace_rebuild_status(
-            webspace_id,
-            recovery_fingerprint=recovery_fingerprint,
-            recovery_duplicate_total=duplicate_total,
-            recovery_last_duplicate_at=time.time(),
-            recovery_last_duplicate_reason="duplicate_recovery_command",
-            recovery_last_duplicate_age_s=duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
-            recovery_last_command_client=command_trace.get("gateway_client"),
-            recovery_last_command_id=command_trace.get("cmd_id"),
-            recovery_last_command_seq=int(command_trace.get("gateway_command_seq") or 0),
-        )
-        _log.warning(
-            "deduplicated webspace recovery command webspace=%s action=%s scenario=%s cmd=%s seq=%s client=%s fp=%s age_s=%s ttl_s=%s dup_total=%s",
-            webspace_id,
-            requested_action,
-            scenario_id,
-            command_trace.get("cmd_id") or "-",
-            command_trace.get("gateway_command_seq") or 0,
-            command_trace.get("gateway_client") or "-",
-            recovery_fingerprint,
-            duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else "-",
-            duplicate_command.get("ttl_s") if isinstance(duplicate_command, dict) else "-",
-            duplicate_total,
-        )
-        return {
-            "ok": True,
-            "accepted": True,
-            "deduplicated": True,
-            "skip_reason": "duplicate_recovery_command",
-            "action": requested_action,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_resolution": scenario_resolution,
-            "kind": state.kind,
-            "source_mode": state.source_mode,
-            "home_scenario": state.effective_home_scenario,
-            "current_scenario_before": state.current_scenario,
-            "recovery_fingerprint": recovery_fingerprint,
-            "recovery_duplicate_total": duplicate_total,
-            "duplicate_age_s": duplicate_command.get("age_s") if isinstance(duplicate_command, dict) else None,
-            "rebuild": describe_webspace_rebuild_state(webspace_id),
-        }
-
-    rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
-    duplicate_window_s = _reload_dedupe_window_s()
-    previous_action = str(rebuild_state_before.get("action") or "").strip().lower()
-    previous_scenario = str(rebuild_state_before.get("scenario_id") or "").strip() or None
+    recovery_fingerprint = recovery_decision.fingerprint
     previous_fingerprint = str(rebuild_state_before.get("recovery_fingerprint") or "").strip()
-    previous_pending = bool(rebuild_state_before.get("pending"))
-    previous_status = str(rebuild_state_before.get("status") or "").strip().lower()
-    previous_updated_at = rebuild_state_before.get("updated_at")
-    if previous_updated_at is None:
-        previous_updated_at = rebuild_state_before.get("finished_at")
-    if previous_updated_at is None:
-        previous_updated_at = rebuild_state_before.get("started_at")
-    previous_age_s: float | None = None
-    try:
-        if previous_updated_at is not None:
-            previous_age_s = round(max(0.0, time.time() - float(previous_updated_at)), 3)
-    except Exception:
-        previous_age_s = None
-    pending_stale_after_s = _reload_pending_stale_after_s()
-    previous_pending_stale = bool(
-        previous_pending
-        and pending_stale_after_s > 0.0
-        and previous_age_s is not None
-        and previous_age_s >= pending_stale_after_s
-    )
-
-    duplicate_reason: str | None = None
-    if (
-        previous_action == requested_action
-        and previous_scenario == scenario_id
-        and previous_fingerprint
-        and previous_fingerprint == recovery_fingerprint
-    ):
-        if previous_pending and not previous_pending_stale:
-            duplicate_reason = "already_pending_recovery"
-        elif (
-            duplicate_window_s > 0.0
-            and previous_age_s is not None
-            and previous_age_s <= duplicate_window_s
-            and previous_status in {"running", "ready", "scheduled"}
-        ):
-            duplicate_reason = "duplicate_recovery_request"
-
-    if previous_pending_stale:
+    if recovery_decision.previous_pending_stale:
         _log.warning(
             "stale pending webspace recovery will be superseded webspace=%s action=%s scenario=%s prev_status=%s age_s=%s stale_after_s=%s fp=%s",
             webspace_id,
             requested_action,
             scenario_id,
-            previous_status or "-",
-            previous_age_s if previous_age_s is not None else "-",
-            pending_stale_after_s,
+            recovery_decision.previous_status or "-",
+            recovery_decision.duplicate_age_s if recovery_decision.duplicate_age_s is not None else "-",
+            recovery_decision.pending_stale_after_s,
             previous_fingerprint or "-",
         )
 
-    if duplicate_reason:
+    if recovery_decision.deduplicated:
         duplicate_total = int(rebuild_state_before.get("recovery_duplicate_total") or 0) + 1
-        duplicate_now = time.time()
         _set_webspace_rebuild_status(
             webspace_id,
             recovery_fingerprint=recovery_fingerprint,
             recovery_duplicate_total=duplicate_total,
-            recovery_last_duplicate_at=duplicate_now,
-            recovery_last_duplicate_reason=duplicate_reason,
-            recovery_last_duplicate_age_s=previous_age_s,
+            recovery_last_duplicate_at=time.time(),
+            recovery_last_duplicate_reason=recovery_decision.duplicate_reason,
+            recovery_last_duplicate_age_s=recovery_decision.duplicate_age_s,
             recovery_last_command_client=command_trace.get("gateway_client"),
             recovery_last_command_id=command_trace.get("cmd_id"),
             recovery_last_command_seq=int(command_trace.get("gateway_command_seq") or 0),
@@ -10663,9 +7432,9 @@ async def reload_webspace_from_scenario(
             webspace_id,
             requested_action,
             scenario_id,
-            duplicate_reason,
-            previous_status or "-",
-            previous_age_s if previous_age_s is not None else "-",
+            recovery_decision.duplicate_reason,
+            recovery_decision.previous_status or "-",
+            recovery_decision.duplicate_age_s if recovery_decision.duplicate_age_s is not None else "-",
             command_trace.get("cmd_id") or "-",
             command_trace.get("gateway_command_seq") or 0,
             command_trace.get("gateway_client") or "-",
@@ -10676,7 +7445,7 @@ async def reload_webspace_from_scenario(
             "ok": True,
             "accepted": True,
             "deduplicated": True,
-            "skip_reason": duplicate_reason,
+            "skip_reason": recovery_decision.duplicate_reason,
             "action": requested_action,
             "webspace_id": webspace_id,
             "scenario_id": scenario_id,
@@ -10687,7 +7456,7 @@ async def reload_webspace_from_scenario(
             "current_scenario_before": state.current_scenario,
             "recovery_fingerprint": recovery_fingerprint,
             "recovery_duplicate_total": duplicate_total,
-            "duplicate_age_s": previous_age_s,
+            "duplicate_age_s": recovery_decision.duplicate_age_s,
             "rebuild": describe_webspace_rebuild_state(webspace_id),
         }
 
@@ -11132,10 +7901,7 @@ async def apply_builder_revision_materialization(
 
 
 async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
-    """
-    Restore a webspace from its latest persisted YStore snapshot and reconcile
-    its materialized effective UI/runtime projection.
-    """
+    """Restore persisted state and run coordinator-owned semantic reconcile."""
     webspace_id = str(webspace_id or "").strip()
     if not webspace_id:
         raise ValueError("webspace_id is required")
@@ -11143,50 +7909,67 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
     from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
     from adaos.services.yjs.store import restore_ystore_for_webspace  # pylint: disable=import-outside-toplevel
 
-    restore_result = await restore_ystore_for_webspace(webspace_id)
-    if not bool(restore_result.get("accepted")):
-        return restore_result
+    async def _reset_room(target: str) -> dict[str, Any]:
+        return await reset_live_webspace_room(target, close_reason="webspace_restore")
 
-    reset_result: dict[str, Any] = {}
-    try:
-        reset_result = await reset_live_webspace_room(webspace_id, close_reason="webspace_restore")
-    except Exception:
-        _log.warning("failed to reset live room before restore for webspace=%s", webspace_id, exc_info=True)
+    async def _read_current_scenario(target: str) -> str | None:
+        async with _open_readonly_operational_ydoc(target) as ydoc:
+            return _normalize_optional_token(ydoc.get_map("ui").get("current_scenario"))
 
-    restored_current_scenario: str | None = None
-    try:
-        async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
-            restored_current_scenario = _normalize_optional_token(
-                ydoc.get_map("ui").get("current_scenario")
-            )
-    except Exception:
-        restored_current_scenario = None
-    if restored_current_scenario:
-        try:
-            workspace_index.set_workspace_current_scenario_overlay(webspace_id, restored_current_scenario)
-        except Exception:
-            _log.debug(
-                "failed to persist restored current scenario overlay webspace=%s scenario=%s",
-                webspace_id,
-                restored_current_scenario,
-                exc_info=True,
-            )
+    async def _rebuild(target: str, restore_result: Mapping[str, Any]) -> dict[str, Any]:
+        return await rebuild_webspace_from_sources(
+            target,
+            action="restore",
+            source_of_truth="snapshot",
+            reseed_from_scenario=False,
+            event_payload={"snapshot_path": str(restore_result.get("snapshot_path") or "")},
+        )
 
-    rebuild_result = await rebuild_webspace_from_sources(
-        webspace_id,
-        action="restore",
-        source_of_truth="snapshot",
-        reseed_from_scenario=False,
-        event_payload={"snapshot_path": str(restore_result.get("snapshot_path") or "")},
+    def _on_error(stage: str, _exc: BaseException) -> None:
+        log = _log.warning if stage == "reset_room" else _log.debug
+        log(
+            "webspace snapshot restore stage failed stage=%s webspace=%s",
+            stage,
+            webspace_id,
+            exc_info=True,
+        )
+
+    return await _RECOVERY_COORDINATOR.restore_snapshot(
+        webspace_id=webspace_id,
+        restore_store=restore_ystore_for_webspace,
+        reset_room=_reset_room,
+        read_current_scenario=_read_current_scenario,
+        persist_current_scenario=workspace_index.set_workspace_current_scenario_overlay,
+        rebuild=_rebuild,
+        on_error=_on_error,
     )
 
-    return {
-        **restore_result,
-        **rebuild_result,
-        "action": "restore",
-        "source_of_truth": "snapshot",
-        "reset_room": reset_result,
-    }
+
+def _scenario_switch_operations() -> ScenarioSwitchOperations:
+    return ScenarioSwitchOperations(
+        task_state=_TASK_STATE,
+        log=_log,
+        workspace_index=workspace_index,
+        describe_operational_state=describe_webspace_operational_state,
+        describe_rebuild_state=describe_webspace_rebuild_state,
+        record_timing=_record_timing,
+        materialization_scenario_from_rebuild_state=_materialization_scenario_from_rebuild_state,
+        read_effective_materialization_scenario=_read_effective_materialization_scenario,
+        scenario_switch_mode=_scenario_switch_mode,
+        copy_timing_map=_copy_timing_map,
+        derive_phase_timings=_derive_phase_timings,
+        finalize_timing_map=_finalize_timing_map,
+        scenario_exists_for_switch=_scenario_exists_for_switch,
+        set_rebuild_status=_set_webspace_rebuild_status,
+        set_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        sync_webspace_listing_target=_sync_webspace_listing_target,
+        schedule_scenario_switch_rebuild=_schedule_scenario_switch_rebuild,
+        complete_scenario_switch_rebuild=_complete_scenario_switch_rebuild,
+        set_map_value_if_changed=_set_map_value_if_changed,
+        write_meta=_webspace_runtime_async_write_meta,
+        async_get_ydoc=async_get_ydoc,
+        mutate_live_room=mutate_live_room,
+    )
 
 
 async def switch_webspace_scenario(
@@ -11199,451 +7982,16 @@ async def switch_webspace_scenario(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> dict[str, Any]:
-    webspace_id = str(webspace_id or "").strip()
-    scenario_id = str(scenario_id or "").strip()
-    if not webspace_id:
-        raise ValueError("webspace_id is required")
-    if not scenario_id:
-        raise ValueError("scenario_id is required")
-
-    switch_started = time.perf_counter()
-    timings_ms: Dict[str, float] = {}
-    stage_started = time.perf_counter()
-    state_before = await describe_webspace_operational_state(webspace_id)
-    _record_timing(timings_ms, "describe_state_before", stage_started)
-
-    stage_started = time.perf_counter()
-    row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-    resolved_set_home = bool(set_home) if set_home is not None else False
-    _record_timing(timings_ms, "resolve_manifest_policy", stage_started)
-    stage_started = time.perf_counter()
-    rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
-    _record_timing(timings_ms, "describe_rebuild_before", stage_started)
-    materialized_scenario_before: str | None = None
-    materialization_matches_target = True
-    if str(state_before.current_scenario or "").strip() == scenario_id:
-        stage_started = time.perf_counter()
-        materialized_scenario_before = _materialization_scenario_from_rebuild_state(rebuild_state_before)
-        if materialized_scenario_before is None:
-            materialized_scenario_before = await _read_effective_materialization_scenario(webspace_id)
-        _record_timing(timings_ms, "read_materialization_scenario_before", stage_started)
-        materialization_matches_target = (
-            materialized_scenario_before is None
-            or str(materialized_scenario_before or "").strip() == scenario_id
-        )
-        if materialized_scenario_before and not materialization_matches_target:
-            _log.warning(
-                "desktop.scenario.set forcing rebuild for materialization mismatch webspace=%s current_scenario=%s materialized_scenario=%s target_scenario=%s",
-                webspace_id,
-                state_before.current_scenario,
-                materialized_scenario_before,
-                scenario_id,
-            )
-
-    _log.info(
-        "desktop.scenario.set webspace=%s scenario=%s requested_set_home=%s resolved_set_home=%s request_source=%s request_id=%s request_client=%s",
+    return await _SCENARIO_SWITCHING.switch(
+        _scenario_switch_operations(),
         webspace_id,
         scenario_id,
-        set_home,
-        resolved_set_home,
-        str(request_source or "").strip() or "-",
-        str(request_id or "").strip() or "-",
-        str(request_client or "").strip() or "-",
+        set_home=set_home,
+        wait_for_rebuild=wait_for_rebuild,
+        request_id=request_id,
+        request_source=request_source,
+        request_client=request_client,
     )
-    switch_mode = _scenario_switch_mode()
-    atomic_selector_commit = True
-    selector_commit_mode = "materialization_transaction"
-    loader_space = "workspace"
-    try:
-        if row:
-            loader_space = row.effective_source_mode
-    except Exception:
-        loader_space = "workspace"
-    switch_content: Dict[str, Any] | None = None
-
-    def _build_switch_skip_result(*, skip_reason: str, rebuild_state: Mapping[str, Any], background_rebuild: bool) -> dict[str, Any]:
-        phase_timings = _copy_timing_map(rebuild_state.get("phase_timings_ms"))
-        if not phase_timings:
-            phase_timings = _derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                rebuild_timings_ms=_copy_timing_map(rebuild_state.get("timings_ms")),
-                semantic_rebuild_timings_ms=_copy_timing_map(rebuild_state.get("semantic_rebuild_timings_ms")),
-                switch_mode="noop",
-            )
-        return {
-            "ok": True,
-            "accepted": True,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "kind": row.effective_kind,
-            "source_mode": row.effective_source_mode,
-            "current_scenario_before": state_before.current_scenario,
-            "home_scenario_before": state_before.effective_home_scenario,
-            "home_scenario": row.effective_home_scenario,
-            "set_home": resolved_set_home,
-            "background_rebuild": background_rebuild,
-            "scenario_switch_mode": switch_mode,
-            "selector_commit_mode": "unchanged",
-            "switch_skipped": True,
-            "skip_reason": skip_reason,
-            "timings_ms": finalized_timings,
-            "rebuild_timings_ms": _copy_timing_map(rebuild_state.get("timings_ms")),
-            "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_state.get("semantic_rebuild_timings_ms")),
-            "resolver": dict(rebuild_state.get("resolver") or {})
-            if isinstance(rebuild_state.get("resolver"), Mapping)
-            else None,
-            "apply_summary": dict(rebuild_state.get("apply_summary") or {})
-            if isinstance(rebuild_state.get("apply_summary"), Mapping)
-            else None,
-            "phase_timings_ms": phase_timings,
-        }
-
-    if (
-        str(state_before.current_scenario or "").strip() == scenario_id
-        and not bool(rebuild_state_before.get("pending"))
-        and str(rebuild_state_before.get("status") or "").strip().lower() == "ready"
-        and str(rebuild_state_before.get("scenario_id") or "").strip() == scenario_id
-        and materialization_matches_target
-    ):
-        if resolved_set_home and row.effective_home_scenario != scenario_id:
-            stage_started = time.perf_counter()
-            row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
-            _record_timing(timings_ms, "persist_home_scenario", stage_started)
-
-            stage_started = time.perf_counter()
-            await _sync_webspace_listing_target(webspace_id)
-            _record_timing(timings_ms, "sync_listing", stage_started)
-
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        _log.info(
-            "desktop.scenario.set skipped webspace=%s scenario=%s mode=%s timings_ms=%s",
-            webspace_id,
-            scenario_id,
-            switch_mode,
-            finalized_timings,
-        )
-        return _build_switch_skip_result(
-            skip_reason="already_current_ready",
-            rebuild_state=rebuild_state_before,
-            background_rebuild=False,
-        )
-
-    if (
-        str(state_before.current_scenario or "").strip() == scenario_id
-        and bool(rebuild_state_before.get("pending"))
-        and str(rebuild_state_before.get("scenario_id") or "").strip() == scenario_id
-    ):
-        if resolved_set_home and row.effective_home_scenario != scenario_id:
-            stage_started = time.perf_counter()
-            row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
-            _record_timing(timings_ms, "persist_home_scenario", stage_started)
-
-            stage_started = time.perf_counter()
-            await _sync_webspace_listing_target(webspace_id)
-            _record_timing(timings_ms, "sync_listing", stage_started)
-
-        if wait_for_rebuild:
-            existing_task = _SCENARIO_SWITCH_REBUILD_TASKS.get(webspace_id)
-            if existing_task and not existing_task.done():
-                stage_started = time.perf_counter()
-                try:
-                    await asyncio.shield(existing_task)
-                except Exception:
-                    pass
-                _record_timing(timings_ms, "wait_existing_rebuild", stage_started)
-                rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
-
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        _log.info(
-            "desktop.scenario.set deduplicated webspace=%s scenario=%s mode=%s pending=%s timings_ms=%s",
-            webspace_id,
-            scenario_id,
-            switch_mode,
-            bool(rebuild_state_before.get("pending")),
-            finalized_timings,
-        )
-        return _build_switch_skip_result(
-            skip_reason="already_pending_rebuild",
-            rebuild_state=rebuild_state_before,
-            background_rebuild=bool(rebuild_state_before.get("pending") or (not wait_for_rebuild and rebuild_state_before.get("background"))),
-        )
-
-    stage_started = time.perf_counter()
-    scenario_exists = _scenario_exists_for_switch(scenario_id, space=loader_space)
-    _record_timing(timings_ms, "validate_scenario", stage_started)
-    if not scenario_exists:
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        _set_webspace_rebuild_status(
-            webspace_id,
-            status="failed",
-            pending=False,
-            background=not wait_for_rebuild,
-            action="scenario_switch_rebuild",
-            source_of_truth="scenario_switch",
-            scenario_id=scenario_id,
-            scenario_resolution="explicit",
-            switch_mode=switch_mode,
-            requested_at=time.time(),
-            finished_at=time.time(),
-            error="scenario_not_found",
-            projection_refresh=None,
-            registry_summary=None,
-            resolver=None,
-            apply_summary=None,
-            timings_ms=finalized_timings,
-            phase_timings_ms=_derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        )
-        return {
-            "ok": False,
-            "accepted": False,
-            "error": "scenario_not_found",
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_switch_mode": switch_mode,
-            "timings_ms": finalized_timings,
-            "phase_timings_ms": _derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        }
-
-    try:
-        if atomic_selector_commit:
-            timings_ms["defer_switch_pointer"] = 0.0
-        else:
-            stage_started = time.perf_counter()
-
-            def _mutator(doc: Any, txn: Any) -> None:
-                ui_map = doc.get_map("ui")
-                _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
-
-            live_applied = mutate_live_room(
-                webspace_id,
-                _mutator,
-                root_names=["ui"],
-                source="webspace_runtime.switch_pointer",
-                owner="core:webspace_runtime",
-                channel="core.webspace_runtime.live_room",
-            )
-            if live_applied:
-                _record_timing(timings_ms, "write_switch_pointer", stage_started)
-            else:
-                stage_started = time.perf_counter()
-                async with _webspace_runtime_async_write_meta(
-                    root_names=["ui"],
-                    source="webspace_runtime.switch_pointer",
-                ):
-                    async with async_get_ydoc(webspace_id) as ydoc:
-                        _record_timing(timings_ms, "open_doc", stage_started)
-                        ui_map = ydoc.get_map("ui")
-                        stage_started = time.perf_counter()
-                        with ydoc.begin_transaction() as txn:
-                            _set_map_value_if_changed(ui_map, txn, "current_scenario", scenario_id)
-                        _record_timing(timings_ms, "write_switch_pointer", stage_started)
-
-        stage_started = time.perf_counter()
-        row = await asyncio.to_thread(
-            workspace_index.set_workspace_current_scenario_overlay,
-            webspace_id,
-            scenario_id,
-        )
-        _record_timing(timings_ms, "persist_current_scenario", stage_started)
-    except Exception:
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        _set_webspace_rebuild_status(
-            webspace_id,
-            status="failed",
-            pending=False,
-            background=not wait_for_rebuild,
-            action="scenario_switch_rebuild",
-            source_of_truth="scenario_switch",
-            scenario_id=scenario_id,
-            scenario_resolution="explicit",
-            switch_mode=switch_mode,
-            requested_at=time.time(),
-            finished_at=time.time(),
-            error="scenario_switch_failed",
-            projection_refresh=None,
-            registry_summary=None,
-            resolver=None,
-            apply_summary=None,
-            timings_ms=finalized_timings,
-            phase_timings_ms=_derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        )
-        _log.warning(
-            "failed to switch scenario for webspace=%s scenario=%s timings_ms=%s",
-            webspace_id,
-            scenario_id,
-            finalized_timings,
-            exc_info=True,
-        )
-        return {
-            "ok": False,
-            "accepted": False,
-            "error": "scenario_switch_failed",
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "scenario_switch_mode": switch_mode,
-            "timings_ms": finalized_timings,
-            "phase_timings_ms": _derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        }
-
-    try:
-        from adaos.services.yjs.gateway_ws import (  # pylint: disable=import-outside-toplevel
-            note_authoritative_current_scenario,
-        )
-
-        if not atomic_selector_commit:
-            note_authoritative_current_scenario(
-                webspace_id,
-                scenario_id,
-                reason="scenario_switch",
-            )
-    except Exception:
-        _log.debug("failed to publish authoritative current_scenario lease", exc_info=True)
-
-    stage_started = time.perf_counter()
-    row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-    _record_timing(timings_ms, "refresh_manifest_row", stage_started)
-    if resolved_set_home:
-        stage_started = time.perf_counter()
-        row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=scenario_id)
-        _record_timing(timings_ms, "persist_home_scenario", stage_started)
-
-        stage_started = time.perf_counter()
-        await _sync_webspace_listing_target(webspace_id)
-        _record_timing(timings_ms, "sync_listing", stage_started)
-
-    if not wait_for_rebuild:
-        scheduled_switch_timings = _finalize_timing_map(dict(timings_ms), started_at=switch_started)
-        stage_started = time.perf_counter()
-        _schedule_scenario_switch_rebuild(
-            webspace_id,
-            scenario_id=scenario_id,
-            scenario_resolution="explicit",
-            switch_mode=switch_mode,
-            switch_timings_ms=scheduled_switch_timings,
-            request_id=request_id,
-            request_source=request_source,
-            request_client=request_client,
-        )
-        _record_timing(timings_ms, "schedule_background_rebuild", stage_started)
-        finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        current_status = describe_webspace_rebuild_state(webspace_id)
-        _set_webspace_rebuild_status_if_current(
-            webspace_id,
-            str(current_status.get("request_id") or "").strip() or None,
-            switch_timings_ms=finalized_timings,
-            phase_timings_ms=_derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        )
-        _log.info(
-            "desktop.scenario.set accepted webspace=%s scenario=%s mode=%s background=%s timings_ms=%s",
-            webspace_id,
-            scenario_id,
-            switch_mode,
-            True,
-            finalized_timings,
-        )
-        return {
-            "ok": True,
-            "accepted": True,
-            "webspace_id": webspace_id,
-            "scenario_id": scenario_id,
-            "request_id": str(request_id or "").strip() or str(current_status.get("request_id") or "").strip() or None,
-            "request_source": str(request_source or "").strip() or None,
-            "request_client": str(request_client or "").strip() or None,
-            "kind": row.effective_kind,
-            "source_mode": row.effective_source_mode,
-            "current_scenario_before": state_before.current_scenario,
-            "home_scenario_before": state_before.effective_home_scenario,
-            "home_scenario": row.effective_home_scenario,
-            "set_home": resolved_set_home,
-            "background_rebuild": True,
-            "scenario_switch_mode": switch_mode,
-            "selector_commit_mode": selector_commit_mode,
-            "timings_ms": finalized_timings,
-            "phase_timings_ms": _derive_phase_timings(
-                switch_timings_ms=finalized_timings,
-                switch_mode=switch_mode,
-            ),
-        }
-
-    stage_started = time.perf_counter()
-    rebuild_result = await _complete_scenario_switch_rebuild(
-        webspace_id,
-        scenario_id=scenario_id,
-        scenario_resolution="explicit",
-        switch_mode=switch_mode,
-        switch_timings_ms=_finalize_timing_map(dict(timings_ms), started_at=switch_started),
-    )
-    _record_timing(timings_ms, "wait_rebuild", stage_started)
-    if not bool(rebuild_result.get("accepted")):
-        final_switch_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-        rebuild_result["switch_timings_ms"] = final_switch_timings
-        rebuild_result["phase_timings_ms"] = _derive_phase_timings(
-            switch_timings_ms=final_switch_timings,
-            rebuild_timings_ms=rebuild_result.get("timings_ms"),
-            semantic_rebuild_timings_ms=rebuild_result.get("semantic_rebuild_timings_ms"),
-            switch_mode=switch_mode,
-        )
-        return rebuild_result
-
-    finalized_timings = _finalize_timing_map(timings_ms, started_at=switch_started)
-    phase_timings = _derive_phase_timings(
-        switch_timings_ms=finalized_timings,
-        rebuild_timings_ms=rebuild_result.get("timings_ms"),
-        semantic_rebuild_timings_ms=rebuild_result.get("semantic_rebuild_timings_ms"),
-        switch_mode=switch_mode,
-    )
-    _log.info(
-        "desktop.scenario.set completed webspace=%s scenario=%s mode=%s background=%s timings_ms=%s rebuild_timings_ms=%s",
-        webspace_id,
-        scenario_id,
-        switch_mode,
-        False,
-        finalized_timings,
-        rebuild_result.get("timings_ms"),
-    )
-    return {
-        "ok": True,
-        "accepted": True,
-        "webspace_id": webspace_id,
-        "scenario_id": scenario_id,
-        "kind": row.effective_kind,
-        "source_mode": row.effective_source_mode,
-        "current_scenario_before": state_before.current_scenario,
-        "home_scenario_before": state_before.effective_home_scenario,
-        "home_scenario": row.effective_home_scenario,
-        "set_home": resolved_set_home,
-        "background_rebuild": False,
-        "scenario_switch_mode": switch_mode,
-        "selector_commit_mode": selector_commit_mode,
-        "timings_ms": finalized_timings,
-        "rebuild_timings_ms": _copy_timing_map(rebuild_result.get("timings_ms")),
-        "semantic_rebuild_timings_ms": _copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),
-        "live_room_publish": rebuild_result.get("live_room_publish"),
-        "live_room_refresh": rebuild_result.get("live_room_refresh"),
-        "fresh_doc_rebuild": rebuild_result.get("fresh_doc_rebuild"),
-        "resolver": dict(rebuild_result.get("resolver") or {})
-        if isinstance(rebuild_result.get("resolver"), Mapping)
-        else None,
-        "apply_summary": dict(rebuild_result.get("apply_summary") or {})
-        if isinstance(rebuild_result.get("apply_summary"), Mapping)
-        else None,
-        "phase_timings_ms": phase_timings,
-    }
 
 
 async def go_home_webspace(webspace_id: str, *, wait_for_rebuild: bool = False) -> dict[str, Any]:

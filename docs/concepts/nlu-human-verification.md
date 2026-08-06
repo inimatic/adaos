@@ -55,9 +55,10 @@ The current Teacher candidate-apply and Root MCP phrase-check slice is covered b
 
 Expected result:
 
-- Candidate Apply persists a regex rule into the scenario/skill owner.
-- The persisted rule and updated candidate carry `promotion`, `provenance`,
-  and `privacy` fields; no bearer/session secret is embedded.
+- Candidate Apply persists a scoped runtime regex overlay and creates a bounded
+  Builder promotion candidate for the selected scenario/skill package.
+- The overlay and updated candidate carry `promotion`, `provenance`, and
+  `privacy` fields; no owner source or bearer/session secret is embedded.
 - The original phrase is probed again and the candidate becomes `intent_matched`
   only when the planned intent matches the probe result.
 - `nlp.teacher.understanding.acquired` is emitted.

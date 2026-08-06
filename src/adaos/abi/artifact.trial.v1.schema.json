@@ -20,6 +20,7 @@
     "reload_receipt": {"type": "object"},
     "health_receipt": {"type": "object"},
     "rollback_receipt": {"type": "object"},
+    "workflow_metrics": {"type": "object"},
     "duration_seconds": {"type": "integer", "minimum": 0}
   },
   "additionalProperties": false

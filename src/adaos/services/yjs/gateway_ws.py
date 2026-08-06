@@ -237,6 +237,15 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
         "media_audio_input_supported": _browser_metadata_param(params, "media_audio_input_supported", "mediaAudioInputSupported"),
         "media_audio_output_supported": _browser_metadata_param(params, "media_audio_output_supported", "mediaAudioOutputSupported"),
         "media_audio_output_selection_supported": _browser_metadata_param(params, "media_audio_output_selection_supported", "mediaAudioOutputSelectionSupported"),
+        "media_route_status_level": _browser_metadata_param(params, "media_route_status_level", "mediaRouteStatusLevel"),
+        "media_route_status_state": _browser_metadata_param(params, "media_route_status_state", "mediaRouteStatusState"),
+        "media_route_status_reason": _browser_metadata_param(params, "media_route_status_reason", "mediaRouteStatusReason"),
+        "media_route_status_detail": _browser_metadata_param(params, "media_route_status_detail", "mediaRouteStatusDetail"),
+        "media_route_checked_at": _browser_metadata_param(params, "media_route_checked_at", "mediaRouteCheckedAt"),
+        "media_route_recent_device_change": _browser_metadata_param(params, "media_route_recent_device_change", "mediaRouteRecentDeviceChange"),
+        "media_route_bluetooth_profile_hint": _browser_metadata_param(params, "media_route_bluetooth_profile_hint", "mediaRouteBluetoothProfileHint"),
+        "media_route_output_routed": _browser_metadata_param(params, "media_route_output_routed", "mediaRouteOutputRouted"),
+        "media_route_input_applied": _browser_metadata_param(params, "media_route_input_applied", "mediaRouteInputApplied"),
     }
     clearable_media_keys = {
         "media_audio_input_device_id",
@@ -248,7 +257,7 @@ def _browser_session_metadata(params: Dict[str, str]) -> dict[str, str]:
     for key, (value, present) in raw.items():
         cleaned = _clean_browser_metadata_value(
             value,
-            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96)),
+            max_len=512 if key == "user_agent" else (256 if key in {"media_audio_input_device_id", "media_audio_output_device_id"} else (160 if key == "media_route_status_detail" else (128 if key in {"client_build_version", "device_display_name", "endpoint_display_name", "media_audio_input_label", "media_audio_output_label"} else 96))),
         )
         if cleaned:
             out[key] = cleaned
@@ -1312,6 +1321,7 @@ class DiagnosticYRoom(YRoom):
         self._diag_effective_initial_replay_total = 0
         self._diag_effective_initial_replay_bytes = 0
         self._diag_effective_initial_replay_skip_total = 0
+        self._diag_effective_initial_replay_dedupe_total = 0
         self._diag_effective_initial_replay_last_reason = ""
         self._diag_effective_branch_snapshot: dict[str, Any] = {"ready": False, "error": "not_observed"}
         self._diag_effective_last_full_check_mono = time.monotonic()
@@ -1393,6 +1403,9 @@ class DiagnosticYRoom(YRoom):
             "effective_initial_replay_total": int(self._diag_effective_initial_replay_total),
             "effective_initial_replay_bytes": int(self._diag_effective_initial_replay_bytes),
             "effective_initial_replay_skip_total": int(self._diag_effective_initial_replay_skip_total),
+            "effective_initial_replay_dedupe_total": int(
+                self._diag_effective_initial_replay_dedupe_total
+            ),
             "effective_initial_replay_last_reason": str(self._diag_effective_initial_replay_last_reason or ""),
             "peak_buffer_used": int(self._diag_peak_buffer_used),
             "peak_pending_send_tasks": int(self._diag_peak_pending_send_tasks),
@@ -1617,6 +1630,32 @@ class DiagnosticYRoom(YRoom):
                 message_bytes=len(message),
             )
             await client.send(message)
+        except Exception as exc:
+            # A failed transport must stop participating in the room.  Keeping
+            # it in ``clients`` makes every later update retry the dead
+            # recipient and turns reconnect churn into broadcast
+            # amplification.  Isolate the failure here instead of letting it
+            # cancel the room task group.
+            self.clients = [current for current in list(getattr(self, "clients", []) or []) if current is not client]
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    maybe_awaitable = close()
+                    if inspect.isawaitable(maybe_awaitable):
+                        await maybe_awaitable
+                except Exception:
+                    self.log.debug(
+                        "failed closing rejected YRoom client webspace=%s",
+                        self._diag_room_id(),
+                        exc_info=True,
+                    )
+            self.log.warning(
+                "pruned failed YRoom client webspace=%s update_bytes=%s error=%s remaining_clients=%s",
+                self._diag_room_id(),
+                int(update_bytes or 0),
+                type(exc).__name__,
+                len(getattr(self, "clients", []) or []),
+            )
         finally:
             if live_refresh_key is not None:
                 _record_live_refresh_client_send(live_refresh_key, elapsed_ms=_elapsed_ms_since(started))
@@ -1846,20 +1885,43 @@ class DiagnosticYRoom(YRoom):
             )
         return repair_update
 
-    async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> None:
+    async def _repair_authoritative_selector_after_update(
+        self,
+        *,
+        update_bytes: int,
+    ) -> bytes | None:
+        authoritative_scenario = _authoritative_current_scenario(self._diag_room_id())
+        if not authoritative_scenario:
+            return None
+        current_scenario = _room_current_scenario(self.ydoc)
+        if current_scenario == authoritative_scenario:
+            return None
+        self.log.warning(
+            "blocked stale YRoom selector update webspace=%s bytes=%s current=%s authoritative=%s",
+            self._diag_room_id(),
+            int(update_bytes or 0),
+            current_scenario,
+            authoritative_scenario,
+        )
+        return await self._repair_effective_branches_after_client_update(
+            update_bytes=int(update_bytes or 0),
+            reason="authoritative_selector_drift",
+        )
+
+    async def _send_initial_effective_state_replay(self, websocket: YWebsocket) -> bool:
         if not _YROOM_EFFECTIVE_INITIAL_REPLAY:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "disabled"
-            return
+            return False
         try:
             if not _room_effective_top_level_ready(self.ydoc):
                 self._diag_effective_initial_replay_skip_total += 1
                 self._diag_effective_initial_replay_last_reason = "room_not_effective_ready"
-                return
+                return False
         except Exception as exc:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = f"ready_check_failed:{type(exc).__name__}"
-            return
+            return False
         try:
             import y_py as Y  # pylint: disable=import-outside-toplevel
 
@@ -1875,12 +1937,12 @@ class DiagnosticYRoom(YRoom):
                 exc,
                 exc_info=True,
             )
-            return
+            return False
         update_len = len(update or b"")
         if update_len <= 0:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "empty_update"
-            return
+            return False
         if update_len > _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES:
             self._diag_effective_initial_replay_skip_total += 1
             self._diag_effective_initial_replay_last_reason = "update_too_large"
@@ -1890,7 +1952,7 @@ class DiagnosticYRoom(YRoom):
                 update_len,
                 _YROOM_EFFECTIVE_INITIAL_REPLAY_MAX_BYTES,
             )
-            return
+            return False
         send_started = time.perf_counter()
         await websocket.send(create_update_message(update))
         send_ms = _elapsed_ms_since(send_started)
@@ -1906,6 +1968,7 @@ class DiagnosticYRoom(YRoom):
             send_ms,
             int(self._diag_effective_initial_replay_total),
         )
+        return True
 
     async def serve(self, websocket: YWebsocket):
         if sync is None or process_sync_message is None or read_sync_message is None:
@@ -1913,7 +1976,12 @@ class DiagnosticYRoom(YRoom):
         async with create_task_group() as tg:
             self.clients.append(websocket)
             await sync(self.ydoc, websocket, self.log)
-            await self._send_initial_effective_state_replay(websocket)
+            # Normal y-websocket/DataChannel providers always emit STEP1 and
+            # require the corresponding STEP2 to declare first sync complete.
+            # Sending a full effective replay here, before reading STEP1, used
+            # to transfer the same document three times during one handshake.
+            # Keep the replay only as an exceptional malformed/preflight
+            # recovery path below.
             initial_native_update_pending = True
             try:
                 async for message in websocket:
@@ -2012,7 +2080,13 @@ class DiagnosticYRoom(YRoom):
                                 int(YSyncMessageType.SYNC_UPDATE),
                             }:
                                 initial_native_update_pending = False
-                                await self._send_initial_effective_state_replay(websocket)
+                                # STEP1 is handled by process_sync_message and
+                                # returns the authoritative STEP2.  Replaying a
+                                # full update after discarding the browser's
+                                # initial state duplicated that same response.
+                                # A prior exceptional replay is already enough;
+                                # either way no additional payload is needed.
+                                self._diag_effective_initial_replay_dedupe_total += 1
                             _ylog.warning(
                                 "ignored initial browser Y sync payload in server-authoritative mode "
                                 "webspace=%s sync_type=%s bytes=%s digest=%s",
@@ -2093,6 +2167,29 @@ class DiagnosticYRoom(YRoom):
                                 reset_route_runtime=True,
                             )
                         )
+                    continue
+                authoritative_repair = await self._repair_authoritative_selector_after_update(
+                    update_bytes=update_len,
+                )
+                if authoritative_repair is not None:
+                    repair_update = authoritative_repair
+                    if repair_update:
+                        repair_message = create_update_message(repair_update)
+                        clients = list(getattr(self, "clients", []) or [])
+                        if not clients:
+                            self._queue_effective_repair_replay(
+                                repair_update,
+                                reason="authoritative_selector_drift",
+                            )
+                        for client in clients:
+                            self._task_group.start_soon(
+                                self._tracked_client_send,
+                                client,
+                                repair_message,
+                                len(repair_update),
+                            )
+                    # The stale update is already integrated in the room and
+                    # has been reconciled above.  Never broadcast or persist it.
                     continue
                 previous_effective_ready = bool(
                     isinstance(self._diag_effective_branch_snapshot, dict)
@@ -2690,6 +2787,17 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
                 "inbound_guard_last_reset_reserved": bool(raw_diag.get("inbound_guard_last_reset_reserved")),
                 "effective_repair_total": int(raw_diag.get("effective_repair_total") or 0),
                 "effective_repair_bytes": int(raw_diag.get("effective_repair_bytes") or 0),
+                "effective_initial_replay_total": int(raw_diag.get("effective_initial_replay_total") or 0),
+                "effective_initial_replay_bytes": int(raw_diag.get("effective_initial_replay_bytes") or 0),
+                "effective_initial_replay_skip_total": int(
+                    raw_diag.get("effective_initial_replay_skip_total") or 0
+                ),
+                "effective_initial_replay_dedupe_total": int(
+                    raw_diag.get("effective_initial_replay_dedupe_total") or 0
+                ),
+                "effective_initial_replay_last_reason": str(
+                    raw_diag.get("effective_initial_replay_last_reason") or ""
+                ),
                 "send_stream": {
                     "current_buffer_used": int(send_stream.get("current_buffer_used") or 0),
                     "max_buffer_size": int(send_stream.get("max_buffer_size") or 0),
@@ -3958,10 +4066,10 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
         attempts: dict[str, list[str]] = {}
         for webspace_id, sockets in _ACTIVE_YWS_CONNECTIONS.items():
             for websocket in list(sockets or []):
-                device_id = _websocket_device_id(websocket)
+                client_key = _websocket_yws_client_limit_key(websocket)
                 attempt_id = _websocket_yws_attempt_id(websocket)
                 if attempt_id:
-                    attempts.setdefault(f"{webspace_id}::{device_id}", []).append(attempt_id)
+                    attempts.setdefault(f"{webspace_id}::{client_key}", []).append(attempt_id)
     rows: list[dict[str, Any]] = []
     for webspace_id, device_counts in clients.items():
         for client_key, count in sorted(device_counts.items()):
@@ -3973,7 +4081,7 @@ def _active_yws_client_rows() -> list[dict[str, Any]]:
             }
             if scoped_client_id:
                 row["client_limit_id"] = scoped_client_id
-            attempt_ids = attempts.get(f"{webspace_id}::{device_id}") or []
+            attempt_ids = attempts.get(f"{webspace_id}::{client_key}") or []
             if attempt_ids:
                 row["attempt_ids"] = attempt_ids[:3]
                 row["latest_attempt_id"] = attempt_ids[-1]
@@ -5906,7 +6014,7 @@ def _ws_client_str(websocket: WebSocket) -> str:
 
 class WorkspaceWebsocketServer(WebsocketServer):
     """
-    WebsocketServer that binds each room to a webspace-backed SQLiteYStore.
+    WebsocketServer that binds each room to a webspace-backed YStore snapshot.
 
     We use the websocket path as the webspace id (e.g. "default").
     """
@@ -6809,6 +6917,8 @@ async def _apply_room_materialized_payload(
     if not isinstance(payload, Mapping):
         phase_timings_ms["total"] = _elapsed_ms_since(total_started)
         return b"", {"ok": False, "ready": False, "error": "missing_materialized_payload", "phase_timings_ms": phase_timings_ms}
+    payload_scenario = str(payload.get("scenario_id") or "").strip()
+    previous_authoritative_scenario = _authoritative_current_scenario(webspace_id)
     try:
         import y_py as Y  # pylint: disable=import-outside-toplevel
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
@@ -6817,6 +6927,17 @@ async def _apply_room_materialized_payload(
         before = Y.encode_state_vector(ydoc)
         phase_timings_ms["encode_state_vector"] = _elapsed_ms_since(stage_started)
         runtime = WebspaceScenarioRuntime()
+        # Publish the selector authority before mutating the room.  The room
+        # observer fans YDoc updates out asynchronously; without this ordering
+        # an already-connected browser can merge and re-emit its stale selector
+        # between the atomic materialization commit and the old post-apply
+        # lease publication.
+        if payload_scenario:
+            note_authoritative_current_scenario(
+                webspace_id,
+                payload_scenario,
+                reason=f"{reason}:materialized_prepare",
+            )
         suppress_attr = "_suppress_backend_ystore_persist"
         previous_suppress = int(getattr(room, suppress_attr, 0) or 0)
         stage_started = time.perf_counter()
@@ -7050,6 +7171,18 @@ async def _apply_room_materialized_payload(
     except BaseException as exc:
         if _is_control_flow_base_exception(exc):
             raise
+        if payload_scenario and _authoritative_current_scenario(webspace_id) == payload_scenario:
+            if previous_authoritative_scenario:
+                note_authoritative_current_scenario(
+                    webspace_id,
+                    previous_authoritative_scenario,
+                    reason=f"{reason}:materialized_rollback",
+                )
+            else:
+                _clear_authoritative_current_scenario(
+                    webspace_id,
+                    reason=f"{reason}:materialized_failed",
+                )
         _ylog.warning(
             "YRoom materialized payload apply failed webspace=%s reason=%s: %s",
             webspace_id,
@@ -8459,6 +8592,15 @@ async def browser_session_authorize(
     media_audio_input_supported: str | None = None,
     media_audio_output_supported: str | None = None,
     media_audio_output_selection_supported: str | None = None,
+    media_route_status_level: str | None = None,
+    media_route_status_state: str | None = None,
+    media_route_status_reason: str | None = None,
+    media_route_status_detail: str | None = None,
+    media_route_checked_at: str | None = None,
+    media_route_recent_device_change: str | None = None,
+    media_route_bluetooth_profile_hint: str | None = None,
+    media_route_output_routed: str | None = None,
+    media_route_input_applied: str | None = None,
 ):
     """
     Lightweight browser-device preflight for clients before opening /yws.
@@ -8488,6 +8630,15 @@ async def browser_session_authorize(
         "media_audio_input_supported": media_audio_input_supported,
         "media_audio_output_supported": media_audio_output_supported,
         "media_audio_output_selection_supported": media_audio_output_selection_supported,
+        "media_route_status_level": media_route_status_level,
+        "media_route_status_state": media_route_status_state,
+        "media_route_status_reason": media_route_status_reason,
+        "media_route_status_detail": media_route_status_detail,
+        "media_route_checked_at": media_route_checked_at,
+        "media_route_recent_device_change": media_route_recent_device_change,
+        "media_route_bluetooth_profile_hint": media_route_bluetooth_profile_hint,
+        "media_route_output_routed": media_route_output_routed,
+        "media_route_input_applied": media_route_input_applied,
     }.items():
         if value is not None:
             metadata_params[key] = value
@@ -8813,11 +8964,33 @@ async def process_events_command(
             await _ack(False, error="webspace_id required")
             return None
         new_webspace = _coerce_gateway_webspace_id(target)
+        target_scenario = str(payload.get("scenario_id") or "").strip()
         try:
-            await ensure_webspace_ready(new_webspace, scenario_id=payload.get("scenario_id"))
+            switch_result: dict[str, Any] | None = None
+            if target_scenario:
+                from adaos.services.scenario.webspace_runtime import switch_webspace_scenario
+
+                switch_result = await switch_webspace_scenario(
+                    new_webspace,
+                    target_scenario,
+                    set_home=False,
+                    wait_for_rebuild=True,
+                    request_source="gateway_ws.desktop.webspace.use",
+                    request_client=str(client_label or "").strip() or None,
+                )
+                if not bool(switch_result.get("accepted", switch_result.get("ok", True))):
+                    await _ack(False, error=str(switch_result.get("error") or "scenario_unavailable"))
+                    return None
+            else:
+                await ensure_webspace_ready(new_webspace)
             await _update_device_presence(new_webspace, device_id or "dev-unknown")
             _publish_bus("desktop.webspace.refresh", {"webspace_id": new_webspace})
-            await _ack(data={"webspace_id": new_webspace})
+            ack_data: dict[str, Any] = {"webspace_id": new_webspace}
+            if target_scenario:
+                ack_data["scenario_id"] = target_scenario
+                if switch_result is not None:
+                    ack_data["scenario_switch"] = switch_result
+            await _ack(data=ack_data)
             return new_webspace
         except Exception:
             await _ack(False, error="webspace_unavailable")
@@ -8921,6 +9094,36 @@ async def process_events_command(
                 response_action_id or "-",
                 exc_info=True,
             )
+            await _ack(False, error=f"{type(exc).__name__}: {exc}")
+        return None
+
+    if kind == "conversation.interaction.respond.request":
+        event_payload = dict(payload or {})
+        meta = event_payload.pop("_meta", None)
+        meta = dict(meta) if isinstance(meta, Mapping) else {}
+        action_token = str(event_payload.get("action_token") or "").strip()
+        idempotency_key = str(event_payload.get("idempotency_key") or "").strip()
+        if not idempotency_key and action_token:
+            idempotency_key = f"web:{str(event_payload.get('source_message_id') or 'message')}:{action_token}"
+        try:
+            from adaos.services import conversation_interactions
+
+            result = conversation_interactions.submit_action_token(
+                action_token,
+                actor_id=str(meta.get("user_id") or "user:local").strip() or "user:local",
+                idempotency_key=idempotency_key,
+                metadata={
+                    **meta,
+                    "io_type": "web",
+                    "webspace_id": str(
+                        event_payload.get("webspace_id") or meta.get("webspace_id") or ""
+                    ).strip(),
+                },
+            )
+            _publish_bus("conversation.interaction.responded", result)
+            await _ack(data=result)
+        except Exception as exc:
+            _log.warning("conversation interaction response command failed", exc_info=True)
             await _ack(False, error=f"{type(exc).__name__}: {exc}")
         return None
 
@@ -9323,8 +9526,21 @@ async def events_ws(websocket: WebSocket):
                     from adaos.services.webrtc.peer import handle_rtc_offer
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
                     signal_webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id") or webspace_id)
                     signal_generation_id = str(payload.get("generation_id") or "").strip() or None
+                    signal_browser_session_id = _clean_browser_metadata_value(
+                        payload.get("browser_session_id"),
+                        max_len=128,
+                    )
+                    signal_client_build_id = _clean_browser_metadata_value(
+                        payload.get("client_build_id"),
+                        max_len=96,
+                    )
+                    signal_client_build_version = _clean_browser_metadata_value(
+                        payload.get("client_build_version"),
+                        max_len=128,
+                    )
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     webspace_id = signal_webspace_id
@@ -9356,6 +9572,10 @@ async def events_ws(websocket: WebSocket):
                         send_ice_cb=_send_ice_via_ws,
                         generation_id=signal_generation_id,
                         negotiation_mode=payload.get("negotiation_mode"),
+                        peer_id=signal_peer_id,
+                        browser_session_id=signal_browser_session_id,
+                        client_build_id=signal_client_build_id,
+                        client_build_version=signal_client_build_version,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True, "data": answer})
                 except Exception as e:
@@ -9368,6 +9588,7 @@ async def events_ws(websocket: WebSocket):
                     from adaos.services.webrtc.peer import handle_remote_ice
 
                     signal_device_id = _clean_signaling_device_id(payload.get("device_id")) or device_id or "unknown"
+                    signal_peer_id = _clean_signaling_device_id(payload.get("peer_id")) or signal_device_id
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     if payload.get("webspace_id"):
@@ -9376,6 +9597,7 @@ async def events_ws(websocket: WebSocket):
                         signal_device_id,
                         payload.get("candidate"),
                         generation_id=payload.get("generation_id"),
+                        peer_id=signal_peer_id,
                     )
                     await _ws_send({"ch": "events", "t": "ack", "id": cmd_id, "ok": True})
                 except Exception as e:

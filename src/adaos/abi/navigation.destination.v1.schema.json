@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inimatic.com/abi/navigation.destination.v1.schema.json",
+  "title": "AdaOS Navigation Destination v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "intent"],
+  "properties": {
+    "schema": { "const": "adaos.navigation.destination.v1" },
+    "intent": {
+      "enum": ["connect.register", "auth.login", "webspace.open"]
+    },
+    "zone": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+    "subnet_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "webspace_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "space_kind": {
+      "enum": ["workspace", "development", "preview", "trial"]
+    },
+    "expected_scenario_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "preview_stage": {
+      "enum": ["prototype", "automation", "publication"]
+    },
+    "user_code": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "pair_code": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "auto_login": { "type": "boolean" },
+    "try_local_hub": { "type": "boolean" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "intent": { "const": "connect.register" } } },
+      "then": { "required": ["user_code"] }
+    },
+    {
+      "if": { "properties": { "intent": { "const": "webspace.open" } } },
+      "then": { "required": ["zone", "subnet_id", "webspace_id", "space_kind"] }
+    }
+  ]
+}

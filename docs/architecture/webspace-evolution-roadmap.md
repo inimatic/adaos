@@ -46,6 +46,22 @@ For current implementation details see also:
 - [UI Addressing](ui-addressing.md)
 - [Web UI Architecture](web-ui-architecture.md)
 
+## Roadmap Ownership
+
+This roadmap owns the broader webspace and browser evolution track:
+
+- source taxonomy and typed webspace metadata
+- structure-first rendering and phased/focus-aware readiness
+- persistent overlay groundwork and future profile/device scope
+- client-facing compatibility projections while those contracts migrate
+
+[Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md)
+owns pointer switching, semantic reconcile, materialization identity,
+compatibility-cache demotion, and CRDT checkpoint sequencing. Structural
+refactoring of `webspace_runtime.py` spans both roadmaps, but it must not use
+module decomposition as a reason to redesign the already accepted pointer-first
+switch contract.
+
 ## Four Source Model
 
 AdaOS already behaves as if four different model sources exist. The roadmap
@@ -403,6 +419,49 @@ gaps are in recovery unification and phased rendering:
   recovery order hard to reason about
 - frontend `YJS Resync` and `YJS Reload` can currently be confused as two
   variants of the same operation, while they solve different failure modes
+
+### Runtime decomposition required by these gaps
+
+The current runtime already has extraction seams for task state, cache state,
+materialization, projections, and scenario switching. Those seams are not the
+end state while the compatibility facade still exposes their mutable mappings
+and retains the operational pipelines.
+
+The next structural tranche must therefore:
+
+1. make task and cache services the only owners of mutable registries, TTL/LRU
+   policy, coalescing, cancellation, and invalidation
+2. introduce one semantic recovery coordinator for reload, reset, restore, and
+   post-restore reconcile while keeping transport resync separate
+3. make projection refresh an explicit lifecycle dependency rather than a
+   hidden rebuild side effect
+4. move materialization execution and scenario-switch orchestration behind
+   typed services while preserving pointer-first behavior and no-op identity
+5. leave `webspace_runtime.py` as a compatibility facade and composition
+   surface, without module-level mutable aliases as an alternate authority
+
+Acceptance requires component/characterization coverage, unchanged public
+command and event contracts, no-op branch identity tests, and browser/pressure
+evidence for the affected paths.
+
+Implementation status, 2026-08-06:
+
+- `WebspaceTaskState` and `WebspaceCacheState` are the mutable task/cache
+  owners; debounce/coalescing execution is isolated in
+  `task_scheduling.py`
+- resolver input collection, semantic merge, branch diff/patch application,
+  skill catalog collection, and process-isolated materialization now live in
+  typed component services
+- projection refresh, recovery decisions, rebuild execution, and scenario
+  switching have separate owners; the public module keeps compatibility
+  signatures and resolves monkeypatchable dependencies at each delegation
+- the formerly long rebuild/scenario-switch/resolution/materialization bodies
+  have moved out of `webspace_runtime.py`; the compatibility surface decreased
+  from about 11.8k to 8.6k lines while Yjs branch identity, command/event
+  payloads, and cache behavior remain covered by characterization tests
+- remaining work in the facade is incremental extraction of builder/publication
+  adapters and small helpers, not duplicate ownership of task, cache,
+  projection, resolution, materialization, recovery, or scenario-switch state
 
 ### Future profile-aware personalization must be planned now
 

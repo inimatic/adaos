@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import yaml
 from adaos.adapters.db.sqlite import durable_state_delete, durable_state_get, durable_state_put
 from adaos.services.agent_context import get_ctx, AgentContext  # type: ignore
-from adaos.services.zone_hosts import canonical_zone_id, zone_public_base_url
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
 from adaos.services.node_runtime_state import (
     load_member_hub_token,
     load_node_runtime_state,
@@ -191,7 +191,7 @@ class RootLlmSettings:
 
 @dataclass
 class RootSettings:
-    base_url: str = "https://api.inimatic.com"
+    base_url: str = DEFAULT_PUBLIC_ROOT_BASE_URL
     # Store relative/default-friendly path; resolve via _expand_path
     ca_cert: str | None = "keys/ca.cert"
     owner: RootOwnerSettings = field(default_factory=RootOwnerSettings)
@@ -525,7 +525,7 @@ def _settings_to_dict(settings: Any) -> dict[str, Any]:
         data["node_names"] = normalize_node_names(data.get("node_names"))
         data["core_update_enabled"] = _coerce_bool(data.get("core_update_enabled"), default=True)
     if isinstance(settings, RootSettings):
-        data["base_url"] = data.get("base_url") or "https://api.inimatic.com"
+        data["base_url"] = data.get("base_url") or DEFAULT_PUBLIC_ROOT_BASE_URL
         data["ca_cert"] = _config_stringify_path(data.get("ca_cert"))
         owner = data.get("owner") or {}
         owner_id = owner.get("owner_id") if isinstance(owner, dict) else None
@@ -578,7 +578,7 @@ def _settings_from_dict(settings_cls: type, payload: Any):
         except Exception:
             allow_nlu_teacher = True
         return RootSettings(
-            base_url=base_url or "https://api.inimatic.com",
+            base_url=base_url or DEFAULT_PUBLIC_ROOT_BASE_URL,
             ca_cert=ca_cert or "keys/ca.cert",
             owner=RootOwnerSettings(owner_id=owner_id),
             llm=RootLlmSettings(allow_nlu_teacher=allow_nlu_teacher),
@@ -629,7 +629,7 @@ def resolve_effective_root_base_url(base_url: str | None, *, zone_id: str | None
     normalized_base = str(base_url or "").strip().rstrip("/")
     if not normalized_base:
         return zone_public_base_url(normalized_zone)
-    if normalized_base in {"https://api.inimatic.com", "http://api.inimatic.com"} and normalized_zone:
+    if normalized_base in {DEFAULT_PUBLIC_ROOT_BASE_URL, "http://api.inimatic.com"} and normalized_zone:
         return zone_public_base_url(normalized_zone)
     return normalized_base
 

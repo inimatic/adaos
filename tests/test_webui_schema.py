@@ -154,6 +154,52 @@ def test_webui_schema_accepts_responsive_form_layout() -> None:
     Draft202012Validator(schema).validate(payload)
 
 
+def test_webui_schema_accepts_deterministic_tabs_modal_page_and_multistep_behaviors() -> None:
+    schema = _load_schema()
+    payload = {
+        "schema": "adaos.webui.v1",
+        "behaviors": [
+            {
+                "id": "recipe-editor",
+                "kind": "multistep",
+                "statePath": "recipeEditor.step",
+                "initial": "details",
+                "states": [
+                    {"id": "details", "label_i18n": {"key": "recipes.step.details"}, "view": "recipe-details"},
+                    {"id": "ingredients", "label": "Ingredients", "view": "recipe-ingredients"},
+                    {"id": "review", "label": "Review", "view": "recipe-review", "terminal": True},
+                ],
+                "transitions": [
+                    {"on": "next", "from": "details", "to": "ingredients", "effect": "local_state"},
+                    {"on": "next", "from": "ingredients", "to": "review", "guard": "recipe.valid", "effect": "local_state"},
+                    {
+                        "on": "submit",
+                        "from": "review",
+                        "to": "review",
+                        "effect": "runtime_action",
+                        "action": {"type": "callHost", "target": "recipes.save"},
+                    },
+                ],
+            },
+            {
+                "id": "recipe-tabs",
+                "kind": "tabs",
+                "initial": "all",
+                "states": [{"id": "all"}, {"id": "favorites"}],
+                "transitions": [{"on": "favorite", "from": "all", "to": "favorites", "effect": "none"}],
+            },
+            {
+                "id": "recipe-modal",
+                "kind": "modal",
+                "initial": "closed",
+                "states": [{"id": "closed"}, {"id": "open"}],
+                "transitions": [{"on": "open", "from": "closed", "to": "open", "effect": "local_state"}],
+            },
+        ],
+    }
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_webui_schema_accepts_responsive_split_widths_and_multiline_chat() -> None:
     schema = _load_schema()
     payload = {

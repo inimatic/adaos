@@ -3,14 +3,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from adaos.services.env_policy import truthy
 from adaos.services.runtime_environment import normalize_env_type
 
 
-_TRUTHY = {"1", "true", "yes", "on"}
-
-
 def _truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in _TRUTHY
+    return truthy(value, default=False)
 
 
 def current_env_type(settings: Any | None = None) -> str:

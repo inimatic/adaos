@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.conversation.interaction_requirements.v1",
+  "title": "AdaOS Interaction Requirements",
+  "type": "object",
+  "required": [
+    "schema", "requirements_id", "version", "required", "optional", "limits",
+    "fallbacks", "fail_closed", "semantic_equivalence_required",
+    "permission_boundary", "business_availability_boundary"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.conversation.interaction_requirements.v1" },
+    "requirements_id": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "version": { "type": "integer", "minimum": 1 },
+    "required": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+    "optional": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 120 } },
+    "limits": { "type": "object", "additionalProperties": { "type": ["integer", "number", "string", "boolean", "null"] } },
+    "fallbacks": { "type": "array", "uniqueItems": true, "items": { "enum": ["plain_text", "numbered_text", "deep_link", "web_view", "miniapp", "unsupported"] } },
+    "fail_closed": { "type": "boolean" },
+    "semantic_equivalence_required": { "type": "boolean" },
+    "permission_boundary": { "const": "separate" },
+    "business_availability_boundary": { "const": "separate" }
+  },
+  "additionalProperties": false
+}

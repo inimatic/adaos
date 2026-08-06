@@ -16,8 +16,80 @@ def get_state(object_type: str, object_id: str) -> dict[str, Any]:
     return dict(_service().describe(object_type, object_id))
 
 
-def get_interaction_frame(object_type: str, object_id: str) -> dict[str, Any]:
-    return dict(_service().interaction_frame(object_type, object_id))
+def get_interaction_frame(
+    object_type: str,
+    object_id: str,
+    *,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    return dict(_service().interaction_frame(object_type, object_id, locale=locale))
+
+
+def create_conversation_interaction(
+    object_type: str,
+    object_id: str,
+    *,
+    conversation_id: str,
+    principal_id: str,
+    command_context_id: str,
+    prompt: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().conversation_interaction(
+            object_type,
+            object_id,
+            conversation_id=conversation_id,
+            principal_id=principal_id,
+            command_context_id=command_context_id,
+            prompt=prompt,
+            metadata=metadata,
+            locale=locale,
+        )
+    )
+
+
+def invoke_interaction_response(
+    object_type: str,
+    object_id: str,
+    response: Mapping[str, Any],
+    *,
+    actor: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().invoke_interaction_response(
+            object_type,
+            object_id,
+            response,
+            actor=actor,
+            metadata=metadata,
+        )
+    )
+
+
+def invoke_command(
+    object_type: str,
+    object_id: str,
+    command: str,
+    *,
+    actor: str,
+    idempotency_key: str,
+    input_value: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().invoke_command(
+            object_type,
+            object_id,
+            command,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            input_value=input_value,
+            metadata=metadata,
+        )
+    )
 
 
 def transition(
@@ -49,6 +121,11 @@ def build_context_packet(
     *,
     allowed_paths: list[str] | tuple[str, ...] | None = None,
     instruction_refs: list[str] | tuple[str, ...] | None = None,
+    conversation_context: Mapping[str, Any] | None = None,
+    pending_action_refs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+    run_purpose: str = "iteration",
+    required_facets: list[str] | tuple[str, ...] | None = None,
+    enforce_context_coverage: bool = False,
     persist: bool = False,
 ) -> dict[str, Any]:
     return dict(
@@ -57,6 +134,11 @@ def build_context_packet(
             object_id,
             allowed_paths=allowed_paths,
             instruction_refs=instruction_refs,
+            conversation_context=conversation_context,
+            pending_action_refs=pending_action_refs,
+            run_purpose=run_purpose,
+            required_facets=required_facets,
+            enforce_context_coverage=enforce_context_coverage,
             persist=persist,
         )
     )
@@ -81,8 +163,11 @@ def update_interaction_context(
 
 __all__ = [
     "build_context_packet",
+    "create_conversation_interaction",
     "get_interaction_frame",
     "get_state",
+    "invoke_command",
+    "invoke_interaction_response",
     "transition",
     "update_interaction_context",
 ]
