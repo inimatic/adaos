@@ -139,7 +139,8 @@ Runtime knobs:
 obsolete revisions do not need event semantics. The local eventbus now bounds
 these topics and supersedes stale queued work per handler and node while
 preserving the latest revision for every subscriber. Synchronous SDK skill
-handlers for both topics are dispatched in a worker thread by default.
+handlers are not moved wholesale because several schedule owner-loop Yjs work;
+blocking sub-operations must be offloaded inside the owning handler.
 
 ### Teacher Startup Rehydration
 

@@ -651,7 +651,9 @@ failure serves an explicitly marked stale last-known-good projection for a
 bounded window instead of immediately turning a ready required upstream link
 into false `degraded`. `core.update.status` and `hub.core_update.status` are
 latest-state bounded eventbus topics with per-handler supersession, and
-synchronous skill subscribers for those topics run off the event-loop thread.
+obsolete queued revisions do not amplify subscriber work. Event-loop-affine
+skill handlers stay on their owner loop; their blocking sub-operations must be
+offloaded at the handler boundary instead of moving the whole handler.
 NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
 `sys.ready` also run in workers. Target-stand pressure evidence is still needed
 before closing the tracking items.
