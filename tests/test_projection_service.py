@@ -180,6 +180,10 @@ async def _no_live_room(*_args, **_kwargs) -> dict[str, object]:
     }
 
 
+async def _allow_primary_doc_write(*_args, **_kwargs) -> bool:
+    return True
+
+
 class _FakeAsyncDocWithUpdateCallback(_FakeAsyncDoc):
     def __init__(self, state: dict[str, _FakeMap], kwargs: dict[str, object]) -> None:
         super().__init__(state)
@@ -541,6 +545,12 @@ def test_projection_service_persists_changed_detached_fallback(monkeypatch) -> N
         return {"ok": True, "webspace_id": webspace_id}
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(projection_service_module, "_govern_primary_doc_write", _allow_primary_doc_write)
+    monkeypatch.setattr(
+        projection_service_module,
+        "_suppress_recent_projection_amplification",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
@@ -571,6 +581,12 @@ def test_projection_service_surfaces_detached_persistence_failure(monkeypatch) -
         raise RuntimeError("disk unavailable")
 
     monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(projection_service_module, "_govern_primary_doc_write", _allow_primary_doc_write)
+    monkeypatch.setattr(
+        projection_service_module,
+        "_suppress_recent_projection_amplification",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(
         projection_service_module,
         "async_get_ydoc",
