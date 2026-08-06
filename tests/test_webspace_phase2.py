@@ -4053,6 +4053,32 @@ def test_reload_preview_webspaces_for_skill_dependency(monkeypatch) -> None:
     assert result["reloaded_webspaces"] == [preview]
 
 
+def test_materialization_source_prewarm_returns_mode_summary(monkeypatch) -> None:
+    class _Runtime:
+        _last_skill_decls_fingerprint = ""
+
+        def _collect_skill_decls(self, *, mode: str):
+            self._last_skill_decls_fingerprint = f"fingerprint-{mode}"
+            return [{"id": mode}]
+
+    fingerprint_modes: list[str] = []
+    monkeypatch.setattr(webspace_runtime_module, "WebspaceScenarioRuntime", _Runtime)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_skill_sources_fingerprint_for_materialization",
+        lambda mode: fingerprint_modes.append(mode) or f"source-{mode}",
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.prewarm_webspace_materialization_sources()
+    )
+
+    assert result["ok"] is True
+    assert result["modes"]["workspace"]["declarations"] == 1
+    assert result["modes"]["dev"]["fingerprint"] == "fingerprint-dev"
+    assert fingerprint_modes == ["workspace", "dev"]
+
+
 def test_scenarios_synced_routes_through_semantic_rebuild_helper(monkeypatch) -> None:
     captured: list[tuple[str, str | None, str, str]] = []
 

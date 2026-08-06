@@ -56,6 +56,7 @@ from adaos.services.webui_contract import (
 from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
 from .webspace_components import (
+    BuilderPublicationOperations,
     MaterializationExecutorOwner,
     WebspaceMaterializationOperations,
     WebspaceMaterializationService,
@@ -73,6 +74,7 @@ from .webspace_components import (
     WebspaceTaskState,
     WebspaceTaskSchedulingOperations,
     WebspaceTaskSchedulingService,
+    WebspaceBuilderPublicationService,
 )
 from .workflow_runtime import ScenarioWorkflowRuntime
 
@@ -89,6 +91,7 @@ _REBUILD_SERVICE = WebspaceRebuildService()
 _RESOLUTION_SERVICE = WebspaceResolutionService()
 _SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
 _SKILL_CATALOG_SERVICE = WebspaceSkillCatalogService()
+_BUILDER_PUBLICATION_SERVICE = WebspaceBuilderPublicationService()
 _SKILL_DECLS_CACHE_TTL_S = 300.0
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
 
@@ -100,6 +103,29 @@ _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
+
+
+def _builder_publication_operations() -> BuilderPublicationOperations:
+    # Build this adapter per call so compatibility tests and runtime patches of
+    # facade-owned boundaries remain observable by the extracted coordinator.
+    return BuilderPublicationOperations(
+        canonical_materialization_identity=canonical_materialization_identity,
+        clone_json_like=_clone_json_like,
+        describe_webspace_operational_state=describe_webspace_operational_state,
+        elapsed_ms=_elapsed_ms,
+        logger=_log,
+        payload_command_trace=_payload_command_trace,
+        preflight_validated_scenario=_preflight_validated_scenario,
+        rebuild_webspace_from_sources=rebuild_webspace_from_sources,
+        reload_webspace_from_scenario=reload_webspace_from_scenario,
+        resolve_rebuild_scenario_target=_resolve_rebuild_scenario_target,
+        scenario_runtime_type=WebspaceScenarioRuntime,
+        scenarios_loader=scenarios_loader,
+        skill_sources_fingerprint_for_materialization=(
+            _skill_sources_fingerprint_for_materialization
+        ),
+        workspace_index=workspace_index,
+    )
 
 
 def _materialization_operations() -> WebspaceMaterializationOperations:
@@ -7509,34 +7535,11 @@ async def reload_webspace_from_scenario(
 
 
 def _builder_empty_canvas_widget() -> dict[str, Any]:
-    return {
-        "id": "builder-empty-canvas",
-        "type": "ui.form",
-        "area": "main",
-        "inputs": {
-            "fields": [
-                {
-                    "id": "builder-empty-canvas-message",
-                    "type": "staticContent",
-                    "title": "Empty prototype canvas",
-                    "content": "Describe the interface in Builder to create the first prototype revision.",
-                }
-            ]
-        },
-    }
+    return _BUILDER_PUBLICATION_SERVICE.empty_canvas_widget()
 
 
 def _ensure_builder_empty_canvas_widget(page: dict[str, Any], scenario_id: str) -> None:
-    meta = page.get("meta") if isinstance(page.get("meta"), Mapping) else {}
-    builder_meta = meta.get("builder") if isinstance(meta.get("builder"), Mapping) else {}
-    widgets = page.get("widgets") if isinstance(page.get("widgets"), list) else []
-    if not bool(builder_meta.get("empty_canvas")) or widgets:
-        return
-    page["id"] = scenario_id
-    page["widgets"] = [_builder_empty_canvas_widget()]
-    builder_meta["placeholder_injected"] = True
-    meta["builder"] = builder_meta
-    page["meta"] = meta
+    _BUILDER_PUBLICATION_SERVICE.ensure_empty_canvas_widget(page, scenario_id)
 
 
 def _builder_publication_package_content(
@@ -7544,81 +7547,11 @@ def _builder_publication_package_content(
     *,
     revision: str | None,
 ) -> dict[str, Any] | None:
-    """Read an installed immutable Publication even when its slot is not active.
-
-    Workspace files are an active materialization, while subscriptions and
-    release packages are the durable source for every installed project.
-    """
-
-    from io import BytesIO
-    from zipfile import BadZipFile, ZipFile
-
-    from adaos.domain.artifact_release import ProjectRelease
-    from adaos.services.artifact_pipeline.channels import ChannelError, SubscriptionStore
-    from adaos.services.artifact_pipeline.packages import (
-        ContentAddressedPackageStore,
-        PackageVerificationError,
+    return _BUILDER_PUBLICATION_SERVICE.publication_package_content(
+        scenario_id,
+        revision=revision,
+        operations=_builder_publication_operations(),
     )
-    from adaos.services.runtime_paths import current_state_dir
-
-    scenario_root = scenarios_loader.scenario_root_for_space(scenario_id, "workspace")
-    workspace_root = scenario_root.parent.parent
-    try:
-        subscription = SubscriptionStore(
-            workspace_root / ".adaos" / "subscriptions.json"
-        ).load().get(scenario_id)
-    except ChannelError as exc:
-        raise ValueError("Builder publication subscription metadata is invalid") from exc
-    if subscription is None or not subscription.installed_digest:
-        return None
-    expected_release = f"{scenario_id}@{str(revision or '').strip()}"
-    if revision and subscription.installed_release != expected_release:
-        return None
-
-    release_path = (
-        workspace_root
-        / ".adaos"
-        / "releases"
-        / f"{subscription.installed_digest.split(':', 1)[-1]}.json"
-    )
-    if not release_path.is_file():
-        return None
-    try:
-        release = ProjectRelease.from_mapping(
-            json.loads(release_path.read_text(encoding="utf-8"))
-        )
-    except (OSError, ValueError, TypeError) as exc:
-        raise ValueError("Builder publication release metadata is invalid") from exc
-    release_digest = release.release_digest or release.computed_digest()
-    if (
-        release.project_id != scenario_id
-        or release_digest != subscription.installed_digest
-        or (revision and release.version != str(revision).strip())
-    ):
-        raise ValueError("Builder publication release identity does not match its subscription")
-    component = next(
-        (
-            item
-            for item in release.components
-            if item.kind == "scenario" and item.artifact_id == scenario_id
-        ),
-        None,
-    )
-    if component is None:
-        raise ValueError("Builder publication release has no scenario component")
-
-    store = ContentAddressedPackageStore(
-        Path(current_state_dir()) / "artifact_pipeline" / "packages"
-    )
-    try:
-        archive, verified = store.read_verified(component.digest)
-        if verified.ref != component:
-            raise ValueError("published package identity differs from its release")
-        with ZipFile(BytesIO(archive), "r") as bundle:
-            payload = json.loads(bundle.read("webui.json").decode("utf-8-sig"))
-    except (OSError, KeyError, ValueError, BadZipFile, PackageVerificationError) as exc:
-        raise ValueError("Builder publication package is unavailable or invalid") from exc
-    return dict(payload) if isinstance(payload, Mapping) else None
 
 
 def _builder_preview_content_override(
@@ -7628,93 +7561,13 @@ def _builder_preview_content_override(
     revision: str | None,
     label: str | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    stage_token = str(stage or "").strip().lower()
-    if stage_token not in {"prototype", "automation", "publication"}:
-        return None, None
-    source_space = "workspace" if stage_token == "publication" else "dev"
-    content: Mapping[str, Any] | None = None
-    revision_token = str(revision or "").strip()
-    if stage_token == "prototype" and revision_token:
-        if not revision_token.isdigit():
-            raise ValueError(f"Builder prototype revision is unavailable: {revision}")
-        root = scenarios_loader.scenario_root_for_space(scenario_id, "dev")
-        revision_path = root / "ui_revisions" / f"{revision_token}.json"
-        try:
-            revision_payload = json.loads(revision_path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Builder prototype revision is unavailable: {revision}") from exc
-        content = revision_payload.get("after_webui") if isinstance(revision_payload, Mapping) else None
-    elif stage_token == "automation":
-        from adaos.services.runtime_paths import current_state_dir
-
-        snapshot_path = (
-            current_state_dir()
-            / "builder"
-            / "workflow_snapshots"
-            / "scenario"
-            / scenario_id
-            / "automation"
-            / "webui.json"
-        )
-        try:
-            snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
-            # Legacy completed Automation projects predate retained snapshots.
-            # Their current DEV descriptor is the only recoverable source;
-            # every completion under the v1 workflow creates a real snapshot.
-            snapshot_payload = None
-        content = snapshot_payload if isinstance(snapshot_payload, Mapping) else None
-    if not isinstance(content, Mapping):
-        content = scenarios_loader.read_content(scenario_id, space=source_space)
-    if stage_token == "publication" and (not isinstance(content, Mapping) or not content):
-        content = _builder_publication_package_content(
-            scenario_id,
-            revision=revision_token or None,
-        )
-    if not isinstance(content, Mapping) or not content:
-        raise ValueError(f"Builder {stage_token} preview source is unavailable: {scenario_id}")
-
-    override = _clone_json_like(content)
-    ui = override.get("ui") if isinstance(override.get("ui"), Mapping) else {}
-    application = ui.get("application") if isinstance(ui.get("application"), Mapping) else {}
-    desktop = application.get("desktop") if isinstance(application.get("desktop"), Mapping) else {}
-    page = desktop.get("pageSchema") if isinstance(desktop.get("pageSchema"), Mapping) else {}
-    if stage_token == "prototype" and not page:
-        try:
-            manifest = scenarios_loader.read_manifest(scenario_id, space=source_space)
-        except Exception:
-            manifest = {}
-        title = str(
-            manifest.get("title")
-            or manifest.get("name")
-            or scenario_id
-        ).strip() or scenario_id
-        page = {
-            "id": scenario_id,
-            "title": title,
-            "layout": {
-                "type": "single",
-                "pattern": "stack",
-                "areas": [{"id": "main", "role": "main"}],
-            },
-            "widgets": [_builder_empty_canvas_widget()],
-            "meta": {"builder": {"empty_canvas": True, "compatibility_fallback": True}},
-        }
-        desktop["pageSchema"] = page
-        application["desktop"] = desktop
-        ui["application"] = application
-        override["ui"] = ui
-    if stage_token == "prototype" and page:
-        _ensure_builder_empty_canvas_widget(page, scenario_id)
-    if page:
-        existing_title = str(page.get("title") or scenario_id).strip() or scenario_id
-        prefix = {
-            "prototype": f"proto:{str(revision or 'current').strip() or 'current'}",
-            "automation": "active:",
-            "publication": f"public:{str(revision or 'current').strip() or 'current'}",
-        }[stage_token]
-        page["title"] = str(label or f"{prefix} {existing_title}").strip()
-    return dict(override), source_space
+    return _BUILDER_PUBLICATION_SERVICE.preview_content_override(
+        scenario_id,
+        stage=stage,
+        revision=revision,
+        label=label,
+        operations=_builder_publication_operations(),
+    )
 
 
 async def apply_builder_revision_materialization(
@@ -7730,174 +7583,19 @@ async def apply_builder_revision_materialization(
     policy_fingerprint: str | None = None,
     event_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Apply a Builder UI revision to a paired dev webspace without using the
-    recovery-grade reload path.
-
-    This keeps the current renderer compatibility mirror intact by running the
-    semantic materialization pipeline, but it deliberately avoids scenario
-    reseed, scenario projection, listing sync, workflow sync, and
-    ``desktop.webspace.reloaded`` emission.
-    """
-    webspace_id = str(webspace_id or "").strip()
-    if not webspace_id:
-        raise ValueError("webspace_id is required")
-    requested_scenario = str(scenario_id or "").strip()
-    if not requested_scenario:
-        raise ValueError("scenario_id is required")
-
-    source_webspace_id = str((event_payload or {}).get("source_webspace_id") or "").strip()
-    if source_webspace_id:
-        try:
-            from adaos.services.builder.workbench import BuilderWorkbenchService
-
-            binding = BuilderWorkbenchService.from_context().get_workspace_binding(source_webspace_id)
-        except Exception:
-            binding = {}
-            _log.debug(
-                "builder materialization target guard unavailable source_webspace=%s dev_webspace=%s scenario=%s",
-                source_webspace_id,
-                webspace_id,
-                requested_scenario,
-                exc_info=True,
-            )
-        desired_dev_webspace = str(binding.get("dev_webspace_id") or "").strip()
-        desired_scenario = str(binding.get("runtime_scenario_id") or "").strip()
-        if desired_dev_webspace == webspace_id and desired_scenario and desired_scenario != requested_scenario:
-            _log.info(
-                "builder materialization superseded source_webspace=%s dev_webspace=%s requested_scenario=%s desired_scenario=%s revision=%s",
-                source_webspace_id,
-                webspace_id,
-                requested_scenario,
-                desired_scenario,
-                str(revision or "").strip() or "-",
-            )
-            return {
-                "ok": True,
-                "accepted": False,
-                "skipped": "superseded_builder_target",
-                "action": "builder_revision_apply",
-                "source_webspace_id": source_webspace_id,
-                "webspace_id": webspace_id,
-                "scenario_id": requested_scenario,
-                "desired_scenario_id": desired_scenario,
-                "revision": str(revision or "").strip() or None,
-            }
-
-    state, resolved_scenario_id, scenario_resolution = await _resolve_rebuild_scenario_target(
+    return await _BUILDER_PUBLICATION_SERVICE.apply_revision_materialization(
         webspace_id,
-        requested_scenario,
-        prefer_manifest_home_before_current=False,
-    )
-    resolved_scenario_id, scenario_resolution, preflight = _preflight_validated_scenario(
-        resolved_scenario_id,
-        source_mode=state.source_mode,
-        resolution=scenario_resolution or "builder_revision",
-    )
-    if not resolved_scenario_id:
-        return {
-            "ok": False,
-            "accepted": False,
-            "action": "builder_revision_apply",
-            "webspace_id": webspace_id,
-            "scenario_id": None,
-            "scenario_resolution": scenario_resolution,
-            "kind": state.kind,
-            "source_mode": state.source_mode,
-            "validation": preflight,
-            "error": "scenario_not_found",
-        }
-
-    identity_update = {
-        "attempted": False,
-        "changed": False,
-        "webspace_id": webspace_id,
-        "home_scenario_before": state.effective_home_scenario,
-        "home_scenario": state.effective_home_scenario,
-    }
-    if state.is_dev and str(state.effective_home_scenario or "").strip() != resolved_scenario_id:
-        stage_started = time.perf_counter()
-        try:
-            row = workspace_index.set_workspace_manifest(webspace_id, home_scenario=resolved_scenario_id)
-            identity_update.update(
-                {
-                    "attempted": True,
-                    "changed": True,
-                    "home_scenario": row.effective_home_scenario,
-                    "timing_ms": _elapsed_ms(stage_started),
-                }
-            )
-        except Exception as exc:
-            identity_update.update(
-                {
-                    "attempted": True,
-                    "changed": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "timing_ms": _elapsed_ms(stage_started),
-                }
-            )
-            _log.warning(
-                "failed to persist builder dev webspace identity webspace=%s scenario=%s",
-                webspace_id,
-                resolved_scenario_id,
-                exc_info=True,
-            )
-
-    materialization_identity = canonical_materialization_identity(
-        webspace_id=webspace_id,
-        scenario_id=resolved_scenario_id,
+        scenario_id=scenario_id,
         revision=revision,
+        preview_stage=preview_stage,
+        preview_label=preview_label,
         source_fingerprint=source_fingerprint,
         user_id=user_id,
         roles=roles,
         policy_fingerprint=policy_fingerprint,
-    )
-    scenario_content_override, skill_source_mode = _builder_preview_content_override(
-        resolved_scenario_id,
-        stage=str(preview_stage or ""),
-        revision=revision,
-        label=preview_label,
-    )
-    request_id = f"builder-revision-{materialization_identity['key_hash']}-{int(time.time() * 1000)}"
-    trace = _payload_command_trace(event_payload or {})
-    _log.info(
-        "applying builder revision materialization webspace=%s scenario=%s revision=%s user=%s roles_hash=%s cmd=%s trace=%s key_hash=%s",
-        webspace_id,
-        resolved_scenario_id,
-        materialization_identity.get("revision") or "-",
-        materialization_identity.get("user_id") or "-",
-        materialization_identity.get("roles_hash") or "-",
-        trace.get("cmd_id") or "-",
-        trace.get("trace_id") or "-",
-        materialization_identity.get("key_hash") or "-",
-    )
-
-    result = await rebuild_webspace_from_sources(
-        webspace_id,
-        action="builder_revision_apply",
-        scenario_id=resolved_scenario_id,
-        scenario_resolution=scenario_resolution or "builder_revision",
-        source_of_truth="builder_revision",
-        reseed_from_scenario=False,
         event_payload=event_payload,
-        request_id=request_id,
-        switch_mode="materialization_pointer_compat",
-        materialization_identity=materialization_identity,
-        scenario_content_override=scenario_content_override,
-        skill_source_mode=skill_source_mode,
+        operations=_builder_publication_operations(),
     )
-    result.update(
-        {
-            "kind": state.kind,
-            "source_mode": state.source_mode,
-            "home_scenario": identity_update.get("home_scenario") or state.effective_home_scenario,
-            "current_scenario_before": state.current_scenario,
-            "validation": preflight,
-            "materialization_identity": materialization_identity,
-            "webspace_identity_update": identity_update,
-        }
-    )
-    return result
 
 
 async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
@@ -8117,103 +7815,12 @@ async def reload_preview_webspaces_for_project(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    object_type = str(object_type or "").strip().lower()
-    object_id = str(object_id or "").strip()
-    if object_type not in {"scenario", "skill"} or not object_id:
-        return {
-            "ok": False,
-            "accepted": False,
-            "error": "project_identity_required",
-        }
-
-    # Only explicit Builder preview relations are consumers. A DEV workspace
-    # is not a subscription merely because its home scenario happens to match.
-    try:
-        from adaos.services.builder.workbench import BuilderWorkbenchService
-
-        workbench = BuilderWorkbenchService.from_context()
-        workbench.list_workspace_bindings()  # migrate legacy binding files first
-        relations = workbench.relationships.list()
-    except Exception:
-        relations = []
-
-    targets: list[tuple[str, str]] = []
-    seen_targets: set[str] = set()
-    for relation in relations:
-        webspace_id = str(relation.target_webspace_id or "").strip()
-        if not webspace_id or webspace_id in seen_targets:
-            continue
-        row = workspace_index.get_workspace(webspace_id)
-        if row is None:
-            _log.info(
-                "ignoring stale preview relation target=%s project=%s:%s",
-                webspace_id,
-                object_type,
-                object_id,
-            )
-            continue
-        home_scenario = str(
-            getattr(row, "effective_home_scenario", "")
-            or relation.metadata.get("scenario_id")
-            or ""
-        ).strip()
-        if not home_scenario:
-            continue
-        if object_type == "scenario":
-            if home_scenario == object_id:
-                targets.append((webspace_id, home_scenario))
-                seen_targets.add(webspace_id)
-            continue
-        try:
-            source_mode = str(getattr(row, "effective_source_mode", "dev") or "dev")
-            manifest = scenarios_loader.read_manifest(home_scenario, space=source_mode)
-            depends_raw = manifest.get("depends") or []
-            depends = {
-                str(item).strip()
-                for item in depends_raw
-                if str(item).strip()
-            }
-            if object_id in depends:
-                targets.append((webspace_id, home_scenario))
-                seen_targets.add(webspace_id)
-        except Exception:
-            _log.debug(
-                "failed to resolve scenario depends for preview webspace=%s home=%s",
-                webspace_id,
-                home_scenario,
-                exc_info=True,
-            )
-
-    reloaded: list[str] = []
-    failed: list[str] = []
-    for webspace_id, scenario_id in targets:
-        try:
-            await reload_webspace_from_scenario(
-                webspace_id,
-                scenario_id=scenario_id,
-                action="reload",
-            )
-            reloaded.append(webspace_id)
-        except Exception:
-            failed.append(webspace_id)
-            _log.warning(
-                "failed to reload preview webspace=%s for %s:%s reason=%s",
-                webspace_id,
-                object_type,
-                object_id,
-                reason,
-                exc_info=True,
-            )
-
-    return {
-        "ok": not failed,
-        "accepted": bool(targets),
-        "object_type": object_type,
-        "object_id": object_id,
-        "reason": str(reason or "").strip() or None,
-        "reloaded_webspaces": reloaded,
-        "failed_webspaces": failed,
-    }
+    return await _BUILDER_PUBLICATION_SERVICE.reload_preview_webspaces_for_project(
+        object_type,
+        object_id,
+        reason=reason,
+        operations=_builder_publication_operations(),
+    )
 
 
 @subscribe("desktop.webspace.reload")
@@ -8339,121 +7946,20 @@ async def _on_webspace_go_home(evt: Dict[str, Any]) -> None:
 
 async def prewarm_webspace_materialization_sources() -> dict[str, Any]:
     """Build the process-owned skill declaration catalog before first use."""
-
-    started = time.perf_counter()
-
-    def _warm() -> dict[str, Any]:
-        runtime = WebspaceScenarioRuntime()
-        modes: dict[str, Any] = {}
-        for mode in ("workspace", "dev"):
-            mode_started = time.perf_counter()
-            decls = runtime._collect_skill_decls(mode=mode)
-            modes[mode] = {
-                "declarations": len(decls),
-                "fingerprint": str(getattr(runtime, "_last_skill_decls_fingerprint", "") or ""),
-                "elapsed_ms": _elapsed_ms(mode_started),
-            }
-            _skill_sources_fingerprint_for_materialization(mode)
-        return modes
-
-    modes = await asyncio.to_thread(_warm)
-    result = {
-        "ok": True,
-        "modes": modes,
-        "elapsed_ms": _elapsed_ms(started),
-    }
+    return await _BUILDER_PUBLICATION_SERVICE.prewarm_materialization_sources(
+        operations=_builder_publication_operations()
+    )
 
 
 async def reload_workspace_webspaces_for_publication(
     object_type: str,
     object_id: str,
 ) -> dict[str, Any]:
-    """Reload workspace-backed consumers after a DEV artifact is published.
-
-    Publishing copies a new source tree into ``workspace``. Existing Yjs rooms
-    keep their materialized projection until they are explicitly rebuilt, so a
-    successful publication must invalidate and reload matching workspace-mode
-    webspaces. DEV webspaces are intentionally excluded: their source of truth
-    remains the DEV tree and Builder revision materialization flow.
-    """
-
-    object_type = str(object_type or "").strip().lower()
-    object_id = str(object_id or "").strip()
-    if object_type not in {"scenario", "skill"} or not object_id:
-        return {"ok": False, "accepted": False, "error": "project_identity_required"}
-
-    if object_type == "scenario":
-        scenarios_loader.invalidate_cache(scenario_id=object_id, space="workspace")
-
-    try:
-        rows = list(workspace_index.list_workspaces())
-    except Exception:
-        rows = []
-
-    targets: list[tuple[str, str]] = []
-    for row in rows:
-        if str(getattr(row, "effective_source_mode", "workspace") or "workspace").strip().lower() != "workspace":
-            continue
-        webspace_id = str(getattr(row, "workspace_id", "") or "").strip()
-        if not webspace_id:
-            continue
-        try:
-            state = await describe_webspace_operational_state(webspace_id)
-            scenario_id = str(state.current_scenario or state.effective_home_scenario or "").strip()
-        except Exception:
-            scenario_id = str(getattr(row, "effective_home_scenario", "") or "").strip()
-        if not scenario_id:
-            continue
-        if object_type == "scenario":
-            if scenario_id != object_id:
-                continue
-        else:
-            try:
-                manifest = scenarios_loader.read_manifest(scenario_id, space="workspace")
-                dependencies = {
-                    str(item).strip()
-                    for item in (manifest.get("depends") or [])
-                    if str(item).strip()
-                }
-            except Exception:
-                dependencies = set()
-            if object_id not in dependencies:
-                continue
-        targets.append((webspace_id, scenario_id))
-
-    reloaded: list[str] = []
-    failed: list[str] = []
-    for webspace_id, scenario_id in targets:
-        try:
-            await reload_webspace_from_scenario(
-                webspace_id,
-                scenario_id=scenario_id,
-                action=f"published_{object_type}_reload",
-                event_payload={
-                    "source": "registry.publication",
-                    "object_type": object_type,
-                    "object_id": object_id,
-                },
-            )
-            reloaded.append(webspace_id)
-        except Exception:
-            failed.append(webspace_id)
-            _log.warning(
-                "failed to reload workspace webspace=%s after publishing %s:%s",
-                webspace_id,
-                object_type,
-                object_id,
-                exc_info=True,
-            )
-
-    return {
-        "ok": not failed,
-        "accepted": bool(targets),
-        "object_type": object_type,
-        "object_id": object_id,
-        "reloaded_webspaces": reloaded,
-        "failed_webspaces": failed,
-    }
+    return await _BUILDER_PUBLICATION_SERVICE.reload_workspace_webspaces_for_publication(
+        object_type,
+        object_id,
+        operations=_builder_publication_operations(),
+    )
 
 
 @subscribe("registry.scenarios.published")
@@ -8470,8 +7976,6 @@ async def _on_skill_published(evt: Dict[str, Any]) -> None:
     skill_id = str(payload.get("name") or payload.get("skill_id") or "").strip()
     if skill_id:
         await reload_workspace_webspaces_for_publication("skill", skill_id)
-    _log.info("prewarmed webspace materialization sources result=%s", result)
-    return result
 
 
 @subscribe("desktop.webspace.set_home")

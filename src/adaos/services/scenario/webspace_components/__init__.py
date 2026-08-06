@@ -1,4 +1,8 @@
 from .cache import WebspaceCacheState
+from .builder_publication import (
+    BuilderPublicationOperations,
+    WebspaceBuilderPublicationService,
+)
 from .materialization import MaterializationExecutorOwner
 from .materialization_runtime import WebspaceMaterializationOperations, WebspaceMaterializationService
 from .projections import WebspaceProjectionService
@@ -17,6 +21,8 @@ from .task_scheduling import WebspaceTaskSchedulingOperations, WebspaceTaskSched
 
 __all__ = [
     "MaterializationExecutorOwner",
+    "BuilderPublicationOperations",
+    "WebspaceBuilderPublicationService",
     "WebspaceMaterializationOperations",
     "WebspaceMaterializationService",
     "WebspaceProjectionService",
