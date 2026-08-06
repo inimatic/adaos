@@ -58,6 +58,16 @@ implemented and validated locally:
 - `examples/executable_prototype_lab` is the portable reference project and is
   also installed as a local DEV scenario under subnet `sn_6acf0c01`.
 
+The ordinary `dev scenario push` path admitted version `0.1.1` with exact
+workflow, validation, adapter and role-policy locks, then uploaded it in Forge
+commit `a6ff3ac226427fb9679557ef1aa32bc28dd33304` (payload SHA-256
+`fcbb16fff49e636e6cfd1e3c0641c83059bddefef53524b4910efd04e4384b4d`).
+Two rejected preflight attempts are retained as useful negative evidence: an
+unregistered domain activity and a widened input/risk contract were both
+blocked before upload. The final definition uses the registered isolated
+`builder.prototype.derive` execution adapter while keeping domain activities
+as separate implementation-neutral handoff requirements.
+
 The reference deliberately checks in one missing data mapping and one missing
 workflow activity mapping. Its end-to-end test first proves rejection, then
 maps the same immutable evidence in memory and proves admission into the

@@ -1301,6 +1301,10 @@ portable `examples/executable_prototype_lab` scenario. Focused Builder, ABI,
 workflow, Automation, and end-to-end tests exercise both rejected incomplete
 mapping and admitted exact-handoff paths. The same scenario is installed in
 local DEV under `sn_6acf0c01` and passes the standard scenario validator.
+The same package passed workflow/validation/adapter lock admission and was
+uploaded through the ordinary Scenario Forge path as version `0.1.1`, Forge
+commit `a6ff3ac226427fb9679557ef1aa32bc28dd33304`, payload SHA-256
+`fcbb16fff49e636e6cfd1e3c0641c83059bddefef53524b4910efd04e4384b4d`.
 - [x] `[deferred]` Keep screenshots out of the default context packet. Defer
   capture, multimodal target resolution, screenshot-derived layout inference,
   and visual-diff acceptance until structured composition evidence is shown
