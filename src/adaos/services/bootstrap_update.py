@@ -26,6 +26,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/bootstrap_runtime/hub_route_proxy.py",
     "src/adaos/services/bootstrap_runtime/lifecycle.py",
     "src/adaos/services/bootstrap_runtime/nats_bridge.py",
+    "src/adaos/services/bootstrap_runtime/nats_root_runtime.py",
     "src/adaos/services/bootstrap_runtime/root_transport.py",
     "src/adaos/services/bootstrap_runtime/status_policy.py",
     "src/adaos/services/bootstrap_runtime/status_watchdog.py",
@@ -43,12 +44,12 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/supervisor_memory.py",
     "src/adaos/services/webui_contract.py",
     "src/adaos/services/scenario/webspace_components/__init__.py",
-    "src/adaos/services/scenario/webspace_components/cache_state.py",
+    "src/adaos/services/scenario/webspace_components/cache.py",
     "src/adaos/services/scenario/webspace_components/materialization.py",
     "src/adaos/services/scenario/webspace_components/projections.py",
     "src/adaos/services/scenario/webspace_components/recovery.py",
     "src/adaos/services/scenario/webspace_components/scenario_switching.py",
-    "src/adaos/services/scenario/webspace_components/task_state.py",
+    "src/adaos/services/scenario/webspace_components/state.py",
 )
 
 SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (
