@@ -393,10 +393,15 @@ blocked.
   `Начать автоматизацию` callback exposed one remaining boundary defect: Router
   forwarded the transient EventBus projection instead of reloading the durable
   decision. Router now treats the event as notification-only, rehydrates and
-  cross-checks both ledger records, and the exact response advanced
-  `executable_prototype_lab@004` to `automation_waiting` with its local Codex
-  task running. One post-fix live mutating callback through the complete Router
-  path remains required before closing this item.
+  cross-checks both ledger records. Recovery of the exact response advanced
+  `executable_prototype_lab@004` once: local Codex task
+  `task.01KZBS9SQX2Z97C6V0DB53Z05C` completed its implementation and one bounded
+  deterministic repair pass, activated version `0.1.6`, recorded the Automation
+  checkpoint, and advanced the statechart to `trial_ready`. The local API was
+  then restarted on the final Router revision. One new post-fix live mutating
+  callback through the complete Router path remains required before closing
+  this item; recovery of an already persisted decision is not counted as that
+  independent release-gate observation.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
