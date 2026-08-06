@@ -103,6 +103,8 @@ def test_browser_session_changed_is_bounded_by_default(monkeypatch):
 
     assert "browser.session.changed" in snapshot["bounded_topics"]
     assert "io.out.stream.publish" in snapshot["bounded_topics"]
+    assert "core.update.status" in snapshot["bounded_topics"]
+    assert "hub.core_update.status" in snapshot["bounded_topics"]
 
 
 @pytest.mark.asyncio
@@ -143,6 +145,42 @@ async def test_browser_session_changed_supersedes_queued_handler_work(monkeypatc
 
     assert ok is True
     assert seen == [4]
+
+
+@pytest.mark.asyncio
+async def test_core_update_status_supersedes_stale_per_handler_fanout(monkeypatch):
+    monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)
+    monkeypatch.delenv("ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS", raising=False)
+    bus = LocalEventBus()
+    first_seen: list[int] = []
+    second_seen: list[int] = []
+
+    async def first_handler(event: Event):
+        first_seen.append(int(event.payload.get("seq") or 0))
+
+    async def second_handler(event: Event):
+        second_seen.append(int(event.payload.get("seq") or 0))
+
+    bus.subscribe("core.update.status", first_handler)
+    bus.subscribe("core.update.status", second_handler)
+    for seq in range(5):
+        bus.publish(
+            Event(
+                type="core.update.status",
+                payload={"node_id": "local", "seq": seq},
+                source="test",
+                ts=0.0,
+            )
+        )
+
+    snapshot = bus.backlog_snapshot()
+    superseded = dict(snapshot["top_bounded_superseded_types"])
+
+    assert snapshot["bounded_queue_total"] <= 2
+    assert superseded["core.update.status"] >= 8
+    assert await bus.wait_for_idle(timeout=1.0) is True
+    assert first_seen == [4]
+    assert second_seen == [4]
 
 
 def test_local_event_bus_unsubscribe_matching_removes_skill_handlers():

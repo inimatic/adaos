@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import importlib
 import json
@@ -438,6 +439,16 @@ def _new_event_loop_lag_runtime() -> dict[str, Any]:
 
 
 _EVENT_LOOP_LAG_RUNTIME: dict[str, Any] = _new_event_loop_lag_runtime()
+_SUPERVISOR_SNAPSHOT_PROBE_LOCK = threading.Lock()
+_SUPERVISOR_SNAPSHOT_CACHE: dict[str, Any] = {
+    "key": (),
+    "payload": None,
+    "fetched_at": 0.0,
+    "hit_total": 0,
+    "stale_hit_total": 0,
+    "refresh_total": 0,
+    "refresh_failure_total": 0,
+}
 _HUB_ROOT_TRANSPORT_STATE: dict[str, Any] = {
     "requested_transport": None,
     "effective_transport": None,
@@ -1381,6 +1392,17 @@ def reset_reliability_runtime_state() -> None:
         _HUB_ROOT_PROTOCOL_RUNTIME.update(_new_protocol_runtime())
         _EVENT_LOOP_LAG_RUNTIME.clear()
         _EVENT_LOOP_LAG_RUNTIME.update(_new_event_loop_lag_runtime())
+        _SUPERVISOR_SNAPSHOT_CACHE.update(
+            {
+                "key": (),
+                "payload": None,
+                "fetched_at": 0.0,
+                "hit_total": 0,
+                "stale_hit_total": 0,
+                "refresh_total": 0,
+                "refresh_failure_total": 0,
+            }
+        )
 
 
 def record_runtime_event_loop_lag_sample(
@@ -6674,7 +6696,7 @@ def _skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
     }
 
 
-def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
+def _probe_supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
             "available": False,
@@ -6764,6 +6786,176 @@ def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[
     finally:
         with contextlib.suppress(Exception):
             session.close()
+
+
+def _supervisor_snapshot_cache_seconds(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(str(os.getenv(name) or default).strip()))
+    except Exception:
+        return default
+
+
+def _supervisor_snapshot_cache_result(
+    payload: dict[str, Any],
+    *,
+    state: str,
+    age_sec: float,
+    refresh_error: str | None = None,
+) -> dict[str, Any]:
+    result = copy.deepcopy(payload)
+    with _LOCK:
+        result["_cache"] = {
+            "state": state,
+            "stale": state == "stale",
+            "age_sec": round(max(0.0, float(age_sec)), 3),
+            "refresh_error": str(refresh_error or "").strip() or None,
+            "hit_total": int(_SUPERVISOR_SNAPSHOT_CACHE.get("hit_total") or 0),
+            "stale_hit_total": int(_SUPERVISOR_SNAPSHOT_CACHE.get("stale_hit_total") or 0),
+            "refresh_total": int(_SUPERVISOR_SNAPSHOT_CACHE.get("refresh_total") or 0),
+            "refresh_failure_total": int(
+                _SUPERVISOR_SNAPSHOT_CACHE.get("refresh_failure_total") or 0
+            ),
+        }
+    return result
+
+
+def _cached_supervisor_snapshot(
+    *,
+    key: tuple[str, ...],
+    now: float,
+    max_age_sec: float,
+    stale: bool,
+) -> dict[str, Any] | None:
+    with _LOCK:
+        payload = _SUPERVISOR_SNAPSHOT_CACHE.get("payload")
+        fetched_at = float(_SUPERVISOR_SNAPSHOT_CACHE.get("fetched_at") or 0.0)
+        if (
+            not isinstance(payload, dict)
+            or tuple(_SUPERVISOR_SNAPSHOT_CACHE.get("key") or ()) != key
+            or fetched_at <= 0.0
+        ):
+            return None
+        age_sec = max(0.0, now - fetched_at)
+        if age_sec > max(0.0, float(max_age_sec)):
+            return None
+        counter = "stale_hit_total" if stale else "hit_total"
+        _SUPERVISOR_SNAPSHOT_CACHE[counter] = int(
+            _SUPERVISOR_SNAPSHOT_CACHE.get(counter) or 0
+        ) + 1
+        cached = copy.deepcopy(payload)
+    return _supervisor_snapshot_cache_result(
+        cached,
+        state="stale" if stale else "hit",
+        age_sec=age_sec,
+    )
+
+
+def supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
+    """Return a single-flight cached supervisor projection.
+
+    The full reliability snapshot may be requested by several browser/status
+    consumers at once. Only one of them should probe the local supervisor;
+    transient probe failures retain the last known-good transition/link state
+    for a short, explicitly marked stale window.
+    """
+    enabled = str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return _probe_supervisor_transition_runtime_snapshot(timeout_sec=timeout_sec)
+
+    key = tuple(_supervisor_public_base_candidates())
+    now = time.monotonic()
+    ttl_sec = _supervisor_snapshot_cache_seconds(
+        "ADAOS_SUPERVISOR_SNAPSHOT_CACHE_TTL_SEC",
+        2.0,
+    )
+    stale_max_sec = max(
+        ttl_sec,
+        _supervisor_snapshot_cache_seconds(
+            "ADAOS_SUPERVISOR_SNAPSHOT_STALE_MAX_SEC",
+            30.0,
+        ),
+    )
+    cached = _cached_supervisor_snapshot(
+        key=key,
+        now=now,
+        max_age_sec=ttl_sec,
+        stale=False,
+    )
+    if cached is not None:
+        return cached
+
+    if not _SUPERVISOR_SNAPSHOT_PROBE_LOCK.acquire(blocking=False):
+        cached = _cached_supervisor_snapshot(
+            key=key,
+            now=now,
+            max_age_sec=stale_max_sec,
+            stale=True,
+        )
+        if cached is not None:
+            cached["_cache"]["refresh_error"] = "refresh_in_progress"
+            return cached
+        payload = {
+            "available": False,
+            "source": "supervisor.refresh_in_progress",
+            "supervisor_url": None,
+            "status": {},
+            "attempt": {},
+            "runtime": {},
+            "_served_by": None,
+        }
+        payload["browser_safe_surface"] = _supervisor_browser_safe_surface(payload=payload)
+        payload["required_upstream_link"] = _supervisor_required_upstream_link(payload=payload)
+        return _supervisor_snapshot_cache_result(
+            payload,
+            state="miss",
+            age_sec=0.0,
+            refresh_error="refresh_in_progress",
+        )
+
+    try:
+        with _LOCK:
+            _SUPERVISOR_SNAPSHOT_CACHE["refresh_total"] = int(
+                _SUPERVISOR_SNAPSHOT_CACHE.get("refresh_total") or 0
+            ) + 1
+        payload = _probe_supervisor_transition_runtime_snapshot(timeout_sec=timeout_sec)
+        if bool(payload.get("available")):
+            refreshed_at = time.monotonic()
+            with _LOCK:
+                _SUPERVISOR_SNAPSHOT_CACHE.update(
+                    {
+                        "key": key,
+                        "payload": copy.deepcopy(payload),
+                        "fetched_at": refreshed_at,
+                    }
+                )
+            return _supervisor_snapshot_cache_result(
+                payload,
+                state="refresh",
+                age_sec=0.0,
+            )
+
+        with _LOCK:
+            _SUPERVISOR_SNAPSHOT_CACHE["refresh_failure_total"] = int(
+                _SUPERVISOR_SNAPSHOT_CACHE.get("refresh_failure_total") or 0
+            ) + 1
+        refresh_error = str(payload.get("error") or payload.get("source") or "refresh_failed")
+        cached = _cached_supervisor_snapshot(
+            key=key,
+            now=time.monotonic(),
+            max_age_sec=stale_max_sec,
+            stale=True,
+        )
+        if cached is not None:
+            cached["_cache"]["refresh_error"] = refresh_error
+            return cached
+        return _supervisor_snapshot_cache_result(
+            payload,
+            state="miss",
+            age_sec=0.0,
+            refresh_error=refresh_error,
+        )
+    finally:
+        _SUPERVISOR_SNAPSHOT_PROBE_LOCK.release()
 
 
 def _event_model_phase0_communication_checkpoint(
