@@ -334,6 +334,12 @@ Implementation status, 2026-08-06:
 - `UpdateStateMachine` owns update task/cancellation lifecycle and persists
   causally linked status/attempt transitions; update cutover execution and
   durable reconciliation are separate runtime components
+- `UpdateAttemptStore` owns normalization and persistence of the durable
+  attempt contract; `SupervisorRuntimeConfig` is the single interpreter for
+  update, warm-switch, watchdog, reconcile, and restart environment policy
+- `WatchdogStatusCompactor` owns bounded watchdog event/status shaping and
+  JSONL tail reads instead of leaving a second serialization implementation in
+  the compatibility module
 - `RuntimeRecoveryPolicy` owns the unhealthy window, watchdog decisions, last
   decision, and evidence; the monitoring loop is a separate scheduler owner
 - `MemoryProfilingService` owns mutable profile session, baseline, suspicion,
@@ -347,12 +353,15 @@ Implementation status, 2026-08-06:
 - `SupervisorManager` now delegates process launch/adoption, monitoring,
   update execution/reconciliation, recovery decisions, memory operations, and
   status projection to explicit owners. The compatibility module decreased
-  from about 10.7k to 7.9k lines without changing persisted or HTTP contracts
+  from about 10.7k to 7.4k lines without changing persisted or HTTP contracts
 
 The component suites and supervisor regressions cover the delegated paths with
-the public API and persisted attempt shapes unchanged. Remaining physical
-reduction is limited to smaller compatibility helpers and orchestration; it is
-not an alternate mutable-state implementation.
+the public API and persisted attempt shapes unchanged. Dead private compaction
+and attempt-normalization wrappers were removed after reference checks, while
+the compatibility names still used by callers remain thin delegates. The
+planned ownership split is complete; remaining physical reduction is limited
+to characterized orchestration extraction and is not an alternate mutable-state
+implementation.
 
 Target-stand evidence, 2026-08-06: `.30` accepted commit `5422f6c7`, built
 slot `B` as `0.1.679+1.5422f6c`, completed root promotion, restarted the root

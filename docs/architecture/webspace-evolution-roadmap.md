@@ -457,11 +457,20 @@ Implementation status, 2026-08-06:
   signatures and resolves monkeypatchable dependencies at each delegation
 - the formerly long rebuild/scenario-switch/resolution/materialization bodies
   have moved out of `webspace_runtime.py`; the compatibility surface decreased
-  from about 11.8k to 8.6k lines while Yjs branch identity, command/event
+  from about 11.8k to 8.1k lines while Yjs branch identity, command/event
   payloads, and cache behavior remain covered by characterization tests
-- remaining work in the facade is incremental extraction of builder/publication
-  adapters and small helpers, not duplicate ownership of task, cache,
-  projection, resolution, materialization, recovery, or scenario-switch state
+- Builder preview materialization, publication package reads, targeted preview
+  reloads, workspace publication reloads, and declaration prewarm now belong to
+  `builder_publication.py`; the facade retains only compatibility entry points
+  and subscriber composition
+- the extraction also restored the missing prewarm result return and removed
+  dead private Builder helpers after reference checks; there is no longer
+  duplicate ownership of task, cache, projection, resolution, materialization,
+  recovery, scenario-switch, or Builder publication state in the facade
+
+The planned runtime-ownership tranche is complete. Further reduction of the
+compatibility facade is opportunistic and must be tied to a characterized
+consumer removal rather than line-count targets.
 
 ### Future profile-aware personalization must be planned now
 

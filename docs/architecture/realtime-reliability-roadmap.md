@@ -627,6 +627,10 @@ Implementation status, 2026-08-06:
 - `bootstrap.py` remains the compatibility/composition surface (about 1.3k
   lines after the split), while transport state has one owner and the promoted
   root dependency closure explicitly includes every extracted module
+- the promoted root dependency closure also includes the extracted
+  Builder/publication runtime plus supervisor config and watchdog-status
+  owners, preventing a validated slot from importing a component omitted from
+  root-promotion classification
 
 The 2026-08-06 `.30` delivery checkpoint promoted commit `5422f6c7` through
 the rooted A/B path to slot `B`; supervisor update state finished as
