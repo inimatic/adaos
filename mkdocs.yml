@@ -189,6 +189,7 @@ nav:
       - Skill Factory: architecture/skill-factory.md
       - Builder: architecture/builder.md
       - Builder Conversational Development: architecture/builder-conversational-development.md
+      - Executable Prototype Architecture: architecture/executable-prototype-architecture.md
       - Builder Roadmap: architecture/builder-roadmap.md
       - Builder SDK Boundary: architecture/builder-sdk-boundary.md
       - Builder Preview Runtime: architecture/builder-preview-runtime.md

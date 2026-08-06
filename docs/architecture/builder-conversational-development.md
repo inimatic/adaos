@@ -8,6 +8,7 @@ change without making either chat history, a browser widget, an LLM session, or
 a Git branch the development source of truth. It refines the broader
 [Builder](builder.md), [Conversational Control Interface](conversational-interface.md),
 [Conversation and Channel Architecture](conversation-and-channel-architecture.md),
+[Executable Prototype Architecture](executable-prototype-architecture.md),
 [Governed Evolution](governed-evolution.md), and
 [Artifact Source, Package, and Activation](artifact-source-package-activation.md)
 contracts.
@@ -470,6 +471,13 @@ target and risk rather than by one broad keyword:
 - a mixed request is split into typed Issues; definition work cannot be hidden
   inside the UI LLM context.
 
+The bounded exception is the target conversational-prototyping profile defined
+by the [Executable Prototype Architecture](executable-prototype-architecture.md).
+The Prototype LLM may propose a constrained conversational workflow slice and
+semantic patch, but cannot write the active definition. Validation, stories,
+Review, package materialization, and workflow admission remain separate
+governed steps; general workflow correction continues through Automation.
+
 The Prototype LLM receives no write authority over `workflow.json`. The current
 Automation slice receives the complete project source, definition ref/digest,
 validation diagnostics, governed Issue/acceptance context, and worker-side
@@ -545,7 +553,9 @@ For an interface change the packet contains or provides governed retrieval for:
 - prior failed attempts or evaluator evidence relevant to the same targets.
 
 Screenshots and prose may supplement this structure but cannot replace stable
-refs or ABI constraints. The executor may retrieve additional referenced
+refs or ABI constraints. Screenshot/multimodal composition context is deferred
+and is not included in the default packet until structured composition evidence
+is proven insufficient for a named change class. The executor may retrieve additional referenced
 material through governed tools; it cannot silently scrape an unrelated
 workspace or infer missing authority.
 
@@ -1002,6 +1012,7 @@ remain discoverable from one map:
 | Iterations, experiments, evaluations, and recovery have different authority | [Run purpose contract](#iteration-experiment-evaluation-and-recovery) | Builder Phase 11 and GWR4 conformance tests |
 | Deterministic semantic UI changes precede general coding when sufficient | [Semantic UI Change IR](#semantic-ui-change-ir) | Builder semantic-operation tests |
 | Prototype data is mock/fixture by default; real effects are gated | [Data Modes And Prototype Isolation](#data-modes-and-prototype-isolation) | Builder data-mode tests and Trial evidence |
+| Prototype is an executable requirement model, with conversational workflow as the only MVP workflow profile | [Executable Prototype Architecture](executable-prototype-architecture.md) | Builder executable-prototype slice and acceptance stories |
 | Review is durable, withdrawable, and may become an executable constraint | [Review And Executable Acceptance](#review-and-executable-acceptance) | Builder Review lifecycle and reload tests |
 | LLM/Codex receive bounded but sufficient governed context | [Development Capsule](#development-capsule) and [Context Sufficiency](#context-sufficiency-contract) | Builder packet coverage/evaluation evidence |
 | DEV, Candidate, Trial, Release, and Workspace are distinct | [Artifact Source, Package, and Activation](artifact-source-package-activation.md) | Artifact pipeline roadmap and release evidence |
@@ -1018,6 +1029,9 @@ remain discoverable from one map:
   versioned project contract during migration.
 - `webui.json` is the active declarative UI source; UI revisions are immutable
   snapshots.
+- `workflow.json` remains the canonical process definition. A conversational
+  Workflow Prototype Slice is a candidate projection with an exact base digest,
+  never a second authority or a direct active-definition write path.
 - ProjectRelease, PackageRef, and WorkspaceLock own delivery and activation.
 - Conversation ledger owns messages; Change records reference message ids.
 - Operational event/evidence stores own facts and receipts.

@@ -384,6 +384,15 @@ allowed to reshape the declarative `adaos.webui.v1` UI inside the ABI boundary;
 AdaOS owns schema validation, revision storage, review, safe apply, runtime
 refresh, and rollback.
 
+The complete target boundary is defined by the
+[Executable Prototype Architecture](executable-prototype-architecture.md). A
+Prototype is not a static mockup with a few rows of data: it is a bounded
+executable requirement model over semantic UI composition, typed mock/fixture
+data behavior, Activity Requirements, and, for the current MVP only, a
+constrained conversational workflow slice. General workflow projection,
+reverse/legacy inference, visual workflow editing, and screenshot/multimodal
+context remain explicitly deferred.
+
 The current UI is starting material, not a fixed product contract. When a user
 asks for a design, workflow, layout, copy, data, or prototype change, the LLM
 should make a meaningful visible transformation rather than a rename-only,

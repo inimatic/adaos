@@ -115,7 +115,7 @@ The current repository has useful but fragmented foundations:
 | GWR1 | A canonical metamodel, definition compiler, pure resolver, and admitted `workflow.json` artifact contract exist | `validated-local` semantic core; data authoring/package admission open | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local`; active `builder_skill` package is strict authority when cutover is enabled, with restart/rollback/in-flight migration proof | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` lifecycle core; constrained conversational Workflow Prototype Slice and final compatibility retirement remain open | next |
 | GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local`; live transport durability remains in GWR6 | next |
 | GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
@@ -718,6 +718,30 @@ tests cover all legal and representative illegal paths.
   and result transitions, reconcile the `trial_waiting` state with the declared
   activity contract, then remove the shortcuts after shadow evidence proves no
   remaining caller.
+- [ ] `[must]` `GWR4-32` Implement the constrained conversational
+  `PrototypeWorkflowProfile` defined by the
+  [Executable Prototype Architecture](executable-prototype-architecture.md).
+  Extract a candidate slice from an empty or exact canonical base, admit only
+  sequential/conditional conversational states, typed input, mock activities,
+  declared outcomes/cancel/retry, localized interactions, and deterministic
+  stories, and keep the Prototype LLM unable to mutate active `workflow.json`.
+- [ ] `[must]` `GWR4-33` Bind an accepted conversational slice to semantic
+  Activity Requirements and one Automation mapping report. The Simulation Trace
+  distinguishes mock execution from implementation evidence; missing mappings
+  or story divergence fail before Automation/candidate promotion, and accepted
+  semantic patches enter the existing package authoring/admission rail.
+- [x] `[deferred]` `GWR4-34` Defer the general
+  `workflow.prototype_slice`/`workflow.semantic_patch` round trip, boundary-port
+  expansion and rebase, non-conversational workflow projections, visual graph
+  editing, and reverse projection from stable or legacy applications. Preserve
+  canonical definition refs/digests and the documented identity/locality/
+  outside-preservation laws so the conversational MVP does not create a second
+  workflow authority.
+- [x] `[deferred]` `GWR4-35` Defer protected automated-node lifecycle and
+  migration execution. Prototype-only draft/experiment nodes remain removable
+  at Revision level without tombstones; future `implementation_bound` and
+  `runtime_bound` nodes use deprecation, migration obligations, drain/evidence,
+  and retirement instead of silent deletion.
 
 ## GWR5. Cross-Channel and End-to-End Consistency Proof
 
@@ -1233,6 +1257,14 @@ admitted, the GWR7 adapter:
 45. **Operational Builder bridge:** a real built-in LLM/Codex/Trial/Publication
     run reaches `published` through registered activities and recovered async
     replies without compatibility transition shortcuts or manual repair.
+46. **Conversational prototype:** one bounded conversational slice is extracted
+    from an exact base, adapted through a validated candidate patch, exercised
+    with mock success/failure/input-required stories in Web and a limited
+    channel, and changes no active definition before Review/admission.
+47. **Prototype-to-Automation contract:** every demonstrated non-local behavior
+    produces a semantic Activity Requirement and mapping; one missing mapping
+    fails before Automation/candidate promotion, while mapped bindings rerun the
+    same accepted stories and preserve observable outcomes.
 
 ## Definition of Done for This Roadmap
 

@@ -131,7 +131,7 @@ gate easy to read by priority.
 | 8. Product Experience | Complete for the current Builder refactor: dedicated Builder scenario, durable Review context, declarative tabs/modal/page/multistep behavior ABI, and stable no-op projections are covered. | Complete: a 32-cycle equal-object reload soak preserves live Yjs root identity. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Complete for the current reference slice: stable async job messages, bounded context/memory/repair evidence, broadened goldens, eval-to-repair backlinks, and a validated public generated-skill example exist. | Complete: the generated example demonstrates skill-owned conversation, consent-gated memory, Pending Action, and browser UI. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, runtime-only Trial activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gate: one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the runtime-only Trial path. | Open: complete Builder-caller migration, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: full Trial data isolation, simultaneous shared-skill versions, public alpha/beta rollout channels, hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, runtime-only Trial activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the runtime-only Trial path. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, public alpha/beta rollout channels, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -1239,6 +1239,57 @@ Semantic changes and Review:
   Prototype data contract requires an explicit Automation mapping. The first
   implementation makes mode visible in Process/chat status and fails closed on
   live Prototype writes or declared missing mappings.
+
+Executable Prototype foundation:
+
+- [x] `[must]` Define the bounded target contract in
+  [Executable Prototype Architecture](executable-prototype-architecture.md): a
+  Prototype is an executable requirement model over distinct UI composition,
+  data binding, conversational workflow, and activity-requirement planes, not a
+  static mockup or an implementation claim.
+- [ ] `[must]` Implement one shared Prototype Data Runtime contract for static
+  examples, local state, disposable local CRUD, recorded provider fixtures, and
+  typed synthetic/model-generated data. Every operation uses a semantic command,
+  visible data mode, bounded reset policy, and no undeclared external authority.
+- [ ] `[must]` Emit typed, implementation-neutral Activity Requirements and a
+  semantic Simulation Trace for every demonstrated non-local behavior. Mock
+  execution must not satisfy Automation evidence or claim that a database,
+  provider, or model implementation exists.
+- [ ] `[must]` Build a compact UI Composition Slice for LLM work containing exact
+  target refs and source revision, parent/siblings/order/grouping, responsive
+  constraints, actions, bindings, ABI fragments, and acceptance constraints.
+  Spatial requests such as "put checkboxes on the left" fail for clarification
+  before model execution when target/reference/breakpoint is ambiguous.
+- [ ] `[should]` Add bounded structured renderer evidence for the affected
+  viewport and breakpoints, then verify spatial acceptance constraints after
+  render without serializing the complete desktop into the model packet.
+- [ ] `[must]` Implement the constrained conversational
+  `PrototypeWorkflowProfile`: one bounded entry, sequential states, conditional
+  choice, typed input, mock activities, `success`/`failure`/`input_required`,
+  cancel, one declared retry, localized interactions, and three deterministic
+  stories. The LLM proposes a candidate slice/semantic patch; it never writes an
+  active `workflow.json` directly.
+- [ ] `[must]` Produce an Automation handoff bundle containing exact UI and
+  conversational revisions, logical schemas, binding profile, Activity
+  Requirements, implementation-mapping report, fixtures/provenance, accepted
+  stories, outcomes, and Review constraints. Missing required mappings block
+  Automation or candidate promotion; the same stories run against implemented
+  bindings.
+- [ ] `[should]` Prove representative `empty`, normal, validation-failure,
+  provider-unavailable, delayed/input-required, role-denied, long-content,
+  English/Russian, compact, and wide profiles. Add offline, conflict, rate-limit,
+  and large-volume profiles only after the deterministic core is stable.
+- [x] `[deferred]` Keep screenshots out of the default context packet. Defer
+  capture, multimodal target resolution, screenshot-derived layout inference,
+  and visual-diff acceptance until structured composition evidence is shown
+  insufficient for a named class of defects.
+- [x] `[deferred]` Defer general UI-driven/mixed-channel Workflow Prototype
+  Slices, full semantic workflow round trips, boundary expansion/rebase,
+  reverse projection from stable applications, protected automated-node
+  deprecation and migration obligations, legacy code/trace inference, visual
+  workflow studio, and parallel/nested/long-running prototype workflows. The
+  target contracts and protection boundary remain documented for later work.
+
 - [x] `[must]` Implement submit/withdraw/dismiss/convert-to-Issue,
   accept-as-constraint/supersede/resolve for durable submitted Reviews. Only an
   unsent local draft may be hard-deleted; withdrawn Reviews are omitted from
