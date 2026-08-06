@@ -11,6 +11,7 @@ from .scenario_switching import (
     ScenarioSwitchRequest,
     WebspaceScenarioSwitchingService,
 )
+from .skill_catalog import WebspaceSkillCatalogOperations, WebspaceSkillCatalogService
 from .state import WebspaceTaskState
 
 __all__ = [
@@ -28,6 +29,8 @@ __all__ = [
     "ScenarioSwitchOperations",
     "ScenarioSwitchRequest",
     "WebspaceScenarioSwitchingService",
+    "WebspaceSkillCatalogOperations",
+    "WebspaceSkillCatalogService",
     "WebspaceCacheState",
     "WebspaceTaskState",
 ]

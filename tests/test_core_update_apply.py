@@ -868,6 +868,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/scenario/webspace_components/materialization_runtime.py" in critical
     assert "src/adaos/services/scenario/webspace_components/rebuild.py" in critical
     assert "src/adaos/services/scenario/webspace_components/resolution.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/skill_catalog.py" in critical
     assert "src/adaos/services/scenario/webspace_components/state.py" in critical
     assert "src/adaos/services/nlu/rasa_skill_installer.py" in critical
     assert "src/adaos/services/runtime_refresh.py" in critical
