@@ -298,6 +298,41 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
     assert len(fake_root.set_calls) == 1
 
 
+def test_projection_service_reconciles_flat_mapping_projection_in_place(monkeypatch) -> None:
+    fake_root = _FakeMap(
+        {
+            "media_indexer": {
+                "status": {"value": "done"},
+                "results": [{"title": "Gwen"}],
+            }
+        }
+    )
+    fake_state = {"data": fake_root}
+    calls: list[tuple[object, str, object]] = []
+
+    def _reconcile(y_map, txn, key: str, value: object) -> tuple[bool, str]:
+        calls.append((txn, key, value))
+        y_map.set(txn, key, value)
+        return True, "diff"
+
+    target = SimpleNamespace(backend="yjs", path="data/media_indexer", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    monkeypatch.setattr(projection_service_module, "set_map_value_if_changed", _reconcile)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+
+    next_value = {
+        "status": {"value": "done"},
+        "results": [{"title": "No Doubt"}],
+    }
+    asyncio.run(service.apply("runtime", "media_indexer.snapshot", next_value, webspace_id="desktop"))
+
+    assert [(key, value) for _txn, key, value in calls] == [("media_indexer", next_value)]
+    assert fake_root["media_indexer"]["results"] == [{"title": "No Doubt"}]
+
+
 def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None:
     monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: None)
 
@@ -441,6 +476,35 @@ def test_nested_y_map_projection_updates_leaf_after_legacy_branch_conversion(mon
     assert changed is True
     assert len(root.set_calls) == root_set_calls
     assert root["nodes"]["hub"]["media"]["library_summary"]["count"] == 1535
+
+
+def test_nested_y_map_projection_reconciles_mapping_leaf_in_place(monkeypatch) -> None:
+    class _FakeYMap(dict):
+        def set(self, txn, key: str, value: object) -> None:  # noqa: ARG002
+            self[key] = value
+
+    root = _FakeYMap()
+    calls: list[tuple[object, str, object]] = []
+
+    def _reconcile(parent, txn, key: str, value: object) -> tuple[bool, str]:
+        calls.append((parent, key, value))
+        parent.set(txn, key, value)
+        return True, "diff"
+
+    monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: _FakeYMap)
+    monkeypatch.setattr(projection_service_module, "set_map_value_if_changed", _reconcile)
+
+    payload = {"current": {"city": "Berlin"}, "status": "ok"}
+    changed = projection_service_module._set_nested_y_map_path(
+        root,
+        _FakeTxn(),
+        ["nodes", "hub", "weather"],
+        payload,
+    )
+
+    assert changed is True
+    assert [(key, value) for _parent, key, value in calls] == [("weather", payload)]
+    assert root["nodes"]["hub"]["weather"] == payload
 
 
 def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> None:
