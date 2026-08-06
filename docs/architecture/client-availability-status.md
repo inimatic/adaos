@@ -104,10 +104,18 @@ separate client stream and must not replace the runtime beacon used by header
 state or recovery decisions. `mode=thin`, `mode=full`, and the legacy runtime
 endpoint remain compatibility and operator-diagnostic surfaces.
 
-Rapid WS/YJS state changes may restart browser observables, but they must not
-produce immediate duplicate beacon requests. Requests are single-flight and
-subject to a short retrigger cooldown; the regular background interval remains
-the upper bound when polling is required.
+The runtime beacon is event-driven. It is requested once when the effective
+browser session or WS/YJS connectivity state changes; it is not polled on a
+background interval. Rapid state changes may restart browser observables, but
+requests remain single-flight and subject to a short retrigger cooldown. The
+header primarily projects the browser's local transport and YJS state between
+those boundary probes.
+
+Materialization HTTP snapshots are also fallback-only. A ready YJS document
+must render directly without a snapshot request. When YJS is incomplete, the
+client may request one snapshot for the current webspace, expected scenario,
+sync state, and materialization fingerprint. An unchanged gap must not create
+periodic or transaction-driven snapshot traffic.
 
 ## Mobile Rule
 
