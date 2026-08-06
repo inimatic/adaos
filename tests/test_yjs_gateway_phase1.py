@@ -3075,41 +3075,6 @@ def test_process_events_command_runs_go_home_before_ack(monkeypatch) -> None:
     assert responses[-1]["data"]["scenario_id"] == "web_desktop"
 
 
-def test_process_events_command_preserves_weather_node_target(monkeypatch) -> None:
-    published: list[object] = []
-    responses: list[dict[str, object]] = []
-
-    class _Bus:
-        def publish(self, event: object) -> None:
-            published.append(event)
-
-    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: SimpleNamespace(bus=_Bus()))
-
-    async def _send_response(msg: dict[str, object]) -> None:
-        responses.append(msg)
-
-    asyncio.run(
-        gateway_module.process_events_command(
-            kind="weather.city_changed",
-            cmd_id="cmd-weather-1",
-            payload={"city": "Berlin", "node_id": "member-01", "webspace_id": "desktop"},
-            device_id="dev-1",
-            webspace_id="desktop",
-            send_response=_send_response,
-        )
-    )
-
-    assert len(published) == 1
-    event = published[0]
-    assert getattr(event, "type", "") == "weather.city_changed"
-    payload = getattr(event, "payload", {})
-    assert payload["city"] == "Berlin"
-    assert payload["node_id"] == "member-01"
-    assert payload["target_node_id"] == "member-01"
-    assert payload["_meta"]["target_node_id"] == "member-01"
-    assert responses[-1]["ok"] is True
-
-
 def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> None:
     published: list[object] = []
     responses: list[dict[str, object]] = []

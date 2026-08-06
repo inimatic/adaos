@@ -118,8 +118,6 @@ def _candidate_side_effect(candidate: Mapping[str, Any], intent: str) -> str:
     value = str(action.get("side_effect_class") or "").strip()
     if value:
         return value
-    if intent in {"desktop.open_weather"}:
-        return "read_only"
     if intent in {"desktop.open_modal", "desktop.open_node_modal", "desktop.switch_scenario", VOICE_CAPABILITY_BINDING_INTENT}:
         return "ui_navigation"
     if intent.startswith("desktop."):

@@ -6,8 +6,8 @@ from pathlib import Path
 from types import ModuleType
 
 # Рантайм проставит эти env
-_ENV_PKG = "ADAOS_SKILL_PACKAGE"  # e.g. skills.weather_skill
-_ENV_NAME = "ADAOS_SKILL_NAME"  # e.g. weather_skill
+_ENV_PKG = "ADAOS_SKILL_PACKAGE"  # e.g. skills.example_skill
+_ENV_NAME = "ADAOS_SKILL_NAME"  # e.g. example_skill
 _ENV_ROOT = "ADAOS_SKILL_ROOT"  # абсолютный путь к корню навыка
 _ENV_MODE = "ADAOS_SKILL_MODE"  # "dev" | "runtime"
 

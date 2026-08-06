@@ -41,20 +41,6 @@ _recent: dict[str, float] = {}
 _LOOKUP_SLOT_NAMES = {"modal_id", "node_ref", "app_id", "scenario_id", "webspace_id", "skill_id"}
 _LOOKUP_NORMALIZE_TIMEOUT_S = _float_env("ADAOS_NLU_LOOKUP_NORMALIZE_TIMEOUT_S", 1.5, min_value=0.05)
 
-# NOTE: Keep patterns ASCII-safe by using explicit unicode escapes.
-# "погода" = \u043f\u043e\u0433\u043e\u0434\u0430
-# "какая"  = \u043a\u0430\u043a\u0430\u044f
-# "в"      = \u0432
-# "во"     = \u0432\u043e
-_WEATHER_KEYWORD_RE = re.compile(r"\b(?:\u043f\u043e\u0433\u043e\u0434\u0430|weather)\b", re.IGNORECASE | re.UNICODE)
-_WEATHER_CITY_RU_RE = re.compile(
-    r"\b(?:\u043a\u0430\u043a\u0430\u044f\s+)?\u043f\u043e\u0433\u043e\u0434\u0430\b(?:\s+(?:\u0432|\u0432\u043e)\s+(?P<city>[^?.!,;:]+))?",
-    re.IGNORECASE | re.UNICODE,
-)
-_WEATHER_CITY_EN_RE = re.compile(
-    r"\bweather\b(?:\s+in\s+(?P<city>[^?.!,;:]+))?",
-    re.IGNORECASE | re.UNICODE,
-)
 _MARKETPLACE_RE = re.compile(
     r"\b(?:\u043e\u0442\u043a\u0440\u043e\u0439|\u043f\u043e\u043a\u0430\u0436\u0438|\u0437\u0430\u043f\u0443\u0441\u0442\u0438|open|show)\s+(?:\u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b(?:\u0435\u0439\u0441|\u0430\u0441\u0435)|marketplace)\b",
     re.IGNORECASE | re.UNICODE,
@@ -169,24 +155,6 @@ def describe_builtin_regex_rules() -> list[dict[str, Any]]:
     Intended for observability / UI / LLM teacher context.
     """
     return [
-        {
-            "id": "builtin.weather.keyword",
-            "intent": "desktop.open_weather",
-            "pattern": _WEATHER_KEYWORD_RE.pattern,
-            "notes": "Keyword gate for the built-in weather rule.",
-        },
-        {
-            "id": "builtin.weather.ru",
-            "intent": "desktop.open_weather",
-            "pattern": _WEATHER_CITY_RU_RE.pattern,
-            "notes": "RU weather queries, optional city captured as (?P<city>...).",
-        },
-        {
-            "id": "builtin.weather.en",
-            "intent": "desktop.open_weather",
-            "pattern": _WEATHER_CITY_EN_RE.pattern,
-            "notes": "EN weather queries, optional city captured as (?P<city>...).",
-        },
         {
             "id": "builtin.desktop.open_marketplace",
             "intent": "desktop.open_marketplace",
@@ -728,7 +696,7 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
     """
     Very small, fast regex stage (MVP).
 
-    Goal: quickly extract intent/slots for weather queries without calling
+    Goal: quickly apply scenario and skill-contributed rules without calling
     external interpreters.
     """
     # 1) Dynamic rules (LLM/teacher-applied) take precedence.
@@ -794,21 +762,7 @@ async def _try_regex_intent(text: str, *, webspace_id: str) -> tuple[str | None,
     if modal_intent:
         return (modal_intent, modal_slots, modal_via, modal_raw)
 
-    # 2) Built-in fallback (desktop weather MVP)
-    if not _WEATHER_KEYWORD_RE.search(text):
-        return (None, {}, "regex", {})
-
-    city: str | None = None
-    m_ru = _WEATHER_CITY_RU_RE.search(text)
-    if m_ru:
-        city = _clean_city(m_ru.group("city"))
-    if city is None:
-        m_en = _WEATHER_CITY_EN_RE.search(text)
-        if m_en:
-            city = _clean_city(m_en.group("city"))
-
-    slots = {"city": city} if city else {}
-    return ("desktop.open_weather", slots, "regex", {"builtin": "weather"})
+    return (None, {}, "regex", {})
 
 
 @subscribe("nlp.intent.detect.request")

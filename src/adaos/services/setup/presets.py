@@ -20,7 +20,6 @@ DEFAULT_PRESET = InstallPreset(
     ),
     skills=(
         "infrastate_skill",
-        "weather_skill",
         "web_desktop_skill",
         "prompt_engineer_skill",
         "adaos_connect",

@@ -55,7 +55,6 @@ from adaos.services.scenario import (
     webspace_runtime as _scenario_ws_runtime,  # ensure core scenario subscriptions
 )
 from adaos.services.scenario import workflow_runtime as _scenario_workflow_runtime  # ensure scenario workflow subscriptions
-from adaos.services import weather as _weather_services  # ensure weather observers
 from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions

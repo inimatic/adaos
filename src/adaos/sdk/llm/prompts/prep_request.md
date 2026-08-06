@@ -152,7 +152,7 @@ exports: {}
 
 Adjust:
 
-* `name`: kebab/underscore form inferred from the user goal (e.g., `weather_skill`).
+* `name`: kebab/underscore form inferred from the user goal (e.g., `catalog_lookup_skill`).
 * Add dependencies needed by your `prepare.py`. If you import `requests`, include it here.
 
 Do **not** invent handlers/tools here — this is prep stage only.
@@ -161,7 +161,6 @@ Do **not** invent handlers/tools here — this is prep stage only.
 
 ## Hints (only if relevant)
 
-* For weather: default endpoint `https://api.openweathermap.org/data/2.5/weather`.
 * Try non-interactive probes first; ask via `input()` only if nothing reasonable can be assumed.
 * Normalize/strip user inputs; keep `prep_result.json` deterministic.
 * Validate token with GET <https://api.telegram.org/bot><token>/getMe

@@ -45,7 +45,6 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
     assert "[member-1](node_ref)" in open_node_modal_examples
     assert "open marketplace" in _examples_for(dataset, "desktop.open_marketplace")
     assert "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0430\u0441\u0435" in _examples_for(dataset, "desktop.open_marketplace")
-    assert "weather in [Berlin](city)" in _examples_for(dataset, "weather.show")
     assert "set timer for [10 minutes](duration)" in _examples_for(dataset, "voice.timer.start")
     assert "reload desktop" in _examples_for(dataset, "desktop.reload_webspace")
     assert "switch to [web_desktop](scenario_id)" in _examples_for(dataset, "desktop.switch_scenario")
@@ -244,45 +243,6 @@ async def test_default_desktop_nlu_suppresses_duplicate_voice_dispatch_for_reque
     assert emitted[0]["_meta"]["_voice_chat_ack_suppressed"] is True
     assert len(replies) == 1
     assert any(stage.get("status") == "duplicate_suppressed" for stage in stages)
-
-
-@pytest.mark.anyio
-async def test_default_desktop_nlu_dispatches_weather_show(monkeypatch) -> None:
-    from adaos.services.agent_context import get_ctx
-    from adaos.services.nlu import dispatcher as dispatcher_module
-
-    ctx = get_ctx()
-    emitted: list[dict] = []
-    missed: list[dict] = []
-    ctx.bus.subscribe("nlp.intent.weather.get", lambda ev: emitted.append(dict(ev.payload or {})))
-    ctx.bus.subscribe("nlp.intent.not_obtained", lambda ev: missed.append(dict(ev.payload or {})))
-
-    async def _scenario_id(_ctx, _webspace_id: str) -> str:
-        return "web_desktop"
-
-    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
-
-    await dispatcher_module._on_nlp_intent_detected(
-        {
-            "intent": "weather.show",
-            "confidence": 1.0,
-            "slots": {"city": "\u041c\u043e\u0441\u043a\u0432\u0430"},
-            "text": "\u041f\u043e\u0433\u043e\u0434\u0430 \u0432 \u041c\u043e\u0441\u043a\u0432\u0435",
-            "webspace_id": "desktop",
-            "_meta": {"route_id": "voice_chat"},
-        }
-    )
-
-    assert emitted == [
-        {
-            "city": "\u041c\u043e\u0441\u043a\u0432\u0430",
-            "webspace_id": "desktop",
-            "slots": {"city": "\u041c\u043e\u0441\u043a\u0432\u0430"},
-            "text": "\u041f\u043e\u0433\u043e\u0434\u0430 \u0432 \u041c\u043e\u0441\u043a\u0432\u0435",
-            "_meta": {"route_id": "voice_chat", "webspace_id": "desktop", "scenario_id": "web_desktop"},
-        }
-    ]
-    assert missed == []
 
 
 @pytest.mark.anyio

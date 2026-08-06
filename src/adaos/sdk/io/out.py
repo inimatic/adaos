@@ -281,7 +281,7 @@ def chat_append(
     summary="Enqueue a TTS message (router decides which devices/webspaces play it).",
     stability="experimental",
     examples=[
-        "io.out.say('Weather is sunny', lang='en-US', _meta={'webspace_id':'default'})",
+        "io.out.say('Task completed', lang='en-US', _meta={'webspace_id':'default'})",
     ],
 )
 def say(

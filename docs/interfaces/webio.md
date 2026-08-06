@@ -586,18 +586,21 @@ The webspace lifecycle is handled by the core runtime
 These events always carry `_meta.webspace_id`, so downstream helpers know the
 origin but can still operate on other targets.
 
-## Weather Skill and Webspace Routing
+## Skill-Owned Domain Routing
 
-The weather observer publishes `weather.city_changed {webspace_id, city}`
-whenever `data.weather.current.city` changes. The runtime `weather_skill`
-listens for the same event type and resolves the destination webspace from
-either `payload.webspace_id` or `payload._meta.webspace_id`. This ensures:
+Core does not observe or interpret domain-specific Yjs branches. A widget
+publishes a declared skill event through the generic `skill.event.publish`
+host action, the SDK subscription dispatcher delivers it to the owning skill,
+and the skill publishes its declared projection through the projection SDK.
+There is deliberately no core observer for a particular app, city, media
+library, or other skill-owned concept. This ensures:
 
 * multiple browsers in different webspaces can change the city independently
 * browser-visible writes go through governed projection helpers such as
   `ctx_subnet` / `ProjectionService`, so only declared slots in the intended
   webspace are updated
-* when `target_node_id` is present, only the matching node applies the change
+* when `target_node_id` is present, generic SDK routing delivers the event to
+  the matching node rather than requiring target checks in every skill
 
 `RouterService` follows the same pattern: when emitting runtime events
 destined for UI-integrated skills, include a `_meta.webspace_id` hint so
@@ -670,8 +673,8 @@ while member snapshots should prefer local state and local workspace scans.
   `desktop.webspace.use` and reloads the UI after the hub acknowledges.
 * The merged catalog already exposes DEV badges, so no additional filtering
   happens on the client.
-* The weather modal sends a small city-change command; the skill projects the
-  resulting compact weather state asynchronously.
+* Skill modals send small declared commands; the owning skill projects the
+  resulting compact state asynchronously through the standard SDK.
 
 ## Materialization and Readiness
 

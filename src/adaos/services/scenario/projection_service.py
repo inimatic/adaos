@@ -1554,8 +1554,8 @@ class ProjectionService:
         def _mutator(doc, txn) -> None:
             root = doc.get_map(root_name)
 
-            # For simple two-segment paths like ``data/weather`` keep the
-            # legacy flat ``data["weather"]`` behaviour so existing widgets
+            # For simple two-segment paths like ``data/status`` keep the
+            # legacy flat ``data["status"]`` behaviour so existing widgets
             # continue to work. For longer paths such as ``data/infra/status``
             # merge into the existing top-level subtree so sibling branches
             # like other user ids are preserved.

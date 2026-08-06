@@ -9023,14 +9023,6 @@ async def process_events_command(
         await _ack(data={"event_type": event_type})
         return None
 
-    if kind == "weather.city_changed":
-        event_payload = dict(payload or {})
-        event_payload["city"] = payload.get("city")
-        event_payload["webspace_id"] = payload.get("webspace_id")
-        _publish_bus("weather.city_changed", event_payload)
-        await _ack()
-        return None
-
     if kind == "demo_metrics.host_action":
         event_payload = dict(payload or {})
         event_payload["webspace_id"] = payload.get("webspace_id")

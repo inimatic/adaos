@@ -59,10 +59,10 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
     ```python
     def lang_res():
         return {
-            "prep.weather.api_error": "Could not get weather for {city}",
-            "prep.weather.success": "Current weather in {city}: {temp}°C, {description}",
-            "prep.weather.missing_key": "API key is missing",
-            "prep.weather.invalid_response": "Invalid response from weather service"
+            "prep.lookup.api_error": "Could not retrieve data for {query}",
+            "prep.lookup.success": "Result for {query}: {result}",
+            "prep.lookup.missing_key": "API key is missing",
+            "prep.lookup.invalid_response": "Invalid response from external service"
         }
     ```
 
@@ -79,8 +79,8 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
   Example:
 
   ```python
-  city = entities.get("city") or get("last_city") or get_env("default_city")
-  set("last_city", city)
+  query = entities.get("query") or get("last_query") or get_env("default_query")
+  set("last_query", query)
   ```
 
 * **Output abstraction:**
@@ -90,7 +90,7 @@ Generate a minimal but fully functional skill compatible with the AdaOS SDK.
 
     ```python
     from adaos.sdk.output import output
-    output(_("prep.weather.success", city=city, temp=temp))
+    output(_("prep.lookup.success", query=query, result=result))
     ```
 
   * The SDK will decide whether to show text, voice or both.
@@ -155,11 +155,11 @@ The skill must consist of **two files only**, formatted exactly as shown below:
    * Load initial settings from `prep_result.json` if `.skill_env.json` is missing required keys.
    * Save them into `.skill_env.json` using `set_env()`.
 
-5. Logic for selecting the city must respect user overrides and memory:
+5. Logic for selecting a user-overridable setting must respect explicit entities and memory:
 
    ```python
-   city = entities.get("city") or get("last_city") or get_env("default_city")
-   set("last_city", city)
+   query = entities.get("query") or get("last_query") or get_env("default_query")
+   set("last_query", query)
    ```
 
 6. Handle API responses safely:
@@ -169,17 +169,16 @@ The skill must consist of **two files only**, formatted exactly as shown below:
    * Example:
 
      ```python
-     temp = data.get("main", {}).get("temp")
-     description = data.get("weather", [{}])[0].get("description", "")
-     if temp is None:
-         output(_("prep.weather.invalid_response"))
+     result = data.get("result")
+     if result is None:
+         output(_("prep.lookup.invalid_response"))
          return
      ```
 
 7. **All user-facing messages must use `output()` and i18n keys:**
 
    ```python
-   output(_("prep.weather.success", city=city, temp=temp, description=description))
+   output(_("prep.lookup.success", query=query, result=result))
    ```
 
 ---

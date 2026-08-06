@@ -82,7 +82,7 @@ def _install_all_skills(limit: int | None = None) -> list[str]:
         pass
 
     if not names:
-        names = ["weather_skill"]
+        names = ["example_skill"]
 
     if limit:
         names = names[:limit]

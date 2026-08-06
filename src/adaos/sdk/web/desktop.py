@@ -61,7 +61,7 @@ def desktop_toggle_app(app_id: str, webspace_id: Optional[str] = None, *, live: 
     "web.desktop.toggle_widget",
     summary="Pin or remove a desktop widget.",
     stability="stable",
-    examples=["web.desktop.toggle_widget('weather')"],
+    examples=["web.desktop.toggle_widget('status')"],
 )
 def desktop_toggle_widget(widget_id: str, webspace_id: Optional[str] = None, *, live: bool = True) -> None:
     """
@@ -167,7 +167,7 @@ async def desktop_get_page_schema_async(webspace_id: Optional[str] = None) -> di
     "web.desktop.set_installed",
     summary="Replace installed desktop apps/widgets for a webspace.",
     stability="experimental",
-    examples=["web.desktop.set_installed(['scenario:prompt_engineer_scenario'], ['weather'])"],
+    examples=["web.desktop.set_installed(['scenario:prompt_engineer_scenario'], ['status'])"],
 )
 def desktop_set_installed(
     app_ids: list[str],

@@ -99,26 +99,6 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
                 }
             ],
         },
-        "weather.show": {
-            "description": "Ask the weather skill for current weather in a city.",
-            "scope": "skill",
-            "examples": [
-                "\u043a\u0430\u043a\u0430\u044f \u043f\u043e\u0433\u043e\u0434\u0430 \u0432 [\u041c\u043e\u0441\u043a\u0432\u0435](city)",
-                "\u043f\u043e\u0433\u043e\u0434\u0430 \u0432 [\u041c\u043e\u0441\u043a\u0432\u0435](city)",
-                "\u043f\u0440\u043e\u0433\u043d\u043e\u0437 \u0432 [\u0411\u0435\u0440\u043b\u0438\u043d\u0435](city)",
-                "weather in [Berlin](city)",
-            ],
-            "actions": [
-                {
-                    "type": "callSkill",
-                    "target": "nlp.intent.weather.get",
-                    "params": {
-                        "city": "$slot.city",
-                        "webspace_id": "$ctx.webspace_id",
-                    },
-                }
-            ],
-        },
         "voice.time.now": {
             "description": "Answer with current local time in the voice chat.",
             "scope": "scenario",

@@ -488,11 +488,6 @@ def _confirmation_question(candidate: Mapping[str, Any]) -> str:
     if intent == "desktop.open_modal":
         label = _canonical_slot_value(candidate, "modal_id", "modal", "app_id", "app")
         return _question_for_action("Открыть", label, "это окно", candidate)
-    if intent in {"desktop.open_weather", "weather.current"} or "weather" in intent:
-        city = _slot_value(candidate, "city", "location")
-        if city:
-            return f"Показать погоду в {city}?"
-        return "Показать погоду?"
     name = coerce_dict(candidate.get("candidate")).get("name")
     if isinstance(name, str) and name.strip():
         return f"Я правильно понял: {name.strip()}?"

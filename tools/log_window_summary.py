@@ -48,7 +48,6 @@ MARKERS = {
     "yws_reconnect_storm": ["yws reconnect storm"],
     "peer_failed": ["connectionState=failed", "peer failed"],
     "stale_peer": ["timed out closing stale peer"],
-    "weather_observer_slow": ["weather observer slow"],
     "weather_zone_proxy_missing": ["zone_proxy_proxy_not_configured"],
     "weather_read_timeout": ["read_timeout"],
     "rtc_ice_timeout": ["rtc.ice timeout"],

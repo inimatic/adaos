@@ -802,7 +802,7 @@ def _execute_action(
     Execute a single NLU action mapping. For MVP we support:
 
       - type: "callSkill" | "callHost"
-        target: event type (e.g. "desktop.toggleInstall", "weather.city_changed")
+        target: event type (e.g. "desktop.toggleInstall", "example.changed")
         params: dict with optional templates.
     """
     action_type = str(action.get("type") or "").strip() or "callSkill"

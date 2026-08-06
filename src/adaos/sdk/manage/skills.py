@@ -113,7 +113,7 @@ def _validation_to_dict(report: Any) -> Mapping[str, Any] | None:
     summary="install a skill from catalog or git",
     stability="stable",
     idempotent=True,
-    examples=["skills.install(request_id='req-42', skill='weather_skill')"],
+    examples=["skills.install(request_id='req-42', skill='example_skill')"],
     input_schema=_INSTALL_INPUT,
     output_schema=SCHEMA_RESULT_ENVELOPE,
 )
@@ -159,7 +159,7 @@ def install(
     summary="remove an installed skill",
     stability="stable",
     idempotent=True,
-    examples=["skills.uninstall(request_id='req-99', skill='weather_skill')"],
+    examples=["skills.uninstall(request_id='req-99', skill='example_skill')"],
     input_schema=_UNINSTALL_INPUT,
     output_schema=SCHEMA_RESULT_ENVELOPE,
 )

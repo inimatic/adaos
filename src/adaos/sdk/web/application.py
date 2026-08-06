@@ -112,7 +112,7 @@ def application_get_pinned_panels(webspace_id: Optional[str] = None) -> list[dic
     "web.application.set_installed",
     summary="Replace installed applications/widgets for a webspace.",
     stability="experimental",
-    examples=["web.application.set_installed(['prompt_engineer_scenario'], ['weather'])"],
+    examples=["web.application.set_installed(['prompt_engineer_scenario'], ['status'])"],
 )
 def application_set_installed(
     application_ids: list[str],

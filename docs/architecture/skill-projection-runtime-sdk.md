@@ -50,6 +50,14 @@ data should stay behind tools/details. The SDK/core runtime owns the mechanics:
 Skill code should focus on building semantic section payloads and performing
 domain actions. It should not open-code projection scheduling.
 
+Core code must remain domain-neutral. It may validate and route declared
+events, subscriptions, tools, scopes, targets, and projection slots, but it
+must not contain observers, NLU fallbacks, renderer branches, or lifecycle
+services for one particular skill. Domain behavior and domain vocabulary live
+in the skill manifest, handler, and WebUI package and use only public
+`adaos.sdk` entry points. Compatibility for an old domain event belongs in the
+owning skill during migration, not in the core gateway.
+
 The SDK must not silently reroute a skill's data between Yjs and streams.
 Runtime guardrails may warn, throttle, block, quarantine, and log pressure, but
 route ownership remains a design-time skill responsibility.

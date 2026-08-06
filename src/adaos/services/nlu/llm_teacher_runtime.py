@@ -124,10 +124,6 @@ _UI_NAVIGATION_INTENTS = {
     "desktop.open_scenario",
     "desktop.switch_scenario",
 }
-_READ_ONLY_INTENTS = {
-    "desktop.open_weather",
-    "weather.current",
-}
 _ALLOWED_TRAINING_STRATEGIES = {
     "regex",
     "rasa_example",
@@ -1505,8 +1501,6 @@ def _candidate_class_for_intent(*, intent: str, target: Mapping[str, Any] | None
 
 
 def _side_effect_class_for_intent(intent: str) -> str:
-    if intent in _READ_ONLY_INTENTS:
-        return "read_only"
     if intent in _UI_NAVIGATION_INTENTS:
         return "ui_navigation"
     if intent.startswith("desktop."):
@@ -1794,7 +1788,7 @@ def _regex_policy_rejection(
         return {"reason": "overbroad_regex", "strategy": "rasa_example", "pattern": pattern}
     if len(compact) < 4:
         return {"reason": "too_short_regex", "strategy": "rasa_example", "pattern": pattern}
-    if confidence < 0.45 and intent not in _READ_ONLY_INTENTS:
+    if confidence < 0.45:
         return {
             "reason": "low_confidence_non_read_only_regex",
             "strategy": "clarification",
@@ -3014,19 +3008,18 @@ def _build_prompt(*, request: dict[str, Any], webspace_id: str, context: dict[st
         "- action_candidate is descriptive only: describe the intended AdaOS action/intent/slots, but do not call any action. When a voice_capability or voice_affordance is the target, include capability_id and/or affordance_id plus the activation plan evidence.\n"
         "- propose_regex_rule.pattern MUST be a Python regex with named capture groups for slots (e.g. (?P<city>...)).\n"
         "- Avoid proposing duplicate regex rules if builtin_regex or regex_rules already cover the utterance.\n"
-        "- If user asks about weather/temperature but doesn't say the exact keyword, propose a regex rule for intent desktop.open_weather.\n"
         "- Never use desktop.toggle_app_install for read-only inventory questions like 'show installed skills', 'list available apps', or 'which scenarios are installed'. That intent is only for changing install state of a concrete app target. If no published read/list capability exists, return descriptor_fix or development_task instead.\n"
         "- For lookup-backed slots such as scenario_id, modal_id, app_id, node_ref, webspace_id, and skill_id, capture the user text in a named group; AdaOS canonicalizes known values/labels before dispatch.\n"
         "- Use the exact slot names expected by the existing intent/action. For scenario switching use (?P<scenario_id>...), not (?P<scenario>...). For modal opening use (?P<modal_id>...), not (?P<modal>...).\n"
         "- The regex must match the exact user request text after normal case-insensitive Python regex matching.\n"
         "- When the user used a localized label (e.g. Russian text), include that surface form in the regex alternative so preview matches the exact request; AdaOS will canonicalize the captured label through lookup aliases.\n"
         "- When the user utterance has an acceptable STT/acronym variant of a known label, include both the source utterance form and the canonical label/alias in regex alternatives; do not silently replace the source form with only the canonical name.\n"
-        "- Regex rules should be reasonably general (avoid overfitting to a single verb like \"покажи\"); capture city via (?P<city>...).\n"
+        "- Regex rules should be reasonably general and avoid overfitting to a single verb or exact utterance.\n"
         "- When proposing a regex rule, also set target to where the rule should be stored:\n"
         "  - Prefer the skill that handles the intent (see context.intent_routes) over the scenario.\n"
         "  - For intents that trigger system actions (callHost targets from context.system_actions/host_actions), target should be the current scenario that owns the intent, not the scenario/app/modal being opened.\n"
         "- If it suggests a new capability, propose create_skill_candidate or create_scenario_candidate.\n"
-        "- Keep intent names short and namespaced (e.g. desktop.open_weather, smalltalk.how_are_you).\n"
+        "- Keep intent names short and namespaced (e.g. desktop.open_modal, smalltalk.how_are_you).\n"
     )
     utterance = request.get("text") if isinstance(request.get("text"), str) else ""
     user = {

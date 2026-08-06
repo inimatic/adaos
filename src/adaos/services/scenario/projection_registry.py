@@ -243,11 +243,11 @@ class ProjectionRegistry:
 
         data_projections:
           - scope: subnet
-            slot: weather.snapshot
+            slot: example.snapshot
             targets:
               - backend: yjs
                 webspace_id: desktop
-                path: data/skills/weather/global/snapshot
+                path: data/skills/example/global/snapshot
         """
         manifest = read_manifest(scenario_id, space=space)
         entries = manifest.get("data_projections") or []

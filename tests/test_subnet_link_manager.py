@@ -930,7 +930,7 @@ def test_broadcast_event_sends_node_targeted_payload_only_to_matching_member() -
 
     result = asyncio.run(
         manager.broadcast_event(
-            event_type="weather.city_changed",
+            event_type="example.changed",
             payload={"city": "Berlin", "target_node_id": "member-2"},
             source="hub",
         )

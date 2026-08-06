@@ -1567,7 +1567,7 @@ def cmd_test(
 @app.command("run-handler")
 def run_handler(
     skill: str = typer.Argument(..., help=_("cli.skill.run.name_help")),
-    topic: str = typer.Option("nlp.intent.weather.get", "--topic", "-t", help=_("cli.skill.run.topic_help")),
+    topic: str = typer.Option("skill.run.requested", "--topic", "-t", help=_("cli.skill.run.topic_help")),
     payload: str = typer.Option("{}", "--payload", "-p", help=_("cli.skill.run.payload_help")),
 ):
     """Execute a skill handler locally using the configured workspace."""

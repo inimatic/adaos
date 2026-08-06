@@ -1132,7 +1132,7 @@ async def test_llm_teacher_prompt_includes_mcp_evidence_and_stores_regex_candida
         "why_not_regex": None,
     }
     assert candidate["action_candidate"]["intent"] == "desktop.open_weather"
-    assert candidate["action_candidate"]["side_effect_class"] == "read_only"
+    assert candidate["action_candidate"]["side_effect_class"] == "local_state_change"
     assert candidate["action_candidate"]["phrase_preview"]["ok"] is True
     assert candidate["action_candidate"]["action_preview"]["status"] == "not_run"
     assert candidate["template_candidate"]["engine"] == "regex"

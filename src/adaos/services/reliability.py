@@ -4869,12 +4869,6 @@ def yjs_sync_runtime_snapshot(
     except Exception:
         gateway = {}
     try:
-        from adaos.services.weather.observer import weather_observer_snapshot
-
-        weather_observer = weather_observer_snapshot(webspace_id=selected_webspace_id or None)
-    except Exception:
-        weather_observer = {}
-    try:
         from adaos.services.yjs.doc import live_room_command_diagnostics_snapshot
 
         live_room_commands = live_room_command_diagnostics_snapshot()
@@ -5161,9 +5155,6 @@ def yjs_sync_runtime_snapshot(
             "load_mark": dict(selected_load_mark),
             "gateway_room": dict(gateway_rooms.get(selected_webspace_id) or {})
             if isinstance(gateway_rooms.get(selected_webspace_id), dict)
-            else {},
-            "weather_observer": dict(weather_observer.get("selected") or {})
-            if isinstance(weather_observer, dict)
             else {},
             "command_trace": {
                 "last_reload": last_reload if str(last_reload.get("webspace_id") or "").strip() == selected_webspace_id else {},

@@ -418,7 +418,7 @@ class ScenarioManager:
             # Optional root data overrides from scenario.json:
             # if "data" section is present in the scenario payload, its
             # top-level keys are projected into the webspace data map.
-            # This is used for initial data seeding (e.g. data.weather)
+            # This is used for initial data seeding (e.g. data.status)
             # and for YJS reload; only explicitly defined keys are
             # overwritten. Runtime-owned effective branches stay under
             # semantic rebuild ownership and are skipped here.
