@@ -67,7 +67,15 @@ def _workflow_report() -> dict:
 
 def _states() -> list[dict]:
     return [
-        {"state_id": state_id, "evidence_ref": f"story:{state_id}"}
+        {
+            "state_id": state_id,
+            "evidence_ref": f"story:{state_id}",
+            "fixture": {
+                "kind": "locale" if state_id.startswith("locale_") else "layout" if state_id in {"compact", "wide"} else "data",
+                "input": {"locale": state_id.removeprefix("locale_")} if state_id.startswith("locale_") else {"breakpoint": state_id} if state_id in {"compact", "wide"} else {"profile": state_id},
+                "expected": {"rendered": True},
+            },
+        }
         for state_id in sorted(REQUIRED_REPRESENTATIVE_STATES)
     ]
 
@@ -129,7 +137,7 @@ def test_handoff_reports_all_missing_representative_states_without_mutating_inpu
         binding_profile=_binding(),
         composition_slices=[_composition()],
         activity_requirements=_requirements(),
-        representative_states=[{"state_id": "normal", "evidence_ref": "story:normal"}],
+        representative_states=[{"state_id": "normal", "evidence_ref": "story:normal", "fixture": {"kind": "data", "input": {"profile": "normal"}, "expected": {"rendered": True}}}],
         strict=False,
     )
     assert report["ready"] is False

@@ -103,6 +103,21 @@ def build_automation_handoff(
     supplied_states = {str(item.get("state_id") or "") for item in representative_states}
     missing_states = sorted(REQUIRED_REPRESENTATIVE_STATES - supplied_states)
     blockers.extend(f"missing_representative_state:{state_id}" for state_id in missing_states)
+    for item in representative_states:
+        state_id = str(item.get("state_id") or "")
+        fixture = item.get("fixture") if isinstance(item.get("fixture"), Mapping) else {}
+        fixture_input = fixture.get("input") if isinstance(fixture.get("input"), Mapping) else {}
+        expected_kind = (
+            "locale" if state_id.startswith("locale_")
+            else "layout" if state_id in {"compact", "wide"}
+            else None
+        )
+        if expected_kind and fixture.get("kind") != expected_kind:
+            blockers.append(f"invalid_representative_state_kind:{state_id}")
+        expected_value = state_id.removeprefix("locale_") if state_id.startswith("locale_") else state_id
+        expected_field = "locale" if state_id.startswith("locale_") else "breakpoint"
+        if expected_kind and fixture_input.get(expected_field) != expected_value:
+            blockers.append(f"invalid_representative_state_input:{state_id}")
     if len(composition_slices) == 0:
         blockers.append("missing_composition_slice")
 

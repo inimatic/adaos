@@ -34,10 +34,20 @@
       "type": "array", "minItems": 1, "maxItems": 40,
       "items": {
         "type": "object",
-        "required": ["state_id", "evidence_ref"],
+        "required": ["state_id", "evidence_ref", "fixture"],
         "properties": {
           "state_id": { "type": "string", "minLength": 1, "maxLength": 160 },
-          "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 500 }
+          "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "fixture": {
+            "type": "object",
+            "required": ["kind", "input", "expected"],
+            "properties": {
+              "kind": { "enum": ["data", "runtime", "policy", "locale", "layout"] },
+              "input": { "type": "object" },
+              "expected": { "type": "object", "minProperties": 1 }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       }
