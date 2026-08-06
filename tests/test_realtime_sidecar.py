@@ -97,6 +97,30 @@ def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: P
     )
 
 
+def test_sidecar_lifecycle_tls_appends_hub_ca_to_system_trust(monkeypatch, tmp_path: Path) -> None:
+    ca_path = tmp_path / "adaos-ca.pem"
+    ca_path.write_text("test-ca", encoding="utf-8")
+    create_calls: list[dict[str, object]] = []
+    loaded_ca: list[str] = []
+
+    class _Context:
+        def load_verify_locations(self, *, cafile: str) -> None:
+            loaded_ca.append(cafile)
+
+    def _create_default_context(**kwargs):
+        create_calls.append(dict(kwargs))
+        return _Context()
+
+    monkeypatch.delenv("ADAOS_ROOT_CA_MODE", raising=False)
+    monkeypatch.setattr(realtime_sidecar_mod.ssl, "create_default_context", _create_default_context)
+
+    context = realtime_sidecar_mod._sidecar_lifecycle_ssl_context(ca_path)
+
+    assert isinstance(context, _Context)
+    assert create_calls == [{}]
+    assert loaded_ca == [str(ca_path)]
+
+
 def test_realtime_sidecar_rotates_diag_and_log_with_five_backups(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

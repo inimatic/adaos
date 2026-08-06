@@ -1727,12 +1727,24 @@ def _sidecar_lifecycle_report_target() -> tuple[str, Path | None, Path, Path] | 
     return base_url, (ca_path if ca_path.is_file() else None), cert_path, key_path
 
 
+def _sidecar_lifecycle_ssl_context(ca_path: Path | None) -> ssl.SSLContext:
+    mode = str(os.getenv("ADAOS_ROOT_CA_MODE") or "append").strip().lower()
+    if ca_path is not None and mode != "append":
+        return ssl.create_default_context(cafile=str(ca_path))
+    context = ssl.create_default_context()
+    if ca_path is not None:
+        # The AdaOS CA authenticates the mTLS peer, while the public Root
+        # certificate normally chains to a system trust root. Keep both sets.
+        context.load_verify_locations(cafile=str(ca_path))
+    return context
+
+
 def _post_sidecar_lifecycle_report(payload: dict[str, Any]) -> None:
     target = _sidecar_lifecycle_report_target()
     if target is None:
         raise RuntimeError("hub lifecycle mTLS target is unavailable")
     base_url, ca_path, cert_path, key_path = target
-    context = ssl.create_default_context(cafile=str(ca_path) if ca_path is not None else None)
+    context = _sidecar_lifecycle_ssl_context(ca_path)
     context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = UrlRequest(
