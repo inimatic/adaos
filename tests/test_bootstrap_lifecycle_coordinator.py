@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
-from adaos.services.bootstrap_runtime import BootstrapLifecycleCoordinator
+from adaos.services.bootstrap_runtime import BootstrapBootCoordinator, BootstrapLifecycleCoordinator
 
 
 pytestmark = pytest.mark.anyio
@@ -80,3 +81,46 @@ async def test_lifecycle_coordinator_replaces_and_tracks_tasks() -> None:
     assert lifecycle.boot_tasks.count(external) == 1
 
     await lifecycle.stop()
+
+
+async def test_boot_coordinator_uses_agent_context_bus() -> None:
+    class _ContextBus:
+        pass
+
+    class _StopAfterBusSelection(RuntimeError):
+        pass
+
+    class _IoBus:
+        def __init__(self, *, core: object) -> None:
+            assert core is context_bus
+
+        async def connect(self) -> None:
+            raise _StopAfterBusSelection
+
+    class _Watchdog:
+        report_control_lifecycle = object()
+        emit_node_status = object()
+
+    context_bus = _ContextBus()
+    config = SimpleNamespace(role="member", node_id="node-1", subnet_id="subnet-1")
+    service = SimpleNamespace(
+        _booted=False,
+        _lifecycle=SimpleNamespace(bind_app=lambda app: None),
+        _log=SimpleNamespace(debug=lambda *args, **kwargs: None),
+        _prepare_environment=lambda: None,
+        ctx=SimpleNamespace(bus=context_bus, config=config),
+    )
+    operations = SimpleNamespace(
+        load_config=lambda **kwargs: config,
+        status_watchdog_service=SimpleNamespace(
+            from_environment=lambda **kwargs: _Watchdog(),
+        ),
+        report_hub_control_lifecycle_state=lambda config: None,
+        should_emit_node_status=lambda **kwargs: False,
+        bus=SimpleNamespace(emit=lambda *args, **kwargs: None),
+        local_event_bus_type=_ContextBus,
+        local_io_bus_type=_IoBus,
+    )
+
+    with pytest.raises(_StopAfterBusSelection):
+        await BootstrapBootCoordinator().run(service, operations, SimpleNamespace())

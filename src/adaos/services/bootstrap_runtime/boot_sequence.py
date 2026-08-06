@@ -156,7 +156,7 @@ class BootstrapBootCoordinator:
 
         service._prepare_environment()
         # local adapter over LocalEventBus
-        core_bus = service.ctx.operations.bus if isinstance(service.ctx.operations.bus, operations.local_event_bus_type) else operations.local_event_bus_type()
+        core_bus = service.ctx.bus if isinstance(service.ctx.bus, operations.local_event_bus_type) else operations.local_event_bus_type()
         io_bus: Any = operations.local_io_bus_type(core=core_bus)
         await io_bus.connect()
         print("[bootstrap] IO bus: LocalEventBus")
