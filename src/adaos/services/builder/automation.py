@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -227,12 +228,21 @@ class BuilderAutomationService:
         conversation_id: str | None = None,
         brief_path: str | None = None,
         change_set_id: str | None = None,
+        prototype_handoff: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
+        admitted_handoff: dict[str, Any] | None = None
+        if prototype_handoff is not None:
+            from adaos.services.builder.prototype_handoff import admit_automation_handoff
+
+            admitted_handoff = admit_automation_handoff(
+                prototype_handoff,
+                expected_project_ref=f"{kind}:{project_id}",
+            )
         workflow_before = self._workflow().describe(kind, project_id)
         if workflow_before.get("archived"):
             raise ValueError("archived projects cannot start automation")
@@ -305,6 +315,20 @@ class BuilderAutomationService:
         with _LOCK:
             current = self.get_session(kind, project_id)
             if current and current.get("status") in {"queued", "assigned", "workspace_preparing", "in_progress", "tests_running", "commit_ready"}:
+                if admitted_handoff is not None:
+                    current_handoff = (
+                        current.get("prototype_handoff")
+                        if isinstance(current.get("prototype_handoff"), Mapping)
+                        else None
+                    )
+                    current_digest = str((current_handoff or {}).get("digest") or "")
+                    incoming_digest = str(admitted_handoff.get("digest") or "")
+                    if current_digest and current_digest != incoming_digest:
+                        raise ValueError("another Prototype handoff already owns the active Automation session")
+                    if not current_digest:
+                        current["prototype_handoff"] = copy.deepcopy(admitted_handoff)
+                        current["updated_at"] = _now_iso()
+                        self._save_session(current)
                 incoming_conversation_id = str(conversation_id or "").strip()
                 if incoming_conversation_id and not str(current.get("conversation_id") or "").strip():
                     current["conversation_id"] = incoming_conversation_id
@@ -365,6 +389,7 @@ class BuilderAutomationService:
                 "change_set_id": requested_change_set_id,
                 "canonical_change_id": requested_change_set_id,
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
+                "prototype_handoff": admitted_handoff,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -1020,6 +1045,9 @@ class BuilderAutomationService:
                 "companion_skill_ids": BuilderAutomationService._session_companion_skill_ids(session),
             },
             "source_prototype_version": str(session.get("source_prototype_version") or "").strip() or None,
+            "prototype_handoff_digest": str(
+                dict(session.get("prototype_handoff") or {}).get("digest") or ""
+            ) or None,
             "iteration": int(session.get("iteration") or 0),
             "task_id": str(session.get("current_task_id") or task.get("task_id") or "") or None,
             "change_set_id": str(session.get("change_set_id") or "").strip() or None,
@@ -1487,6 +1515,7 @@ class BuilderAutomationService:
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "change_set": dict(change_set) if change_set else None,
                 "context_packet": context_packet,
+                "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
             },
             "repo": {
                 "sparse_paths": sparse_paths,
@@ -1517,6 +1546,9 @@ class BuilderAutomationService:
                 "change_set_id": session.get("change_set_id"),
                 "canonical_change_id": canonical_change_id,
                 "context_packet_digest": context_packet.get("digest"),
+                "prototype_handoff_digest": str(
+                    dict(session.get("prototype_handoff") or {}).get("digest") or ""
+                ) or None,
             },
         }
         return self.factory.submit_realize_request(request)

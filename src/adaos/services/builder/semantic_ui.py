@@ -219,6 +219,56 @@ def _remove(
     }
 
 
+def _move(
+    webui: Mapping[str, Any],
+    target: dict[str, Any],
+    target_ref: str,
+    value: Any,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError("move requires an object value")
+    location = _target_location(webui, target)
+    if location is None:
+        raise BuilderWorkflowError(f"semantic UI target {target_ref!r} is not movable")
+    container, source_index, _parent, collection = location
+    selectors = [key for key in ("before_ref", "after_ref", "index") if value.get(key) is not None]
+    if len(selectors) != 1:
+        raise BuilderWorkflowError("move requires exactly one of before_ref, after_ref, or index")
+    requested_index: int
+    if "index" in selectors:
+        requested_index = int(value["index"])
+        if requested_index < 0 or requested_index >= len(container):
+            raise BuilderWorkflowError("move index is outside the target collection")
+    else:
+        anchor_ref = str(value[selectors[0]] or "").strip()
+        if anchor_ref == target_ref:
+            raise BuilderWorkflowError("move anchor must differ from target")
+        anchor, _anchor_kind = _resolve_target(webui, anchor_ref)
+        anchor_location = _target_location(webui, anchor)
+        if anchor_location is None or anchor_location[0] is not container:
+            raise BuilderWorkflowError("move target and anchor must share the same collection")
+        anchor_index = anchor_location[1]
+        requested_index = anchor_index if selectors[0] == "before_ref" else anchor_index + 1
+    item = container.pop(source_index)
+    if requested_index > source_index:
+        requested_index -= 1
+    target_index = max(0, min(requested_index, len(container)))
+    container.insert(target_index, item)
+    return {
+        "property": collection,
+        "before": {"index": source_index},
+        "after": {
+            "index": target_index,
+            "breakpoints": list(value.get("breakpoints") or ["all"]),
+        },
+        "undo": {
+            "operation": "move",
+            "target_ref": target_ref,
+            "value": {"index": source_index, "breakpoints": list(value.get("breakpoints") or ["all"])},
+        },
+    }
+
+
 def _write_bytes_atomic(path: Path, raw: bytes) -> None:
     temporary = path.with_name(f".{path.name}.semantic-ui.tmp")
     temporary.write_bytes(raw)
@@ -240,9 +290,9 @@ class BuilderSemanticUIService:
         value.setdefault("schema", BUILDER_SEMANTIC_UI_CHANGE_SCHEMA)
         value.setdefault("risk", "local_reversible")
         Draft202012Validator(_schema("builder.semantic_ui_change.v1.schema.json")).validate(value)
-        if value["operation"] not in {"rename", "add", "remove", "set_data_mode"}:
+        if value["operation"] not in {"rename", "move", "add", "remove", "set_data_mode"}:
             raise BuilderWorkflowError(
-                "enabled semantic UI operations are rename, add, remove, and set_data_mode"
+                "enabled semantic UI operations are rename, move, add, remove, and set_data_mode"
             )
 
         change_id = str(value["change_id"]).strip()
@@ -305,6 +355,8 @@ class BuilderSemanticUIService:
             target, target_kind = _resolve_target(after_webui, target_ref)
             if value["operation"] == "rename":
                 edit = _rename(target, target_kind, value.get("value"))
+            elif value["operation"] == "move":
+                edit = _move(after_webui, target, target_ref, value.get("value"))
             elif value["operation"] == "add":
                 if target_kind != "widget":
                     raise BuilderWorkflowError("add requires a widget parent target")

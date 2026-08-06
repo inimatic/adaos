@@ -115,7 +115,7 @@ The current repository has useful but fragmented foundations:
 | GWR1 | A canonical metamodel, definition compiler, pure resolver, and admitted `workflow.json` artifact contract exist | `validated-local` semantic core; data authoring/package admission open | now |
 | GWR2 | State explanation and semantic interactions are capability-negotiated consistently for every channel | `validated-local` with bounded compatibility adapters | now |
 | GWR3 | Free text is constrained by pending interaction and allowed transitions | `validated-local` | next |
-| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` lifecycle core; constrained conversational Workflow Prototype Slice and final compatibility retirement remain open | next |
+| GWR4 | Builder uses one dependent Prototype -> Automation -> Publication workflow model whose authoritative transition catalogue is data | `validated-local` lifecycle and constrained conversational Prototype Slice; final compatibility retirement remains open | next |
 | GWR5 | The model passes cross-channel, transition, lineage, and failure consistency proofs | `validated-local`; live transport durability remains in GWR6 | next |
 | GWR6 | Actual workflow, async-reply, and delivery durability gaps are measured and closed on the reference path | `validated-local` | later |
 | GWR7 | An external durable adapter is adopted only if it wins the evidence gate | `postponed by evidence` | later |
@@ -380,6 +380,10 @@ blocked.
   not completion evidence for executor-backed mutating controls. The
   2026-08-06 Web/Voice increment additionally proves that a consumed semantic
   token is retired in the durable message projection and on the live client;
+  the follow-up increment separates immutable InteractionResponse content from
+  per-delivery metadata and projects Telegram user ingress into the canonical
+  Builder project conversation with a stable id. Local regressions cover the
+  previously failing Prototype approval and cross-channel user-turn history;
   live mutating Telegram acceptance is still required before closing this
   item.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
@@ -718,18 +722,27 @@ tests cover all legal and representative illegal paths.
   and result transitions, reconcile the `trial_waiting` state with the declared
   activity contract, then remove the shortcuts after shadow evidence proves no
   remaining caller.
-- [ ] `[must]` `GWR4-32` Implement the constrained conversational
+- [x] `[must]` `GWR4-32` Implement the constrained conversational
   `PrototypeWorkflowProfile` defined by the
   [Executable Prototype Architecture](executable-prototype-architecture.md).
   Extract a candidate slice from an empty or exact canonical base, admit only
   sequential/conditional conversational states, typed input, mock activities,
   declared outcomes/cancel/retry, localized interactions, and deterministic
   stories, and keep the Prototype LLM unable to mutate active `workflow.json`.
-- [ ] `[must]` `GWR4-33` Bind an accepted conversational slice to semantic
+  `builder.prototype_workflow_slice.v1` pins definition digest/generation,
+  accepts one entry and one bounded same-state retry, requires terminating
+  cancel, and executes exactly three stories through the existing compiler and
+  story runner. Its only output is an `automation_only` candidate.
+- [x] `[must]` `GWR4-33` Bind an accepted conversational slice to semantic
   Activity Requirements and one Automation mapping report. The Simulation Trace
   distinguishes mock execution from implementation evidence; missing mappings
   or story divergence fail before Automation/candidate promotion, and accepted
-  semantic patches enter the existing package authoring/admission rail.
+  semantic patches enter the existing package authoring/admission rail. The
+  project-bound handoff is schema-validated and digest-verified before
+  `BuilderAutomationService` mutates state; the full accepted packet and digest
+  enter the isolated Codex request. `executable_prototype_lab` proves missing
+  mapping rejection, exact mapped admission, bounded Builder context, and all
+  required representative states locally.
 - [x] `[deferred]` `GWR4-34` Defer the general
   `workflow.prototype_slice`/`workflow.semantic_patch` round trip, boundary-port
   expansion and rebase, non-conversational workflow projections, visual graph
@@ -965,8 +978,10 @@ coverage.
   under pagination, fallback, reconnect, and resume. Core commit `46f681f1`
   and client commit `466b3c9` close Web/Voice consumed-control persistence and
   reload behavior; the 2026-08-06 live Web projection proves the localized
-  published action set. A new live Telegram mutating callback in both locales
-  is still required.
+  published action set. Local regression now also proves that delivery metadata
+  cannot alter a digest-protected approval and that `Add requirement` remains
+  semantically distinct from `Correct prototype`. A new live Telegram mutating
+  callback in both locales is still required.
 
 The 2026-08-04 local increment is recorded in the linked verification ledger.
 Commits `5e0ed333`, `6dfd3442`, `b0dd4fae`, and `b72f2a7d` respectively close

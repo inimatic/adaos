@@ -368,7 +368,7 @@ def test_conversation_interaction_uses_localized_shared_action_registry(
     ]
     assert interaction["locale_context"]["locale"] == "ru"
     assert interaction["actions"][0]["label_ref"] == "builder.action.change_extend"
-    assert interaction["actions"][0]["label"] == "Дополнить изменение"
+    assert interaction["actions"][0]["label"] == "Добавить требование"
 
 
 def test_dependent_surface_exposes_only_registered_canonical_continuation(

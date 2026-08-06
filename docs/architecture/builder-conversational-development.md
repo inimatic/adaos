@@ -434,7 +434,7 @@ status lines. Both name the exact current result and the next useful action.
 ### Durable Conversational Continuation
 
 An action that asks the user for prose, including `Refine project`,
-`Add to change`, `Refine prototype`, and `Continue implementation`, does not
+`Add requirement`, `Correct prototype`, and `Continue implementation`, does not
 return a prompt-only compatibility message. It creates a durable
 `ConversationInteraction` in `input_required` with a typed text/form input,
 project/Change refs, expected generation, and continuation command. The next
@@ -448,6 +448,21 @@ transport-neutral and applies equally to Telegram, Web chat, and Voice chat.
 Transport message editing is an optional presentation capability; inability
 to edit a historical message must still make its action tokens unusable and
 render it without active controls on reload.
+
+`Add requirement` and `Correct prototype` are intentionally different intents.
+The former extends the scope of the current Change with a new requirement and
+therefore changes the Issue set considered by the next revision. The latter
+corrects the current Prototype within the already agreed scope. A presentation
+must not use two near-synonymous labels for these commands, and the durable
+continuation records the exact semantic command even when both eventually ask
+the Prototype executor for a new revision.
+
+An admitted `InteractionResponse` is immutable. Routing, retry, locale, current
+Webspace, and delivery-attempt facts are carried in a separate delivery context;
+they must never be merged into the response before digest verification or
+workflow invocation. This separation is required for idempotent Telegram/Web/
+Voice callbacks and prevents a valid approval from failing after transport
+handoff.
 
 Availability is the intersection of the canonical transition, guards,
 principal policy, target/generation freshness, executor readiness, and channel
@@ -685,6 +700,11 @@ The first limited-channel slice uses one dialog contract for Web and Telegram:
   call Builder or NLU directly;
 - Router resolves the active/addressed dialog and passes transport metadata in
   `_meta` while the project topic remains the canonical development context;
+- every admitted external user turn is projected once, by stable ingress id,
+  into that canonical Builder project topic. The Builder Conversation therefore
+  contains both user and assistant turns regardless of whether they originated
+  in Web, Voice, or Telegram; transport conversations remain delivery evidence,
+  not a competing project history;
 - Builder replies use `io.out.chat.append`; Router projects assistant text back
   to the originating Telegram bot/chat and preserves `reply_to`;
 - each inbound Telegram update is claimed in the node conversation store before
@@ -730,6 +750,14 @@ conversation focus only. The selected Prototype/Implementation/Publication is
 materialized only by a separate `Open in Preview` command on the owning Builder
 host. This keeps text clients useful without letting transport routing mutate a
 browser session as a side effect.
+
+The current Prototype target is a follow-active Preview pointer. When Builder
+accepts a new Prototype revision, materialization publishes the new
+`runtime.environment.materialization.identity`; an already open Preview compares
+its rendered identity with the live identity and refreshes only when the exact
+revision differs. Explicit historical Lifecycle revisions remain immutable
+snapshot targets. Revision freshness is independent from `Online local/direct`:
+transport health alone is not proof that the rendered projection is current.
 
 Builder self-hosting also keeps surface and target identity separate.
 `_meta.current_scenario` names the declarative surface currently executing

@@ -1,0 +1,19 @@
+{
+  "states": [
+    {"state_id": "empty", "evidence_ref": "fixture:requests:empty", "fixture": {"kind": "data", "input": {"records": []}, "expected": {"empty_state": true}}},
+    {"state_id": "normal", "evidence_ref": "fixture:requests:normal", "fixture": {"kind": "data", "input": {"records": 1}, "expected": {"cards": 1}}},
+    {"state_id": "validation_failure", "evidence_ref": "story:request.input", "fixture": {"kind": "runtime", "input": {"unknown": true}, "expected": {"reason_code": "invalid_input:$"}}},
+    {"state_id": "unavailable", "evidence_ref": "story:request.failure", "fixture": {"kind": "runtime", "input": {"executor_available": false}, "expected": {"reason_code": "executor_unavailable"}}},
+    {"state_id": "delayed_input_required", "evidence_ref": "story:request.input", "fixture": {"kind": "runtime", "input": {"complete": false}, "expected": {"task_status": "input_required"}}},
+    {"state_id": "role_denied", "evidence_ref": "fixture:requests:role-denied", "fixture": {"kind": "policy", "input": {"role": "guest"}, "expected": {"reason_code": "role_not_authorized"}}},
+    {"state_id": "long_content", "evidence_ref": "fixture:requests:long-content", "fixture": {"kind": "data", "input": {"details_length": 8000}, "expected": {"overflow": "wrap"}}},
+    {"state_id": "locale_en", "evidence_ref": "locale:en", "fixture": {"kind": "locale", "input": {"locale": "en"}, "expected": {"label": "Submit request"}}},
+    {"state_id": "locale_ru", "evidence_ref": "locale:ru", "fixture": {"kind": "locale", "input": {"locale": "ru"}, "expected": {"label": "Отправить заявку"}}},
+    {"state_id": "compact", "evidence_ref": "breakpoint:compact", "fixture": {"kind": "layout", "input": {"breakpoint": "compact"}, "expected": {"layout": "stack"}}},
+    {"state_id": "wide", "evidence_ref": "breakpoint:wide", "fixture": {"kind": "layout", "input": {"breakpoint": "wide"}, "expected": {"layout": "split"}}},
+    {"state_id": "offline", "evidence_ref": "fixture:requests:offline", "fixture": {"kind": "runtime", "input": {"online": false}, "expected": {"data_mode": "fixture"}}},
+    {"state_id": "conflict", "evidence_ref": "fixture:requests:conflict", "fixture": {"kind": "runtime", "input": {"expected_generation": 0, "actual_generation": 1}, "expected": {"reason_code": "stale_generation"}}},
+    {"state_id": "rate_limited", "evidence_ref": "fixture:requests:rate-limited", "fixture": {"kind": "runtime", "input": {"status": 429}, "expected": {"retry": "bounded"}}},
+    {"state_id": "large_dataset", "evidence_ref": "fixture:requests:large", "fixture": {"kind": "data", "input": {"records": 1000}, "expected": {"render": "bounded"}}}
+  ]
+}

@@ -114,6 +114,18 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    with pytest.raises(ValueError, match="invalid prototype handoff"):
+        service.start_from_execute(
+            object_type="scenario",
+            object_id="recipes",
+            implementation_brief="Implement the executable prototype requirements.",
+            prototype_handoff={"schema": "adaos.builder.prototype_handoff.v1"},
+        )
+    assert service.get_session("scenario", "recipes") is None
+
+
 def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(tmp_path: Path) -> None:
     service = _service(tmp_path)
     older = service.factory.submit_realize_request(

@@ -11,15 +11,15 @@ from collections.abc import Mapping
 from typing import Any
 
 
-BUILDER_SURFACE_CATALOG_VERSION = 1
+BUILDER_SURFACE_CATALOG_VERSION = 2
 BUILDER_SURFACE_DEFAULT_LOCALE = "en"
 BUILDER_SURFACE_LOCALES = ("en", "ru")
 
 _ACTION_LABELS: dict[str, dict[str, str]] = {
     "builder.process.inspect": {"en": "Show process", "ru": "Показать процесс"},
     "builder.change.plan": {"en": "Refine project", "ru": "Доработать проект"},
-    "builder.change.extend": {"en": "Add to change", "ru": "Дополнить изменение"},
-    "builder.prototype.edit": {"en": "Refine prototype", "ru": "Доработать прототип"},
+    "builder.change.extend": {"en": "Add requirement", "ru": "Добавить требование"},
+    "builder.prototype.edit": {"en": "Correct prototype", "ru": "Исправить прототип"},
     "builder.prototype.approve": {"en": "Approve prototype", "ru": "Согласовать прототип"},
     "builder.implementation.start": {"en": "Start implementation", "ru": "Начать автоматизацию"},
     "builder.implementation.iterate": {"en": "Continue implementation", "ru": "Доработать автоматизацию"},
@@ -47,12 +47,12 @@ _INPUT_PROMPTS: dict[str, dict[str, str]] = {
         "ru": "Опишите, что нужно изменить. Строитель разложит запрос на Issues и Change.",
     },
     "builder.change.extend": {
-        "en": "Describe the additional requirement for the current Change.",
-        "ru": "Опишите дополнительное замечание для текущего Change.",
+        "en": "Describe a new requirement. It will extend the current Change and be included in the next prototype revision.",
+        "ru": "Опишите новое требование. Оно расширит текущий Change и будет учтено в следующей ревизии прототипа.",
     },
     "builder.prototype.edit": {
-        "en": "Describe the required prototype change.",
-        "ru": "Опишите требуемое изменение прототипа.",
+        "en": "Describe what should be corrected in the current prototype without expanding the agreed scope.",
+        "ru": "Опишите, что нужно исправить в текущем прототипе, не расширяя согласованный объём изменения.",
     },
     "builder.implementation.iterate": {
         "en": "Describe what should be corrected in the current implementation.",

@@ -1,0 +1,145 @@
+{
+  "schema": "adaos.builder.prototype_workflow_slice.v1",
+  "slice_id": "service-request-conversation-v1",
+  "source_definition_ref": "workflow.json@1.0.0",
+  "source_definition_digest": "sha256:2d97fdfb8251b7abe7b0eed5a25edee9d183db6a4815ed3467474d3472df90a1",
+  "source_generation": 0,
+  "profile": "conversational_mvp",
+  "entry_command": "start",
+  "cancel_command": "cancel",
+  "definition": {"source_ref": "workflow.json"},
+  "activity_requirements": [
+    {
+      "activity_id": "builder.prototype.derive",
+      "input_schema": {"type": "object", "properties": {"confirmed": {"type": "boolean"}, "evidence_refs": {"type": "array", "items": {"type": "string"}}, "legacy_action": {"type": "string"}}, "additionalProperties": true},
+      "output_schema": {"type": "object"},
+      "implementation_status": "mapped",
+      "implementation_ref": "adaos:builder.prototype.derive"
+    },
+    {
+      "activity_id": "prototype.request.collect",
+      "input_schema": {"type": "object", "properties": {"title": {"type": "string"}, "details": {"type": "string"}}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "implementation_status": "mapped",
+      "implementation_ref": "skill:request_service.collect"
+    },
+    {
+      "activity_id": "prototype.request.submit",
+      "input_schema": {"type": "object", "properties": {"confirmed": {"type": "boolean"}}, "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "implementation_status": "missing",
+      "implementation_ref": null
+    },
+    {
+      "activity_id": "prototype.request.cancel",
+      "input_schema": {"type": "object", "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "implementation_status": "prototype_only",
+      "implementation_ref": null
+    }
+  ],
+  "retry_transition_ids": ["retry_request"],
+  "locales": {
+    "en": {"start": "Describe request", "submit": "Submit request", "input_required": "Add the missing details"},
+    "ru": {"start": "Описать заявку", "submit": "Отправить заявку", "input_required": "Добавьте недостающие сведения"}
+  },
+  "stories": [
+    {
+      "schema": "adaos.conversational.story.v1",
+      "id": "request.success",
+      "story_kind": "workflow",
+      "workflow_type": "prototype.service_request",
+      "locale": "en",
+      "channel": "web",
+      "actor": {"id": "user:local", "permissions": [], "roles": ["registered"]},
+      "start": {"instance_id": "request:success", "state": "draft", "generation": 0, "context": {}},
+      "steps": [
+        {
+          "user": "I need help preparing a demo",
+          "given": {
+            "proposal": {
+              "kind": "workflow_command", "intent_id": "request.start", "command": "start",
+              "skill_id": null, "operation_id": null,
+              "arguments": {"title": "Prepare a demo", "details": "Show the prototype path"},
+              "confidence": 1.0,
+              "action_policy": {"schema": "adaos.conversation.action_policy.v1", "risk_class": "local_reversible", "side_effect": "reversible", "confirmation": "none"}
+            },
+            "event": null, "skill_result": null, "output_ref": null,
+            "runtime": {"expected_generation": 0, "executor_available": true, "retry_of_step": null, "concurrent_command": null}
+          },
+          "expect": {
+            "proposal": {"kind": "workflow_command", "command": "start", "confidence_at_least": 1.0},
+            "command": "start", "transition_id": "collect_request", "state": "review", "reason_code": null,
+            "accepted": true, "generation": 1,
+            "output": {"kind": "accepted", "output_ref": null, "summary": "Request details collected.", "actions": [], "next_expected_input": "none"}
+          }
+        }
+      ]
+    },
+    {
+      "schema": "adaos.conversational.story.v1",
+      "id": "request.failure",
+      "story_kind": "workflow",
+      "workflow_type": "prototype.service_request",
+      "locale": "ru",
+      "channel": "telegram",
+      "actor": {"id": "user:local", "permissions": [], "roles": ["registered"]},
+      "start": {"instance_id": "request:failure", "state": "draft", "generation": 0, "context": {}},
+      "steps": [
+        {
+          "user": "Создай заявку",
+          "given": {
+            "proposal": {
+              "kind": "workflow_command", "intent_id": "request.start", "command": "start",
+              "skill_id": null, "operation_id": null, "arguments": {}, "confidence": 1.0,
+              "action_policy": {"schema": "adaos.conversation.action_policy.v1", "risk_class": "local_reversible", "side_effect": "reversible", "confirmation": "none"}
+            },
+            "event": null, "skill_result": null, "output_ref": null,
+            "runtime": {"expected_generation": 0, "executor_available": false, "retry_of_step": null, "concurrent_command": null}
+          },
+          "expect": {
+            "proposal": {"kind": "workflow_command", "command": "start", "confidence_at_least": 1.0},
+            "command": "start", "transition_id": null, "state": "draft", "reason_code": "executor_unavailable",
+            "accepted": false, "generation": 0,
+            "output": {"kind": "repair", "output_ref": null, "summary": "The workflow executor is unavailable.", "actions": [], "next_expected_input": "none"}
+          }
+        }
+      ]
+    },
+    {
+      "schema": "adaos.conversational.story.v1",
+      "id": "request.input",
+      "story_kind": "workflow",
+      "workflow_type": "prototype.service_request",
+      "locale": "ru",
+      "channel": "voice",
+      "actor": {"id": "user:local", "permissions": [], "roles": ["guest"]},
+      "start": {"instance_id": "request:input", "state": "draft", "generation": 0, "context": {}},
+      "steps": [
+        {
+          "user": "Продолжить с неверным подтверждением",
+          "given": {
+            "proposal": {
+              "kind": "workflow_command", "intent_id": "request.start", "command": "start",
+              "skill_id": null, "operation_id": null, "arguments": {"confirmed": "yes"}, "confidence": 1.0,
+              "action_policy": {"schema": "adaos.conversation.action_policy.v1", "risk_class": "local_reversible", "side_effect": "reversible", "confirmation": "none"}
+            },
+            "event": null, "skill_result": null, "output_ref": null,
+            "runtime": {"expected_generation": 0, "executor_available": true, "retry_of_step": null, "concurrent_command": null}
+          },
+          "expect": {
+            "proposal": {"kind": "workflow_command", "command": "start", "confidence_at_least": 1.0},
+            "command": "start", "transition_id": null, "state": "draft", "reason_code": "invalid_input:confirmed",
+            "accepted": false, "generation": 0,
+            "output": {"kind": "repair", "output_ref": null, "summary": "invalid input:confirmed", "actions": [], "next_expected_input": "none"}
+          }
+        }
+      ]
+    }
+  ],
+  "story_outcomes": {
+    "success": "request.success",
+    "failure": "request.failure",
+    "input_required": "request.input"
+  }
+}

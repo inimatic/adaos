@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_trace.v1",
+  "title": "AdaOS Builder Prototype Simulation Trace",
+  "type": "object",
+  "required": ["schema", "trace_id", "source_id", "generation", "entries"],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_trace.v1" },
+    "trace_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "source_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "entries": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["sequence", "activity_id", "operation", "status", "side_effect_class", "input", "result", "provenance"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "activity_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "operation": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "status": { "enum": ["completed", "rejected", "failed"] },
+          "side_effect_class": { "enum": ["read_only", "local_reversible"] },
+          "input": { "type": "object" },
+          "result": {},
+          "provenance": {
+            "type": "object",
+            "required": ["kind", "source_ref"],
+            "properties": {
+              "kind": { "enum": ["seed", "local_state", "recorded_fixture", "deterministic_generator"] },
+              "source_ref": { "type": "string", "minLength": 1, "maxLength": 500 }
+            },
+            "additionalProperties": false
+          },
+          "reason_code": { "type": ["string", "null"], "maxLength": 160 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

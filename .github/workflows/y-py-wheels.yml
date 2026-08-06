@@ -16,13 +16,29 @@ permissions:
 
 jobs:
   build:
-    name: Build wheel (${{ matrix.os }})
+    name: Build wheel (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            machine: x86_64
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+          - os: windows-latest
+            label: windows-x86_64
+            machine: AMD64
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-win_amd64.whl
+          - os: macos-15
+            label: macos-arm64
+            machine: arm64
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_arm64.whl
+          - os: macos-15-intel
+            label: macos-x86_64
+            machine: x86_64
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_x86_64.whl
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +46,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          python -c "import platform; actual=platform.machine(); expected='${{ matrix.machine }}'; assert actual.lower() == expected.lower(), f'{actual} != {expected}'"
+
+      - name: Configure macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -44,6 +70,10 @@ jobs:
             --interpreter python3.11
           manylinux: auto
 
+      - name: Verify wheel filename
+        shell: bash
+        run: test -f "dist/${{ matrix.asset }}"
+
       - name: Test built wheel
         shell: bash
         run: |
@@ -54,7 +84,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: y-py-wheel-${{ matrix.os }}
+          name: y-py-wheel-${{ matrix.label }}
           path: dist/*.whl
           if-no-files-found: error
 

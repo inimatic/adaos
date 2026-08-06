@@ -36,6 +36,16 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   exact candidate bindings, data mode, health, detach, and reconciliation state
 - `builder.binding_profile.v1.schema.json` - explicit mock, fixture, sandbox,
   live-readonly, and live Preview data boundary plus implementation mappings
+- `builder.prototype_data.v1.schema.json` - bounded static, disposable CRUD,
+  recorded-fixture, and deterministic synthetic Prototype data activities
+- `builder.prototype_trace.v1.schema.json` - semantic Prototype simulation
+  entries and provenance that never count as implementation evidence
+- `builder.ui_composition_slice.v1.schema.json` - exact target-local UI
+  composition and bounded compact/wide renderer evidence
+- `builder.prototype_workflow_slice.v1.schema.json` - constrained
+  conversational workflow candidate pinned to a canonical definition digest
+- `builder.prototype_handoff.v1.schema.json` - exact fail-closed Prototype to
+  Automation evidence and implementation-mapping bundle
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation
   against stable declarative UI refs
 - `builder.review_anchor.v1.schema.json` - durable target model for Review

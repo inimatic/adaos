@@ -600,6 +600,43 @@ def _stable_digest(value: Mapping[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
+def _load_bounded_project_json(
+    root: Path,
+    artifact_ref: Any,
+    *,
+    label: str,
+    max_bytes: int = 256 * 1024,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load one manifest-declared JSON artifact without escaping the project."""
+
+    token = str(artifact_ref or "").replace("\\", "/").strip().lstrip("/")
+    if not token:
+        raise BuilderWorkflowError(f"{label} artifact ref is required")
+    project_root = root.resolve()
+    candidate = (project_root / token).resolve()
+    try:
+        candidate.relative_to(project_root)
+    except ValueError as exc:
+        raise BuilderWorkflowError(f"{label} artifact must stay inside the project") from exc
+    if not candidate.is_file():
+        raise BuilderWorkflowError(f"{label} artifact is missing: {token}")
+    raw = candidate.read_bytes()
+    if len(raw) > max_bytes:
+        raise BuilderWorkflowError(f"{label} artifact exceeds {max_bytes} bytes")
+    try:
+        value = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BuilderWorkflowError(f"{label} artifact is not valid UTF-8 JSON: {token}") from exc
+    if not isinstance(value, Mapping):
+        raise BuilderWorkflowError(f"{label} artifact must contain one JSON object")
+    return dict(value), {
+        "ref": token,
+        "digest": f"sha256:{hashlib.sha256(raw).hexdigest()}",
+        "bytes": len(raw),
+        "schema": str(value.get("schema") or "").strip() or None,
+    }
+
+
 def _bounded_ref(value: Any, *, keys: tuple[str, ...]) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -2442,10 +2479,10 @@ class BuilderWorkflowService:
         canonical_surface = {
             "plan_prototype_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
             "plan_automation_change": ("builder.change.plan", "Plan change", "local_reversible", project_ref),
-            "extend_with_prototype_issues": ("builder.change.extend", "Add to change", "local_reversible", change_ref),
-            "extend_with_automation_issues": ("builder.change.extend", "Add to change", "local_reversible", change_ref),
-            "record_prototype_revision": ("builder.prototype.edit", "Refine prototype", "local_reversible", change_ref),
-            "revise_prototype": ("builder.prototype.edit", "Refine prototype", "local_reversible", change_ref),
+            "extend_with_prototype_issues": ("builder.change.extend", "Add requirement", "local_reversible", change_ref),
+            "extend_with_automation_issues": ("builder.change.extend", "Add requirement", "local_reversible", change_ref),
+            "record_prototype_revision": ("builder.prototype.edit", "Correct prototype", "local_reversible", change_ref),
+            "revise_prototype": ("builder.prototype.edit", "Correct prototype", "local_reversible", change_ref),
             "accept_prototype": ("builder.prototype.approve", "Approve prototype", "isolated_write", change_ref),
             "start_automation": ("builder.implementation.start", "Start implementation", "isolated_write", change_ref),
             "retry_automation": ("builder.implementation.iterate", "Continue implementation", "isolated_write", change_ref),
@@ -3707,6 +3744,237 @@ class BuilderWorkflowService:
                     "statechart_edge_count": len(static_review["statechart"]["edges"]),
                     "coverage": copy.deepcopy(static_review["coverage"]),
                 }
+            executable_prototype: dict[str, Any] = {
+                "status": "missing",
+                "profile": "conversational_mvp",
+                "manifest_field": "prototype_runtime",
+                "artifacts": {},
+                "composition_slices": [],
+                "activity_requirements": [],
+                "simulation_trace": {
+                    "schema": "adaos.builder.prototype_trace.v1",
+                    "definition_ref": "abi:builder.prototype_trace.v1.schema.json",
+                    "authority": "prototype_evidence_only",
+                    "implementation_evidence": False,
+                },
+                "diagnostics": [],
+            }
+            prototype_declaration = (
+                manifest.get("prototype_runtime")
+                if isinstance(manifest.get("prototype_runtime"), Mapping)
+                else None
+            )
+            if prototype_declaration is not None:
+                from jsonschema import Draft202012Validator, ValidationError
+
+                from adaos.services.builder.composition import extract_composition_slice
+                from adaos.services.builder.conversational_prototype import (
+                    validate_conversational_workflow_slice,
+                )
+                from adaos.services.builder.prototype_handoff import (
+                    REQUIRED_REPRESENTATIVE_STATES,
+                )
+                from adaos.services.builder.prototype_runtime import PrototypeDataRuntime
+
+                executable_prototype["status"] = "ambiguous"
+                prototype_values: dict[str, dict[str, Any]] = {}
+                diagnostics: list[dict[str, Any]] = []
+                for field_name, label in (
+                    ("data", "prototype data"),
+                    ("binding", "prototype binding"),
+                    ("workflow_slice", "prototype workflow slice"),
+                    ("representative_states", "prototype representative states"),
+                ):
+                    try:
+                        payload, artifact = _load_bounded_project_json(
+                            root,
+                            prototype_declaration.get(field_name),
+                            label=label,
+                        )
+                    except BuilderWorkflowError as exc:
+                        diagnostics.append(
+                            {
+                                "code": f"prototype.{field_name}.invalid",
+                                "severity": "error",
+                                "message": str(exc),
+                            }
+                        )
+                        continue
+                    prototype_values[field_name] = payload
+                    executable_prototype["artifacts"][field_name] = artifact
+
+                data_definition = prototype_values.get("data")
+                if data_definition is not None:
+                    try:
+                        prototype_data_runtime = PrototypeDataRuntime.start(data_definition)
+                    except Exception as exc:
+                        diagnostics.append(
+                            {
+                                "code": "prototype.data.validation_failed",
+                                "severity": "error",
+                                "message": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                    else:
+                        executable_prototype["data_definition"] = copy.deepcopy(data_definition)
+                        executable_prototype["data_mode"] = prototype_data_runtime.definition["mode"]
+                        executable_prototype["activity_requirements"].extend(
+                            prototype_data_runtime.activity_requirements()
+                        )
+
+                binding_profile = prototype_values.get("binding")
+                if binding_profile is not None:
+                    binding_schema_path = (
+                        Path(__file__).resolve().parents[2]
+                        / "abi"
+                        / "builder.binding_profile.v1.schema.json"
+                    )
+                    try:
+                        Draft202012Validator(
+                            json.loads(binding_schema_path.read_text(encoding="utf-8"))
+                        ).validate(binding_profile)
+                    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+                        diagnostics.append(
+                            {
+                                "code": "prototype.binding.validation_failed",
+                                "severity": "error",
+                                "message": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                    else:
+                        executable_prototype["binding_profile"] = copy.deepcopy(binding_profile)
+                        implementation_mappings = [
+                            dict(item)
+                            for item in binding_profile.get("implementation_mappings") or []
+                            if isinstance(item, Mapping)
+                        ]
+                        missing_mappings = [
+                            str(item.get("logical_ref") or "")
+                            for item in implementation_mappings
+                            if item.get("status") != "mapped"
+                            or not str(item.get("implementation_ref") or "").strip()
+                        ]
+                        executable_prototype["implementation_mapping"] = {
+                            "schema": "adaos.builder.implementation_mapping_report.v1",
+                            "profile_id": binding_profile.get("profile_id"),
+                            "mode": binding_profile.get("mode"),
+                            "mapping_count": len(implementation_mappings),
+                            "missing": missing_mappings,
+                            "ready": not missing_mappings,
+                        }
+
+                workflow_slice = prototype_values.get("workflow_slice")
+                if workflow_slice is not None:
+                    if project_workflow_artifact is None:
+                        diagnostics.append(
+                            {
+                                "code": "prototype.workflow.source_missing",
+                                "severity": "error",
+                                "message": "prototype workflow slice requires canonical workflow.json",
+                            }
+                        )
+                    else:
+                        try:
+                            prototype_workflow_report = validate_conversational_workflow_slice(
+                                workflow_slice,
+                                source_definition=project_workflow_artifact.definition,
+                            )
+                        except BuilderWorkflowError as exc:
+                            diagnostics.append(
+                                {
+                                    "code": "prototype.workflow.validation_failed",
+                                    "severity": "error",
+                                    "message": str(exc),
+                                }
+                            )
+                        else:
+                            executable_prototype["workflow_slice"] = copy.deepcopy(workflow_slice)
+                            executable_prototype["workflow_validation"] = {
+                                key: copy.deepcopy(value)
+                                for key, value in prototype_workflow_report.items()
+                                if key != "candidate_patch"
+                            }
+                            executable_prototype["activity_requirements"].extend(
+                                copy.deepcopy(workflow_slice.get("activity_requirements") or [])
+                            )
+
+                representative_state_set = prototype_values.get("representative_states")
+                representative_states = (
+                    representative_state_set.get("states")
+                    if isinstance(representative_state_set, Mapping)
+                    else None
+                )
+                if not isinstance(representative_states, list):
+                    diagnostics.append(
+                        {
+                            "code": "prototype.representative_states.invalid",
+                            "severity": "error",
+                            "message": "representative states artifact requires a states array",
+                        }
+                    )
+                else:
+                    supplied_states = {
+                        str(item.get("state_id") or "")
+                        for item in representative_states
+                        if isinstance(item, Mapping)
+                    }
+                    missing_states = sorted(REQUIRED_REPRESENTATIVE_STATES - supplied_states)
+                    if missing_states:
+                        diagnostics.append(
+                            {
+                                "code": "prototype.representative_states.incomplete",
+                                "severity": "error",
+                                "message": "missing representative states: " + ", ".join(missing_states),
+                            }
+                        )
+                    executable_prototype["representative_states"] = copy.deepcopy(
+                        representative_states[:40]
+                    )
+
+                revision_ref = None
+                current_revision_path = root / "ui_revisions" / "current.txt"
+                if current_revision_path.is_file():
+                    try:
+                        revision_ref = current_revision_path.read_text(
+                            encoding="utf-8-sig"
+                        ).strip()
+                    except OSError:
+                        revision_ref = None
+                revision_ref = revision_ref or webui_digest or "webui:unversioned"
+                acceptance_by_target: dict[str, list[Mapping[str, Any]]] = {}
+                for constraint in change.get("acceptance_constraints") or []:
+                    if not isinstance(constraint, Mapping):
+                        continue
+                    target_ref = str(constraint.get("target_ref") or "").strip()
+                    if target_ref:
+                        acceptance_by_target.setdefault(target_ref, []).append(constraint)
+                for target_ref in semantic_refs:
+                    if not target_ref.startswith(("widget:", "field:")):
+                        continue
+                    try:
+                        composition_slice = extract_composition_slice(
+                            webui,
+                            target_ref,
+                            source_revision=str(revision_ref),
+                            acceptance=acceptance_by_target.get(target_ref),
+                        )
+                    except BuilderWorkflowError as exc:
+                        diagnostics.append(
+                            {
+                                "code": "prototype.composition.unresolved",
+                                "severity": "error",
+                                "target_ref": target_ref,
+                                "message": str(exc),
+                            }
+                        )
+                    else:
+                        executable_prototype["composition_slices"].append(composition_slice)
+
+                executable_prototype["activity_requirements"] = copy.deepcopy(
+                    executable_prototype["activity_requirements"][:100]
+                )
+                executable_prototype["diagnostics"] = diagnostics[:50]
+                executable_prototype["status"] = "ambiguous" if diagnostics else "present"
             conversational_definition: dict[str, Any] = {
                 "status": "missing",
                 "manifest_ref": "conversational/manifest.yaml",
@@ -3819,6 +4087,7 @@ class BuilderWorkflowService:
                 "data_policy": data_policy,
                 "workflow_definition": workflow_definition,
                 "conversational_definition": conversational_definition,
+                "executable_prototype": executable_prototype,
                 "repair_context": repair_context,
                 "execution_authority": {
                     "status": "present" if selected_paths else "missing",

@@ -1,0 +1,21 @@
+{
+  "id": "executable_prototype_lab",
+  "name": "executable_prototype_lab",
+  "version": "0.1.1",
+  "title": "Executable Prototype Lab",
+  "description": "Safe executable requirements for a conversational service request.",
+  "type": "desktop",
+  "supported_locales": ["en", "ru"],
+  "depends": [],
+  "runtime": {"skills": {"required": [], "optional": []}},
+  "ui": {"manifest": "webui.json", "version": "0.1.1"},
+  "workflow": {"manifest": "workflow.json"},
+  "prototype_runtime": {
+    "data": "prototype/data.json",
+    "binding": "prototype/binding_profile.json",
+    "workflow_slice": "prototype/workflow_slice.json",
+    "representative_states": "prototype/representative_states.json"
+  },
+  "trigger": "manual",
+  "vars": {}
+}

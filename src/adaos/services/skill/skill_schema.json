@@ -22,6 +22,10 @@
 			"$ref": "#/$defs/conversationalManifest",
 			"description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
 		},
+		"prototype_runtime": {
+			"$ref": "#/$defs/prototypeRuntime",
+			"description": "Optional bounded executable Prototype artifact references."
+		},
     "runtime": {
       "type": "object",
       "properties": {
@@ -203,6 +207,21 @@
 				"manifest": { "const": "conversational/manifest.yaml" }
 			},
 			"additionalProperties": false
+		},
+		"prototypeRuntime": {
+			"type": "object",
+			"required": ["data", "binding", "workflow_slice", "representative_states"],
+			"properties": {
+				"data": { "$ref": "#/$defs/prototypeArtifactPath" },
+				"binding": { "$ref": "#/$defs/prototypeArtifactPath" },
+				"workflow_slice": { "$ref": "#/$defs/prototypeArtifactPath" },
+				"representative_states": { "$ref": "#/$defs/prototypeArtifactPath" }
+			},
+			"additionalProperties": false
+		},
+		"prototypeArtifactPath": {
+			"type": "string",
+			"pattern": "^prototype/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*\\.json$"
 		},
 		"conversationContract": {
 			"type": "object",

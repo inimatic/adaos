@@ -18,6 +18,7 @@ REV="rev2026"
 ZONE_ID=""
 NO_VOICE="0"
 DEV_MODE="0"
+BUILD_VENDORED_Y_PY="0"
 MIN_PYTHON="3.11.9"
 MAX_PYTHON_EXCLUSIVE="3.12.0"
 PYTHON_ARG=""
@@ -478,6 +479,7 @@ while [[ $# -gt 0 ]]; do
     --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
+    --build-vendored-y-py) BUILD_VENDORED_Y_PY="1"; shift ;;
     -h|--help)
       cat <<EOF
 Usage: tools/bootstrap_uv.sh [options]
@@ -495,6 +497,7 @@ Usage: tools/bootstrap_uv.sh [options]
   --workspace-registry-repo URL
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
+  --build-vendored-y-py Build repository vendor/y-py (requires Rust/Cargo >=1.72)
   --no_voice            Disable optional Rasa NLU service/training
 EOF
       exit 0
@@ -561,23 +564,31 @@ else
 fi
 
 # 2) Python deps
-command -v cargo >/dev/null 2>&1 || die "Rust/Cargo >=1.72 is required to build the repository-pinned vendor/y-py source. Install Rust with rustup."
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
-if [[ -f uv.lock ]]; then
-  log "Syncing environment from uv.lock..."
-  set +e
-  uv sync --python "$UV_PYTHON" --locked
-  rc=$?
-  set -e
-  if [[ $rc -ne 0 ]]; then
-    warn "uv sync --locked failed, refreshing lock..."
+if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]; then
+  command -v cargo >/dev/null 2>&1 || die "Rust/Cargo >=1.72 is required with --build-vendored-y-py. Install Rust with rustup."
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
+  if [[ -f uv.lock ]]; then
+    log "Syncing development environment from uv.lock..."
+    set +e
+    uv sync --python "$UV_PYTHON" --locked --extra dev
+    rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+      warn "uv sync --locked failed, refreshing lock..."
+      uv lock || die "uv lock failed"
+      uv sync --python "$UV_PYTHON" --extra dev || die "uv sync failed"
+    fi
+  else
+    log "Locking and syncing development environment..."
     uv lock || die "uv lock failed"
-    uv sync --python "$UV_PYTHON" || die "uv sync failed"
+    uv sync --python "$UV_PYTHON" --extra dev || die "uv sync failed"
   fi
 else
-  log "Locking and syncing environment..."
-  uv lock || die "uv lock failed"
-  uv sync --python "$UV_PYTHON" || die "uv sync failed"
+  log "Creating user environment from precompiled dependencies..."
+  uv venv --python "$UV_PYTHON" "$PWD/.venv" || die "uv venv failed"
+  ADAOS_PY="$PWD/.venv/bin/python"
+  [[ -x "$ADAOS_PY" ]] || die "Expected venv python at $ADAOS_PY"
+  uv pip install --python "$ADAOS_PY" --no-sources --only-binary y-py --editable ".[dev]" || die "AdaOS dependency install failed"
 fi
 ok "Python environment ready"
 
@@ -586,6 +597,8 @@ ADAOS_PY="$PWD/.venv/bin/python"
 if [[ ! -x "$ADAOS_PY" ]]; then
   die "Expected venv python at $ADAOS_PY (uv sync should have created .venv)"
 fi
+"$ADAOS_PY" -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
+  || die "AdaOS requires patched y-py==0.6.2+adaos.1"
 
 # 4) .env
 if [[ ! -f .env ]]; then
