@@ -298,6 +298,41 @@ def test_projection_service_skips_identical_flat_yjs_update(monkeypatch) -> None
     assert len(fake_root.set_calls) == 1
 
 
+def test_projection_service_reconciles_flat_mapping_projection_in_place(monkeypatch) -> None:
+    fake_root = _FakeMap(
+        {
+            "media_indexer": {
+                "status": {"value": "done"},
+                "results": [{"title": "Gwen"}],
+            }
+        }
+    )
+    fake_state = {"data": fake_root}
+    calls: list[tuple[object, str, object]] = []
+
+    def _reconcile(y_map, txn, key: str, value: object) -> tuple[bool, str]:
+        calls.append((txn, key, value))
+        y_map.set(txn, key, value)
+        return True, "diff"
+
+    target = SimpleNamespace(backend="yjs", path="data/media_indexer", webspace_id=None)
+    registry = SimpleNamespace(resolve=lambda scope, slot: [target])  # noqa: ARG005
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    monkeypatch.setattr(projection_service_module, "set_map_value_if_changed", _reconcile)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _no_live_room)
+    monkeypatch.setattr(projection_service_module, "async_get_ydoc", _fake_async_get_ydoc(fake_state))
+
+    next_value = {
+        "status": {"value": "done"},
+        "results": [{"title": "No Doubt"}],
+    }
+    asyncio.run(service.apply("subnet", "media_indexer.snapshot", next_value, webspace_id="desktop"))
+
+    assert [(key, value) for _txn, key, value in calls] == [("media_indexer", next_value)]
+    assert fake_root["media_indexer"]["results"] == [{"title": "No Doubt"}]
+
+
 def test_projection_service_skips_identical_deep_yjs_update(monkeypatch) -> None:
     monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: None)
 

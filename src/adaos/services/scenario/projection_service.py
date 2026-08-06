@@ -17,6 +17,7 @@ from adaos.services.node_config import load_config
 from adaos.services.runtime_paths import current_state_dir
 from adaos.services.scenario.node_data_scope import node_scope_data_path
 from adaos.services.yjs.doc import async_get_ydoc, submit_live_room_mutation
+from adaos.services.yjs.json_merge import set_map_value_if_changed
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.user.profile import UserProfileService
 from .projection_registry import ProjectionRegistry, ProjectionTarget
@@ -1561,10 +1562,13 @@ class ProjectionService:
             # like other user ids are preserved.
             if len(segments) == 2:
                 key = segments[1]
-                current = root.get(key)
-                if _json_like_equal(current, projected_value):
-                    return
-                root.set(txn, key, _clone_json_like(projected_value))
+                # Scenario materialization stores top-level application data
+                # as attached YMaps. Replacing such a branch detaches the
+                # complete CRDT subtree and turns a small skill snapshot into
+                # a very large Yjs update. Reconcile mapping payloads in-place
+                # so only changed leaves are encoded and projection guard does
+                # not suppress the next legitimate snapshot.
+                set_map_value_if_changed(root, txn, key, projected_value)
                 return
 
             changed_y_map = _set_nested_y_map_path(root, txn, segments[1:], projected_value)
