@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.prototype_handoff.v1",
+  "title": "AdaOS Builder Prototype to Automation Handoff",
+  "type": "object",
+  "required": [
+    "schema", "handoff_id", "project_ref", "ui_revision_ref", "workflow",
+    "data_definition_digest", "binding_profile", "composition_slice_refs",
+    "activity_requirements", "story_reports", "representative_states",
+    "implementation_mappings", "ready", "blockers", "digest"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.builder.prototype_handoff.v1" },
+    "handoff_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[A-Za-z0-9_.-]+$" },
+    "ui_revision_ref": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "workflow": {
+      "type": "object",
+      "required": ["source_definition_ref", "source_definition_digest", "candidate_definition_digest", "source_generation"],
+      "properties": {
+        "source_definition_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "source_definition_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "candidate_definition_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "source_generation": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "data_definition_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "binding_profile": { "type": "object" },
+    "composition_slice_refs": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 240 } },
+    "activity_requirements": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "object" } },
+    "story_reports": { "type": "array", "minItems": 3, "maxItems": 100, "items": { "type": "object" } },
+    "representative_states": {
+      "type": "array", "minItems": 1, "maxItems": 40,
+      "items": {
+        "type": "object",
+        "required": ["state_id", "evidence_ref"],
+        "properties": {
+          "state_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "evidence_ref": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "implementation_mappings": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["activity_id", "implementation_ref", "status"],
+        "properties": {
+          "activity_id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "implementation_ref": { "type": ["string", "null"], "maxLength": 500 },
+          "status": { "enum": ["mapped", "missing"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "ready": { "type": "boolean" },
+    "blockers": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  },
+  "additionalProperties": false
+}

@@ -60,6 +60,8 @@ def _load_service_skill_schema() -> dict:
         "builder.prototype_data.v1.schema.json",
         "builder.prototype_trace.v1.schema.json",
         "builder.ui_composition_slice.v1.schema.json",
+        "builder.prototype_workflow_slice.v1.schema.json",
+        "builder.prototype_handoff.v1.schema.json",
     ],
 )
 def test_conversational_and_builder_schemas_are_valid_draft_2020_12(schema_name: str) -> None:
