@@ -9,7 +9,7 @@ from .semantic_ui import BuilderSemanticUIService
 from .prototype_runtime import PrototypeDataRuntime
 from .composition import extract_composition_slice
 from .conversational_prototype import validate_conversational_workflow_slice
-from .prototype_handoff import build_automation_handoff
+from .prototype_handoff import admit_automation_handoff, build_automation_handoff
 
 __all__ = [
     "BuilderAutomationService",
@@ -23,4 +23,5 @@ __all__ = [
     "extract_composition_slice",
     "validate_conversational_workflow_slice",
     "build_automation_handoff",
+    "admit_automation_handoff",
 ]

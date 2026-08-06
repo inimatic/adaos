@@ -57,6 +57,7 @@ def start(
     conversation_id: str | None = None,
     brief_path: str | None = None,
     change_set_id: str | None = None,
+    prototype_handoff: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
@@ -69,6 +70,7 @@ def start(
         conversation_id=conversation_id,
         brief_path=brief_path,
         change_set_id=change_set_id,
+        prototype_handoff=prototype_handoff,
     ) or {}
     return _foreground_result(
         service,

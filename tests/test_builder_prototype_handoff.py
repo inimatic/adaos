@@ -5,7 +5,10 @@ import copy
 import pytest
 
 from adaos.sdk.builder.prototype import automation_handoff
-from adaos.services.builder.prototype_handoff import REQUIRED_REPRESENTATIVE_STATES
+from adaos.services.builder.prototype_handoff import (
+    REQUIRED_REPRESENTATIVE_STATES,
+    admit_automation_handoff,
+)
 from adaos.services.builder.workflow import BuilderWorkflowError
 
 
@@ -116,6 +119,26 @@ def test_handoff_pins_exact_prototype_evidence_and_is_ready() -> None:
     assert report["workflow"]["source_generation"] == 3
     assert report["implementation_mappings"][0]["status"] == "mapped"
     assert report["digest"].startswith("sha256:")
+    assert admit_automation_handoff(
+        report, expected_project_ref="scenario:requests"
+    )["handoff_id"] == "handoff-request-v1"
+
+
+def test_handoff_admission_rejects_tampered_evidence() -> None:
+    report = automation_handoff(
+        handoff_id="handoff-request-v1",
+        project_ref="scenario:requests",
+        ui_revision_ref="ui_revision:001",
+        workflow_report=_workflow_report(),
+        data_definition={"schema": "adaos.builder.prototype_data.v1", "source_id": "requests"},
+        binding_profile=_binding(),
+        composition_slices=[_composition()],
+        activity_requirements=_requirements(),
+        representative_states=_states(),
+    )
+    report["ui_revision_ref"] = "ui_revision:tampered"
+    with pytest.raises(BuilderWorkflowError, match="digest"):
+        admit_automation_handoff(report, expected_project_ref="scenario:requests")
 
 
 def test_handoff_fails_closed_on_missing_activity_mapping() -> None:

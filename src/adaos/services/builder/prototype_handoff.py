@@ -158,4 +158,28 @@ def build_automation_handoff(
     return payload
 
 
-__all__ = ["PROTOTYPE_HANDOFF_SCHEMA", "REQUIRED_REPRESENTATIVE_STATES", "build_automation_handoff"]
+def admit_automation_handoff(
+    value: Mapping[str, Any], *, expected_project_ref: str
+) -> dict[str, Any]:
+    """Verify a previously built handoff before the existing Automation rail."""
+
+    handoff = copy.deepcopy(dict(value))
+    _validate("builder.prototype_handoff.v1.schema.json", handoff, label="prototype handoff")
+    supplied_digest = str(handoff.get("digest") or "")
+    unsigned = copy.deepcopy(handoff)
+    unsigned.pop("digest", None)
+    if supplied_digest != _digest(unsigned):
+        raise BuilderWorkflowError("prototype handoff digest does not match its evidence")
+    if str(handoff.get("project_ref") or "") != str(expected_project_ref):
+        raise BuilderWorkflowError("prototype handoff project does not match Automation target")
+    if not handoff.get("ready") or handoff.get("blockers"):
+        raise BuilderWorkflowError("prototype handoff is not ready for Automation")
+    return handoff
+
+
+__all__ = [
+    "PROTOTYPE_HANDOFF_SCHEMA",
+    "REQUIRED_REPRESENTATIVE_STATES",
+    "admit_automation_handoff",
+    "build_automation_handoff",
+]
