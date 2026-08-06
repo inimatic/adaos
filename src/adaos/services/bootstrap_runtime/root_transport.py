@@ -4,9 +4,17 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from .lifecycle import BootstrapLifecycleCoordinator
+
+
+@dataclass(frozen=True, slots=True)
+class RootTransportReconnectOperations:
+    configure_strategy: Any
+    record_event: Any
+    strategy_snapshot: Any
 
 
 class RootTransportService:
@@ -219,3 +227,222 @@ class RootTransportService:
                 "state": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+
+    async def request_reconnect(
+        self,
+        operations: RootTransportReconnectOperations,
+        *,
+        transport: str | None = None,
+        url_override: str | None = None,
+        wait_for_authority: bool = False,
+        _reason: str = "manual_reconnect",
+    ) -> dict[str, Any]:
+        """
+        Force hub-root transport reconnect.
+
+        This is a debugging/ops hook: update env-like overrides and proactively close the current
+        NATS connection so the supervisor reconnects using new settings.
+        """
+        tr = str(transport or "").strip().lower() or None
+        override = str(url_override or "").strip() or None
+        reconnect_reason = str(_reason or "manual_reconnect").strip() or "manual_reconnect"
+        close_diag: dict[str, Any] = {"attempted": False, "timeout": False, "forced_ws_close": False}
+        bridge_diag: dict[str, Any] = {"attempted": False, "started": False}
+        authority_waiter = asyncio.Event() if wait_for_authority else None
+        authority_diag: dict[str, Any] = {
+            "required": bool(wait_for_authority),
+            "ready": None if not wait_for_authority else False,
+        }
+        if authority_waiter is not None:
+            self.authority_waiters.add(authority_waiter)
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                current_task.add_done_callback(
+                    lambda _task, waiter=authority_waiter: self.authority_waiters.discard(waiter)
+                )
+
+        def _finish(payload: dict[str, Any]) -> dict[str, Any]:
+            if authority_waiter is not None:
+                self.authority_waiters.discard(authority_waiter)
+            payload["authority"] = dict(authority_diag)
+            return payload
+
+        def _safe_strategy() -> dict[str, Any]:
+            try:
+                return operations.strategy_snapshot()
+            except Exception:
+                return {}
+
+        try:
+            if tr is not None:
+                os.environ["HUB_NATS_TRANSPORT"] = tr
+            if override is not None:
+                os.environ["HUB_NATS_URL_OVERRIDE"] = override
+            elif url_override is not None:
+                # Explicit empty override clears it.
+                os.environ.pop("HUB_NATS_URL_OVERRIDE", None)
+            try:
+                strategy_update: dict[str, Any] = {}
+                if transport is not None:
+                    strategy_update["requested_transport"] = tr
+                if url_override is not None:
+                    strategy_update["url_override"] = override
+                if strategy_update:
+                    operations.configure_strategy(**strategy_update)
+                operations.record_event(
+                    "reconnect_requested",
+                    transport=tr,
+                    server=override,
+                    summary=f"hub-root reconnect requested ({reconnect_reason})",
+                    details={
+                        "requested_transport": tr,
+                        "url_override": override,
+                        "reason": reconnect_reason,
+                    },
+                )
+            except Exception:
+                pass
+            try:
+                close_diag["route_reset"] = await self.reset_route_runtime(
+                    reason=reconnect_reason,
+                    notify_browser=True,
+                )
+            except Exception:
+                pass
+            # Trigger reconnect by closing the active connection if present.
+            nc = self.nats_client
+            if nc is not None:
+                try:
+                    close = getattr(nc, "close", None)
+                    if callable(close):
+                        close_diag["attempted"] = True
+                        try:
+                            close_timeout_s = float(os.getenv("HUB_ROOT_RECONNECT_CLOSE_TIMEOUT_S", "1.5") or "1.5")
+                        except Exception:
+                            close_timeout_s = 1.5
+                        if close_timeout_s < 0.2:
+                            close_timeout_s = 0.2
+
+                        # NOTE: asyncio.wait_for() can itself hang if the close coroutine ignores cancellation.
+                        # Use asyncio.wait() with timeout to ensure the HTTP request returns promptly.
+                        try:
+                            task = asyncio.create_task(close())
+                            _done, pending = await asyncio.wait({task}, timeout=close_timeout_s)
+                            if pending:
+                                close_diag["timeout"] = True
+                                try:
+                                    task.cancel()
+                                except Exception:
+                                    pass
+                                # Best-effort: force-close websocket transport internals if present to avoid a stuck close().
+                                try:
+                                    tr_obj = getattr(nc, "_transport", None)
+                                    ws = getattr(tr_obj, "_ws", None) if tr_obj else None
+                                    close_task = getattr(tr_obj, "_close_task", None) if tr_obj else None
+                                    client = getattr(tr_obj, "_client", None) if tr_obj else None
+                                    try:
+                                        if ws is not None:
+                                            t = asyncio.create_task(ws.close())
+                                            await asyncio.wait({t}, timeout=0.5)
+                                            if not t.done():
+                                                try:
+                                                    t.cancel()
+                                                except Exception:
+                                                    pass
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if close_task is not None and hasattr(close_task, "done") and not close_task.done():
+                                            close_task.set_result(None)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if client is not None:
+                                            t = asyncio.create_task(client.close())
+                                            await asyncio.wait({t}, timeout=0.5)
+                                            if not t.done():
+                                                try:
+                                                    t.cancel()
+                                                except Exception:
+                                                    pass
+                                    except Exception:
+                                        pass
+                                    close_diag["forced_ws_close"] = True
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                force_bridge_rearm = nc is None or bool(close_diag.get("timeout"))
+                bridge_diag = self.ensure_bridge_task(
+                    force_rearm=force_bridge_rearm,
+                    reason=(
+                        f"{reconnect_reason}_without_active_nats"
+                        if nc is None
+                        else f"{reconnect_reason}_close_timeout"
+                    ),
+                )
+                if bridge_diag.get("started"):
+                    try:
+                        operations.record_event(
+                            "bridge_rearmed",
+                            transport=tr,
+                            server=override,
+                            summary=f"hub-root reconnect rearmed bridge task ({reconnect_reason})",
+                            details=dict(bridge_diag),
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                bridge_diag = {
+                    "attempted": True,
+                    "started": False,
+                    "state": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            if authority_waiter is not None:
+                try:
+                    authority_timeout_s = float(
+                        os.getenv("HUB_ROOT_RECONNECT_AUTHORITY_TIMEOUT_S", "8.0") or "8.0"
+                    )
+                except Exception:
+                    authority_timeout_s = 8.0
+                authority_timeout_s = max(0.25, min(authority_timeout_s, 30.0))
+                authority_started_at = time.monotonic()
+                try:
+                    await asyncio.wait_for(authority_waiter.wait(), timeout=authority_timeout_s)
+                    authority_diag.update(
+                        {
+                            "ready": True,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "ready_at": self.authority_ready_at,
+                        }
+                    )
+                except asyncio.TimeoutError:
+                    authority_diag.update(
+                        {
+                            "ready": False,
+                            "wait_sec": round(max(0.0, time.monotonic() - authority_started_at), 3),
+                            "timeout_sec": authority_timeout_s,
+                            "error": "hub_root_authority_timeout",
+                        }
+                    )
+            return _finish({
+                "ok": not bool(wait_for_authority) or bool(authority_diag.get("ready")),
+                "requested": {"transport": tr, "url_override": override},
+                "strategy": _safe_strategy(),
+                "close": close_diag,
+                "bridge": bridge_diag,
+            })
+        except Exception as exc:
+            return _finish({
+                "ok": False,
+                "requested": {"transport": tr, "url_override": override},
+                "strategy": _safe_strategy(),
+                "close": close_diag,
+                "bridge": bridge_diag,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+
