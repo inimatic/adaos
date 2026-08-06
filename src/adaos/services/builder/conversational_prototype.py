@@ -82,6 +82,18 @@ def _validate_profile(value: Mapping[str, Any], compiled: CompiledWorkflowDefini
     if unknown_retries:
         raise BuilderWorkflowError(f"unknown prototype retry transition: {unknown_retries[0]}")
     _assert_acyclic_without_retry(compiled, retries)
+    retry = next(item for item in compiled.transitions if item.transition_id in retries)
+    if retry.target not in retry.sources:
+        raise BuilderWorkflowError("conversational MVP retry must be a bounded same-state retry")
+    cancel_command = str(value["cancel_command"])
+    cancel_transitions = [
+        transition for transition in compiled.transitions if transition.command == cancel_command
+    ]
+    if not cancel_transitions or any(
+        not bool(compiled.states[transition.target].get("terminal"))
+        for transition in cancel_transitions
+    ):
+        raise BuilderWorkflowError("conversational prototype cancel command must terminate the flow")
 
     requirements = {str(item["activity_id"]): dict(item) for item in value["activity_requirements"]}
     if len(requirements) != len(value["activity_requirements"]):

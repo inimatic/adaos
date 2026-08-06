@@ -2,10 +2,11 @@
   "schema": "adaos.builder.prototype_workflow_slice.v1",
   "slice_id": "service-request-conversation-v1",
   "source_definition_ref": "workflow.json@1.0.0",
-  "source_definition_digest": "sha256:cdb84d9568e1289c0eea4baf6d78f04d13547e300af63f352316add8d56effb4",
+  "source_definition_digest": "sha256:e90e623c052d2af634825e2748ff253b8bd6e926b12c3a41ea307a7ca43e9370",
   "source_generation": 0,
   "profile": "conversational_mvp",
   "entry_command": "start",
+  "cancel_command": "cancel",
   "definition": {"source_ref": "workflow.json"},
   "activity_requirements": [
     {
@@ -21,9 +22,16 @@
       "output_schema": {"type": "object"},
       "implementation_status": "missing",
       "implementation_ref": null
+    },
+    {
+      "activity_id": "prototype.request.cancel",
+      "input_schema": {"type": "object", "additionalProperties": false},
+      "output_schema": {"type": "object"},
+      "implementation_status": "prototype_only",
+      "implementation_ref": null
     }
   ],
-  "retry_transition_ids": [],
+  "retry_transition_ids": ["retry_request"],
   "locales": {
     "en": {"start": "Describe request", "submit": "Submit request", "input_required": "Add the missing details"},
     "ru": {"start": "Описать заявку", "submit": "Отправить заявку", "input_required": "Добавьте недостающие сведения"}

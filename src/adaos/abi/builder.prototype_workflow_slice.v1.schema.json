@@ -5,7 +5,7 @@
   "type": "object",
   "required": [
     "schema", "slice_id", "source_definition_ref", "source_definition_digest",
-    "source_generation", "profile", "entry_command", "definition",
+    "source_generation", "profile", "entry_command", "cancel_command", "definition",
     "activity_requirements", "retry_transition_ids", "locales", "stories",
     "story_outcomes"
   ],
@@ -17,6 +17,7 @@
     "source_generation": { "type": "integer", "minimum": 0 },
     "profile": { "const": "conversational_mvp" },
     "entry_command": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "cancel_command": { "type": "string", "minLength": 1, "maxLength": 160 },
     "definition": { "type": "object" },
     "activity_requirements": {
       "type": "array",
@@ -35,7 +36,7 @@
       }
     },
     "retry_transition_ids": {
-      "type": "array", "maxItems": 1, "uniqueItems": true,
+      "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 160 }
     },
     "locales": {

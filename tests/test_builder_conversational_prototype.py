@@ -45,6 +45,8 @@ def _transition(identifier: str, source: str, target: str, command: str, activit
 def _definition() -> dict:
     start = _transition("collect", "new", "review", "start", "request.collect")
     finish = _transition("confirm", "review", "done", "confirm", "request.create")
+    retry = _transition("retry_collect", "review", "review", "retry", "request.collect")
+    cancel = _transition("cancel_request", "review", "cancelled", "cancel", "request.cancel")
     return {
         "schema": "adaos.workflow.definition.v1",
         "workflow_type": "prototype.request",
@@ -55,12 +57,15 @@ def _definition() -> dict:
             {"id": "new", "label": "New", "terminal": False},
             {"id": "review", "label": "Review", "terminal": False, "waiting": True, "wait_explanation": "Confirm request"},
             {"id": "done", "label": "Done", "terminal": True},
+            {"id": "cancelled", "label": "Cancelled", "terminal": True},
         ],
         "commands": [
             {"id": "start", "input_schema": start["trigger"]["input_schema"]},
             {"id": "confirm", "input_schema": finish["trigger"]["input_schema"]},
+            {"id": "retry", "input_schema": retry["trigger"]["input_schema"]},
+            {"id": "cancel", "input_schema": cancel["trigger"]["input_schema"]},
         ],
-        "transitions": [start, finish],
+        "transitions": [start, finish, retry, cancel],
         "subworkflows": [],
         "metadata": {"prototype": True},
     }
@@ -127,12 +132,14 @@ def _slice(source: dict) -> dict:
         "source_generation": 4,
         "profile": "conversational_mvp",
         "entry_command": "start",
+        "cancel_command": "cancel",
         "definition": definition,
         "activity_requirements": [
             {"activity_id": "request.collect", "input_schema": INPUT_SCHEMA, "output_schema": {"type": "object"}, "implementation_status": "prototype_only", "implementation_ref": None},
             {"activity_id": "request.create", "input_schema": INPUT_SCHEMA, "output_schema": {"type": "object"}, "implementation_status": "missing", "implementation_ref": None},
+            {"activity_id": "request.cancel", "input_schema": INPUT_SCHEMA, "output_schema": {"type": "object"}, "implementation_status": "prototype_only", "implementation_ref": None},
         ],
-        "retry_transition_ids": [],
+        "retry_transition_ids": ["retry_collect"],
         "locales": {"en": {"start": "Start"}, "ru": {"start": "Начать"}},
         "stories": stories,
         "story_outcomes": {"success": "request.success", "failure": "request.failure", "input_required": "request.input"},

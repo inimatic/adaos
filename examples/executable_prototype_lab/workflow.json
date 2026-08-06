@@ -7,11 +7,14 @@
   "states": [
     {"id": "draft", "label": "Draft", "terminal": false},
     {"id": "review", "label": "Review", "terminal": false, "waiting": true, "wait_explanation": "Confirm the request details."},
-    {"id": "submitted", "label": "Submitted", "terminal": true}
+    {"id": "submitted", "label": "Submitted", "terminal": true},
+    {"id": "cancelled", "label": "Cancelled", "terminal": true}
   ],
   "commands": [
     {"id": "start", "input_schema": {"type": "object", "properties": {"title": {"type": "string"}, "details": {"type": "string"}}, "additionalProperties": false}},
-    {"id": "submit", "input_schema": {"type": "object", "properties": {"confirmed": {"type": "boolean"}}, "additionalProperties": false}}
+    {"id": "submit", "input_schema": {"type": "object", "properties": {"confirmed": {"type": "boolean"}}, "additionalProperties": false}},
+    {"id": "retry", "input_schema": {"type": "object", "additionalProperties": false}},
+    {"id": "cancel", "input_schema": {"type": "object", "additionalProperties": false}}
   ],
   "transitions": [
     {
@@ -58,6 +61,52 @@
       "explanations": {"allowed": "The request can be submitted.", "rejected": "Confirm the request first.", "completed": "Request submitted."},
       "events": {"emitted": ["prototype.request.submitted"], "outbox": true},
       "observability": {"audit_event": "prototype.request.submit", "redaction": "policy", "metrics": [], "trace": true},
+      "migration": {"introduced_in": "1.0.0", "aliases": []}
+    },
+    {
+      "schema": "adaos.workflow.transition.v1",
+      "transition_id": "retry_request",
+      "source": "review",
+      "target": "review",
+      "trigger": {"kind": "command", "command": "retry", "input_schema": {"type": "object", "additionalProperties": false}},
+      "context": {"target_resolution": "instance", "command_context_required": false},
+      "authority": {"actors": ["user"], "permissions": []},
+      "guards": [{"id": "always", "params": {}, "reason_code": "blocked"}],
+      "concurrency": {"conflict_scope": "prototype", "requires_generation": true, "idempotency": "required"},
+      "risk": {"class": "local_reversible", "side_effect": "reversible", "confirmation": "none"},
+      "effect": {"activity": "prototype.request.collect", "transaction": "outbox", "retry": "bounded", "compensation": null},
+      "recovery": {"timeout_seconds": 30, "heartbeat_seconds": 5, "cancellation": "cooperative", "reconciliation": "required_on_unknown"},
+      "outcomes": {"success": "target", "failure": "source", "input_required": "source", "cancelled": "source", "unknown": "source"},
+      "evidence": {"required": false, "minimum": 0},
+      "approval": {"required": false, "policy_refs": []},
+      "async_reply": {"mode": "terminal", "reply_route": "origin"},
+      "capability_requirements": {"required": [], "optional": ["buttons"], "fallback": "numbered_text"},
+      "explanations": {"allowed": "Collection can be retried once.", "rejected": "Collection retry is blocked.", "completed": "Collection retried."},
+      "events": {"emitted": ["prototype.request.retried"], "outbox": true},
+      "observability": {"audit_event": "prototype.request.retry", "redaction": "policy", "metrics": [], "trace": true},
+      "migration": {"introduced_in": "1.0.0", "aliases": []}
+    },
+    {
+      "schema": "adaos.workflow.transition.v1",
+      "transition_id": "cancel_request",
+      "source": "review",
+      "target": "cancelled",
+      "trigger": {"kind": "command", "command": "cancel", "input_schema": {"type": "object", "additionalProperties": false}},
+      "context": {"target_resolution": "instance", "command_context_required": false},
+      "authority": {"actors": ["user"], "permissions": []},
+      "guards": [{"id": "always", "params": {}, "reason_code": "blocked"}],
+      "concurrency": {"conflict_scope": "prototype", "requires_generation": true, "idempotency": "required"},
+      "risk": {"class": "local_reversible", "side_effect": "reversible", "confirmation": "none"},
+      "effect": {"activity": "prototype.request.cancel", "transaction": "outbox", "retry": "never", "compensation": null},
+      "recovery": {"timeout_seconds": 30, "heartbeat_seconds": 5, "cancellation": "cooperative", "reconciliation": "required_on_unknown"},
+      "outcomes": {"success": "target", "failure": "source", "input_required": "source", "cancelled": "target", "unknown": "source"},
+      "evidence": {"required": false, "minimum": 0},
+      "approval": {"required": false, "policy_refs": []},
+      "async_reply": {"mode": "terminal", "reply_route": "origin"},
+      "capability_requirements": {"required": [], "optional": ["buttons"], "fallback": "numbered_text"},
+      "explanations": {"allowed": "The request can be cancelled.", "rejected": "Cancellation is blocked.", "completed": "Request cancelled."},
+      "events": {"emitted": ["prototype.request.cancelled"], "outbox": true},
+      "observability": {"audit_event": "prototype.request.cancel", "redaction": "policy", "metrics": [], "trace": true},
       "migration": {"introduced_in": "1.0.0", "aliases": []}
     }
   ],
