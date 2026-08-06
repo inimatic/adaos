@@ -44,11 +44,35 @@
     "acceptance": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
     "renderer_evidence": {
       "type": "object",
-      "required": ["kind", "target_ref", "visible_neighbor_refs", "budget", "truncated", "digest"],
+      "required": ["kind", "target_ref", "visible_neighbor_refs", "breakpoints", "budget", "truncated", "digest"],
       "properties": {
         "kind": { "const": "bounded_structured" },
         "target_ref": { "type": "string", "pattern": "^(widget|field):" },
         "visible_neighbor_refs": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 240 } },
+        "breakpoints": {
+          "type": "array", "maxItems": 10,
+          "items": {
+            "type": "object",
+            "required": ["breakpoint", "visible_order", "rects"],
+            "properties": {
+              "breakpoint": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "visible_order": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 240 } },
+              "rects": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["x", "y", "width", "height"],
+                  "properties": {
+                    "x": { "type": "number" }, "y": { "type": "number" },
+                    "width": { "type": "number", "minimum": 0 }, "height": { "type": "number", "minimum": 0 }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
         "budget": { "type": "integer", "minimum": 1, "maximum": 20 },
         "truncated": { "type": "boolean" },
         "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }

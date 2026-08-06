@@ -47,7 +47,15 @@ def _composition() -> dict:
         "actions": [],
         "bindings": {},
         "acceptance": [],
-        "renderer_evidence": {"kind": "bounded_structured", "target_ref": "widget:request-form", "visible_neighbor_refs": ["widget:request-form"], "budget": 5, "truncated": False, "digest": "0" * 64},
+        "renderer_evidence": {
+            "kind": "bounded_structured", "target_ref": "widget:request-form",
+            "visible_neighbor_refs": ["widget:request-form"],
+            "breakpoints": [
+                {"breakpoint": "compact", "visible_order": ["widget:request-form"], "rects": {}},
+                {"breakpoint": "wide", "visible_order": ["widget:request-form"], "rects": {}}
+            ],
+            "budget": 5, "truncated": False, "digest": "0" * 64
+        },
     }
 
 

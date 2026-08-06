@@ -50,11 +50,19 @@ def test_executable_prototype_lab_runs_full_fail_closed_handoff() -> None:
         "widget:request-list",
         source_revision="001",
         acceptance=[{"relation": "after", "reference_ref": "widget:request-form"}],
+        renderer_snapshots=[
+            {"breakpoint": "compact", "visible_order": ["widget:request-form", "widget:request-list", "widget:simulation-trace"], "rects": {}},
+            {"breakpoint": "wide", "visible_order": ["widget:request-form", "widget:request-list", "widget:simulation-trace"], "rects": {}},
+        ],
     )
     request_form = composition_slice(
         webui,
         "field:request-form:request-title",
         source_revision="001",
+        renderer_snapshots=[
+            {"breakpoint": "compact", "visible_order": ["field:request-form:request-title", "field:request-form:request-details", "field:request-form:request-priority"], "rects": {}},
+            {"breakpoint": "wide", "visible_order": ["field:request-form:request-title", "field:request-form:request-details", "field:request-form:request-priority"], "rects": {}},
+        ],
     )
     assert request_list["composition"]["responsive"] == {"compact": "stack", "wide": "split"}
     assert request_form["bindings"]["stateKey"] == "draft.title"

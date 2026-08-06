@@ -120,6 +120,12 @@ def build_automation_handoff(
             blockers.append(f"invalid_representative_state_input:{state_id}")
     if len(composition_slices) == 0:
         blockers.append("missing_composition_slice")
+    for item in composition_slices:
+        evidence = item.get("renderer_evidence") if isinstance(item.get("renderer_evidence"), Mapping) else {}
+        observed = {str(entry.get("breakpoint") or "") for entry in evidence.get("breakpoints") or []}
+        for breakpoint in ("compact", "wide"):
+            if breakpoint not in observed:
+                blockers.append(f"missing_renderer_evidence:{item.get('slice_id')}:{breakpoint}")
 
     workflow = {
         "source_definition_ref": str(

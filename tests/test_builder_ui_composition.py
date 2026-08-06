@@ -60,6 +60,10 @@ def test_composition_slice_explains_structure_binding_and_responsive_layout() ->
         source_revision="004",
         acceptance=[{"relation": "after", "reference_ref": "widget:shopping-form"}],
         evidence_budget=2,
+        renderer_snapshots=[
+            {"breakpoint": "compact", "visible_order": ["widget:shopping-form", "widget:shopping-list", "widget:shopping-help"], "rects": {}},
+            {"breakpoint": "wide", "visible_order": ["widget:shopping-form", "widget:shopping-list", "widget:shopping-help"], "rects": {}},
+        ],
     )
     assert value["siblings"] == [
         "widget:shopping-form",
@@ -70,9 +74,11 @@ def test_composition_slice_explains_structure_binding_and_responsive_layout() ->
     assert value["composition"]["responsive"] == {"compact": "stack", "wide": "grid"}
     assert value["bindings"] == {"binding": {"activity": "shopping.list"}}
     assert value["renderer_evidence"]["truncated"] is True
-    assert check_spatial_constraint(
+    result = check_spatial_constraint(
         value, {"relation": "after", "reference_ref": "widget:shopping-form", "breakpoints": ["wide"]}
-    )["passed"] is True
+    )
+    assert result["passed"] is True
+    assert result["evidence_kind"] == "structured_renderer"
 
 
 def test_field_slice_uses_stable_parent_scoped_reference() -> None:

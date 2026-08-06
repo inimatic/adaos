@@ -75,6 +75,7 @@ def extract_composition_slice(
     source_revision: str,
     acceptance: list[Mapping[str, Any]] | None = None,
     evidence_budget: int = 5,
+    renderer_snapshots: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Project just enough structure to interpret spatial UI instructions."""
 
@@ -126,12 +127,27 @@ def extract_composition_slice(
     end = min(len(sibling_refs), start + evidence_budget)
     start = max(0, end - evidence_budget)
     visible = sibling_refs[start:end]
+    snapshots: list[dict[str, Any]] = []
+    for raw_snapshot in renderer_snapshots or []:
+        snapshot = copy.deepcopy(dict(raw_snapshot))
+        breakpoint = str(snapshot.get("breakpoint") or "").strip()
+        visible_order = [str(item) for item in snapshot.get("visible_order") or []]
+        if not breakpoint:
+            raise BuilderWorkflowError("renderer snapshot requires a breakpoint")
+        if target_ref not in visible_order:
+            raise BuilderWorkflowError(f"renderer snapshot omits target {target_ref} at {breakpoint}")
+        unknown = sorted(set(visible_order) - set(sibling_refs))
+        if unknown:
+            raise BuilderWorkflowError(f"renderer snapshot contains an unrelated ref: {unknown[0]}")
+        rects = copy.deepcopy(dict(snapshot.get("rects") or {}))
+        snapshots.append({"breakpoint": breakpoint, "visible_order": visible_order, "rects": rects})
     evidence_source = {
         "target": copy.deepcopy(target),
         "parent_ref": _node_ref(logical_parent or {}),
         "visible_neighbor_refs": visible,
         "layout": layout,
         "responsive": responsive,
+        "breakpoints": snapshots,
     }
     result = {
         "schema": UI_COMPOSITION_SLICE_SCHEMA,
@@ -161,6 +177,7 @@ def extract_composition_slice(
             "kind": "bounded_structured",
             "target_ref": target_ref,
             "visible_neighbor_refs": visible,
+            "breakpoints": snapshots,
             "budget": evidence_budget,
             "truncated": len(sibling_refs) > len(visible),
             "digest": _digest(evidence_source),
@@ -181,9 +198,30 @@ def evaluate_spatial_constraint(slice_value: Mapping[str, Any], constraint: Mapp
         raise BuilderWorkflowError("spatial constraint relation must be before or after")
     if target not in siblings or reference not in siblings:
         raise BuilderWorkflowError("spatial constraint requires targets in the same stable sibling collection")
-    target_index = siblings.index(target)
-    reference_index = siblings.index(reference)
-    passed = target_index < reference_index if relation == "before" else target_index > reference_index
+    requested_breakpoints = list(constraint.get("breakpoints") or ["all"])
+    snapshots = {
+        str(item.get("breakpoint")): [str(ref) for ref in item.get("visible_order") or []]
+        for item in dict(slice_value.get("renderer_evidence") or {}).get("breakpoints") or []
+    }
+    per_breakpoint: list[dict[str, Any]] = []
+    if snapshots and requested_breakpoints != ["all"]:
+        for breakpoint in requested_breakpoints:
+            order = snapshots.get(str(breakpoint))
+            if order is None or target not in order or reference not in order:
+                raise BuilderWorkflowError(f"renderer evidence is missing for breakpoint {breakpoint}")
+            target_index = order.index(target)
+            reference_index = order.index(reference)
+            accepted = target_index < reference_index if relation == "before" else target_index > reference_index
+            per_breakpoint.append({"breakpoint": breakpoint, "passed": accepted, "target_order": target_index, "reference_order": reference_index})
+        passed = all(item["passed"] for item in per_breakpoint)
+        evidence_kind = "structured_renderer"
+        target_index = per_breakpoint[0]["target_order"]
+        reference_index = per_breakpoint[0]["reference_order"]
+    else:
+        target_index = siblings.index(target)
+        reference_index = siblings.index(reference)
+        passed = target_index < reference_index if relation == "before" else target_index > reference_index
+        evidence_kind = "declarative_composition"
     return {
         "passed": passed,
         "relation": relation,
@@ -191,8 +229,9 @@ def evaluate_spatial_constraint(slice_value: Mapping[str, Any], constraint: Mapp
         "reference_ref": reference,
         "target_order": target_index,
         "reference_order": reference_index,
-        "breakpoints": list(constraint.get("breakpoints") or ["all"]),
-        "evidence_kind": "declarative_composition",
+        "breakpoints": requested_breakpoints,
+        "breakpoint_results": per_breakpoint,
+        "evidence_kind": evidence_kind,
     }
 
 

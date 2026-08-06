@@ -19,6 +19,7 @@ def composition_slice(
     source_revision: str,
     acceptance: list[Mapping[str, Any]] | None = None,
     evidence_budget: int = 5,
+    renderer_snapshots: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from adaos.services.builder.composition import extract_composition_slice
 
@@ -28,6 +29,7 @@ def composition_slice(
         source_revision=source_revision,
         acceptance=acceptance,
         evidence_budget=evidence_budget,
+        renderer_snapshots=renderer_snapshots,
     )
 
 
