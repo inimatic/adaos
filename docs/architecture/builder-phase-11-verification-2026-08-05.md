@@ -94,6 +94,37 @@ scenario tree
 and skill tree
 `sha256:4e15bd8cc2ef071a6c1777283bc2bc539125fe109e008d20db9236d150e0e6ea`.
 
+### Post-publication materialization correction — 2026-08-06
+
+The first human launch selected `workflow_lab_dashboard` but retained the
+Homepoint page. The published package was complete; the runtime scenario
+loader still required the obsolete adjacent `scenario.json` and therefore
+ignored the canonical `scenario.yaml -> webui.json` reference used by the new
+package.
+
+The loader now resolves UI content from canonical `scenario.yaml` first and
+uses `scenario.json` only for legacy packages whose YAML does not declare a UI
+descriptor. The source fingerprint includes the referenced `webui.json`, and
+materialization cannot report `ready` without
+`ui.application.desktop.pageSchema`.
+
+After restarting the local checkout runtime, an exact one-shot reload of the
+already published scenario proved:
+
+```text
+current_scenario = workflow_lab_dashboard
+resolver.source = loader:workspace
+resolver.legacy_fallback = false
+materialization.readiness_state = ready
+page_widget_count = 3
+changed_branches = 0 on the confirming reload
+workflow_lab_dashboard_skill.get_dashboard = ok, 4 requests
+```
+
+The confirming reload changed no Yjs branch, so this correction restores the
+declarative surface without introducing a periodic refresh or compatibility
+write loop.
+
 Strict recovery testing exposed and corrected four reliability gaps instead of
 concealing them with another mutation:
 
@@ -127,6 +158,8 @@ the independently managed projects.
 | Builder governed/compatibility workflow regression | 55 passed |
 | Current `builder_sdk_control_skill` regression | 50 passed |
 | `workflow_lab_dashboard` scenario validation and companion skill tests | passed (3/3 companion tests) |
+| YAML-only scenario loader/materialization regression | passed (106/106 affected tests); live Workspace resolver and companion tool passed |
+| Dependency-aware scenario CLI validation | passed (13/13 focused tests); published dashboard validation has zero issues |
 | AdaOS backend TypeScript build and complete suite | passed, 20/20 |
 | Client complete deterministic browser suite | 906 passed |
 | Client NavigationLocation/App/Modal/Auth/YDoc focused suite | 295 passed |

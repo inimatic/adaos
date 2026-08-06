@@ -26,6 +26,7 @@ from adaos.services.node_config import load_config
 from adaos.services.root.client import RootHttpClient
 from adaos.services.root.service import create_zip_bytes
 from adaos.services.scenario.manager import ScenarioManager
+from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.scenario.webspace_runtime import rebuild_webspace_from_sources
 from adaos.services.scenario.scaffold import create as scaffold_create
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
@@ -613,21 +614,33 @@ def validate_cmd(
     else:
         scenario_path = ctx.paths.scenarios_workspace_dir()
     scenario_path = scenario_path / scenario_id
-    model = load_scenario(scenario_path)
-    runtime = ScenarioRuntime()
-    errors = runtime.validate(model)
+    report = validate_scenario_path(scenario_path)
+    errors = report.errors
 
     if json_output:
-        payload = {"ok": not bool(errors), "errors": errors, "scenario_id": model.id}
+        payload = {
+            "ok": report.ok,
+            "errors": errors,
+            "scenario_id": report.scenario_id,
+            "issues": [
+                {
+                    "level": issue.level,
+                    "code": issue.code,
+                    "message": issue.message,
+                    "where": issue.where,
+                }
+                for issue in report.issues
+            ],
+        }
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-        raise typer.Exit(0 if not errors else 1)
+        raise typer.Exit(0 if report.ok else 1)
 
     if errors:
         typer.secho(_("cli.scenario.validate.errors"), fg=typer.colors.RED)
         for err in errors:
             typer.echo(_("cli.scenario.validate.error_item", error=str(err)))
         raise typer.Exit(code=1)
-    typer.secho(_("cli.scenario.validate.success", scenario_id=model.id), fg=typer.colors.GREEN)
+    typer.secho(_("cli.scenario.validate.success", scenario_id=report.scenario_id), fg=typer.colors.GREEN)
 
 
 def _collect_scenario_tests(scenario_id: Optional[str]) -> list[Path]:

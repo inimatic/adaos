@@ -1320,7 +1320,8 @@ The dated entries below remain the chronological implementation ledger.
   reversible semantic UI operation, the chat-first Workbench, and hardened
   lineage invalidation.
 - [x] DEV Builder is `0.2.53 / UI 058`; the page metadata, active UI pointer,
-  `scenario.json`, `webui.json`, and canonical `scenario.yaml` version agree.
+  `webui.json`, and canonical `scenario.yaml` version agree. `scenario.json`
+  remains a derived legacy projection and is not compared as an authority.
   Forge scenario commit `4231be4b3fc3e74cbf6ff11e75ad98bb67ec457b`
   contains the compact project header, left-panel Change/Preview context, and
   explicit Builder surface identity without overwriting selected-project
@@ -1842,6 +1843,12 @@ observed projection matches the latest desired generation.
   WorkspaceLock revision `4` pins the scenario and
   `workflow_lab_dashboard_skill@0.1.1`, and Trial/Workspace trees are
   byte-identical.
+- [x] `[must]` Materialize a newly published scenario that contains canonical
+  `scenario.yaml -> webui.json` and no legacy `scenario.json`. The
+  `workflow_lab_dashboard` launch exposed the old loader dependency; the
+  corrected live proof resolves from `loader:workspace`, reports no legacy
+  fallback, requires `ui.application.desktop.pageSchema`, and materializes
+  three declarative widget definitions backed by the companion skill.
 - [x] `[must]` Reject newly corrupted user-authored text at Builder workflow,
   interactive Builder, and Automation ingress before it becomes durable
   evidence. Codex-operated non-ASCII tool requests use UTF-8 files and

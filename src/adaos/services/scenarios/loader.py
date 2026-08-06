@@ -138,7 +138,12 @@ def read_manifest(scenario_id: str, *, space: str = "workspace") -> Dict[str, An
 
 def read_content(scenario_id: str, *, space: str = "workspace") -> Dict[str, Any]:
     """
-    Read scenario.json for a given scenario id. Returns {} if missing/invalid.
+    Resolve runtime content from the canonical scenario manifest.
+
+    ``scenario.yaml`` is authoritative. When it references ``ui.manifest``,
+    the adjacent descriptor is resolved from that reference. ``scenario.json``
+    remains a compatibility fallback only for older packages whose YAML does
+    not declare a UI descriptor.
 
     When ``space="dev"`` the loader looks under ``dev_scenarios_dir``.
     """
@@ -308,9 +313,9 @@ def scenario_exists(scenario_id: str, *, space: str = "workspace") -> bool:
 
 def invalidate_cache(*, scenario_id: str | None = None, space: str | None = None) -> None:
     """
-    Invalidate in-memory scenario.json cache. This is required for workflows
-    like desktop.webspace.reload which expect updated UI/NLU definitions to be
-    picked up without restarting the hub process.
+    Invalidate cached canonical manifests and resolved runtime content. This is
+    required for workflows like desktop.webspace.reload which expect updated
+    UI/NLU definitions to be picked up without restarting the hub process.
     """
     keys = list(_CONTENT_CACHE.keys())
     for key in keys:

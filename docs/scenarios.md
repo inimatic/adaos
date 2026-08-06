@@ -5,8 +5,11 @@
 A scenario is a managed workflow artifact that can be installed into the workspace, validated, executed, and tested.
 
 `scenario.yaml` is the canonical scenario manifest and the only version
-authority. `scenario.json` is generated as a compatibility/runtime projection;
-version drift is resolved from YAML rather than by editing JSON independently.
+authority. A package may reference its adjacent declarative UI through
+`ui.manifest: webui.json`; runtime resolution and source fingerprinting follow
+that YAML reference. `scenario.json` is a legacy compatibility/runtime
+projection, not a required package member; version or UI drift is resolved
+from YAML rather than by editing JSON independently.
 Package-backed publication and transactional Workspace activation are described
 in [Artifact Source, Package, and Activation Architecture](architecture/artifact-source-package-activation.md).
 
