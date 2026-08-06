@@ -142,6 +142,10 @@
       "$ref": "#/$defs/conversationalManifest",
       "description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
     },
+    "prototype_runtime": {
+      "$ref": "#/$defs/prototypeRuntime",
+      "description": "Optional bounded executable Prototype artifacts. These files model disposable data, bindings, one conversational workflow slice, and representative states; they are not runtime implementation evidence."
+    },
 
     "steps": {
       "description": "Optional low-level execution steps for ScenarioRuntime (CLI/SDK runner).",
@@ -200,6 +204,21 @@
         "manifest": { "const": "conversational/manifest.yaml" }
       },
       "additionalProperties": false
+    },
+    "prototypeRuntime": {
+      "type": "object",
+      "required": ["data", "binding", "workflow_slice", "representative_states"],
+      "properties": {
+        "data": { "$ref": "#/$defs/prototypeArtifactPath" },
+        "binding": { "$ref": "#/$defs/prototypeArtifactPath" },
+        "workflow_slice": { "$ref": "#/$defs/prototypeArtifactPath" },
+        "representative_states": { "$ref": "#/$defs/prototypeArtifactPath" }
+      },
+      "additionalProperties": false
+    },
+    "prototypeArtifactPath": {
+      "type": "string",
+      "pattern": "^prototype/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*\\.json$"
     },
     "legacyWorkflow": {
       "type": "object",

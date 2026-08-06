@@ -152,6 +152,46 @@ def test_scenario_schema_accepts_conversational_package_manifest_ref() -> None:
     Draft7Validator(schema).validate(payload)
 
 
+@pytest.mark.parametrize(
+    "schema_name,id_field",
+    [("scenario.schema.json", "id"), ("skill.schema.json", "name")],
+)
+def test_component_manifest_accepts_executable_prototype_refs(
+    schema_name: str,
+    id_field: str,
+) -> None:
+    schema = _load_schema(schema_name)
+    payload = {
+        id_field: "executable_prototype_lab",
+        "version": "0.1.0",
+        "prototype_runtime": {
+            "data": "prototype/data.json",
+            "binding": "prototype/binding_profile.json",
+            "workflow_slice": "prototype/workflow_slice.json",
+            "representative_states": "prototype/representative_states.json",
+        },
+    }
+
+    Draft7Validator(schema).validate(payload)
+
+
+def test_component_manifest_rejects_prototype_path_escape() -> None:
+    schema = _load_schema("scenario.schema.json")
+    payload = {
+        "id": "unsafe_prototype",
+        "version": "0.1.0",
+        "prototype_runtime": {
+            "data": "../outside.json",
+            "binding": "prototype/binding_profile.json",
+            "workflow_slice": "prototype/workflow_slice.json",
+            "representative_states": "prototype/representative_states.json",
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        Draft7Validator(schema).validate(payload)
+
+
 def test_skill_schema_accepts_browser_data_route_plan() -> None:
     schema = _load_schema("skill.schema.json")
     payload = {
@@ -288,6 +328,22 @@ def test_runtime_skill_validator_schema_accepts_conversational_package_ref() -> 
         "version": "0.1.0",
         "workflow": {"manifest": "workflow.json"},
         "conversational": {"manifest": "conversational/manifest.yaml"},
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_runtime_skill_validator_accepts_executable_prototype_refs() -> None:
+    schema = _load_service_skill_schema()
+    payload = {
+        "name": "executable_prototype_skill",
+        "version": "0.1.0",
+        "prototype_runtime": {
+            "data": "prototype/data.json",
+            "binding": "prototype/binding_profile.json",
+            "workflow_slice": "prototype/workflow_slice.json",
+            "representative_states": "prototype/representative_states.json",
+        },
     }
 
     Draft202012Validator(schema).validate(payload)
