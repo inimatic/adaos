@@ -444,6 +444,25 @@ Acceptance requires component/characterization coverage, unchanged public
 command and event contracts, no-op branch identity tests, and browser/pressure
 evidence for the affected paths.
 
+Implementation status, 2026-08-06:
+
+- `WebspaceTaskState` and `WebspaceCacheState` are the mutable task/cache
+  owners; debounce/coalescing execution is isolated in
+  `task_scheduling.py`
+- resolver input collection, semantic merge, branch diff/patch application,
+  skill catalog collection, and process-isolated materialization now live in
+  typed component services
+- projection refresh, recovery decisions, rebuild execution, and scenario
+  switching have separate owners; the public module keeps compatibility
+  signatures and resolves monkeypatchable dependencies at each delegation
+- the formerly long rebuild/scenario-switch/resolution/materialization bodies
+  have moved out of `webspace_runtime.py`; the compatibility surface decreased
+  from about 11.8k to 8.6k lines while Yjs branch identity, command/event
+  payloads, and cache behavior remain covered by characterization tests
+- remaining work in the facade is incremental extraction of builder/publication
+  adapters and small helpers, not duplicate ownership of task, cache,
+  projection, resolution, materialization, recovery, or scenario-switch state
+
 ### Future profile-aware personalization must be planned now
 
 The roadmap should not implement profile-aware overlays yet, but it must avoid

@@ -329,24 +329,30 @@ A/B cutover, recovery, and profiling flows.
 Implementation status, 2026-08-06:
 
 - `ProcessSupervisor` owns active/candidate/sidecar handles, desired lifecycle,
-  the monitor task, listener discovery, signals, and the bounded
-  graceful/TERM/KILL ladder
+  the monitor task, listener discovery, launch-spec construction, listener
+  adoption, signals, and the bounded graceful/TERM/KILL ladder
 - `UpdateStateMachine` owns update task/cancellation lifecycle and persists
-  causally linked status/attempt transitions
-- `RuntimeRecoveryPolicy` owns the unhealthy window plus last decision and
-  evidence
+  causally linked status/attempt transitions; update cutover execution and
+  durable reconciliation are separate runtime components
+- `RuntimeRecoveryPolicy` owns the unhealthy window, watchdog decisions, last
+  decision, and evidence; the monitoring loop is a separate scheduler owner
 - `MemoryProfilingService` owns mutable profile session, baseline, suspicion,
-  telemetry, and critical-memory state in addition to policy
+  telemetry collection/status surfaces, incident evidence, and critical-memory
+  state in addition to policy
 - `SupervisorApiAdapter` is now the registered FastAPI handler surface and only
   validates/maps/delegates
-- compatibility properties/functions remain for existing tests and imports;
-  `SupervisorManager` uses them as views over component state and remains the
-  orchestration/status composition surface
+- duplicate module-level FastAPI handlers and unused compatibility helpers
+  have been removed; compatibility properties remain only where existing
+  callers inspect historical manager fields
+- `SupervisorManager` now delegates process launch/adoption, monitoring,
+  update execution/reconciliation, recovery decisions, memory operations, and
+  status projection to explicit owners. The compatibility module decreased
+  from about 10.7k to 7.9k lines without changing persisted or HTTP contracts
 
-The component suites and the full supervisor regression passed with the public
-API and persisted attempt shapes unchanged. Removal of the compatibility views
-and further physical file-size reduction are follow-up cleanup, not parallel
-state ownership.
+The component suites and supervisor regressions cover the delegated paths with
+the public API and persisted attempt shapes unchanged. Remaining physical
+reduction is limited to smaller compatibility helpers and orchestration; it is
+not an alternate mutable-state implementation.
 
 Target-stand evidence, 2026-08-06: `.30` accepted commit `5422f6c7`, built
 slot `B` as `0.1.679+1.5422f6c`, completed root promotion, restarted the root

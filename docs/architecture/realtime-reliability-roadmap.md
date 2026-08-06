@@ -613,10 +613,15 @@ Implementation status, 2026-08-06:
 - NATS decisions are consumed through a typed composed policy
 - hub-route local-runtime discovery cache and diagnostics are instance-owned
   by the route proxy policy
-- module functions remain compatibility exports for focused tests and callers;
-  physically moving the long-lived NATS subscription/tunnel loop out of the
-  compatibility body is a later code-size tranche, not a second state-owner
-  migration
+- `run_boot_sequence()` and its compatibility implementation are now thin
+  composition delegates; boot ordering/subscriptions live in
+  `bootstrap_runtime/boot_sequence.py`
+- the long-lived NATS/root subscription, route-tunnel, delivery, and watchdog
+  runtime lives in `bootstrap_runtime/nats_root_runtime.py`; explicit reconnect
+  and authority waiting live on `RootTransportService`
+- `bootstrap.py` remains the compatibility/composition surface (about 1.3k
+  lines after the split), while transport state has one owner and the promoted
+  root dependency closure explicitly includes every extracted module
 
 The 2026-08-06 `.30` delivery checkpoint promoted commit `5422f6c7` through
 the rooted A/B path to slot `B`; supervisor update state finished as
