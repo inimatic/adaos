@@ -1,7 +1,7 @@
 from .api import SupervisorApiAdapter, SupervisorRoute, create_supervisor_app
 from .memory import MemoryProfilingOperations, MemoryProfilingService
 from .monitoring import SupervisorMonitoringOperations, SupervisorMonitoringService
-from .process import AdoptedProcess, ProcessSupervisor
+from .process import AdoptedProcess, ProcessSupervisor, ProcessSupervisorOperations
 from .recovery import RuntimeRecoveryFacts, RuntimeRecoveryOperations, RuntimeRecoveryPolicy
 from .routes import create_supervisor_routes
 from .status import SupervisorStatusOperations, SupervisorStatusService
@@ -15,6 +15,7 @@ __all__ = [
     "SupervisorMonitoringOperations",
     "SupervisorMonitoringService",
     "ProcessSupervisor",
+    "ProcessSupervisorOperations",
     "RuntimeRecoveryFacts",
     "RuntimeRecoveryOperations",
     "RuntimeRecoveryPolicy",

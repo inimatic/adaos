@@ -36,6 +36,7 @@ from adaos.apps.supervisor_runtime import (
     MemoryProfilingOperations,
     MemoryProfilingService,
     ProcessSupervisor,
+    ProcessSupervisorOperations,
     RuntimeRecoveryFacts,
     RuntimeRecoveryOperations,
     RuntimeRecoveryPolicy,
@@ -2761,6 +2762,27 @@ class SupervisorManager:
         self._sidecar_last_sync_source_slot: str | None = None
         self._sidecar_last_sync_reason: str | None = None
         self._sidecar_last_sync_changed_paths: list[str] = []
+
+    @staticmethod
+    def _process_operations() -> ProcessSupervisorOperations:
+        return ProcessSupervisorOperations(
+            active_slot=active_slot,
+            active_slot_manifest=active_slot_manifest,
+            adopted_process_type=_AdoptedProcess,
+            core_slot_status=core_slot_status,
+            current_base_dir=current_base_dir,
+            format_slot_value=_format_slot_value,
+            listener_owner_pid=_listener_owner_pid,
+            logger=_LOG,
+            new_runtime_instance_id=_new_runtime_instance_id,
+            proc_details=_proc_details,
+            read_json=_read_json,
+            read_memory_session_summary=read_memory_session_summary,
+            read_slot_manifest=read_slot_manifest,
+            requests_module=requests,
+            runtime_api_ready=_runtime_api_ready,
+            supervisor_runtime_state_path=_supervisor_runtime_state_path,
+        )
 
     @staticmethod
     def _recovery_operations() -> RuntimeRecoveryOperations:
@@ -5808,81 +5830,16 @@ class SupervisorManager:
         profile_trigger: str | None = None,
         skip_pending_update: bool = False,
     ) -> tuple[list[str] | None, str | None, dict[str, str], str | None, str, str]:
-        resolved_slot = str(slot or active_slot() or "").strip().upper() or None
-        manifest = read_slot_manifest(resolved_slot) if slot else active_slot_manifest()
-        slot_port = self.slot_runtime_port(resolved_slot)
-        slot_dir = str(core_slot_status().get("slots", {}).get(resolved_slot or "", {}).get("path") or "")
-        resolved_runtime_instance_id = str(
-            runtime_instance_id or _new_runtime_instance_id(slot=resolved_slot, transition_role=transition_role)
-        )
-        requested_session_id = profile_session_id
-        requested_mode = str(profile_mode or "").strip().lower() or ""
-        resolved_profile_trigger = str(profile_trigger or "").strip() or None
-        if not requested_mode:
-            requested_session_id = str(self._memory_active_session_id or "").strip() or None
-            requested_mode = self._desired_memory_profile_mode()
-        if requested_session_id and not resolved_profile_trigger:
-            session = read_memory_session_summary(requested_session_id) or {}
-            trigger_source = str(session.get("trigger_source") or "").strip() or "operator"
-            trigger_reason = str(session.get("trigger_reason") or "").strip() or "supervisor.memory.request"
-            resolved_profile_trigger = f"{trigger_source}:{trigger_reason}"
-        env = self._runtime_env(
-            slot=resolved_slot,
-            slot_dir=slot_dir,
-            slot_port=slot_port,
+        return self._process_supervisor.runtime_launch_spec(
+            self,
+            self._process_operations(),
+            slot=slot,
             transition_role=transition_role,
-            runtime_instance_id=resolved_runtime_instance_id,
-            profile_mode=requested_mode,
-            profile_session_id=requested_session_id,
-            profile_trigger=resolved_profile_trigger,
+            runtime_instance_id=runtime_instance_id,
+            profile_mode=profile_mode,
+            profile_session_id=profile_session_id,
+            profile_trigger=profile_trigger,
             skip_pending_update=skip_pending_update,
-        )
-        if isinstance(manifest, dict):
-            manifest_env = manifest.get("env")
-            if isinstance(manifest_env, dict):
-                for key, value in manifest_env.items():
-                    env[str(key)] = str(value)
-            if resolved_slot:
-                env["ADAOS_ACTIVE_CORE_SLOT"] = resolved_slot
-                env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = slot_dir
-            values = {
-                "host": self.runtime_host,
-                "port": str(slot_port),
-                "token": str(self.token or ""),
-                "slot": str(resolved_slot or ""),
-                "slot_dir": slot_dir,
-                "base_dir": str(current_base_dir()),
-                "python": os.sys.executable,
-                "runtime_instance_id": resolved_runtime_instance_id,
-                "transition_role": str(transition_role or "active"),
-            }
-            argv_raw = manifest.get("argv")
-            if isinstance(argv_raw, list):
-                argv = [_format_slot_value(str(item), values) for item in argv_raw if str(item).strip()]
-                if argv:
-                    cwd = str(manifest.get("cwd") or "").strip() or None
-                    return argv, None, env, cwd, resolved_runtime_instance_id, str(transition_role or "active")
-            command = str(manifest.get("command") or "").strip()
-            if command:
-                cwd = str(manifest.get("cwd") or "").strip() or None
-                return None, _format_slot_value(command, values), env, cwd, resolved_runtime_instance_id, str(
-                    transition_role or "active"
-                )
-        return (
-            [
-                sys.executable,
-                "-m",
-                "adaos.apps.autostart_runner",
-                "--host",
-                self.runtime_host,
-                "--port",
-                str(slot_port),
-            ],
-            None,
-            env,
-            None,
-            resolved_runtime_instance_id,
-            str(transition_role or "active"),
         )
 
     def _runtime_state_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
@@ -6588,95 +6545,11 @@ class SupervisorManager:
         return _reconcile_update_status(payload)
 
     def _adopt_active_runtime_listener(self, *, reason: str) -> bool:
-        current_slot = str(active_slot() or "").strip().upper() or None
-        runtime_port = self.slot_runtime_port(current_slot)
-        runtime_url = self.slot_runtime_base_url(current_slot)
-        listener_pid = _listener_owner_pid(self.runtime_host, runtime_port)
-        if not listener_pid:
-            return False
-        adopted = _AdoptedProcess(listener_pid)
-        identity: dict[str, Any] = {}
-        api_ready = _runtime_api_ready(runtime_url, token=self.token, timeout=1.5)
-        if api_ready:
-            headers = {"Accept": "application/json"}
-            if self.token:
-                headers["X-AdaOS-Token"] = self.token
-            try:
-                with requests.get(runtime_url + "/api/status", headers=headers, timeout=2.0) as response:
-                    response.raise_for_status()
-                    payload = response.json()
-                if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
-                    identity = dict(payload["runtime"])
-            except Exception:
-                identity = {}
-        else:
-            managed = _proc_details(adopted, cwd_hint=str(adopted.cwd or "").strip() or None)
-            expected_executable, expected_cwd, matches_active_slot = self._managed_runtime_slot_expectations(
-                manifest=active_slot_manifest(),
-                managed_executable=managed.get("managed_executable"),
-                managed_cwd=managed.get("managed_cwd"),
-            )
-            if matches_active_slot is not True:
-                _LOG.warning(
-                    "supervisor refused pre-ready runtime adoption slot=%s url=%s pid=%s expected_executable=%s "
-                    "actual_executable=%s expected_cwd=%s actual_cwd=%s",
-                    current_slot,
-                    runtime_url,
-                    listener_pid,
-                    expected_executable,
-                    managed.get("managed_executable"),
-                    expected_cwd,
-                    managed.get("managed_cwd"),
-                )
-                return False
-            persisted = _read_json(_supervisor_runtime_state_path())
-            try:
-                persisted_pid = int(persisted.get("managed_pid") or 0)
-            except Exception:
-                persisted_pid = 0
-            if persisted_pid == listener_pid:
-                identity = {
-                    "runtime_instance_id": persisted.get("runtime_instance_id"),
-                    "transition_role": persisted.get("transition_role"),
-                    "slot": persisted.get("managed_slot"),
-                }
-            _LOG.info(
-                "supervisor adopting slot-matched runtime listener before API readiness slot=%s url=%s pid=%s",
-                current_slot,
-                runtime_url,
-                listener_pid,
-            )
-        reported_slot = str(identity.get("slot") or "").strip().upper()
-        reported_role = str(identity.get("transition_role") or "active").strip().lower()
-        if reported_slot and current_slot and reported_slot != current_slot:
-            raise RuntimeError(
-                f"runtime listener on {runtime_url} reports slot {reported_slot}, expected {current_slot}"
-            )
-        if reported_role != "active":
-            raise RuntimeError(
-                f"runtime listener on {runtime_url} reports transition role {reported_role or 'unknown'}"
-            )
-        self._process_supervisor.track_active(adopted)
-        self._managed_runtime_instance_id = str(identity.get("runtime_instance_id") or "").strip() or None
-        self._managed_transition_role = "active"
-        self._managed_slot = current_slot
-        self._managed_runtime_port = runtime_port
-        self._managed_runtime_base_url = runtime_url
-        self._managed_runtime_cwd = str(adopted.cwd or "").strip() or None
-        self._managed_start_reason = str(reason or "supervisor.adopt.active_listener")
-        self._last_start_at = float(getattr(adopted, "_created_at", time.time()))
-        self._last_error = None
-        self._runtime_unhealthy_since = None
-        self._runtime_unhealthy_kind = None
-        self._reset_memory_baseline_scope(managed_pid=listener_pid)
-        _LOG.info(
-            "supervisor adopted active runtime listener slot=%s url=%s pid=%s instance=%s",
-            current_slot,
-            runtime_url,
-            listener_pid,
-            self._managed_runtime_instance_id,
+        return self._process_supervisor.adopt_active_runtime_listener(
+            self,
+            self._process_operations(),
+            reason=reason,
         )
-        return True
 
     async def _spawn_runtime_locked(
         self,
