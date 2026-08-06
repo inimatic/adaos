@@ -377,7 +377,11 @@ blocked.
   local current core repeated the real-bot proof: Telegram received the same
   five inline actions as the Web presentation, and exact action-label text was
   resolved before Automation/NLU. This is evidence for the channel adapter,
-  not completion evidence for executor-backed mutating controls.
+  not completion evidence for executor-backed mutating controls. The
+  2026-08-06 Web/Voice increment additionally proves that a consumed semantic
+  token is retired in the durable message projection and on the live client;
+  live mutating Telegram acceptance is still required before closing this
+  item.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
   immutable target, and expected generation with opaque tokens. Tokens are
   presentation references, never authority; generation, principal scope,
@@ -437,7 +441,11 @@ blocked.
   affordance labels/descriptions, interactions, and outputs. Validate
   `default_locale`, complete per-key English/Russian coverage, deterministic
   fallback, catalog digests, locale-coherent presentations, and channel limits
-  after localization.
+  after localization. Published outcome actions and the semantic Process
+  lineage now share English/Russian labels, and direct SDK/API language context
+  is normalized through the same projection as Router metadata. Remaining
+  non-published state/reason keys and package-level catalog digest admission
+  keep this item open.
 
 ## GWR3. NLU Mediation and Informal Responses
 
@@ -686,15 +694,25 @@ tests cover all legal and representative illegal paths.
   Trial -> accept Trial -> begin Publication`, using only canonical state,
   guards, policy, executor readiness, and lineage. Remove `active_phase`, `gate`,
   capability booleans, and handler allowlists as competing action authorities.
+  The Phase 11 presenter now derives its lifecycle actions and dependent
+  Process lineage from the canonical description, including stable
+  installation/placement, but retained compatibility fields and surface maps
+  have not yet met the removal gate.
 - [ ] `[must]` `GWR4-29` Replace raw command-id lists and Russian handler prose
   with a localized compact explanation that identifies the primary continuation,
   secondary safe actions, blockers, and executor/input requirements from one
-  snapshot.
+  snapshot. Commits `c736c191` and `4b156839` close the published outcome and
+  full Process-lineage slices for English/Russian text and controls. Raw
+  non-published state/reason identifiers and remaining private handler prose
+  keep the task open.
 - [ ] `[must]` `GWR4-30` Register concrete bounded Builder activities for
   Prototype derivation/LLM, Codex Automation, validation, Trial activation and
   observation, and Publication. Persist accepted/started/progress/
   input-required/terminal/replied/delivered outcomes without re-executing an
-  activity on response redelivery.
+  activity on response redelivery. Commit `7ff2a05e` supplies the concrete
+  immutable-package TrialActivation, reconstruction, detach, data-mode, and
+  conflict-boundary service; the complete registered activity set and recovered
+  reply lifecycle remain open.
 - [ ] `[must]` `GWR4-31` Migrate callers from
   `prepare_trial_compatibility`/`publish_compatibility` to the normative waiting
   and result transitions, reconcile the `trial_waiting` state with the declared
@@ -912,12 +930,19 @@ coverage.
   Automation -> verification -> Trial -> Publication using the built-in LLM and
   isolated Codex executors, real persisted callbacks, restart-safe ReplyRoute,
   and no manual state repair. Record exact package, workflow, activity, lineage,
-  release, and delivery evidence.
+  release, and delivery evidence. `workflow_lab_dashboard` is a real
+  LLM/Codex/Publication reference run and remains useful evidence, but it
+  predates the normative runtime-only Trial activation slice and therefore does
+  not close this acceptance gate by itself.
 - [ ] `[must]` `GWR5-38` Prove Web and Telegram semantic parity for the live
   Builder bridge in English and Russian: free text and controls converge on the
   same IntentProposal/InteractionResponse and command identities, used controls
   are retired or replaced idempotently, and presentation remains locale-coherent
-  under pagination, fallback, reconnect, and resume.
+  under pagination, fallback, reconnect, and resume. Core commit `46f681f1`
+  and client commit `466b3c9` close Web/Voice consumed-control persistence and
+  reload behavior; the 2026-08-06 live Web projection proves the localized
+  published action set. A new live Telegram mutating callback in both locales
+  is still required.
 
 The 2026-08-04 local increment is recorded in the linked verification ledger.
 Commits `5e0ed333`, `6dfd3442`, `b0dd4fae`, and `b72f2a7d` respectively close

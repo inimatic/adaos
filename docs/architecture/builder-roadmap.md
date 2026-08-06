@@ -1709,25 +1709,37 @@ The dated entries below remain the chronological implementation ledger.
   (`b0dd4fae`), and Story runner v2 plus Run/Trial metrics evidence
   (`b72f2a7d`). The local verification ledger keeps these proofs distinct from
   the open durable Telegram target-zone receipt and default cutover rollout.
-- [ ] `[must]` Add `adaos.project.placement.v1` and persist the distinction
+- [x] `[must]` Add `adaos.project.placement.v1` and persist the distinction
   between stable publication, Workspace installation, and a runnable Webspace
   placement. Published actions must open the placement through Navigation SDK
-  or offer `Place in Webspace` when it is absent.
-- [ ] `[must]` Replace raw published-state diagnostics with an outcome-oriented
+  or offer `Place in Webspace` when it is absent. Commit `c736c191` adds the
+  aggregate projection and stable placement/open actions; the live
+  `workflow_lab_dashboard` projection on 2026-08-06 offered `Place in
+  Webspace` because its stable release was installed but not placed.
+- [x] `[must]` Replace raw published-state diagnostics with an outcome-oriented
   localized message and a semantic Process lineage containing exact version,
   Prototype, Automation, verification, Trial, stable Release, Workspace
-  installation, and placement evidence.
-- [ ] `[must]` Replace prompt-only `builder.change.plan`/extend/edit/iterate
+  installation, and placement evidence. Commits `c736c191` and `4b156839`
+  make the Trial outcome independent from Publication and render the same
+  localized lineage for text and semantic-control inspection.
+- [x] `[must]` Replace prompt-only `builder.change.plan`/extend/edit/iterate
   controls with durable typed `input_required` interactions. Resume the exact
-  project/change/generation once and project a fresh action set.
-- [ ] `[must]` Implement runtime-only Trial activation from an immutable
+  project/change/generation once and project a fresh action set. The durable
+  continuation carries the project, Change, command, and expected generation;
+  stale or repeated responses cannot start another mutation.
+- [x] `[must]` Implement runtime-only Trial activation from an immutable
   Candidate PackageRef into derived `workspace/.runtime` state, with a durable
   TrialActivation record, restart reconstruction, explicit detach, bounded
-  data modes, and fail-closed shared-skill version-conflict detection.
-- [ ] `[should]` Apply the consumed-control lifecycle to Web/Voice chat as well
+  data modes, and fail-closed shared-skill version-conflict detection. Commit
+  `7ff2a05e` implements the derived materialization and reconciliation path;
+  simultaneous versions of a conflicting shared skill remain deliberately
+  rejected under the deferred boundary below.
+- [x] `[should]` Apply the consumed-control lifecycle to Web/Voice chat as well
   as Telegram: accepted historical tokens are unusable, old controls disappear
   on live update and reload, and the replacement Interaction comes from the
-  new workflow generation.
+  new workflow generation. Core commit `46f681f1` and client commit `466b3c9`
+  persist and optimistically project consumed actions as empty; focused server
+  and browser tests cover live update, reload, and idempotent re-use.
 - [ ] `[deferred]` Add full Trial data sandboxing, simultaneous versions of a
   shared skill, and public alpha/beta channel rollout. The MVP may render a
   Trial/alpha badge but cannot claim a registry channel promotion.

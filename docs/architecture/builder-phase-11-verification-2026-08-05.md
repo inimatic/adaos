@@ -156,6 +156,58 @@ promotion contains one `channel_moved` receipt plus activation operation
 new scenario and its required skill in this project closure while retaining
 the independently managed projects.
 
+### Outcome, Trial, and consumed-control increment — 2026-08-06
+
+The follow-up slice separates a stable release from its installation and
+runnable placement, and removes Preview language from the terminal published
+surface:
+
+- root commit `c736c191` adds the Project placement projection, exact stable
+  outcome actions, and restart-safe typed Builder continuations;
+- root commit `7ff2a05e` materializes immutable Candidate PackageRefs under
+  derived `workspace/.runtime/trials`, persists TrialActivation and data-mode
+  evidence, reconstructs missing derived state, and detaches explicitly;
+- root commit `46f681f1` plus client commit `466b3c9` retire consumed Web/Voice
+  controls durably and optimistically without repeating the underlying command;
+- root commit `4b156839` keeps the Trial node accepted after Publication and
+  localizes the semantic Process lineage independently of command identity;
+- client commit `b0a95e7` accepts exact runtime Trial navigation targets.
+
+The current DEV Builder scenario was checkpointed to Forge as
+`4d568b7dfba7e27bcba320183c719b96f38ea0b6` and published as stable scenario
+`0.2.56`. The Builder skill was checkpointed as
+`3c9d11b77f334f3d7a4c5b49b64d6da18f50dd29` and published as stable skill
+`0.3.36`. A direct-runtime restart loaded checkout commit `7ff2a05e`; the final
+root lineage correction requires the concluding restart recorded with this
+ledger.
+
+Live `builder_skill.chat` evidence for `workflow_lab_dashboard` produced one
+`adaos.conversation.interaction_presentation.v1` with these published actions:
+
+```text
+Place in Webspace
+Show process
+Refine project
+Change project
+Help
+```
+
+The project had stable version `0.1.2` installed in Workspace and no stable
+Webspace placement, so `Place in Webspace` was correct and no Preview action
+was present. The Russian text command `Строитель, покажи процесс` returned the
+same semantic lineage:
+
+```text
+Изменение -> Прототип -> Автоматизация -> Проверка -> Апробация
+-> Стабильная версия -> Установка в Workspace
+Дальше: Разместить в Webspace
+```
+
+The remaining acceptance gates are intentionally not hidden by these results:
+`GWR5-37` still needs a fresh operational empty-project run that uses the new
+runtime-only Trial path, and `GWR5-38` still needs a live mutating Telegram
+callback in both supported locales.
+
 ## Test evidence
 
 | Surface | Result |
@@ -176,6 +228,10 @@ the independently managed projects.
 | Client complete deterministic browser suite | 906 passed |
 | Client NavigationLocation/App/Modal/Auth/YDoc focused suite | 295 passed |
 | Client production build | passed, version 0.0.276 |
+| Phase 11 placement/Trial/Builder SDK regression | passed, 100/100 |
+| Current DEV `builder_skill` regression after localized Process change | passed, 167/167 |
+| Runtime Trial/navigation plus Voice consumed-control client suite | passed, 22/22 |
+| Published Trial status and Russian Process projection focus test | passed, 1/1 |
 
 Key commits in this slice are `69d4fb13`, `d0aeb3c9`, `ae6ae315`,
 `cd281033`, `85db66bb`, `36f24913`, `3d43e220`, `e6ce0790`, `cd4b2dea`,
