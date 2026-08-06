@@ -38,6 +38,8 @@ from adaos.apps.supervisor_runtime import (
     RuntimeRecoveryFacts,
     RuntimeRecoveryPolicy,
     SupervisorApiAdapter,
+    SupervisorMonitoringOperations,
+    SupervisorMonitoringService,
     SupervisorUpdateExecution,
     SupervisorUpdateExecutionOperations,
     UpdateStateMachine,
@@ -2632,6 +2634,7 @@ class SupervisorManager:
         self.runtime_port = int(runtime_port)
         self.token = str(token or "").strip() or None
         self._process_supervisor = ProcessSupervisor(psutil)
+        self._monitoring = SupervisorMonitoringService()
         self._update_execution = SupervisorUpdateExecution()
         self._update_state_machine = UpdateStateMachine()
         self._update_state_machine.bind_persistence(
@@ -2753,6 +2756,17 @@ class SupervisorManager:
         self._sidecar_last_sync_source_slot: str | None = None
         self._sidecar_last_sync_reason: str | None = None
         self._sidecar_last_sync_changed_paths: list[str] = []
+
+    @staticmethod
+    def _monitoring_operations() -> SupervisorMonitoringOperations:
+        return SupervisorMonitoringOperations(
+            active_slot=active_slot,
+            logger=_LOG,
+            realtime_sidecar_enabled=realtime_sidecar_enabled,
+            realtime_sidecar_listener_snapshot=realtime_sidecar_listener_snapshot,
+            restart_realtime_sidecar_subprocess=restart_realtime_sidecar_subprocess,
+            sidecar_code_change_debounce_sec=_sidecar_code_change_debounce_sec,
+        )
 
     @staticmethod
     def _update_execution_operations() -> SupervisorUpdateExecutionOperations:
@@ -8238,261 +8252,10 @@ class SupervisorManager:
         return payload
 
     async def _monitor_iteration_loop(self) -> None:
-        while True:
-            await asyncio.sleep(1.0)
-            self._monitor_last_iteration_at = time.time()
-            reconnect_hub_root_after_sidecar_restart = False
-            sidecar_proc = self._sidecar_proc
-            if sidecar_proc is not None and sidecar_proc.poll() is not None:
-                self._sidecar_last_restart_reason = "supervisor.sidecar.exited"
-                self._process_supervisor.track_sidecar(None)
-                self._persist_runtime_state()
-            if realtime_sidecar_enabled(role=self._sidecar_role()) and not self._stopping:
-                sync_result = self._sync_sidecar_controlled_files_from_validated_slot()
-                if bool(sync_result.get("changed")):
-                    self._persist_runtime_state()
-                sidecar_snapshot = realtime_sidecar_listener_snapshot(self._sidecar_proc, role=self._sidecar_role())
-                code_state = self._sidecar_code_state()
-                current_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
-                code_changed = bool(
-                    current_fingerprint
-                    and self._sidecar_code_fingerprint
-                    and current_fingerprint != self._sidecar_code_fingerprint
-                )
-                code_change_ready = False
-                if code_changed:
-                    if current_fingerprint != self._sidecar_code_change_pending_fingerprint:
-                        self._sidecar_code_change_pending_fingerprint = current_fingerprint
-                        self._sidecar_code_change_pending_since = time.time()
-                    elif self._sidecar_code_change_pending_since is not None:
-                        code_change_ready = (
-                            time.time() - float(self._sidecar_code_change_pending_since)
-                            >= _sidecar_code_change_debounce_sec()
-                        )
-                else:
-                    self._sidecar_code_change_pending_fingerprint = None
-                    self._sidecar_code_change_pending_since = None
-                sidecar_ready = await self._probe_sidecar_health()
-                should_restart_sidecar = False
-                restart_reason = None
-                if bool(sync_result.get("changed")):
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.validated_slot_sync"
-                elif self._sidecar_proc is None and not bool(sidecar_snapshot.get("listener_running")):
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.missing"
-                elif code_changed and code_change_ready:
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.code_changed"
-                elif sidecar_ready is False and self._sidecar_consecutive_probe_failures >= 2:
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.unhealthy"
-                if should_restart_sidecar:
-                    allowed, blocked_reason = self._sidecar_restart_allowed()
-                    if not allowed:
-                        self._sidecar_last_restart_reason = blocked_reason
-                        self._persist_runtime_state()
-                        await self._maybe_resume_or_continue_transition()
-                        candidate_proc = self._candidate_proc
-                        if candidate_proc is not None:
-                            candidate_rc = candidate_proc.poll()
-                            if candidate_rc is not None:
-                                self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                                self._process_supervisor.track_candidate(None)
-                                self._candidate_slot = None
-                                self._candidate_runtime_instance_id = None
-                                self._candidate_transition_role = None
-                                self._candidate_runtime_cwd = None
-                                self._persist_runtime_state()
-                        proc = self._proc
-                        if proc is None:
-                            self._runtime_unhealthy_since = None
-                            self._runtime_unhealthy_kind = None
-                            if self._desired_running and not self._stopping:
-                                async with self._lock:
-                                    if self._proc is None and self._desired_running and not self._stopping:
-                                        await self._spawn_runtime_locked(
-                                            reason="supervisor.monitor.ensure_running",
-                                            adopt_existing=True,
-                                        )
-                            continue
-                    try:
-                        async with self._lock:
-                            stale_code_restart = False
-                            if restart_reason in {
-                                "supervisor.sidecar.validated_slot_sync",
-                                "supervisor.sidecar.code_changed",
-                            }:
-                                refreshed_code_state = self._sidecar_code_state()
-                                refreshed_fingerprint = (
-                                    str(refreshed_code_state.get("fingerprint") or "").strip() or None
-                                )
-                                stale_code_restart = bool(
-                                    refreshed_fingerprint
-                                    and refreshed_fingerprint == self._sidecar_code_fingerprint
-                                )
-                                if stale_code_restart:
-                                    self._sidecar_code_change_pending_fingerprint = None
-                                    self._sidecar_code_change_pending_since = None
-                            if self._stopping or stale_code_restart:
-                                pass
-                            elif self._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
-                                self._sidecar_last_restart_reason = restart_reason
-                                await self._spawn_sidecar_locked(reason=restart_reason)
-                                reconnect_hub_root_after_sidecar_restart = True
-                            else:
-                                self._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                new_proc, restart_result = await restart_realtime_sidecar_subprocess(
-                                    proc=self._sidecar_proc,
-                                    role=self._sidecar_role(),
-                                    repo_root=str(self._sidecar_repo_root() or "").strip() or None,
-                                )
-                                self._process_supervisor.track_sidecar(new_proc)
-                                self._sidecar_launch_cwd = str(code_state.get("repo_root") or self._sidecar_launch_cwd or "") or None
-                                self._sidecar_code_fingerprint = current_fingerprint
-                                self._sidecar_code_fingerprint_updated_at = time.time() if current_fingerprint else None
-                                self._sidecar_last_start_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                self._sidecar_last_restart_reason = str(restart_reason or restart_result.get("reason") or "restarted")
-                                self._sidecar_last_probe_at = None
-                                self._sidecar_last_probe_ok = None
-                                self._sidecar_last_probe_error = None
-                                self._sidecar_consecutive_probe_failures = 0
-                                self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
-                                self._persist_runtime_state()
-                                reconnect_hub_root_after_sidecar_restart = True
-                    except Exception:
-                        _LOG.warning("failed to restart adaos-realtime sidecar", exc_info=True)
-                if reconnect_hub_root_after_sidecar_restart:
-                    reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
-                    if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
-                        _LOG.warning(
-                            "failed to reconnect hub-root after sidecar restart: %s",
-                            reconnect_result.get("error") or reconnect_result,
-                        )
-            await self._maybe_resume_or_continue_transition()
-            candidate_proc = self._candidate_proc
-            if candidate_proc is not None:
-                candidate_rc = candidate_proc.poll()
-                if candidate_rc is not None:
-                    self._candidate_last_stop_reason = self._candidate_last_stop_reason or "supervisor.candidate.exited"
-                    self._process_supervisor.track_candidate(None)
-                    self._candidate_slot = None
-                    self._candidate_runtime_instance_id = None
-                    self._candidate_transition_role = None
-                    self._candidate_runtime_cwd = None
-                    self._persist_runtime_state()
-            proc = self._proc
-            if proc is None:
-                self._runtime_unhealthy_since = None
-                self._runtime_unhealthy_kind = None
-                if self._desired_running and not self._stopping:
-                    async with self._lock:
-                        if self._proc is None and self._desired_running and not self._stopping:
-                            await self._spawn_runtime_locked(
-                                reason="supervisor.monitor.ensure_running",
-                                adopt_existing=True,
-                            )
-                continue
-            rc = proc.poll()
-            if rc is None:
-                with contextlib.suppress(Exception):
-                    self._sample_memory_telemetry()
-                critical_memory_decision = self._memory_critical_restart_decision()
-                if critical_memory_decision is not None:
-                    with contextlib.suppress(Exception):
-                        critical_memory_decision["pre_restart_evidence"] = self._capture_runtime_stop_evidence(
-                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure"),
-                            stage="memory_critical_restart",
-                            decision=dict(critical_memory_decision),
-                        )
-                    self._last_error = str(
-                        critical_memory_decision.get("message") or "runtime restart requested due to critical memory pressure"
-                    )
-                    self._memory_critical_restart_last_at = time.time()
-                    self._persist_runtime_state()
-                    try:
-                        await self.restart_runtime(
-                            reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure")
-                        )
-                    except Exception:
-                        _LOG.warning("failed to self-heal critical memory pressure", exc_info=True)
-                    continue
-                try:
-                    await self._maybe_apply_memory_profile_mode()
-                except Exception as exc:
-                    _LOG.warning("failed to apply requested memory profile mode", exc_info=True)
-                    if str(self._memory_active_session_id or "").strip() and self._desired_memory_profile_mode() != "normal":
-                        self._fail_active_memory_session(
-                            reason=f"requested_profile_mode_apply_error.{self._desired_memory_profile_mode()}",
-                            stage="profile_apply_error",
-                            details={
-                                "error": f"{type(exc).__name__}: {exc}",
-                                "active_slot": str(active_slot() or "").strip().upper() or None,
-                                "runtime_instance_id": self._managed_runtime_instance_id,
-                                "transition_role": self._managed_transition_role,
-                            },
-                        )
-                try:
-                    self._expire_stuck_requested_memory_profile()
-                except Exception:
-                    _LOG.warning("failed to expire stuck requested memory profile session", exc_info=True)
-                finalize_profile = self._should_finalize_active_memory_profile()
-                if finalize_profile is not None:
-                    try:
-                        finalize_trigger_source = str(finalize_profile.get("trigger_source") or "").strip().lower() or None
-                        self.stop_memory_profile(
-                            str(finalize_profile.get("session_id") or ""),
-                            reason=str(finalize_profile.get("reason") or "supervisor.memory.profile_window_complete"),
-                        )
-                        if finalize_trigger_source:
-                            self._memory_profile_current_trigger_source = finalize_trigger_source
-                        allowed, block_reason = self._memory_profile_restart_guard(desired_mode="normal")
-                        if not allowed:
-                            self._record_memory_auto_profile_block(block_reason)
-                            self._persist_runtime_state()
-                            continue
-                        await self.restart_runtime(
-                            reason=f"supervisor.memory.complete_profile_mode.{str(finalize_profile.get('profile_mode') or 'profile')}"
-                        )
-                    except Exception:
-                        _LOG.warning("failed to finalize active memory profile session", exc_info=True)
-                    continue
-                try:
-                    await self._maybe_maintain_required_upstream_link()
-                except Exception:
-                    _LOG.warning("required-upstream-link supervisor watchdog failed", exc_info=True)
-                if await self._maybe_self_heal_runtime():
-                    continue
-                continue
-            self._last_exit_code = int(rc)
-            self._last_exit_at = time.time()
-            self._last_stop_reason = self._last_stop_reason or "supervisor.runtime.exited"
-            if self._memory_profile_mode != "normal" and not self._stopping and self._desired_running:
-                self._fail_active_memory_session(
-                    reason="runtime_exited_during_profile_mode",
-                    exit_code=int(rc),
-                )
-            self._process_supervisor.track_active(None)
-            self._managed_runtime_instance_id = None
-            self._managed_transition_role = None
-            self._managed_slot = None
-            self._managed_runtime_port = None
-            self._managed_runtime_base_url = None
-            self._managed_runtime_cwd = None
-            self._runtime_unhealthy_since = None
-            self._runtime_unhealthy_kind = None
-            self._memory_profile_mode = "normal"
-            self._memory_profile_current_trigger_source = None
-            self._persist_runtime_state()
-            if self._stopping or not self._desired_running:
-                continue
-            async with self._lock:
-                if self._proc is None and self._desired_running and not self._stopping:
-                    await asyncio.sleep(1.0)
-                    await self._spawn_runtime_locked(
-                        reason="supervisor.monitor.respawn_after_exit",
-                        adopt_existing=True,
-                    )
+        await self._monitoring.run_iteration_loop(
+            self,
+            self._monitoring_operations(),
+        )
 
     async def monitor_forever(self) -> None:
         """Resume monitoring after a bounded iteration failure.

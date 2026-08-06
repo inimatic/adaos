@@ -10,6 +10,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/apps/supervisor_runtime/__init__.py",
     "src/adaos/apps/supervisor_runtime/api.py",
     "src/adaos/apps/supervisor_runtime/memory.py",
+    "src/adaos/apps/supervisor_runtime/monitoring.py",
     "src/adaos/apps/supervisor_runtime/process.py",
     "src/adaos/apps/supervisor_runtime/recovery.py",
     "src/adaos/apps/supervisor_runtime/routes.py",
