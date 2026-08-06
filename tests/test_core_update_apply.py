@@ -864,7 +864,9 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/apps/supervisor_runtime/monitoring.py" in critical
     assert "src/adaos/apps/supervisor_runtime/status.py" in critical
     assert "src/adaos/services/bootstrap_runtime/boot_sequence.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/nats_credentials.py" in critical
     assert "src/adaos/services/bootstrap_runtime/nats_root_runtime.py" in critical
+    assert "src/adaos/services/bootstrap_runtime/nats_transport_runtime.py" in critical
     assert "src/adaos/services/bootstrap_runtime/route_tunnel_runtime.py" in critical
     assert "src/adaos/services/scenario/webspace_components/cache.py" in critical
     assert "src/adaos/services/scenario/webspace_components/materialization_runtime.py" in critical
