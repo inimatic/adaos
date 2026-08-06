@@ -4,6 +4,7 @@ from .monitoring import SupervisorMonitoringOperations, SupervisorMonitoringServ
 from .process import AdoptedProcess, ProcessSupervisor
 from .recovery import RuntimeRecoveryFacts, RuntimeRecoveryPolicy
 from .routes import create_supervisor_routes
+from .status import SupervisorStatusOperations, SupervisorStatusService
 from .update_execution import SupervisorUpdateExecution, SupervisorUpdateExecutionOperations
 from .update_state import UpdateStateMachine
 
@@ -20,6 +21,8 @@ __all__ = [
     "SupervisorUpdateExecutionOperations",
     "UpdateStateMachine",
     "SupervisorRoute",
+    "SupervisorStatusOperations",
+    "SupervisorStatusService",
     "create_supervisor_app",
     "create_supervisor_routes",
 ]
