@@ -1142,6 +1142,29 @@ class RootHttpClient:
             )
         )
 
+    def hub_lifecycle_report(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        verify: str | bool | ssl.SSLContext | None = None,
+        cert: tuple[str, str] | None = None,
+    ) -> dict:
+        return dict(
+            self._request(
+                "POST",
+                "/v1/hub/lifecycle/report",
+                json=dict(payload),
+                verify=(self.verify if verify is None else verify),
+                cert=(self.cert if cert is None else cert),
+                timeout=_env_timeout_s(
+                    "ADAOS_HUB_LIFECYCLE_REPORT_TIMEOUT_S",
+                    5.0,
+                    minimum=0.25,
+                    maximum=30.0,
+                ),
+            )
+        )
+
     def hub_memory_profile_report(
         self,
         *,

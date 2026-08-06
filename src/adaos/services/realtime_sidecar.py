@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -70,6 +72,48 @@ _MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
     "public_bases": [],
     "last_error": None,
 }
+
+_LIFECYCLE_RUNTIME_FIELDS = (
+    "runtime_state",
+    "runtime_api_ready",
+    "listener_running",
+    "desired_running",
+    "stopping",
+    "managed_alive",
+    "runtime_instance_id",
+    "transition_role",
+    "active_slot",
+    "managed_slot",
+    "runtime_url",
+    "runtime_port",
+    "last_error",
+)
+_LIFECYCLE_UPDATE_FIELDS = (
+    "state",
+    "phase",
+    "action",
+    "message",
+    "reason",
+    "target_rev",
+    "target_version",
+    "target_slot",
+    "scheduled_for",
+    "started_at",
+    "finished_at",
+    "updated_at",
+)
+_LIFECYCLE_ATTEMPT_FIELDS = (
+    "state",
+    "action",
+    "phase",
+    "target_rev",
+    "target_version",
+    "target_slot",
+    "completion_reason",
+    "requested_at",
+    "started_at",
+    "finished_at",
+)
 
 
 def _truthy(value: Any, *, default: bool = False) -> bool:
@@ -1579,6 +1623,135 @@ class _RelayStats:
     last_remote_disconnect_at: float | None = None
 
 
+def _read_lifecycle_state(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _compact_lifecycle_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+    return {field: payload[field] for field in fields if field in payload}
+
+
+def _sidecar_lifecycle_semantic_fingerprint(payload: dict[str, Any]) -> str:
+    semantic = json.loads(json.dumps(payload, ensure_ascii=False))
+    semantic.pop("reported_at", None)
+    semantic.pop("source_epoch", None)
+    semantic.pop("revision", None)
+    supervisor = semantic.get("supervisor") if isinstance(semantic.get("supervisor"), dict) else {}
+    supervisor.pop("observed_at", None)
+    raw = json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_sidecar_lifecycle_report(
+    *,
+    base_dir: Path,
+    transport_snapshot: dict[str, Any],
+    runtime_listener_ready: bool,
+    source_epoch: str,
+    revision: int,
+    reported_at: float | None = None,
+) -> dict[str, Any]:
+    now = time.time() if reported_at is None else float(reported_at)
+    state_dir = Path(base_dir).resolve() / "state"
+    runtime = _read_lifecycle_state(state_dir / "supervisor" / "runtime.json")
+    attempt = _read_lifecycle_state(state_dir / "supervisor" / "update_attempt.json")
+    status = _read_lifecycle_state(state_dir / "core_update" / "status.json")
+    compact_runtime = _compact_lifecycle_fields(runtime, _LIFECYCLE_RUNTIME_FIELDS)
+    desired_running = compact_runtime.get("desired_running") is not False
+    managed_alive = compact_runtime.get("managed_alive") is not False
+    listener_ready = bool(runtime_listener_ready and desired_running and managed_alive)
+    compact_runtime["listener_running"] = listener_ready
+    if not listener_ready:
+        compact_runtime["runtime_api_ready"] = False
+        if not desired_running or not managed_alive:
+            compact_runtime["runtime_state"] = "stopped"
+        elif str(compact_runtime.get("runtime_state") or "").strip().lower() == "ready":
+            compact_runtime["runtime_state"] = "unavailable"
+
+    active_session = bool(transport_snapshot.get("active_session"))
+    remote_connected = isinstance(transport_snapshot.get("remote_connected_ago_s"), (int, float))
+    transport_error = str(transport_snapshot.get("last_error") or "").strip() or None
+    transport_ready = bool(active_session and remote_connected and not transport_error)
+    if transport_ready:
+        transport_state = "ready"
+    elif active_session or bool(transport_snapshot.get("remote_connect_retrying")):
+        transport_state = "degraded"
+    else:
+        transport_state = "offline"
+
+    return {
+        "schema": "adaos.hub.lifecycle.sidecar.v1",
+        "source": "realtime_sidecar",
+        "source_epoch": str(source_epoch),
+        "revision": int(revision),
+        "reported_at": now,
+        "supervisor": {
+            "observed_at": now,
+            "status": _compact_lifecycle_fields(status, _LIFECYCLE_UPDATE_FIELDS),
+            "attempt": _compact_lifecycle_fields(attempt, _LIFECYCLE_ATTEMPT_FIELDS),
+            "runtime": compact_runtime,
+        },
+        "transport": {
+            "owner": "sidecar",
+            "state": transport_state,
+            "ready": transport_ready,
+            "listener_ready": bool(transport_snapshot.get("listen")),
+            "active_session": active_session,
+            "remote_connected": remote_connected,
+            "remote_connect_retrying": bool(transport_snapshot.get("remote_connect_retrying")),
+            "last_error": transport_error,
+            "session_id": str(transport_snapshot.get("session_id") or "").strip() or None,
+        },
+    }
+
+
+def _sidecar_lifecycle_report_target() -> tuple[str, Path | None, Path, Path] | None:
+    try:
+        from adaos.services.node_config import load_config
+
+        conf = load_config()
+        if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+            return None
+        base_url = str(getattr(getattr(conf, "root_settings", None), "base_url", "") or "").strip().rstrip("/")
+        cert_path = Path(conf.hub_cert_path()).resolve()
+        key_path = Path(conf.hub_key_path()).resolve()
+        ca_path = Path(conf.ca_cert_path()).resolve()
+    except Exception:
+        return None
+    if not base_url or not cert_path.is_file() or not key_path.is_file():
+        return None
+    return base_url, (ca_path if ca_path.is_file() else None), cert_path, key_path
+
+
+def _post_sidecar_lifecycle_report(payload: dict[str, Any]) -> None:
+    target = _sidecar_lifecycle_report_target()
+    if target is None:
+        raise RuntimeError("hub lifecycle mTLS target is unavailable")
+    base_url, ca_path, cert_path, key_path = target
+    context = ssl.create_default_context(cafile=str(ca_path) if ca_path is not None else None)
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    request = UrlRequest(
+        base_url + "/v1/hub/lifecycle/report",
+        data=body,
+        method="POST",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        timeout_s = max(0.5, float(os.getenv("ADAOS_SIDECAR_LIFECYCLE_REPORT_TIMEOUT_S", "5") or "5"))
+    except Exception:
+        timeout_s = 5.0
+    with urlopen(request, timeout=timeout_s, context=context) as response:
+        status = int(getattr(response, "status", 0) or 0)
+        if status < 200 or status >= 300:
+            raise RuntimeError(f"root lifecycle report returned HTTP {status}")
+        response.read()
+
+
 class RealtimeSidecarServer:
     def __init__(self, *, host: str, port: int) -> None:
         self._host = str(host or "127.0.0.1")
@@ -1589,6 +1762,10 @@ class RealtimeSidecarServer:
         self._media_server: asyncio.AbstractServer | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
         self._diag_task: asyncio.Task[Any] | None = None
+        self._lifecycle_task: asyncio.Task[Any] | None = None
+        self._lifecycle_source_epoch = str(uuid.uuid4())
+        self._lifecycle_revision = 0
+        self._lifecycle_fingerprint: str | None = None
         self._stopped = asyncio.Event()
         self._shutdown_requested = asyncio.Event()
         self._stats = _RelayStats()
@@ -1718,6 +1895,91 @@ class RealtimeSidecarServer:
             except asyncio.TimeoutError:
                 continue
 
+    async def _runtime_listener_ready_for_lifecycle(self) -> bool:
+        runtime_path = current_base_dir() / "state" / "supervisor" / "runtime.json"
+        runtime = _read_lifecycle_state(runtime_path)
+        if runtime.get("desired_running") is False or runtime.get("managed_alive") is False:
+            return False
+        endpoint = _route_tunnel_runtime_endpoint_from_payload(runtime)
+        if endpoint is None:
+            return False
+        writer: asyncio.StreamWriter | None = None
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(endpoint[0], endpoint[1]),
+                timeout=0.25,
+            )
+            return True
+        except Exception:
+            return False
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+
+    async def _lifecycle_report_loop(self) -> None:
+        try:
+            from adaos.services.node_config import load_config
+
+            node_role = str(getattr(load_config(), "role", "") or "").strip().lower()
+        except Exception:
+            node_role = ""
+        if node_role and node_role != "hub":
+            return
+        try:
+            scan_s = max(0.5, float(os.getenv("ADAOS_SIDECAR_LIFECYCLE_SCAN_S", "2") or "2"))
+        except Exception:
+            scan_s = 2.0
+        try:
+            heartbeat_s = max(5.0, float(os.getenv("ADAOS_SIDECAR_LIFECYCLE_HEARTBEAT_S", "15") or "15"))
+        except Exception:
+            heartbeat_s = 15.0
+        last_success_at = 0.0
+        next_attempt_at = 0.0
+        failure_total = 0
+        last_error = ""
+        while not self._stopped.is_set():
+            now = time.time()
+            runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle()
+            payload = build_sidecar_lifecycle_report(
+                base_dir=current_base_dir(),
+                transport_snapshot=self._diag_snapshot(),
+                runtime_listener_ready=runtime_listener_ready,
+                source_epoch=self._lifecycle_source_epoch,
+                revision=self._lifecycle_revision,
+                reported_at=now,
+            )
+            fingerprint = _sidecar_lifecycle_semantic_fingerprint(payload)
+            changed = fingerprint != self._lifecycle_fingerprint
+            if changed:
+                self._lifecycle_revision += 1
+                self._lifecycle_fingerprint = fingerprint
+                payload["revision"] = self._lifecycle_revision
+            should_report = changed or (now - last_success_at) >= heartbeat_s
+            if should_report and now >= next_attempt_at:
+                try:
+                    await asyncio.to_thread(_post_sidecar_lifecycle_report, payload)
+                except Exception as exc:
+                    failure_total += 1
+                    error = f"{type(exc).__name__}: {exc}"
+                    delay_s = min(60.0, max(2.0, float(2 ** min(5, failure_total - 1))))
+                    next_attempt_at = time.time() + delay_s
+                    if failure_total == 1 or error != last_error:
+                        self._log(f"lifecycle report deferred retry_s={delay_s:.1f} err={error}")
+                    last_error = error
+                else:
+                    if failure_total > 0:
+                        self._log(f"lifecycle report recovered after failures={failure_total}")
+                    failure_total = 0
+                    last_error = ""
+                    next_attempt_at = 0.0
+                    last_success_at = time.time()
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=scan_s)
+            except asyncio.TimeoutError:
+                continue
+
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle_client, self._host, self._port)
         try:
@@ -1738,6 +2000,13 @@ class RealtimeSidecarServer:
         await self._start_route_tunnel_listeners()
         await self._start_media_proxy_listener()
         self._diag_task = asyncio.create_task(self._diag_loop(), name="adaos-realtime-diag")
+        lifecycle_enabled = _truthy(os.getenv("ADAOS_SIDECAR_LIFECYCLE_REPORT_ENABLE"), default=True)
+        is_managed_child = _truthy(os.getenv("ADAOS_REALTIME_CHILD"), default=False)
+        if lifecycle_enabled and is_managed_child:
+            self._lifecycle_task = asyncio.create_task(
+                self._lifecycle_report_loop(),
+                name="adaos-realtime-lifecycle-report",
+            )
         self._log(
             f"serve start listen=nats://{self.listen_host}:{self.listen_port} remote_candidates={resolve_realtime_remote_candidates()} "
             f"loop={type(asyncio.get_running_loop()).__name__} log={realtime_sidecar_log_path()} diag={realtime_sidecar_diag_path()}"
@@ -1833,6 +2102,10 @@ class RealtimeSidecarServer:
             self._diag_task.cancel()
             with contextlib.suppress(BaseException):
                 await self._diag_task
+        if self._lifecycle_task is not None and not self._lifecycle_task.done():
+            self._lifecycle_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._lifecycle_task
 
     async def _start_route_tunnel_listeners(self) -> None:
         listeners = realtime_sidecar_route_tunnel_listeners()

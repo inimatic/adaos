@@ -585,6 +585,10 @@ def _hub_root_watchdog_enabled() -> bool:
     return _RUNTIME_CONFIG.hub_root_watchdog_enabled()
 
 
+def _required_upstream_watchdog_poll_interval_sec() -> float:
+    return _RUNTIME_CONFIG.required_upstream_watchdog_poll_interval_sec()
+
+
 def _hub_root_watchdog_cooldown_sec() -> float:
     return _RUNTIME_CONFIG.hub_root_watchdog_cooldown_sec()
 
@@ -2003,6 +2007,7 @@ class SupervisorManager:
         self._sidecar_last_sync_source_slot: str | None = None
         self._sidecar_last_sync_reason: str | None = None
         self._sidecar_last_sync_changed_paths: list[str] = []
+        self._required_upstream_watchdog_last_poll_at: float | None = None
 
     @staticmethod
     def _process_operations() -> ProcessSupervisorOperations:
@@ -4007,6 +4012,8 @@ class SupervisorManager:
             "cooldown_sec": _hub_root_watchdog_cooldown_sec(),
             "reset_degraded_route": _hub_root_watchdog_reset_degraded_route_enabled(),
             "verify_timeout_sec": _hub_root_watchdog_verify_timeout_sec(),
+            "poll_interval_sec": _required_upstream_watchdog_poll_interval_sec(),
+            "last_poll_at": self._required_upstream_watchdog_last_poll_at,
             "log_path": str(log_path),
             "last_result": _compact_watchdog_last_result(self._hub_root_watchdog_last_result),
             "root_perspective_probe": self._hub_root_root_probe_state_payload(),
@@ -4030,6 +4037,8 @@ class SupervisorManager:
             "reconnect_total": int(self._member_hub_watchdog_reconnect_total),
             "cooldown_sec": _member_hub_watchdog_cooldown_sec(),
             "verify_timeout_sec": _member_hub_watchdog_verify_timeout_sec(),
+            "poll_interval_sec": _required_upstream_watchdog_poll_interval_sec(),
+            "last_poll_at": self._required_upstream_watchdog_last_poll_at,
             "log_path": str(log_path),
             "last_result": _compact_watchdog_last_result(self._member_hub_watchdog_last_result),
             "post_recovery_refresh": self._post_recovery_member_hub_refresh_state_payload(),
@@ -4717,6 +4726,14 @@ class SupervisorManager:
         return self._hub_root_watchdog_decision(runtime, now=now)
 
     async def _maybe_maintain_required_upstream_link(self) -> None:
+        now = time.time()
+        last_poll_at = self._required_upstream_watchdog_last_poll_at
+        if (
+            last_poll_at is not None
+            and now - float(last_poll_at) < _required_upstream_watchdog_poll_interval_sec()
+        ):
+            return
+        self._required_upstream_watchdog_last_poll_at = now
         role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
         if role == "member":
             await self._maybe_reconnect_member_hub_from_watchdog()

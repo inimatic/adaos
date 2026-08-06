@@ -1781,6 +1781,28 @@ def test_required_upstream_link_maintenance_dispatches_to_hub_watchdog(monkeypat
     assert calls == ["hub"]
 
 
+def test_required_upstream_link_maintenance_throttles_runtime_snapshot_poll(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPSTREAM_WATCHDOG_POLL_INTERVAL_SEC", "10")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "hub"
+    clock = {"now": 100.0}
+    calls: list[float] = []
+
+    async def _hub() -> None:
+        calls.append(clock["now"])
+
+    monkeypatch.setattr(supervisor.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(manager, "_maybe_reconnect_hub_root_from_watchdog", _hub)
+
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+    clock["now"] = 101.0
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+    clock["now"] = 110.0
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+
+    assert calls == [100.0, 110.0]
+
+
 def test_supervisor_start_update_and_cancel(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")

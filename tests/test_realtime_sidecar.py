@@ -11,6 +11,7 @@ from adaos.apps.cli.commands import realtime as realtime_cmd
 from adaos.services import realtime_sidecar as realtime_sidecar_mod
 from adaos.services.realtime_sidecar import (
     RealtimeSidecarServer,
+    build_sidecar_lifecycle_report,
     realtime_sidecar_enablement_policy,
     realtime_sidecar_enabled,
     realtime_sidecar_local_url,
@@ -27,6 +28,73 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def test_sidecar_lifecycle_report_compacts_durable_state_and_transport(tmp_path: Path) -> None:
+    (tmp_path / "state" / "supervisor").mkdir(parents=True)
+    (tmp_path / "state" / "core_update").mkdir(parents=True)
+    (tmp_path / "state" / "supervisor" / "runtime.json").write_text(
+        '{"runtime_state":"ready","runtime_api_ready":true,"managed_alive":true,'
+        '"desired_running":true,"runtime_instance_id":"runtime-a",'
+        '"runtime_url":"http://127.0.0.1:8777","secret":"must-not-leak"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "state" / "supervisor" / "update_attempt.json").write_text(
+        '{"state":"active","target_version":"next","private":"drop"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "state" / "core_update" / "status.json").write_text(
+        '{"state":"running","phase":"prepare","message":"updating","private":"drop"}',
+        encoding="utf-8",
+    )
+
+    payload = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={
+            "listen": "127.0.0.1:7422",
+            "active_session": True,
+            "remote_connected_ago_s": 1.25,
+            "session_id": "transport-a",
+            "last_error": None,
+        },
+        runtime_listener_ready=True,
+        source_epoch="epoch-a",
+        revision=3,
+        reported_at=100.0,
+    )
+
+    assert payload["schema"] == "adaos.hub.lifecycle.sidecar.v1"
+    assert payload["transport"]["state"] == "ready"
+    assert payload["transport"]["ready"] is True
+    assert payload["supervisor"]["runtime"]["runtime_api_ready"] is True
+    assert payload["supervisor"]["runtime"]["runtime_instance_id"] == "runtime-a"
+    assert "secret" not in payload["supervisor"]["runtime"]
+    assert "private" not in payload["supervisor"]["status"]
+    assert "private" not in payload["supervisor"]["attempt"]
+
+
+def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: Path) -> None:
+    first = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": False},
+        runtime_listener_ready=False,
+        source_epoch="epoch-a",
+        revision=1,
+        reported_at=100.0,
+    )
+    second = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": False},
+        runtime_listener_ready=False,
+        source_epoch="epoch-a",
+        revision=2,
+        reported_at=115.0,
+    )
+
+    assert (
+        realtime_sidecar_mod._sidecar_lifecycle_semantic_fingerprint(first)
+        == realtime_sidecar_mod._sidecar_lifecycle_semantic_fingerprint(second)
+    )
 
 
 def test_realtime_sidecar_rotates_diag_and_log_with_five_backups(

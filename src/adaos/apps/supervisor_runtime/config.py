@@ -195,6 +195,13 @@ class SupervisorRuntimeConfig:
     def hub_root_watchdog_enabled(self) -> bool:
         return self._enabled("ADAOS_SUPERVISOR_HUB_ROOT_WATCHDOG", default=True)
 
+    def required_upstream_watchdog_poll_interval_sec(self) -> float:
+        return self._float(
+            "ADAOS_SUPERVISOR_UPSTREAM_WATCHDOG_POLL_INTERVAL_SEC",
+            10.0,
+            minimum=2.0,
+        )
+
     def hub_root_watchdog_cooldown_sec(self) -> float:
         return self._float(
             "ADAOS_SUPERVISOR_HUB_ROOT_RECONNECT_COOLDOWN_SEC", 30.0, minimum=5.0

@@ -186,6 +186,24 @@ def test_hub_control_report_uses_short_configurable_timeout(monkeypatch) -> None
     assert captured["timeout"] == 1.25
 
 
+def test_hub_lifecycle_report_uses_dedicated_endpoint_and_timeout(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _request(_self, method, path, **kwargs):
+        captured.update(method=method, path=path, **kwargs)
+        return {"ok": True}
+
+    monkeypatch.setenv("ADAOS_HUB_LIFECYCLE_REPORT_TIMEOUT_S", "1.5")
+    monkeypatch.setattr(RootHttpClient, "_request", _request)
+    client = RootHttpClient(base_url="https://api.example.test")
+
+    assert client.hub_lifecycle_report(payload={"revision": 7}) == {"ok": True}
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/v1/hub/lifecycle/report"
+    assert captured["json"] == {"revision": 7}
+    assert captured["timeout"] == 1.5
+
+
 def test_draft_push_sends_vcs_commit_message(monkeypatch) -> None:
     captured: list[tuple[str, str, dict]] = []
     client = RootHttpClient(base_url="https://api.example.test")
