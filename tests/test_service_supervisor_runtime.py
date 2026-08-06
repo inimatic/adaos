@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from adaos.services.skill import service_supervisor_runtime as runtime_module
 
@@ -44,6 +45,28 @@ def test_service_supervisor_runtime_stops_service_on_skill_deactivated(monkeypat
     asyncio.run(runtime_module._on_skill_deactivated({"name": "service_skill"}))
 
     assert fake.events == [("stop", "service_skill")]
+
+
+def test_service_supervisor_runtime_discovers_services_off_event_loop(monkeypatch) -> None:
+    fake = _FakeSupervisor()
+    discovery_threads: list[int] = []
+
+    def _ensure_discovered() -> None:
+        discovery_threads.append(threading.get_ident())
+
+    fake.ensure_discovered = _ensure_discovered  # type: ignore[method-assign]
+    monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+
+    async def _run() -> int:
+        event_loop_thread = threading.get_ident()
+        assert await runtime_module._restart_if_service("service_skill", reason="skills.activated") is True
+        return event_loop_thread
+
+    event_loop_thread = asyncio.run(_run())
+
+    assert discovery_threads
+    assert discovery_threads[0] != event_loop_thread
+    assert fake.events == [("restart", "service_skill")]
 
 
 def test_service_supervisor_runtime_stops_all_services_on_subnet_stopping(monkeypatch) -> None:

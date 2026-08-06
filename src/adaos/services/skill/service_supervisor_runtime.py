@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -148,13 +149,24 @@ def _emit_runtime_recovery(topic: str, payload: dict[str, Any]) -> None:
         _log.debug("failed to emit runtime recovery event topic=%s", topic, exc_info=True)
 
 
+def _discover_service_names(supervisor: Any) -> set[str]:
+    """Run filesystem/process discovery away from the runtime event loop."""
+
+    supervisor.ensure_discovered()
+    return {str(name) for name in supervisor.list()}
+
+
+async def _is_managed_service(supervisor: Any, skill_name: str) -> bool:
+    names = await asyncio.to_thread(_discover_service_names, supervisor)
+    return skill_name in names
+
+
 async def _restart_if_service(skill_name: str | None, *, reason: str) -> bool:
     if not skill_name:
         return False
     try:
         supervisor = get_service_supervisor()
-        supervisor.ensure_discovered()
-        if skill_name not in supervisor.list():
+        if not await _is_managed_service(supervisor, skill_name):
             return False
         await supervisor.restart(skill_name)
         _log.info("service restarted skill=%s reason=%s", skill_name, reason)
@@ -175,8 +187,7 @@ async def _stop_if_service(skill_name: str | None, *, reason: str) -> bool:
         return False
     try:
         supervisor = get_service_supervisor()
-        supervisor.ensure_discovered()
-        if skill_name not in supervisor.list():
+        if not await _is_managed_service(supervisor, skill_name):
             return False
         await supervisor.stop(skill_name)
         _log.info("service stopped skill=%s reason=%s", skill_name, reason)
@@ -195,7 +206,7 @@ async def _stop_if_service(skill_name: str | None, *, reason: str) -> bool:
 async def _stop_all_services(*, reason: str) -> bool:
     supervisor = get_service_supervisor()
     try:
-        supervisor.ensure_discovered()
+        service_names = await asyncio.to_thread(_discover_service_names, supervisor)
     except Exception as exc:
         _log.warning("failed to discover service supervisor before shutdown reason=%s", reason, exc_info=True)
         await _publish_service_recovery_action(
@@ -216,17 +227,6 @@ async def _stop_all_services(*, reason: str) -> bool:
             shutdown_exc = exc
             _log.warning("failed to shutdown service supervisor reason=%s", reason, exc_info=True)
     ok = True
-    try:
-        service_names = list(supervisor.list())
-    except Exception as exc:
-        _log.warning("failed to list services during supervisor shutdown reason=%s", reason, exc_info=True)
-        await _publish_service_recovery_action(
-            operation="stop_all_services",
-            skill_name=None,
-            reason=reason,
-            exc=exc,
-        )
-        return False
     for skill_name in service_names:
         try:
             await supervisor.stop(skill_name)
