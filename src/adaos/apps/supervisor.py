@@ -37,6 +37,7 @@ from adaos.apps.supervisor_runtime import (
     MemoryProfilingService,
     ProcessSupervisor,
     RuntimeRecoveryFacts,
+    RuntimeRecoveryOperations,
     RuntimeRecoveryPolicy,
     SupervisorApiAdapter,
     SupervisorMonitoringOperations,
@@ -2762,6 +2763,18 @@ class SupervisorManager:
         self._sidecar_last_sync_changed_paths: list[str] = []
 
     @staticmethod
+    def _recovery_operations() -> RuntimeRecoveryOperations:
+        return RuntimeRecoveryOperations(
+            hub_root_watchdog_cooldown_sec=_hub_root_watchdog_cooldown_sec,
+            hub_root_watchdog_enabled=_hub_root_watchdog_enabled,
+            hub_root_watchdog_reset_degraded_route_enabled=(
+                _hub_root_watchdog_reset_degraded_route_enabled
+            ),
+            member_hub_watchdog_cooldown_sec=_member_hub_watchdog_cooldown_sec,
+            member_hub_watchdog_enabled=_member_hub_watchdog_enabled,
+        )
+
+    @staticmethod
     def _memory_operations() -> MemoryProfilingOperations:
         return MemoryProfilingOperations(
             http_exception_type=HTTPException,
@@ -5291,112 +5304,16 @@ class SupervisorManager:
 
     def _hub_root_watchdog_decision(
         self,
-        runtime: dict[str, Any],
+        reliability_payload: dict[str, Any],
         *,
         now: float | None = None,
     ) -> dict[str, Any] | None:
-        if not _hub_root_watchdog_enabled():
-            self._hub_root_watchdog_last_state = "disabled"
-            self._hub_root_watchdog_last_reason = "watchdog disabled"
-            return None
-        if self._stopping or not self._desired_running:
-            return None
-        current_time = time.time() if now is None else float(now)
-        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
-        role = str(node.get("role") or self._sidecar_role() or "").strip().lower()
-        if role != "hub":
-            self._hub_root_watchdog_last_state = "not_applicable"
-            self._hub_root_watchdog_last_reason = f"role={role or '-'}"
-            return None
-
-        channel_state = self._hub_root_channel_state(runtime)
-        root_status = str(channel_state.get("root_control_status") or "")
-        route_status = str(channel_state.get("route_status") or "")
-        hub_root_status = str(channel_state.get("hub_root_status") or "")
-        hub_root_state = str(channel_state.get("hub_root_state") or "")
-        hub_root_browser_status = str(channel_state.get("hub_root_browser_status") or "")
-        hub_root_browser_state = str(channel_state.get("hub_root_browser_state") or "")
-        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
-        sidecar_enabled = bool(required_link.get("sidecar_enabled"))
-        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or ("sidecar" if sidecar_enabled else "runtime")
-        root_down = self._hub_root_channel_down(channel_state)
-        route_degraded = self._hub_root_route_degraded(channel_state)
-        route_degraded_reset_enabled = _hub_root_watchdog_reset_degraded_route_enabled()
-        root_probe = (
-            self._hub_root_root_probe_last_result
-            if isinstance(self._hub_root_root_probe_last_result, dict)
-            else {}
+        return self._recovery_policy.hub_root_watchdog_decision(
+            self,
+            self._recovery_operations(),
+            reliability_payload,
+            now=now,
         )
-        root_probe_state = str(root_probe.get("state") or "").strip().lower()
-        action = (
-            "sidecar_restart"
-            if transport_owner == "sidecar"
-            else ("runtime_reconnect" if root_down else "runtime_route_reset")
-        )
-
-        if (
-            root_down
-            and root_probe_state == "ready"
-            and not self._root_probe_reports_hub_root_unready(root_probe)
-        ):
-            age = root_probe.get("age_sec")
-            age_text = f"{float(age):.1f}s" if isinstance(age, (int, float)) else "-"
-            self._hub_root_watchdog_last_state = "root_perspective_ready"
-            self._hub_root_watchdog_last_reason = (
-                f"runtime reports hub-root down, but root has a fresh hub control report (age={age_text})"
-            )
-            return None
-
-        if not root_down and not route_degraded:
-            state = (
-                root_status
-                or hub_root_status
-                or hub_root_state
-                or route_status
-                or hub_root_browser_status
-                or hub_root_browser_state
-                or "unknown"
-            )
-            self._hub_root_watchdog_last_state = state
-            self._hub_root_watchdog_last_reason = "hub-root and browser route are not down"
-            return None
-
-        if route_degraded and not root_down and not route_degraded_reset_enabled:
-            state = hub_root_browser_status or hub_root_browser_state or route_status or "route_degraded"
-            self._hub_root_watchdog_last_state = state
-            self._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
-            return None
-
-        cooldown = _hub_root_watchdog_cooldown_sec()
-        last_reconnect = self._hub_root_watchdog_last_reconnect_at
-        if last_reconnect is not None and (current_time - float(last_reconnect)) < cooldown:
-            self._hub_root_watchdog_last_state = "cooldown"
-            self._hub_root_watchdog_last_reason = f"hub-root down but reconnect cooldown is active ({cooldown:.0f}s)"
-            return None
-
-        reason = (
-            f"root_control={root_status or '-'} "
-            f"hub_root={hub_root_status or hub_root_state or '-'} "
-            f"route={route_status or '-'} "
-            f"hub_root_browser={hub_root_browser_status or hub_root_browser_state or '-'}"
-        )
-        return {
-            "reason": "supervisor.hub_root.watchdog_reconnect",
-            "message": f"hub-root route watchdog requesting {action} ({reason})",
-            "action": action,
-            "transport_owner": transport_owner,
-            "root_control_status": root_status or None,
-            "route_status": route_status or None,
-            "hub_root_status": hub_root_status or None,
-            "hub_root_state": hub_root_state or None,
-            "hub_root_browser_status": hub_root_browser_status or None,
-            "hub_root_browser_state": hub_root_browser_state or None,
-            "last_event": channel_state.get("last_event"),
-            "last_summary": channel_state.get("last_summary"),
-            "channel_before": channel_state,
-            "required_upstream_link": required_link,
-            "root_perspective_probe": dict(root_probe),
-        }
 
     async def _verify_hub_root_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
         timeout = _hub_root_watchdog_verify_timeout_sec() if timeout_sec is None else max(0.0, float(timeout_sec))
@@ -5513,89 +5430,16 @@ class SupervisorManager:
 
     def _member_hub_watchdog_decision(
         self,
-        runtime: dict[str, Any],
+        reliability_payload: dict[str, Any],
         *,
         now: float | None = None,
     ) -> dict[str, Any] | None:
-        if not _member_hub_watchdog_enabled():
-            self._member_hub_watchdog_last_state = "disabled"
-            self._member_hub_watchdog_last_reason = "watchdog disabled"
-            return None
-        if self._stopping or not self._desired_running:
-            return None
-        current_time = time.time() if now is None else float(now)
-        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
-        role = str(node.get("role") or self._sidecar_role() or "").strip().lower()
-        if role != "member":
-            self._member_hub_watchdog_last_state = "not_applicable"
-            self._member_hub_watchdog_last_reason = f"role={role or '-'}"
-            return None
-
-        channel_state = self._member_hub_channel_state(runtime)
-        required_link = self._required_upstream_link_snapshot(runtime=runtime, role=role)
-        transition_state = str(channel_state.get("transition_state") or "").strip().lower()
-        if transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
-            self._member_hub_watchdog_last_state = transition_state
-            self._member_hub_watchdog_last_reason = (
-                str(channel_state.get("transition_reason") or "").strip() or transition_state
-            )
-            return None
-
-        if bool(channel_state.get("connected")):
-            self._member_hub_watchdog_last_state = "ready"
-            self._member_hub_watchdog_last_reason = "member-hub link is connected"
-            return None
-
-        cooldown = _member_hub_watchdog_cooldown_sec()
-        last_reconnect = self._member_hub_watchdog_last_reconnect_at
-        if last_reconnect is not None and (current_time - float(last_reconnect)) < cooldown:
-            self._member_hub_watchdog_last_state = "cooldown"
-            self._member_hub_watchdog_last_reason = (
-                f"member-hub down but reconnect cooldown is active ({cooldown:.0f}s)"
-            )
-            return None
-
-        route_status = str(channel_state.get("route_status") or "").strip().lower() or "-"
-        member_state = str(channel_state.get("member_state") or "").strip().lower() or "-"
-        transport_owner = str(required_link.get("current_owner") or "").strip().lower() or "runtime"
-        continuity_mode = str(required_link.get("continuity_mode") or "").strip().lower() or "runtime_bound"
-        handoff_state = str(required_link.get("handoff_state") or "").strip().lower() or "unknown"
-        handoff_ready = bool(required_link.get("handoff_ready"))
-        recovery_policy = (
-            dict(required_link.get("recovery_policy"))
-            if isinstance(required_link.get("recovery_policy"), dict)
-            else {}
+        return self._recovery_policy.member_hub_watchdog_decision(
+            self,
+            self._recovery_operations(),
+            reliability_payload,
+            now=now,
         )
-        reason = (
-            f"route={route_status} "
-            f"member_state={member_state} "
-            f"assessment={str(channel_state.get('assessment_state') or '-')} "
-            f"hub_url={str(channel_state.get('hub_url') or '-')} "
-            f"owner={transport_owner} "
-            f"handoff={handoff_state} "
-            f"continuity={continuity_mode}"
-        )
-        return {
-            "reason": "supervisor.member_hub.watchdog_reconnect",
-            "message": f"member-hub watchdog requesting runtime_reconnect ({reason})",
-            "action": "runtime_reconnect",
-            "transport_owner": transport_owner,
-            "continuity_mode": continuity_mode,
-            "handoff_state": handoff_state,
-            "handoff_ready": handoff_ready,
-            "recovery_policy": recovery_policy,
-            "route_status": channel_state.get("route_status"),
-            "hub_member_status": channel_state.get("hub_member_status"),
-            "member_state": channel_state.get("member_state"),
-            "assessment_state": channel_state.get("assessment_state"),
-            "assessment_reason": channel_state.get("assessment_reason"),
-            "transition_state": channel_state.get("transition_state"),
-            "transition_reason": channel_state.get("transition_reason"),
-            "last_error": channel_state.get("last_error"),
-            "last_close_reason": channel_state.get("last_close_reason"),
-            "channel_before": channel_state,
-            "required_upstream_link": required_link,
-        }
 
     async def _verify_member_hub_watchdog_recovery(self, *, timeout_sec: float | None = None) -> dict[str, Any]:
         timeout = _member_hub_watchdog_verify_timeout_sec() if timeout_sec is None else max(0.0, float(timeout_sec))
