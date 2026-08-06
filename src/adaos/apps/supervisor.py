@@ -2271,6 +2271,10 @@ class SupervisorManager:
         sync_source = self._sidecar_validated_slot_source()
         tracked_paths = self._sidecar_tracked_paths()
         digest = hashlib.sha256()
+        # Version the digest contract so supervisors using the corrected
+        # adoption semantics can distinguish processes labelled by the old
+        # "current files == running files" assumption.
+        digest.update(b"adaos-sidecar-code-fingerprint-v2\0")
         tracked_text: list[str] = []
         for path in tracked_paths:
             try:
@@ -2287,6 +2291,7 @@ class SupervisorManager:
             "reason": "sidecar always executes from root project code",
             "repo_root": str(repo_root) if repo_root is not None else None,
             "launch_cwd": self._sidecar_launch_cwd,
+            "fingerprint_contract": "v2",
             "fingerprint": fingerprint,
             "updated_at": time.time() if fingerprint else None,
             "tracked_paths": tracked_text,
