@@ -64,6 +64,8 @@ from .webspace_components import (
     WebspaceProjectionService,
     WebspaceRecoveryCoordinator,
     WebspaceRebuildService,
+    WebspaceResolutionOperations,
+    WebspaceResolutionService,
     ScenarioSwitchOperations,
     WebspaceScenarioSwitchingService,
     WebspaceTaskState,
@@ -78,6 +80,7 @@ _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
 _PROJECTION_SERVICE = WebspaceProjectionService()
 _RECOVERY_COORDINATOR = WebspaceRecoveryCoordinator(command_cache_limit=256)
 _REBUILD_SERVICE = WebspaceRebuildService()
+_RESOLUTION_SERVICE = WebspaceResolutionService()
 _SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
 _SKILL_DECLS_CACHE_TTL_S = 300.0
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
@@ -90,6 +93,73 @@ _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
 _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
+
+
+def _resolution_operations() -> WebspaceResolutionOperations:
+    return WebspaceResolutionOperations(
+        apply_node_context_to_ui=_apply_node_context_to_ui,
+        apply_node_display_to_entry=_apply_node_display_to_entry,
+        build_materialization_snapshot=_build_materialization_snapshot,
+        clone_json_like=_clone_json_like,
+        clone_skill_ui_interface=_clone_skill_ui_interface,
+        coerce_dict=_coerce_dict,
+        decl_is_node_owned=_decl_is_node_owned,
+        dedupe_str_list=_dedupe_str_list,
+        default_materialization_required_branches=_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES,
+        deferred_off_focus_load=_DEFERRED_OFF_FOCUS_LOAD,
+        describe_webspace_rebuild_state=describe_webspace_rebuild_state,
+        detached_member_node_ids=_detached_member_node_ids,
+        effective_branch_paths=_EFFECTIVE_BRANCH_PATHS,
+        elapsed_ms=_elapsed_ms,
+        fingerprint_json_like=_fingerprint_json_like,
+        has_effective_branch_value=_has_effective_branch_value,
+        is_y_map_value=_is_y_map_value,
+        load_config=load_config,
+        local_node_id=_local_node_id,
+        log_webui_contract_issues=log_webui_contract_issues,
+        logger=_log,
+        mapping_items=_mapping_items,
+        mark_entry=_mark_entry,
+        mark_modal_def=_mark_modal_def,
+        materialize_scenario_resource_descriptor=_materialize_scenario_resource_descriptor,
+        materialize_skill_resource_descriptor=_materialize_skill_resource_descriptor,
+        materialized_system_resource_descriptors=_materialized_system_resource_descriptors,
+        merge_by_id=_merge_by_id,
+        merge_installed_with_auto=_merge_installed_with_auto,
+        merge_registry_lists=_merge_registry_lists,
+        merge_webio_receivers=_merge_webio_receivers,
+        node_display_from_config=node_display_from_config,
+        node_scoped_catalog_id=_node_scoped_catalog_id,
+        node_scoped_modal_ids=_node_scoped_modal_ids,
+        normalize_materialization_required_branches=_normalize_materialization_required_branches,
+        normalize_overlay_widget_entries=_normalize_overlay_widget_entries,
+        patch_map_value_from_previous=_patch_map_value_from_previous,
+        preserve_live_remote_catalog_entries=_preserve_live_remote_catalog_entries,
+        preserve_live_remote_modals=_preserve_live_remote_modals,
+        preserve_live_remote_registry_tokens=_preserve_live_remote_registry_tokens,
+        raise_if_rebuild_request_superseded=_raise_if_rebuild_request_superseded,
+        read_effective_branch_fingerprints=_read_effective_branch_fingerprints,
+        refresh_pinned_widgets_from_catalog_entries=_refresh_pinned_widgets_from_catalog_entries,
+        replace_map_value=_replace_map_value,
+        resolved_output_branch_fingerprints=_resolved_output_branch_fingerprints,
+        resolver_inputs_type=WebspaceResolverInputs,
+        resolver_outputs_type=WebspaceResolverOutputs,
+        runtime_environment_payload=runtime_environment_payload,
+        scenario_loader_space=_scenario_loader_space,
+        scenario_materialization_contract=_scenario_materialization_contract,
+        scenario_supports_catalog_controls=_scenario_supports_catalog_controls,
+        scenarios_loader=scenarios_loader,
+        set_map_value_if_changed=_set_map_value_if_changed,
+        set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        trust_previous_materialized_branch_fingerprints_enabled=(
+            _trust_previous_materialized_branch_fingerprints_enabled
+        ),
+        validate_application_ui_contract=validate_application_ui_contract,
+        whole_branch_replace_paths=_WHOLE_BRANCH_REPLACE_PATHS,
+        write_effective_branch_fingerprints=_write_effective_branch_fingerprints,
+    )
+
+
 _EFFECTIVE_BRANCH_PATHS = (
     "ui.application",
     "data.catalog",
@@ -5630,446 +5700,7 @@ class WebspaceScenarioRuntime:
         return resolved
 
     def _resolve_webspace_uncached(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
-
-        scenario_id = str(inputs.scenario_id or "").strip() or "web_desktop"
-        source_mode = str(inputs.source_mode or "").strip() or "mixed"
-        scenario_application = _coerce_dict(inputs.scenario_application or {})
-        scenario_desktop = _coerce_dict(scenario_application.get("desktop") or {})
-        scenario_catalog = _coerce_dict(inputs.scenario_catalog or {})
-        scenario_registry = _coerce_dict(inputs.scenario_registry or {})
-        scenario_apps = [it for it in (scenario_catalog.get("apps") or []) if isinstance(it, Mapping)]
-        scenario_widgets = [it for it in (scenario_catalog.get("widgets") or []) if isinstance(it, Mapping)]
-        raw_scenario_resources = _coerce_dict(
-            scenario_application.get("resources") or scenario_catalog.get("resources") or {}
-        )
-        scenario_resources: Dict[str, Any] = {}
-        scenario_space = _scenario_loader_space(source_mode)
-        try:
-            scenario_dir = scenarios_loader.scenario_root_for_space(scenario_id, scenario_space)
-        except Exception:
-            scenario_dir = None
-        for key, value in raw_scenario_resources.items():
-            token = str(key or "").strip()
-            if token:
-                scenario_resources[token] = _materialize_scenario_resource_descriptor(
-                    token,
-                    value,
-                    scenario_id=scenario_id,
-                    scenario_dir=scenario_dir,
-                )
-        base_registry_modals = [str(x) for x in (scenario_registry.get("modals") or [])]
-        base_registry_widgets = [str(x) for x in (scenario_registry.get("widgets") or [])]
-
-        skill_decls = list(inputs.skill_decls or [])
-        skill_apps: List[Dict[str, Any]] = []
-        skill_widgets: List[Dict[str, Any]] = []
-        skill_resources: Dict[str, Any] = {}
-        skill_interfaces: Dict[str, Any] = {}
-        skill_registry_modals: List[List[str]] = []
-        skill_registry_widgets: List[List[str]] = []
-        auto_widget_ids: set[str] = set()
-        auto_app_ids: set[str] = set()
-        active_remote_node_ids: set[str] = set()
-        detached_remote_node_ids = _detached_member_node_ids()
-        local_display = node_display_from_config(load_config())
-
-        for decl in skill_decls:
-            skill_name = decl.get("skill") or ""
-            space = decl.get("space") or "default"
-            node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _decl_is_node_owned(decl)
-            if node_id and str(skill_name or "").strip().startswith("subnet.member."):
-                active_remote_node_ids.add(node_id)
-            decl_display = {
-                "node_label": str(decl.get("node_label") or "").strip(),
-                "node_compact_label": str(decl.get("node_compact_label") or "").strip(),
-                "node_color": str(decl.get("node_color") or "").strip(),
-                "node_index": decl.get("node_index"),
-            }
-            if not any(decl_display.values()):
-                decl_display = local_display
-            source = f"skill:{skill_name}"
-            dev_flag = space == "dev"
-            reg = decl.get("registry") or {}
-            modal_id_map = _node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
-            for app in decl.get("apps") or []:
-                if isinstance(app, dict):
-                    entry = _mark_entry(app, source=source, dev=dev_flag)
-                    if node_owned and node_id:
-                        entry = _apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                    skill_apps.append(_apply_node_display_to_entry(entry, decl_display, node_id=node_id))
-            for widget in decl.get("widgets") or []:
-                if isinstance(widget, dict):
-                    entry = _mark_entry(widget, source=source, dev=dev_flag)
-                    if node_owned and node_id:
-                        entry = _apply_node_context_to_ui(entry, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                    skill_widgets.append(_apply_node_display_to_entry(entry, decl_display, node_id=node_id))
-            raw_resources = decl.get("resources") if isinstance(decl.get("resources"), Mapping) else {}
-            skill_source_path = str(decl.get("source_path") or "").strip() or None
-            for key, value in raw_resources.items():
-                token = str(key or "").strip()
-                if token and token not in skill_resources:
-                    skill_resources[token] = _materialize_skill_resource_descriptor(
-                        token,
-                        value,
-                        skill_name=skill_name,
-                        skill_dir=skill_source_path,
-                    )
-            raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
-            if raw_interface and skill_name:
-                interface_copy = _clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)
-                if interface_copy:
-                    skill_interfaces.setdefault(str(skill_name), interface_copy)
-            raw_interfaces = decl.get("interfaces") if isinstance(decl.get("interfaces"), Mapping) else {}
-            for interface_skill, raw_skill_interface in raw_interfaces.items():
-                interface_skill_name = str(interface_skill or "").strip()
-                if not interface_skill_name or not isinstance(raw_skill_interface, Mapping):
-                    continue
-                interface_copy = _clone_skill_ui_interface(
-                    raw_skill_interface,
-                    skill=interface_skill_name,
-                    source=f"skill:{interface_skill_name}",
-                )
-                if interface_copy:
-                    skill_interfaces.setdefault(interface_skill_name, interface_copy)
-            mod_spec = reg.get("modals") or {}
-            if isinstance(mod_spec, dict):
-                skill_registry_modals.append([modal_id_map.get(str(k), str(k)) for k in mod_spec.keys()])
-            else:
-                skill_registry_modals.append([str(x) for x in mod_spec])
-            wid_spec = reg.get("widgets") or {}
-            if isinstance(wid_spec, dict):
-                skill_registry_widgets.append([
-                    _node_scoped_catalog_id(node_id, str(k)) if node_owned and node_id else str(k)
-                    for k in wid_spec.keys()
-                ])
-            else:
-                skill_registry_widgets.append([str(x) for x in wid_spec])
-            for contrib in decl.get("contributions") or []:
-                if not isinstance(contrib, dict):
-                    continue
-                ep = str(contrib.get("extensionPoint") or "")
-                ctype = str(contrib.get("type") or "")
-                cid = str(contrib.get("id") or "")
-                auto = bool(contrib.get("autoInstall"))
-                if not cid or not auto:
-                    continue
-                if ep == "desktop.widgets" and ctype == "widget":
-                    auto_widget_ids.add(cid)
-                if ep == "desktop.apps" and ctype == "app":
-                    auto_app_ids.add(cid)
-
-        merged_apps = [
-            _apply_node_display_to_entry(
-                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
-                local_display,
-                node_id=_local_node_id(),
-            )
-            for it in scenario_apps
-        ]
-        merged_widgets = [
-            _apply_node_display_to_entry(
-                _mark_entry(it, source=f"scenario:{scenario_id}", dev=False),
-                local_display,
-                node_id=_local_node_id(),
-            )
-            for it in scenario_widgets
-        ]
-
-        extra_apps: List[Dict[str, Any]] = []
-        for sid, title in inputs.desktop_scenarios:
-            if sid == scenario_id:
-                continue
-            app_id = f"scenario:{sid}"
-            extra_apps.append(
-                _apply_node_display_to_entry(
-                    _mark_entry(
-                        {
-                            "id": app_id,
-                            "title": title,
-                            "icon": "apps-outline",
-                            "scenario_id": sid,
-                        },
-                        source=f"scenario:{sid}",
-                        dev=False,
-                    ),
-                    local_display,
-                    node_id=_local_node_id(),
-                )
-            )
-            auto_app_ids.add(app_id)
-
-        merged_apps = _merge_by_id(merged_apps + extra_apps + skill_apps)
-        merged_widgets = _merge_by_id(merged_widgets + skill_widgets)
-        merged_resources = {
-            **_materialized_system_resource_descriptors(),
-            **scenario_resources,
-            **skill_resources,
-        }
-        live_catalog = _coerce_dict((inputs.live_state or {}).get("catalog") or {})
-        merged_apps = _preserve_live_remote_catalog_entries(
-            merged_apps,
-            current_items=live_catalog.get("apps"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        merged_widgets = _preserve_live_remote_catalog_entries(
-            merged_widgets,
-            current_items=live_catalog.get("widgets"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        supports_catalog_controls = _scenario_supports_catalog_controls(
-            scenario_id,
-            scenario_application,
-        )
-        default_modal_ids = ["scenario_switcher"]
-        if supports_catalog_controls:
-            default_modal_ids = ["apps_catalog", "widgets_catalog", *default_modal_ids]
-        merged_registry = {
-            "modals": _merge_registry_lists(
-                base_registry_modals,
-                skill_registry_modals + [default_modal_ids],
-            ),
-            "widgets": _merge_registry_lists(base_registry_widgets, skill_registry_widgets),
-        }
-
-        installed_current = _coerce_dict((inputs.overlay_snapshot or {}).get("installed") or {})
-        overlay_has_pinned_widgets = "pinnedWidgets" in (inputs.overlay_snapshot or {})
-        overlay_pinned_widgets = _normalize_overlay_widget_entries((inputs.overlay_snapshot or {}).get("pinnedWidgets"))
-        overlay_icon_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("iconOrder"))
-        overlay_widget_order = _dedupe_str_list((inputs.overlay_snapshot or {}).get("widgetOrder"))
-        overlay_hidden_sections = _dedupe_str_list((inputs.overlay_snapshot or {}).get("hiddenSections"))
-        scenario_pinned_widgets = _normalize_overlay_widget_entries(scenario_desktop.get("pinnedWidgets"))
-        scenario_topbar = list(scenario_desktop.get("topbar") or []) if isinstance(scenario_desktop.get("topbar"), list) else []
-        scenario_page_schema = _coerce_dict(scenario_desktop.get("pageSchema") or {})
-        installed_with_auto = _merge_installed_with_auto(
-            installed_current,
-            auto_apps=auto_app_ids,
-            auto_widgets=auto_widget_ids,
-        )
-
-        merged_modals_map: Dict[str, Any] = {}
-        base_modals_map = _coerce_dict(scenario_application.get("modals") or {})
-        for key, value in base_modals_map.items():
-            merged_modals_map[str(key)] = value
-        for decl in skill_decls:
-            reg = decl.get("registry") or {}
-            mod_spec = reg.get("modals") or {}
-            if not isinstance(mod_spec, dict):
-                continue
-            skill_name = str(decl.get("skill") or "").strip()
-            node_id = str(decl.get("node_id") or "").strip()
-            node_owned = _decl_is_node_owned(decl)
-            decl_display = {
-                "node_label": str(decl.get("node_label") or "").strip(),
-                "node_compact_label": str(decl.get("node_compact_label") or "").strip(),
-                "node_color": str(decl.get("node_color") or "").strip(),
-                "node_index": decl.get("node_index"),
-            }
-            if not any(decl_display.values()):
-                decl_display = local_display
-            modal_id_map = _node_scoped_modal_ids(reg, node_id=node_id) if node_owned else {}
-            for key, value in mod_spec.items():
-                raw_token = str(key)
-                token = modal_id_map.get(raw_token, raw_token)
-                if token and token not in merged_modals_map:
-                    modal_def = (
-                        _apply_node_context_to_ui(value, decl_display, node_id=node_id, modal_id_map=modal_id_map)
-                        if node_owned and node_id
-                        else value
-                    )
-                    merged_modals_map[token] = _mark_modal_def(
-                        modal_def,
-                        source=f"skill:{skill_name}" if skill_name else "skill:unknown",
-                        skill=skill_name,
-                        dev=str(decl.get("space") or "default").strip().lower() == "dev",
-                    )
-
-        if supports_catalog_controls and "apps_catalog" not in merged_modals_map:
-            merged_modals_map["apps_catalog"] = {
-                "title": "Available Apps",
-                "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                "schema": {
-                    "id": "apps_catalog",
-                    "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                    "layout": {
-                        "type": "single",
-                        "areas": [{"id": "main", "role": "main"}],
-                    },
-                    "widgets": [
-                        {
-                            "id": "apps-list",
-                            "type": "collection.grid",
-                            "area": "main",
-                            "title": "Apps",
-                            "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                            "dataSource": {
-                                "kind": "y",
-                                "path": "data/catalog/apps",
-                            },
-                            "actions": [
-                                {
-                                    "on": "select",
-                                    "type": "callHost",
-                                    "target": "desktop.toggleInstall",
-                                    "params": {
-                                        "type": "app",
-                                        "id": "$event.id",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                },
-            }
-        if supports_catalog_controls and "widgets_catalog" not in merged_modals_map:
-            merged_modals_map["widgets_catalog"] = {
-                "title": "Available Widgets",
-                "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                "schema": {
-                    "id": "widgets_catalog",
-                    "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                    "layout": {
-                        "type": "single",
-                        "areas": [{"id": "main", "role": "main"}],
-                    },
-                    "widgets": [
-                        {
-                            "id": "widgets-list",
-                            "type": "collection.grid",
-                            "area": "main",
-                            "title": "Widgets",
-                            "load": dict(_DEFERRED_OFF_FOCUS_LOAD),
-                            "dataSource": {
-                                "kind": "y",
-                                "path": "data/catalog/widgets",
-                            },
-                            "actions": [
-                                {
-                                    "on": "select",
-                                    "type": "callHost",
-                                    "target": "desktop.toggleInstall",
-                                    "params": {
-                                        "type": "widget",
-                                        "id": "$event.id",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                },
-            }
-
-        live_application = _coerce_dict((inputs.live_state or {}).get("application") or {})
-        merged_modals_map = _preserve_live_remote_modals(
-            merged_modals_map,
-            current_modals=live_application.get("modals"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-
-        live_registry = _coerce_dict((inputs.live_state or {}).get("registry") or {})
-        merged_registry["modals"] = _preserve_live_remote_registry_tokens(
-            list(merged_registry.get("modals") or []),
-            current_tokens=live_registry.get("modals"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-        merged_registry["widgets"] = _preserve_live_remote_registry_tokens(
-            list(merged_registry.get("widgets") or []),
-            current_tokens=live_registry.get("widgets"),
-            active_remote_node_ids=active_remote_node_ids,
-            detached_remote_node_ids=detached_remote_node_ids,
-        )
-
-        app_with_modals: Dict[str, Any] = dict(scenario_application)
-        if merged_modals_map:
-            app_with_modals["modals"] = merged_modals_map
-        if merged_resources:
-            app_with_modals["resources"] = merged_resources
-        if skill_interfaces:
-            merged_interfaces = _coerce_dict(app_with_modals.get("interfaces") or {})
-            for key, value in skill_interfaces.items():
-                merged_interfaces.setdefault(str(key), _clone_json_like(value))
-            app_with_modals["interfaces"] = merged_interfaces
-        desktop_config = _coerce_dict(app_with_modals.get("desktop") or {})
-        desktop_config["topbar"] = scenario_topbar
-        desktop_config["pageSchema"] = scenario_page_schema
-        pinned_widgets_source = overlay_pinned_widgets if overlay_has_pinned_widgets else scenario_pinned_widgets
-        desktop_config["pinnedWidgets"] = _refresh_pinned_widgets_from_catalog_entries(
-            pinned_widgets_source,
-            merged_widgets,
-        )
-        desktop_config["iconOrder"] = list(overlay_icon_order)
-        desktop_config["widgetOrder"] = list(overlay_widget_order)
-        desktop_config["hiddenSections"] = list(overlay_hidden_sections)
-        app_with_modals["desktop"] = desktop_config
-        webui_contract_issues = validate_application_ui_contract(
-            app_with_modals,
-            source=f"webspace:{inputs.webspace_id}:ui.application",
-        )
-        if webui_contract_issues:
-            diagnostics = _coerce_dict(app_with_modals.get("diagnostics") or {})
-            diagnostics["webui_contract"] = {
-                "schema": "adaos.ui.webui_contract.diagnostics.v1",
-                "status": "invalid"
-                if any(issue.level == "error" for issue in webui_contract_issues)
-                else "warning",
-                "issue_count": len(webui_contract_issues),
-                "error_count": sum(1 for issue in webui_contract_issues if issue.level == "error"),
-                "warning_count": sum(1 for issue in webui_contract_issues if issue.level == "warning"),
-                "issues": [issue.to_dict() for issue in webui_contract_issues[:40]],
-            }
-            app_with_modals["diagnostics"] = diagnostics
-            log_webui_contract_issues(
-                webui_contract_issues,
-                webspace_id=inputs.webspace_id,
-                source="webspace.materialization",
-            )
-
-        desktop_next = _coerce_dict((inputs.live_state or {}).get("desktop") or {})
-        desktop_installed = _coerce_dict(desktop_next.get("installed") or {})
-        desktop_installed["apps"] = list(installed_with_auto.get("apps") or [])
-        desktop_installed["widgets"] = list(installed_with_auto.get("widgets") or [])
-        desktop_next["installed"] = desktop_installed
-        desktop_next["topbar"] = list(desktop_config.get("topbar") or [])
-        desktop_next["pageSchema"] = _coerce_dict(desktop_config.get("pageSchema") or {})
-        desktop_next["pinnedWidgets"] = list(desktop_config.get("pinnedWidgets") or [])
-        desktop_next["iconOrder"] = list(desktop_config.get("iconOrder") or [])
-        desktop_next["widgetOrder"] = list(desktop_config.get("widgetOrder") or [])
-        desktop_next["hiddenSections"] = list(desktop_config.get("hiddenSections") or [])
-
-        webio_dict = _merge_webio_receivers(skill_decls)
-
-        routing_dict = _coerce_dict((inputs.live_state or {}).get("routing") or {})
-        routes = routing_dict.get("routes")
-        routing_dict = {**routing_dict, "routes": _coerce_dict(routes)}
-
-        resolved = WebspaceResolverOutputs(
-            webspace_id=inputs.webspace_id,
-            scenario_id=scenario_id,
-            source_mode=source_mode,
-            application=app_with_modals,
-            catalog={
-                "apps": [dict(it) for it in merged_apps],
-                "widgets": [dict(it) for it in merged_widgets],
-                "resources": _clone_json_like(merged_resources),
-            },
-            registry={
-                "modals": list(merged_registry.get("modals") or []),
-                "widgets": list(merged_registry.get("widgets") or []),
-            },
-            installed={
-                "apps": list(installed_with_auto.get("apps") or []),
-                "widgets": list(installed_with_auto.get("widgets") or []),
-            },
-            desktop=desktop_next,
-            webio=webio_dict,
-            routing=routing_dict,
-            skill_decls=skill_decls,
-        )
-        return resolved
+        return _RESOLUTION_SERVICE.resolve(self, _resolution_operations(), inputs)
 
     def _apply_resolved_state_in_doc(
         self,
@@ -6086,517 +5717,21 @@ class WebspaceScenarioRuntime:
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
     ) -> None:
-        _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
-        effective_inputs = inputs or WebspaceResolverInputs(
-            webspace_id=webspace_id,
-            scenario_id=str(resolved.scenario_id or ""),
-            source_mode=str(resolved.source_mode or ""),
+        _RESOLUTION_SERVICE.apply(
+            self,
+            _resolution_operations(),
+            ydoc,
+            webspace_id,
+            resolved,
+            inputs=inputs,
+            previous_resolved=previous_resolved,
+            resolved_branch_fingerprints_override=resolved_branch_fingerprints_override,
+            previous_branch_fingerprints_override=previous_branch_fingerprints_override,
+            expected_request_id=expected_request_id,
+            single_transaction=single_transaction,
+            materialization_status_per_phase=materialization_status_per_phase,
+            force_selector_write=force_selector_write,
         )
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        registry_map = ydoc.get_map("registry")
-        runtime_map = ydoc.get_map("runtime")
-        materialization_contract = _coerce_dict(effective_inputs.metadata.get("materialization") or {})
-        if not materialization_contract:
-            materialization_contract = _scenario_materialization_contract(
-                resolved.scenario_id,
-                source_mode=resolved.source_mode,
-            )
-        runtime_environment = dict(runtime_environment_payload())
-        runtime_environment["materialization"] = materialization_contract
-        target_paths = _EFFECTIVE_BRANCH_PATHS
-        changed_paths: List[str] = []
-        diff_applied_paths: List[str] = []
-        patch_applied_paths: List[str] = []
-        patch_actual_verified_paths: List[str] = []
-        patch_fingerprint_mismatch_paths: List[str] = []
-        patch_fallback_paths: List[str] = []
-        patch_fallback_reasons: Dict[str, str] = {}
-        replaced_paths: List[str] = []
-        failed_paths: List[str] = []
-        fingerprint_unchanged_paths: List[str] = []
-        trusted_fingerprint_unchanged_paths: List[str] = []
-        trusted_previous_fingerprint_patch_paths: List[str] = []
-        stale_fingerprint_paths: List[str] = []
-        defaults_failed = False
-        selector_changed = False
-        selector_reasserted = False
-        selector_apply_mode = "not_attempted"
-        phase_summaries: Dict[str, Dict[str, Any]] = {}
-        phase_timings_ms: Dict[str, float] = {}
-        branch_timings_ms: Dict[str, Dict[str, float]] = {}
-        branch_apply_modes: Dict[str, str] = {}
-        compatibility_presence = dict(effective_inputs.compatibility_cache_presence or {})
-        resolved_branch_fingerprints = {
-            str(key): str(value)
-            for key, value in (resolved_branch_fingerprints_override or {}).items()
-            if str(key).strip() and str(value or "").strip()
-        }
-        if not all(path in resolved_branch_fingerprints for path in _EFFECTIVE_BRANCH_PATHS if path != "runtime.environment"):
-            fallback_fingerprints = _resolved_output_branch_fingerprints(resolved)
-            for path, fingerprint in fallback_fingerprints.items():
-                resolved_branch_fingerprints.setdefault(path, fingerprint)
-        resolved_branch_fingerprints["runtime.environment"] = _fingerprint_json_like(runtime_environment)
-        previous_branch_values: Dict[str, Any] = {}
-        previous_branch_fingerprints: Dict[str, str] = {}
-        if previous_resolved is not None:
-            previous_branch_values = {
-                "ui.application": previous_resolved.application,
-                "data.catalog": previous_resolved.catalog,
-                "data.installed": previous_resolved.installed,
-                "data.desktop": previous_resolved.desktop,
-                "data.webio": previous_resolved.webio,
-                "data.routing": previous_resolved.routing,
-                "registry.merged": previous_resolved.registry,
-            }
-            previous_branch_fingerprints = {
-                str(key): str(value)
-                for key, value in (previous_branch_fingerprints_override or {}).items()
-                if str(key).strip() and str(value or "").strip()
-            }
-            if not all(path in previous_branch_fingerprints for path in previous_branch_values):
-                fallback_previous_fingerprints = _resolved_output_branch_fingerprints(previous_resolved)
-                for path, fingerprint in fallback_previous_fingerprints.items():
-                    previous_branch_fingerprints.setdefault(path, fingerprint)
-        persisted_branch_fingerprints = _read_effective_branch_fingerprints(registry_map)
-        effective_branch_fingerprints = dict(persisted_branch_fingerprints)
-        pending_fingerprint_updates: Dict[str, str] = {}
-        transaction_total = 0
-
-        def _update_materialization_snapshot(phase_name: str) -> None:
-            application = _coerce_dict(resolved.application or {})
-            desktop = _coerce_dict(application.get("desktop") or {})
-            modals = _coerce_dict(application.get("modals") or {})
-            page_schema = _coerce_dict(desktop.get("pageSchema") or {})
-            topbar = desktop.get("topbar") if isinstance(desktop.get("topbar"), list) else []
-            page_widgets = page_schema.get("widgets") if isinstance(page_schema.get("widgets"), list) else []
-            installed = _coerce_dict(resolved.installed or {})
-            include_catalog = phase_name != "structure"
-            snapshot = _build_materialization_snapshot(
-                webspace_id=webspace_id,
-                current_scenario=resolved.scenario_id,
-                has_ui_application=bool(application),
-                has_desktop_config=bool(desktop),
-                has_desktop_page_schema=bool(page_schema),
-                has_apps_catalog_modal="apps_catalog" in modals,
-                has_widgets_catalog_modal="widgets_catalog" in modals,
-                has_catalog_apps=include_catalog and isinstance(resolved.catalog.get("apps"), list),
-                has_catalog_widgets=include_catalog and isinstance(resolved.catalog.get("widgets"), list),
-                has_data_desktop=include_catalog and isinstance(resolved.desktop, Mapping),
-                has_installed_apps=include_catalog and isinstance(installed.get("apps"), list),
-                has_installed_widgets=include_catalog and isinstance(installed.get("widgets"), list),
-                has_scenario_ui_application=bool(compatibility_presence.get("scenario_ui_application")),
-                has_scenario_registry_entry=bool(compatibility_presence.get("scenario_registry_entry")),
-                has_scenario_catalog=bool(compatibility_presence.get("scenario_catalog")),
-                has_data_webio=include_catalog and isinstance(resolved.webio, Mapping),
-                has_data_routing=include_catalog and isinstance(resolved.routing, Mapping),
-                has_registry_merged=bool(resolved.registry),
-                catalog_apps_count=len(resolved.catalog.get("apps") or []) if include_catalog else 0,
-                catalog_widgets_count=len(resolved.catalog.get("widgets") or []) if include_catalog else 0,
-                installed_apps_count=len(installed.get("apps") or []) if include_catalog else 0,
-                installed_widgets_count=len(installed.get("widgets") or []) if include_catalog else 0,
-                topbar_count=len(topbar),
-                page_widget_count=len(page_widgets),
-                rebuild_state=describe_webspace_rebuild_state(webspace_id),
-                required_branches=_normalize_materialization_required_branches(materialization_contract)
-                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-                snapshot_source=f"semantic_rebuild:{phase_name}",
-                stale=False,
-            )
-            current_request_id = str(describe_webspace_rebuild_state(webspace_id).get("request_id") or "").strip() or None
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                current_request_id,
-                materialization=snapshot,
-            )
-
-        def _apply_branch(
-            txn: Any,
-            path: str,
-            y_map: Any,
-            key: str,
-            value: Any,
-            *,
-            fingerprint_updates: Dict[str, str],
-            ignore_errors: bool = False,
-        ) -> None:
-            branch_started = time.perf_counter()
-            branch_timing = branch_timings_ms.setdefault(path, {})
-            fingerprint = ""
-            changed = False
-            apply_mode = "unknown"
-            stale_branch = False
-            try:
-                stage_started = time.perf_counter()
-                fingerprint = str(resolved_branch_fingerprints.get(path) or "").strip()
-                branch_timing["fingerprint_lookup"] = _elapsed_ms(stage_started)
-                actual_branch_fingerprint: str | None = None
-                if (
-                    fingerprint
-                    and str(effective_branch_fingerprints.get(path) or "").strip() == fingerprint
-                ):
-                    stage_started = time.perf_counter()
-                    trusted_previous_fingerprint = str(previous_branch_fingerprints.get(path) or "").strip()
-                    if (
-                        trusted_previous_fingerprint == fingerprint
-                        and _trust_previous_materialized_branch_fingerprints_enabled()
-                    ):
-                        has_value = _has_effective_branch_value(y_map, key)
-                        branch_timing["presence_check"] = _elapsed_ms(stage_started)
-                        if has_value:
-                            fingerprint_unchanged_paths.append(path)
-                            trusted_fingerprint_unchanged_paths.append(path)
-                            fingerprint_updates[path] = fingerprint
-                            pending_fingerprint_updates[path] = fingerprint
-                            branch_apply_modes[path] = "trusted_previous_fingerprint_unchanged"
-                            return
-                    else:
-                        try:
-                            actual_branch_fingerprint = _fingerprint_json_like(y_map.get(key))
-                        except Exception:
-                            actual_branch_fingerprint = ""
-                        branch_timing["actual_fingerprint"] = _elapsed_ms(stage_started)
-                        if actual_branch_fingerprint == fingerprint:
-                            fingerprint_unchanged_paths.append(path)
-                            fingerprint_updates[path] = fingerprint
-                            pending_fingerprint_updates[path] = fingerprint
-                            branch_apply_modes[path] = "fingerprint_unchanged"
-                            return
-                    if path not in stale_fingerprint_paths:
-                        stale_fingerprint_paths.append(path)
-                    stale_branch = True
-
-                # Continue into previous-payload patching when the stored
-                # fingerprint was trusted but the branch is missing, or when
-                # the verified live branch did not match the stored token.
-                stage_started = time.perf_counter()
-                previous_fingerprint = str(previous_branch_fingerprints.get(path) or "").strip()
-                previous_fingerprint_matches = False
-                if previous_fingerprint and path in previous_branch_values and path not in _WHOLE_BRANCH_REPLACE_PATHS:
-                    verify_started = time.perf_counter()
-                    trusted_previous_state = (
-                        _trust_previous_materialized_branch_fingerprints_enabled()
-                        and str(effective_branch_fingerprints.get(path) or "").strip() == previous_fingerprint
-                    )
-                    if trusted_previous_state:
-                        previous_fingerprint_matches = True
-                        trusted_previous_fingerprint_patch_paths.append(path)
-                        branch_timing["previous_fingerprint_trusted"] = _elapsed_ms(verify_started)
-                    elif actual_branch_fingerprint is None:
-                        try:
-                            actual_branch_fingerprint = _fingerprint_json_like(y_map.get(key))
-                        except Exception:
-                            actual_branch_fingerprint = ""
-                        branch_timing["previous_actual_fingerprint"] = _elapsed_ms(verify_started)
-                    else:
-                        branch_timing["previous_actual_fingerprint_reused"] = _elapsed_ms(verify_started)
-                    if trusted_previous_state or actual_branch_fingerprint == previous_fingerprint:
-                        previous_fingerprint_matches = True
-                        patch_actual_verified_paths.append(path)
-                    else:
-                        patch_fingerprint_mismatch_paths.append(path)
-                branch_timing["previous_check"] = _elapsed_ms(stage_started)
-
-                stage_started = time.perf_counter()
-                try:
-                    if stale_branch:
-                        changed, apply_mode = _replace_map_value(y_map, txn, key, value)
-                    elif (
-                        path in previous_branch_values
-                        and previous_fingerprint
-                        and previous_fingerprint_matches
-                        and path not in _WHOLE_BRANCH_REPLACE_PATHS
-                    ):
-                        try:
-                            current_for_patch = y_map.get(key)
-                        except Exception:
-                            current_for_patch = None
-                        if not _is_y_map_value(current_for_patch):
-                            patch_fallback_paths.append(path)
-                            patch_fallback_reasons[path] = f"current_not_y_map:{type(current_for_patch).__name__}"
-                            changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                        elif _mapping_items(value) is None or _mapping_items(previous_branch_values[path]) is None:
-                            patch_fallback_paths.append(path)
-                            patch_fallback_reasons[path] = "non_mapping_payload"
-                            changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                        else:
-                            changed, apply_mode = _patch_map_value_from_previous(
-                                y_map,
-                                txn,
-                                key,
-                                value,
-                                previous_branch_values[path],
-                            )
-                    elif path in _WHOLE_BRANCH_REPLACE_PATHS:
-                        changed, apply_mode = _replace_map_value(y_map, txn, key, value)
-                    else:
-                        changed, apply_mode = _set_map_value_if_changed(y_map, txn, key, value)
-                finally:
-                    branch_timing["apply"] = _elapsed_ms(stage_started)
-            except Exception:
-                branch_apply_modes[path] = "failed"
-                if not ignore_errors:
-                    raise
-                failed_paths.append(path)
-                return
-            finally:
-                branch_timing["total"] = _elapsed_ms(branch_started)
-            if fingerprint:
-                effective_branch_fingerprints[path] = fingerprint
-                fingerprint_updates[path] = fingerprint
-                pending_fingerprint_updates[path] = fingerprint
-            branch_apply_modes[path] = f"{'changed' if changed else 'unchanged'}:{apply_mode}"
-            if changed:
-                changed_paths.append(path)
-                if apply_mode == "diff":
-                    diff_applied_paths.append(path)
-                elif apply_mode == "patch":
-                    patch_applied_paths.append(path)
-                else:
-                    replaced_paths.append(path)
-
-        def _apply_phase(
-            name: str,
-            branch_specs: tuple[tuple[str, Any, str, Any, bool], ...],
-            *,
-            apply_defaults: bool = False,
-            flush_fingerprints: bool = False,
-            shared_txn: Any | None = None,
-        ) -> None:
-            nonlocal defaults_failed
-            nonlocal transaction_total
-            nonlocal selector_changed
-            nonlocal selector_reasserted
-            nonlocal selector_apply_mode
-            _raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
-            phase_started = time.perf_counter()
-            phase_changed_before = len(changed_paths)
-            phase_diff_before = len(diff_applied_paths)
-            phase_patch_before = len(patch_applied_paths)
-            phase_replaced_before = len(replaced_paths)
-            phase_failed_before = len(failed_paths)
-            phase_fingerprint_unchanged_before = len(fingerprint_unchanged_paths)
-            phase_trusted_fingerprint_unchanged_before = len(trusted_fingerprint_unchanged_paths)
-            phase_stale_fingerprint_before = len(stale_fingerprint_paths)
-            phase_defaults_failed = False
-
-            def _apply_phase_body(txn: Any) -> None:
-                nonlocal defaults_failed
-                nonlocal selector_changed
-                nonlocal selector_reasserted
-                nonlocal selector_apply_mode
-                phase_fingerprint_updates: Dict[str, str] = {}
-                if apply_defaults:
-                    try:
-                        self._apply_ydoc_defaults_in_txn(ydoc, txn, resolved.skill_decls)
-                    except Exception:
-                        defaults_failed = True
-                        phase_defaults_failed = True
-                        _log.warning("failed to apply ydoc_defaults for webspace=%s", webspace_id, exc_info=True)
-
-                if name == "structure":
-                    selector_target = str(resolved.scenario_id or "").strip()
-                    if selector_target:
-                        if force_selector_write:
-                            selector_changed = ui_map.get("current_scenario") != selector_target
-                            ui_map.set(txn, "current_scenario", selector_target)
-                            selector_reasserted = True
-                            selector_apply_mode = "reasserted"
-                        else:
-                            selector_changed, selector_apply_mode = _set_map_value_if_changed(
-                                ui_map,
-                                txn,
-                                "current_scenario",
-                                selector_target,
-                            )
-
-                for path, y_map, key, value, ignore_errors in branch_specs:
-                    _apply_branch(
-                        txn,
-                        path,
-                        y_map,
-                        key,
-                        value,
-                        fingerprint_updates=phase_fingerprint_updates,
-                        ignore_errors=ignore_errors,
-                    )
-                if flush_fingerprints and pending_fingerprint_updates:
-                    _write_effective_branch_fingerprints(
-                        registry_map,
-                        txn,
-                        current=effective_branch_fingerprints,
-                        updates=pending_fingerprint_updates,
-                    )
-
-            if shared_txn is None:
-                with ydoc.begin_transaction() as txn:
-                    transaction_total += 1
-                    _apply_phase_body(txn)
-            else:
-                _apply_phase_body(shared_txn)
-
-            phase_changed_paths = list(changed_paths[phase_changed_before:])
-            phase_diff_paths = list(diff_applied_paths[phase_diff_before:])
-            phase_patch_paths = list(patch_applied_paths[phase_patch_before:])
-            phase_replaced_paths = list(replaced_paths[phase_replaced_before:])
-            phase_failed_paths = list(failed_paths[phase_failed_before:])
-            phase_fingerprint_unchanged_paths = list(fingerprint_unchanged_paths[phase_fingerprint_unchanged_before:])
-            phase_trusted_fingerprint_unchanged_paths = list(
-                trusted_fingerprint_unchanged_paths[phase_trusted_fingerprint_unchanged_before:]
-            )
-            phase_stale_fingerprint_paths = list(stale_fingerprint_paths[phase_stale_fingerprint_before:])
-            phase_paths = [path for path, _y_map, _key, _value, _ignore_errors in branch_specs]
-            phase_branch_timings = {
-                path: dict(branch_timings_ms.get(path) or {})
-                for path in phase_paths
-                if branch_timings_ms.get(path)
-            }
-            phase_branch_modes = {
-                path: str(branch_apply_modes.get(path) or "")
-                for path in phase_paths
-                if str(branch_apply_modes.get(path) or "")
-            }
-            branch_count = len(branch_specs)
-            phase_summary: Dict[str, Any] = {
-                "branch_count": branch_count,
-                "changed_branches": len(phase_changed_paths),
-                "unchanged_branches": branch_count - len(phase_changed_paths) - len(phase_failed_paths),
-                "failed_branches": len(phase_failed_paths),
-                "changed_paths": phase_changed_paths,
-            }
-            if phase_diff_paths:
-                phase_summary["diff_applied_branches"] = len(phase_diff_paths)
-                phase_summary["diff_applied_paths"] = phase_diff_paths
-            if phase_patch_paths:
-                phase_summary["patch_applied_branches"] = len(phase_patch_paths)
-                phase_summary["patch_applied_paths"] = phase_patch_paths
-            if phase_replaced_paths:
-                phase_summary["replaced_branches"] = len(phase_replaced_paths)
-                phase_summary["replaced_paths"] = phase_replaced_paths
-            if phase_fingerprint_unchanged_paths:
-                phase_summary["fingerprint_unchanged_branches"] = len(phase_fingerprint_unchanged_paths)
-                phase_summary["fingerprint_unchanged_paths"] = phase_fingerprint_unchanged_paths
-            if phase_trusted_fingerprint_unchanged_paths:
-                phase_summary["trusted_fingerprint_unchanged_branches"] = len(
-                    phase_trusted_fingerprint_unchanged_paths
-                )
-                phase_summary["trusted_fingerprint_unchanged_paths"] = phase_trusted_fingerprint_unchanged_paths
-            if phase_stale_fingerprint_paths:
-                phase_summary["stale_fingerprint_branches"] = len(phase_stale_fingerprint_paths)
-                phase_summary["stale_fingerprint_paths"] = phase_stale_fingerprint_paths
-            if phase_failed_paths:
-                phase_summary["failed_paths"] = phase_failed_paths
-            if phase_defaults_failed:
-                phase_summary["defaults_failed"] = True
-            if phase_branch_timings:
-                phase_summary["branch_timings_ms"] = phase_branch_timings
-            if phase_branch_modes:
-                phase_summary["branch_apply_modes"] = phase_branch_modes
-            phase_summaries[name] = phase_summary
-            phase_timings_ms[f"apply_{name}"] = _elapsed_ms(phase_started)
-            if materialization_status_per_phase:
-                _update_materialization_snapshot(name)
-
-        structure_specs = (
-            ("ui.application", ui_map, "application", resolved.application, False),
-            ("registry.merged", registry_map, "merged", resolved.registry, False),
-            ("runtime.environment", runtime_map, "environment", runtime_environment, False),
-        )
-        interactive_specs = (
-            ("data.catalog", data_map, "catalog", resolved.catalog, False),
-            ("data.installed", data_map, "installed", resolved.installed, False),
-            ("data.desktop", data_map, "desktop", resolved.desktop, True),
-            ("data.webio", data_map, "webio", resolved.webio, True),
-            ("data.routing", data_map, "routing", resolved.routing, True),
-        )
-        if single_transaction:
-            combined_started = time.perf_counter()
-            with ydoc.begin_transaction() as txn:
-                transaction_total += 1
-                _apply_phase(
-                    "structure",
-                    structure_specs,
-                    apply_defaults=True,
-                    flush_fingerprints=False,
-                    shared_txn=txn,
-                )
-                _apply_phase(
-                    "interactive",
-                    interactive_specs,
-                    flush_fingerprints=True,
-                    shared_txn=txn,
-                )
-            phase_timings_ms["apply_combined_transaction"] = _elapsed_ms(combined_started)
-        else:
-            _apply_phase(
-                "structure",
-                structure_specs,
-                apply_defaults=True,
-                flush_fingerprints=False,
-            )
-            _apply_phase(
-                "interactive",
-                interactive_specs,
-                flush_fingerprints=True,
-            )
-        if not materialization_status_per_phase:
-            _update_materialization_snapshot("interactive")
-
-        self._last_apply_summary = {
-            "branch_count": len(target_paths),
-            "changed_branches": len(changed_paths),
-            "unchanged_branches": len(target_paths) - len(changed_paths) - len(failed_paths),
-            "failed_branches": len(failed_paths),
-            "changed_paths": list(changed_paths),
-            "defaults_failed": defaults_failed,
-            "transaction_total": transaction_total,
-            "phases": phase_summaries,
-            "branch_timings_ms": {path: dict(values) for path, values in branch_timings_ms.items()},
-            "branch_apply_modes": dict(branch_apply_modes),
-            "selector_changed": bool(selector_changed),
-            "selector_reasserted": bool(selector_reasserted),
-            "selector_apply_mode": selector_apply_mode,
-        }
-        if diff_applied_paths:
-            self._last_apply_summary["diff_applied_branches"] = len(diff_applied_paths)
-            self._last_apply_summary["diff_applied_paths"] = list(diff_applied_paths)
-        if patch_applied_paths:
-            self._last_apply_summary["patch_applied_branches"] = len(patch_applied_paths)
-            self._last_apply_summary["patch_applied_paths"] = list(patch_applied_paths)
-        if patch_actual_verified_paths:
-            self._last_apply_summary["patch_actual_verified_branches"] = len(patch_actual_verified_paths)
-            self._last_apply_summary["patch_actual_verified_paths"] = list(patch_actual_verified_paths)
-        if patch_fingerprint_mismatch_paths:
-            self._last_apply_summary["patch_fingerprint_mismatch_branches"] = len(patch_fingerprint_mismatch_paths)
-            self._last_apply_summary["patch_fingerprint_mismatch_paths"] = list(patch_fingerprint_mismatch_paths)
-        if patch_fallback_paths:
-            self._last_apply_summary["patch_fallback_branches"] = len(patch_fallback_paths)
-            self._last_apply_summary["patch_fallback_paths"] = list(patch_fallback_paths)
-            self._last_apply_summary["patch_fallback_reasons"] = dict(patch_fallback_reasons)
-        if replaced_paths:
-            self._last_apply_summary["replaced_branches"] = len(replaced_paths)
-            self._last_apply_summary["replaced_paths"] = list(replaced_paths)
-        if fingerprint_unchanged_paths:
-            self._last_apply_summary["fingerprint_unchanged_branches"] = len(fingerprint_unchanged_paths)
-            self._last_apply_summary["fingerprint_unchanged_paths"] = list(fingerprint_unchanged_paths)
-        if trusted_fingerprint_unchanged_paths:
-            self._last_apply_summary["trusted_fingerprint_unchanged_branches"] = len(
-                trusted_fingerprint_unchanged_paths
-            )
-            self._last_apply_summary["trusted_fingerprint_unchanged_paths"] = list(trusted_fingerprint_unchanged_paths)
-        if trusted_previous_fingerprint_patch_paths:
-            self._last_apply_summary["trusted_previous_fingerprint_patch_branches"] = len(
-                trusted_previous_fingerprint_patch_paths
-            )
-            self._last_apply_summary["trusted_previous_fingerprint_patch_paths"] = list(
-                trusted_previous_fingerprint_patch_paths
-            )
-        if stale_fingerprint_paths:
-            self._last_apply_summary["stale_fingerprint_branches"] = len(stale_fingerprint_paths)
-            self._last_apply_summary["stale_fingerprint_paths"] = list(stale_fingerprint_paths)
-        if failed_paths:
-            self._last_apply_summary["failed_paths"] = list(failed_paths)
-        self._last_apply_phase_timings_ms = phase_timings_ms or None
 
     def apply_materialized_payload_to_doc(
         self,

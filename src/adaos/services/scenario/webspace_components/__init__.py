@@ -2,6 +2,7 @@ from .cache import WebspaceCacheState
 from .materialization import MaterializationExecutorOwner
 from .projections import WebspaceProjectionService
 from .recovery import RecoveryDecision, WebspaceRecoveryCoordinator
+from .resolution import WebspaceResolutionOperations, WebspaceResolutionService
 from .rebuild import RebuildOperations, WebspaceRebuildService
 from .scenario_switching import (
     ScenarioSwitchDecision,
@@ -18,6 +19,8 @@ __all__ = [
     "RebuildOperations",
     "WebspaceRebuildService",
     "WebspaceRecoveryCoordinator",
+    "WebspaceResolutionOperations",
+    "WebspaceResolutionService",
     "ScenarioSwitchDecision",
     "ScenarioSwitchOperations",
     "ScenarioSwitchRequest",
