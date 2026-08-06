@@ -6,6 +6,7 @@ from .recovery import RuntimeRecoveryFacts, RuntimeRecoveryOperations, RuntimeRe
 from .routes import create_supervisor_routes
 from .status import SupervisorStatusOperations, SupervisorStatusService
 from .update_execution import SupervisorUpdateExecution, SupervisorUpdateExecutionOperations
+from .update_reconciliation import UpdateReconciliationOperations, UpdateReconciliationService
 from .update_state import UpdateStateMachine
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     "SupervisorApiAdapter",
     "SupervisorUpdateExecution",
     "SupervisorUpdateExecutionOperations",
+    "UpdateReconciliationOperations",
+    "UpdateReconciliationService",
     "UpdateStateMachine",
     "SupervisorRoute",
     "SupervisorStatusOperations",
