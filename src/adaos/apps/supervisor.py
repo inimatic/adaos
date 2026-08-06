@@ -81,7 +81,10 @@ from adaos.services.core_update import resolved_root_promotion_requirement
 from adaos.services.core_update import rollback_installed_skill_runtimes
 from adaos.services.core_update import write_plan as write_core_update_plan
 from adaos.services.core_update import write_status as write_core_update_status
-from adaos.services.core_update_policy import core_update_reactions_disabled_reason
+from adaos.services.core_update_policy import (
+    SKIP_PENDING_CORE_UPDATE_ENV,
+    core_update_reactions_disabled_reason,
+)
 from adaos.services.node_config import load_config
 from adaos.services.realtime_sidecar import (
     probe_realtime_sidecar_ready,
@@ -135,7 +138,6 @@ from adaos.services.supervisor_memory import (
 )
 
 
-_SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
 _LOG = logging.getLogger("adaos.supervisor")
 _SUPERVISOR_INSTANCE_ID = uuid.uuid4().hex
 _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
@@ -365,41 +367,8 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def _compact_json_value(
-    value: Any,
-    *,
-    depth: int = 0,
-    max_depth: int = 3,
-    max_items: int = 20,
-    max_text: int = 512,
-) -> Any:
-    return _WATCHDOG_STATUS.compact_json_value(
-        value,
-        depth=depth,
-        max_depth=max_depth,
-        max_items=max_items,
-        max_text=max_text,
-    )
-
-
-def _compact_watchdog_channel_state(value: Any) -> dict[str, Any]:
-    return _WATCHDOG_STATUS.compact_channel_state(value)
-
-
 def _compact_watchdog_required_link(value: Any) -> dict[str, Any]:
     return _WATCHDOG_STATUS.compact_required_link(value)
-
-
-def _compact_watchdog_decision(value: Any) -> dict[str, Any]:
-    return _WATCHDOG_STATUS.compact_decision(value)
-
-
-def _compact_watchdog_verification(value: Any) -> dict[str, Any]:
-    return _WATCHDOG_STATUS.compact_verification(value)
-
-
-def _compact_watchdog_result(value: Any) -> dict[str, Any]:
-    return _WATCHDOG_STATUS.compact_result(value)
 
 
 def _compact_watchdog_last_result(value: Any) -> dict[str, Any]:
@@ -703,10 +672,6 @@ def _new_runtime_instance_id(*, slot: str | None, transition_role: str) -> str:
     slot_token = str(slot or "x").strip().lower() or "x"
     role_token = str(transition_role or "active").strip().lower() or "active"
     return f"rt-{slot_token}-{role_token[:1]}-{uuid.uuid4().hex[:8]}"
-
-
-def _normalize_update_attempt(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    return _UPDATE_ATTEMPTS.normalize(payload)
 
 
 def _read_update_attempt() -> dict[str, Any] | None:
@@ -4997,7 +4962,7 @@ class SupervisorManager:
         else:
             env.pop("ADAOS_SUPERVISOR_PROFILE_TRIGGER", None)
         if skip_pending_update:
-            env[_SKIP_PENDING_UPDATE_ENV] = "1"
+            env[SKIP_PENDING_CORE_UPDATE_ENV] = "1"
         return env
 
     def _runtime_launch_spec(

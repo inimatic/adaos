@@ -52,6 +52,7 @@ from adaos.services.core_slots import (
     slot_status,
     write_slot_manifest,
 )
+from adaos.services.core_update_policy import SKIP_PENDING_CORE_UPDATE_ENV
 from adaos.services.node_config import load_config, save_config
 from adaos.services.runtime_refresh import rebuild_webspace_projection_sync
 from adaos.services.runtime_memory_profile import (
@@ -63,7 +64,6 @@ from adaos.services.runtime_identity import runtime_transition_role
 from adaos.services.runtime_paths import current_base_dir, current_logs_dir
 from adaos.services.root.client import RootHttpClient
 from adaos.services.root.core_update_sync import build_core_update_report
-_SKIP_PENDING_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
 _LOG = logging.getLogger("adaos.autostart")
 
 
@@ -87,7 +87,7 @@ def _resolved_token(raw_token: str | None = None) -> str | None:
 
 
 def _skip_pending_update_requested() -> bool:
-    raw = str(os.getenv(_SKIP_PENDING_UPDATE_ENV) or "").strip().lower()
+    raw = str(os.getenv(SKIP_PENDING_CORE_UPDATE_ENV) or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
 
@@ -964,7 +964,7 @@ def _launch_active_slot_if_needed(args: argparse.Namespace, *, host: str, port: 
     env["ADAOS_ACTIVE_CORE_SLOT_DIR"] = str(slot_dir(slot))
     if resolved_token:
         env["ADAOS_TOKEN"] = str(resolved_token)
-    env[_SKIP_PENDING_UPDATE_ENV] = "1"
+    env[SKIP_PENDING_CORE_UPDATE_ENV] = "1"
     cwd_raw = str(manifest.get("cwd") or "").strip()
     cwd = Path(cwd_raw).expanduser().resolve() if cwd_raw else None
     if validate:

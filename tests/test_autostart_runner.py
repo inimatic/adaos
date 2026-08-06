@@ -8,6 +8,7 @@ from pathlib import Path
 
 from adaos.apps import autostart_runner
 from adaos.services import runtime_memory_profile
+from adaos.services.core_update_policy import SKIP_PENDING_CORE_UPDATE_ENV
 from adaos.services.supervisor_memory import read_memory_session_summary, supervisor_memory_session_artifacts_dir
 
 
@@ -806,7 +807,7 @@ def test_launch_active_slot_marks_child_to_skip_pending_update(monkeypatch) -> N
     else:
         raise AssertionError("expected SystemExit")
 
-    assert captured_env[autostart_runner._SKIP_PENDING_UPDATE_ENV] == "1"
+    assert captured_env[SKIP_PENDING_CORE_UPDATE_ENV] == "1"
 
 
 def test_launch_active_slot_marks_root_promotion_pending_when_manifest_requires_it(monkeypatch) -> None:
@@ -1099,7 +1100,7 @@ def test_autostart_runner_skips_pending_update_when_requested(monkeypatch, tmp_p
         "_launch_active_slot_if_needed",
         lambda *args, **kwargs: (_ for _ in ()).throw(SystemExit(0)),
     )
-    monkeypatch.setenv(autostart_runner._SKIP_PENDING_UPDATE_ENV, "1")
+    monkeypatch.setenv(SKIP_PENDING_CORE_UPDATE_ENV, "1")
 
     try:
         autostart_runner.main()

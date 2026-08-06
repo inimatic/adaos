@@ -7534,26 +7534,6 @@ async def reload_webspace_from_scenario(
     return result
 
 
-def _builder_empty_canvas_widget() -> dict[str, Any]:
-    return _BUILDER_PUBLICATION_SERVICE.empty_canvas_widget()
-
-
-def _ensure_builder_empty_canvas_widget(page: dict[str, Any], scenario_id: str) -> None:
-    _BUILDER_PUBLICATION_SERVICE.ensure_empty_canvas_widget(page, scenario_id)
-
-
-def _builder_publication_package_content(
-    scenario_id: str,
-    *,
-    revision: str | None,
-) -> dict[str, Any] | None:
-    return _BUILDER_PUBLICATION_SERVICE.publication_package_content(
-        scenario_id,
-        revision=revision,
-        operations=_builder_publication_operations(),
-    )
-
-
 def _builder_preview_content_override(
     scenario_id: str,
     *,

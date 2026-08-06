@@ -7,6 +7,9 @@ from adaos.services.env_policy import truthy
 from adaos.services.runtime_environment import normalize_env_type
 
 
+SKIP_PENDING_CORE_UPDATE_ENV = "ADAOS_SKIP_PENDING_CORE_UPDATE"
+
+
 def _truthy(value: Any) -> bool:
     return truthy(value, default=False)
 
@@ -62,4 +65,8 @@ def _resolve_raw_env_type(settings: Any | None = None) -> str:
     return "prod"
 
 
-__all__ = ["core_update_reactions_disabled_reason", "current_env_type"]
+__all__ = [
+    "SKIP_PENDING_CORE_UPDATE_ENV",
+    "core_update_reactions_disabled_reason",
+    "current_env_type",
+]

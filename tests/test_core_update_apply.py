@@ -861,6 +861,8 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/core_update_policy.py" in critical
     assert "src/adaos/apps/supervisor_runtime/update_execution.py" in critical
     assert "src/adaos/apps/supervisor_runtime/update_reconciliation.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/config.py" in critical
+    assert "src/adaos/apps/supervisor_runtime/watchdog_status.py" in critical
     assert "src/adaos/apps/supervisor_runtime/monitoring.py" in critical
     assert "src/adaos/apps/supervisor_runtime/status.py" in critical
     assert "src/adaos/services/bootstrap_runtime/boot_sequence.py" in critical
@@ -869,6 +871,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/bootstrap_runtime/nats_transport_runtime.py" in critical
     assert "src/adaos/services/bootstrap_runtime/route_tunnel_runtime.py" in critical
     assert "src/adaos/services/scenario/webspace_components/cache.py" in critical
+    assert "src/adaos/services/scenario/webspace_components/builder_publication.py" in critical
     assert "src/adaos/services/scenario/webspace_components/materialization_runtime.py" in critical
     assert "src/adaos/services/scenario/webspace_components/rebuild.py" in critical
     assert "src/adaos/services/scenario/webspace_components/resolution.py" in critical
