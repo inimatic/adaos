@@ -277,6 +277,7 @@ _EFFECTIVE_BRANCH_PATHS = (
 )
 _DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES = (
     "ui.application",
+    "ui.application.desktop.pageSchema",
     "data.catalog",
     "data.installed",
     "data.desktop",
