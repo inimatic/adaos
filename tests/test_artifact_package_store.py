@@ -72,6 +72,7 @@ def _add_empty_conversational_package(scenario: Path) -> None:
             "owner_ref": {"kind": "scenario", "id": "recipes"},
             "version": "1.2.3",
             "workflow_refs": [],
+            "default_locale": "en",
             "files": {
                 "input": "input.yaml",
                 "entities": "entities.yaml",
@@ -329,7 +330,9 @@ def test_package_release_reference_locks_exact_governed_workflow(tmp_path: Path)
     verified = verify_artifact_package(built.archive_bytes)
 
     assert built.ref.workflow_lock is not None
-    assert built.ref.workflow_lock.lock_id == "workflow:builder.change@1.0.0"
+    assert built.ref.workflow_lock.lock_id == (
+        f"workflow:builder.change@{builder_change_definition()['definition_version']}"
+    )
     assert built.ref.workflow_validation_lock is not None
     assert built.ref.workflow_binding_digest is not None
     assert built.ref.workflow_role_policy_digest is not None

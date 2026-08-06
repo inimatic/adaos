@@ -700,7 +700,7 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
             # otherwise the fallback would have no rollback baseline.
             if target_moved:
                 try:
-                    backup.replace(target)
+                    _restore_directory_backup(backup, target)
                     target_moved = False
                 except Exception as rollback_error:
                     raise RootServiceError(
@@ -718,7 +718,7 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
         except Exception as activation_error:
             if target_moved:
                 try:
-                    backup.replace(target)
+                    _restore_directory_backup(backup, target)
                     target_moved = False
                 except Exception as rollback_error:
                     raise RootServiceError(
@@ -740,6 +740,29 @@ def _replace_directory_transactionally(staged: Path, target: Path) -> None:
     finally:
         if not activated and staged.exists():
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def _restore_directory_backup(
+    backup: Path,
+    target: Path,
+    *,
+    attempts: int = 5,
+    retry_delay_s: float = 0.05,
+) -> None:
+    """Restore a just-renamed directory across transient Windows handle races."""
+
+    last_error: PermissionError | None = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            backup.replace(target)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt + 1 >= max(1, int(attempts)):
+                break
+            time.sleep(max(0.0, float(retry_delay_s)) * (attempt + 1))
+    if last_error is not None:
+        raise last_error
 
 
 def _replace_directory_contents_transactionally(staged: Path, target: Path) -> None:
