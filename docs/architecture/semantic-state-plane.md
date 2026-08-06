@@ -72,6 +72,12 @@ Snapshot fallback is allowed only for:
 
 It must not silently become a second steady-state transport.
 
+After an expected scenario switch, the browser gives the live Yjs document a
+short bounded convergence window before requesting an essential HTTP
+materialization snapshot. Snapshot recovery is single-flight per webspace and
+expected scenario, with bounded retries. A selector change must not trigger a
+parallel or once-per-second snapshot fanout.
+
 ### 4. Enforce safety at the kernel boundary
 
 Skills will continue to evolve quickly.

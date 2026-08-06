@@ -164,6 +164,22 @@ The browser should apply these rules consistently:
 - Diagnostics must expose the selected transport per semantic channel and the
   reason for any fallback.
 
+## Observer Domains
+
+Reliability evidence must retain its observer. The independent domains are
+`root_browser`, `hub_root`, `hub_browser`, and browser-local
+`browser_hub_direct`. A response produced by a Hub reports the Hub runtime's
+understanding even when HTTP reached it through a Root proxy. A Root response
+reports only Root-local browser/session/routing evidence. Neither response may
+claim that another domain is healthy by implication.
+
+Browser runtime summaries carry an `observer` block with `domain`, `role`, and
+`authority=local_runtime_only`, plus the domains the observation does not
+imply. The browser composes that server evidence with its own selected WS/YWS
+or WebRTC path. A direct WebRTC channel can therefore remain ready while the
+Root route is degraded, and the UI reports both facts instead of flattening
+them into one status.
+
 ## Checklist
 
 Implemented:
