@@ -4660,6 +4660,57 @@ def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatc
     assert manager._sidecar_code_fingerprint == "new-fingerprint"
 
 
+def test_supervisor_adopted_sidecar_keeps_persisted_code_generation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _ExistingProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        @staticmethod
+        def poll():
+            return None
+
+    async def _ready(**_kwargs):
+        return True
+
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _ExistingProc)
+    monkeypatch.setattr(supervisor, "probe_realtime_sidecar_ready", _ready)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {
+            "listener_running": True,
+            "listener_pid": 4242,
+            "host": "127.0.0.1",
+            "port": 7422,
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_read_json",
+        lambda _path: {
+            "sidecar": {
+                "process": {"listener_pid": 4242},
+                "code": {
+                    "active_fingerprint": "running-generation",
+                    "active_updated_at": 123.0,
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "promoted-generation"})
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    asyncio.run(manager._spawn_sidecar_locked())
+
+    assert manager._sidecar_proc is not None
+    assert manager._sidecar_proc.pid == 4242
+    assert manager._sidecar_code_fingerprint == "running-generation"
+    assert manager._sidecar_code_fingerprint_updated_at == 123.0
+
+
 def test_supervisor_sidecar_health_uses_managed_listener_snapshot_without_tcp_probe(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")

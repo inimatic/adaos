@@ -2296,6 +2296,38 @@ class SupervisorManager:
             "sync_source_slot": str(sync_source.get("slot") or "").strip() or None,
         }
 
+    def _persisted_sidecar_code_for_listener(self, listener_pid: int) -> tuple[str | None, float | None]:
+        """Return the code generation recorded for an inherited sidecar listener.
+
+        A supervisor restart intentionally leaves the sidecar running.  The new
+        supervisor must not label that inherited process with the fingerprint of
+        files that were promoted while it was alive; doing so hides the pending
+        rolling restart from the monitor.
+        """
+
+        persisted = _read_json(_supervisor_runtime_state_path())
+        sidecar = persisted.get("sidecar") if isinstance(persisted, dict) else None
+        if not isinstance(sidecar, dict):
+            return None, None
+        process = sidecar.get("process")
+        code = sidecar.get("code")
+        if not isinstance(process, dict) or not isinstance(code, dict):
+            return None, None
+        try:
+            persisted_listener_pid = int(process.get("listener_pid") or 0)
+        except (TypeError, ValueError):
+            return None, None
+        if persisted_listener_pid != int(listener_pid):
+            return None, None
+        fingerprint = str(code.get("active_fingerprint") or "").strip() or None
+        if not fingerprint:
+            return None, None
+        try:
+            updated_at = float(code.get("active_updated_at"))
+        except (TypeError, ValueError):
+            updated_at = None
+        return fingerprint, updated_at
+
     def _sync_sidecar_controlled_files_from_validated_slot(self) -> dict[str, Any]:
         source = self._sidecar_validated_slot_source()
         source_root = source.get("repo_root")
@@ -5791,9 +5823,18 @@ class SupervisorManager:
                 timeout_s=1.5,
             )
         if listener_ready:
+            inherited_fingerprint, inherited_fingerprint_updated_at = self._persisted_sidecar_code_for_listener(
+                int(listener_pid)
+            )
             self._process_supervisor.track_sidecar(_AdoptedProcess(int(listener_pid)))
-            _LOG.info("supervisor adopted realtime sidecar listener pid=%s", listener_pid)
+            _LOG.info(
+                "supervisor adopted realtime sidecar listener pid=%s active_fingerprint=%s",
+                listener_pid,
+                inherited_fingerprint,
+            )
         else:
+            inherited_fingerprint = None
+            inherited_fingerprint_updated_at = None
             self._process_supervisor.track_sidecar(
                 await start_realtime_sidecar_subprocess(
                     role=self._sidecar_role(),
@@ -5801,8 +5842,13 @@ class SupervisorManager:
                 )
             )
         self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
-        self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
-        self._sidecar_code_fingerprint_updated_at = time.time() if self._sidecar_code_fingerprint else None
+        current_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
+        self._sidecar_code_fingerprint = inherited_fingerprint or current_fingerprint
+        self._sidecar_code_fingerprint_updated_at = (
+            inherited_fingerprint_updated_at
+            if inherited_fingerprint
+            else (time.time() if current_fingerprint else None)
+        )
         self._sidecar_code_change_pending_fingerprint = None
         self._sidecar_code_change_pending_since = None
         self._sidecar_last_start_reason = str(reason or "supervisor.sidecar.start")

@@ -30,6 +30,14 @@ restarted, upgraded, or temporarily unavailable without removing the sidecar's
 transport observation. The sidecar is the durable diagnostic bridge, but it
 does not reinterpret supervisor update state or runtime business semantics.
 
+During a core A/B cutover the outgoing supervisor leaves the sidecar process
+alive and persists the fingerprint of the code generation that process actually
+loaded. The incoming supervisor adopts both the listener and that fingerprint;
+it must not relabel the inherited process with newly promoted files. If the
+generations differ, the normal debounce and restart budget perform one rolling
+sidecar replacement after the cutover instead of dropping the bridge at the
+supervisor restart boundary.
+
 ## Public Root contract
 
 Initial snapshot:
