@@ -177,9 +177,10 @@ The current DEV Builder scenario was checkpointed to Forge as
 `4d568b7dfba7e27bcba320183c719b96f38ea0b6` and published as stable scenario
 `0.2.56`. The Builder skill was checkpointed as
 `3c9d11b77f334f3d7a4c5b49b64d6da18f50dd29` and published as stable skill
-`0.3.36`. A direct-runtime restart loaded checkout commit `7ff2a05e`; the final
-root lineage correction requires the concluding restart recorded with this
-ledger.
+`0.3.36`. The concluding graceful direct-runtime restart loaded checkout
+commit `6c5a8efd` (`0.1.686+4577.6c5a8efd`). Its live Russian Process projection
+reported Trial as `accepted`, Prototype `001` as `зафиксировано`, and retained
+`Разместить в Webspace` as the primary action.
 
 Live `builder_skill.chat` evidence for `workflow_lab_dashboard` produced one
 `adaos.conversation.interaction_presentation.v1` with these published actions:
