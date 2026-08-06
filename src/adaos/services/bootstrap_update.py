@@ -23,6 +23,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/agent_context.py",
     "src/adaos/services/bootstrap.py",
     "src/adaos/services/bootstrap_runtime/__init__.py",
+    "src/adaos/services/bootstrap_runtime/boot_sequence.py",
     "src/adaos/services/bootstrap_runtime/core_update_convergence.py",
     "src/adaos/services/bootstrap_runtime/hub_route_proxy.py",
     "src/adaos/services/bootstrap_runtime/lifecycle.py",
