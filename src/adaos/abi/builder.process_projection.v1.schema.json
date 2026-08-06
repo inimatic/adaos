@@ -26,7 +26,7 @@
         "required": ["ref", "kind", "parent_ref", "label", "status"],
         "properties": {
           "ref": { "type": "string", "minLength": 1, "maxLength": 500 },
-          "kind": { "enum": ["change", "prototype", "automation", "trial", "publication"] },
+          "kind": { "enum": ["change", "prototype", "automation", "verification", "trial", "publication", "workspace_installation", "placement"] },
           "parent_ref": { "type": "string", "minLength": 1, "maxLength": 500 },
           "label": { "type": "string", "minLength": 1, "maxLength": 4000 },
           "status": { "type": "string", "minLength": 1, "maxLength": 120 },

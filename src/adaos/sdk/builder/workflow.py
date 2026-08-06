@@ -25,6 +25,15 @@ def get_interaction_frame(
     return dict(_service().interaction_frame(object_type, object_id, locale=locale))
 
 
+def get_process_explanation(
+    object_type: str,
+    object_id: str,
+    *,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    return dict(_service().process_explanation(object_type, object_id, locale=locale))
+
+
 def create_conversation_interaction(
     object_type: str,
     object_id: str,
@@ -44,6 +53,31 @@ def create_conversation_interaction(
             principal_id=principal_id,
             command_context_id=command_context_id,
             prompt=prompt,
+            metadata=metadata,
+            locale=locale,
+        )
+    )
+
+
+def create_conversation_input_interaction(
+    object_type: str,
+    object_id: str,
+    *,
+    surface_command: str,
+    conversation_id: str,
+    principal_id: str,
+    command_context_id: str,
+    metadata: Mapping[str, Any] | None = None,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().conversation_input_interaction(
+            object_type,
+            object_id,
+            surface_command=surface_command,
+            conversation_id=conversation_id,
+            principal_id=principal_id,
+            command_context_id=command_context_id,
             metadata=metadata,
             locale=locale,
         )
@@ -88,6 +122,40 @@ def invoke_command(
             idempotency_key=idempotency_key,
             input_value=input_value,
             metadata=metadata,
+        )
+    )
+
+
+def record_project_placement(
+    object_type: str,
+    object_id: str,
+    placement: Mapping[str, Any],
+    *,
+    expected_generation: int,
+) -> dict[str, Any]:
+    return dict(
+        _service().record_project_placement(
+            object_type,
+            object_id,
+            placement,
+            expected_generation=expected_generation,
+        )
+    )
+
+
+def get_project_placement_navigation(
+    object_type: str,
+    object_id: str,
+    *,
+    kind: str = "stable",
+    base_url: str | None = None,
+) -> dict[str, Any]:
+    return dict(
+        _service().project_placement_navigation(
+            object_type,
+            object_id,
+            kind=kind,
+            base_url=base_url,
         )
     )
 
@@ -164,10 +232,14 @@ def update_interaction_context(
 __all__ = [
     "build_context_packet",
     "create_conversation_interaction",
+    "create_conversation_input_interaction",
     "get_interaction_frame",
+    "get_process_explanation",
+    "get_project_placement_navigation",
     "get_state",
     "invoke_command",
     "invoke_interaction_response",
+    "record_project_placement",
     "transition",
     "update_interaction_context",
 ]

@@ -1138,10 +1138,65 @@ def test_change_set_advances_through_automation_trial_and_publication(
     assert hydrated["governed"]["state"] == "published"
     explanation = service.compact_explanation("scenario", "recipes")
     assert explanation["state"] == "published"
-    assert explanation["next_commands"] == ["builder.change.plan"]
+    assert explanation["next_commands"] == [
+        "builder.publication.place",
+        "builder.process.inspect",
+        "builder.change.plan",
+        "builder.project.list",
+        "builder.help",
+    ]
+    assert explanation["installed"] is True
     frame = service.interaction_frame("scenario", "recipes")
     assert frame["message"] == explanation["text"]
-    assert any(item["command"] == "builder.change.plan" for item in frame["actions"])
+    assert [item["command"] for item in frame["actions"]] == [
+        "builder.publication.place",
+        "builder.process.inspect",
+        "builder.change.plan",
+        "builder.project.list",
+        "builder.help",
+    ]
+
+    placed = service.record_project_placement(
+        "scenario",
+        "recipes",
+        {
+            "kind": "stable",
+            "result_ref": {"kind": "release", "id": "scenario:recipes", "version": "0.2.0"},
+            "target": {"webspace_id": "desktop", "space_kind": "workspace"},
+            "scenario_id": "recipes",
+        },
+        expected_generation=hydrated["generation"],
+    )["workflow"]
+    placed_frame = service.interaction_frame("scenario", "recipes", locale="ru")
+    assert placed["project"]["stable_placement_ref"]
+    assert placed_frame["actions"][0]["command"] == "builder.publication.open"
+    assert "builder.preview.link" not in {item["command"] for item in placed_frame["actions"]}
+    assert any(item["kind"] == "placement" for item in placed["process"]["nodes"])
+
+
+def test_builder_text_continuation_is_durable_and_generation_bound(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    interaction = service.conversation_input_interaction(
+        "scenario",
+        "recipes",
+        surface_command="builder.change.plan",
+        conversation_id="conversation.builder.input",
+        principal_id="skill:builder_skill",
+        command_context_id="thread.builder.input",
+        locale="ru",
+    )
+
+    assert interaction["input_spec"]["kind"] == "text"
+    assert interaction["input_spec"]["required_fields"] == ["text"]
+    assert interaction["actions"] == []
+    assert interaction["metadata"]["continuation"] == {
+        "surface_command": "builder.change.plan",
+        "expected_generation": 0,
+        "workflow_generation": 0,
+    }
+    assert interaction["prompt"] == "Опишите, что нужно изменить. Строитель разложит запрос на Issues и Change."
 
 
 def test_active_change_set_requires_explicit_supersession(

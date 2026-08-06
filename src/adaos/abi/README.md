@@ -30,6 +30,8 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   -> Automation -> Trial -> Publication lineage and exact Preview choices
 - `builder.project.v1.schema.json` - project portfolio, release/component refs,
   scoped Change focus, conflict/dependency indexes, and coordination generations
+- `project.placement.v1.schema.json` - exact stable/Trial result binding to a
+  zone, subnet, Webspace, host capability, runtime binding, and data policy
 - `builder.binding_profile.v1.schema.json` - explicit mock, fixture, sandbox,
   live-readonly, and live Preview data boundary plus implementation mappings
 - `builder.semantic_ui_change.v1.schema.json` - reversible semantic operation

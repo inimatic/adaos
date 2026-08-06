@@ -4,9 +4,14 @@ import copy
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from adaos.services.builder.placement import (
+    active_project_placement,
+    normalize_project_placements,
+)
+
 
 BUILDER_PROJECT_SCHEMA = "adaos.builder.project.v1"
-BUILDER_PROJECT_VERSION = "1.0.0"
+BUILDER_PROJECT_VERSION = "1.1.0"
 _TERMINAL_CHANGE_STATES = {"published", "rejected", "superseded", "cancelled"}
 _PORTFOLIO_FIELDS = (
     "active_phase",
@@ -197,6 +202,8 @@ def normalize_project(
     object_id: str,
     archived: bool,
     workflow: Mapping[str, Any],
+    title: str | None = None,
+    description: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
@@ -351,6 +358,9 @@ def normalize_project(
             item for item in trials if item.get("trial_ref") != current_trial["trial_ref"]
         ]
         trials.append(current_trial)
+    placements = normalize_project_placements(raw.get("placements"), project_ref=project_ref)
+    stable_placement = active_project_placement(placements, kind="stable")
+    trial_placement = active_project_placement(placements, kind="trial")
     conflicts = _conflicts(normalized_changes, dependencies)
     raw_lifecycle = dict(raw.get("lifecycle") or {})
     was_archived = str(raw_lifecycle.get("status") or "active") == "archived"
@@ -394,7 +404,13 @@ def normalize_project(
         "project_id": object_id,
         "project_ref": project_ref,
         "object_type": object_type,
-        "identity": {"stable_id": object_id, "kind": object_type, "project_ref": project_ref},
+        "identity": {
+            "stable_id": object_id,
+            "kind": object_type,
+            "project_ref": project_ref,
+            "title": str(title or raw.get("title") or object_id),
+            "description": str(description or raw.get("description") or "").strip() or None,
+        },
         "source_ref": (
             copy.deepcopy(raw.get("source_ref"))
             if isinstance(raw.get("source_ref"), Mapping)
@@ -414,7 +430,24 @@ def normalize_project(
             and str(publication.get("current_version") or "").strip()
             else None
         ),
-        "installed_release_ref": copy.deepcopy(raw.get("installed_release_ref")) if isinstance(raw.get("installed_release_ref"), Mapping) else None,
+        "installed_release_ref": (
+            copy.deepcopy(raw.get("installed_release_ref"))
+            if isinstance(raw.get("installed_release_ref"), Mapping)
+            else {
+                "kind": "release",
+                "id": project_ref,
+                "version": str(publication.get("current_version")),
+                "workspace_lock_digest": str(
+                    dict(publication.get("release_record") or {}).get("workspace_lock_digest")
+                    or ""
+                )
+                or None,
+            }
+            if str(publication.get("status") or "") == "published"
+            and isinstance(publication.get("release_record"), Mapping)
+            and str(publication.get("current_version") or "").strip()
+            else None
+        ),
         "dev_ref": (
             copy.deepcopy(raw.get("dev_ref"))
             if isinstance(raw.get("dev_ref"), Mapping)
@@ -448,6 +481,9 @@ def normalize_project(
             else []
         ),
         "trials": trials[-100:],
+        "placements": placements,
+        "stable_placement_ref": stable_placement["placement_id"] if stable_placement else None,
+        "trial_placement_ref": trial_placement["placement_id"] if trial_placement else None,
         "focus_by_context": focus,
         "workflow_versions": {"project": BUILDER_PROJECT_VERSION, "change": "1.0.0"},
         "workflow_definition_version": str(governed.get("definition_version") or "1.0.0"),

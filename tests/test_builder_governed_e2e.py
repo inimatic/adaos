@@ -265,7 +265,10 @@ def test_empty_scenario_completes_dependent_cross_channel_flow(tmp_path: Path) -
     nodes = {item["kind"]: item for item in published["process"]["nodes"]}
     assert nodes["prototype"]["parent_ref"] == nodes["change"]["ref"]
     assert nodes["automation"]["parent_ref"] == nodes["prototype"]["ref"]
-    assert nodes["trial"]["parent_ref"] == nodes["automation"]["ref"]
+    assert nodes["verification"]["parent_ref"] == nodes["automation"]["ref"]
+    assert nodes["trial"]["parent_ref"] == nodes["verification"]["ref"]
+    assert nodes["publication"]["parent_ref"] == nodes["trial"]["ref"]
+    assert nodes["workspace_installation"]["parent_ref"] == nodes["publication"]["ref"]
     assert nodes["publication"]["parent_ref"] == nodes["trial"]["ref"]
     assert {item["label"].split(":", 1)[0] for item in published["process"]["preview_options"]} == {
         "proto",

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.project.placement.v1",
+  "title": "AdaOS Project Placement",
+  "type": "object",
+  "required": [
+    "schema", "placement_id", "project_ref", "kind", "result_ref", "channel",
+    "target", "host_capability", "scenario_id", "audience", "data_mode",
+    "runtime_binding", "trial_activation_ref", "safety", "status", "created_at",
+    "updated_at", "detached_at"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.project.placement.v1" },
+    "placement_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "project_ref": { "type": "string", "pattern": "^(scenario|skill):[^/\\\\]+$" },
+    "kind": { "enum": ["stable", "trial"] },
+    "result_ref": { "type": "object", "required": ["id"], "additionalProperties": true },
+    "channel": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "target": {
+      "type": "object",
+      "required": ["zone", "subnet_id", "webspace_id", "space_kind"],
+      "properties": {
+        "zone": { "type": ["string", "null"], "maxLength": 160 },
+        "subnet_id": { "type": ["string", "null"], "maxLength": 160 },
+        "webspace_id": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "space_kind": { "enum": ["workspace", "development"] }
+      },
+      "additionalProperties": false
+    },
+    "host_capability": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "scenario_id": { "type": ["string", "null"], "maxLength": 300 },
+    "audience": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "data_mode": { "enum": ["empty", "mock", "fixture", "sandbox", "read_only", "live_readonly", "real", "live"] },
+    "runtime_binding": { "type": "object" },
+    "trial_activation_ref": { "type": ["string", "null"], "maxLength": 500 },
+    "safety": { "type": "object" },
+    "status": { "enum": ["active", "detached", "expired", "failed", "reconciling"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "detached_at": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "additionalProperties": false
+}

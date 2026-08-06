@@ -51,6 +51,11 @@ from adaos.services.builder.project_aggregate import (
     set_dependencies,
     set_focus,
 )
+from adaos.services.builder.placement import (
+    BuilderPlacementError,
+    active_project_placement,
+    normalize_project_placement,
+)
 from adaos.services.conversation_interactions import create_interaction
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.governed_workflow import (
@@ -65,6 +70,7 @@ from adaos.services.builder.release_evidence import applied_release_record
 from adaos.services.builder.surface import (
     builder_action_label,
     builder_action_label_ref,
+    builder_input_prompt,
     builder_surface_locale_context,
     localize_builder_explanation,
     normalize_builder_locale,
@@ -1331,6 +1337,22 @@ class BuilderWorkflowService:
             return None
         return str(value.get("version") or "").strip() or None if isinstance(value, Mapping) else None
 
+    def _project_manifest_metadata(self, object_type: str, object_id: str) -> dict[str, Any]:
+        kind = _kind(object_type)
+        root = self.project_root(kind, object_id)
+        path = root / ("scenario.yaml" if kind == "scenario" else "skill.yaml")
+        try:
+            value = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+        except (OSError, ValueError, yaml.YAMLError):
+            value = {}
+        manifest = dict(value) if isinstance(value, Mapping) else {}
+        return {
+            "title": str(manifest.get("title") or manifest.get("name") or object_id).strip()
+            or object_id,
+            "description": str(manifest.get("description") or "").strip() or None,
+            "version": str(manifest.get("version") or "").strip() or None,
+        }
+
     def current_prototype_revision(self, object_type: str, object_id: str) -> str | None:
         kind = _kind(object_type)
         if kind != "scenario":
@@ -1485,12 +1507,15 @@ class BuilderWorkflowService:
             raw.get("change_portfolio"),
             normalized,
         )
+        manifest_metadata = self._project_manifest_metadata(object_type, object_id)
         normalized["project"] = normalize_project(
             raw.get("project"),
             object_type=_kind(object_type),
             object_id=_project_id(object_id),
             archived=bool(state.get("archived")),
             workflow=normalized,
+            title=manifest_metadata["title"],
+            description=manifest_metadata["description"],
         )
         return normalized
 
@@ -1591,16 +1616,49 @@ class BuilderWorkflowService:
         ]
         next_commands = list(dict.fromkeys([*workflow_commands, *project_commands]))
         progress = _mapping(description.get("progress"))
-        if change is None:
+        project = _mapping(projection.get("project"))
+        identity = _mapping(project.get("identity"))
+        publication = _mapping(projection.get("publication"))
+        placements = [
+            dict(item)
+            for item in project.get("placements") or []
+            if isinstance(item, Mapping)
+        ]
+        stable_placement = active_project_placement(placements, kind="stable")
+        installed = _mapping(project.get("installed_release_ref"))
+        project_title = str(identity.get("title") or projection.get("object_id") or "Project")
+        published_version = str(publication.get("current_version") or "").strip()
+        if state == "published":
+            release_label = published_version or "current"
+            summary = f'Version {release_label} of "{project_title}" is published to stable.'
+            installation_text = (
+                "Installed in Workspace."
+                if installed
+                else "Workspace installation is not recorded."
+            )
+            placement_text = (
+                f"Placed in Webspace {_mapping(stable_placement.get('target')).get('webspace_id')}."
+                if stable_placement
+                else "Not placed in a Webspace yet."
+            )
+            reason = f"{installation_text} {placement_text}"
+            next_commands = [
+                "builder.publication.open" if stable_placement else "builder.publication.place",
+                "builder.process.inspect",
+                "builder.change.plan",
+                "builder.project.list",
+                "builder.help",
+            ]
+        elif change is None:
             summary = "No active Change. Describe the requested change to begin."
+            reason = "No active blocker."
         else:
             summary = f"Change {change['change_id']} is in {state}."
-        if progress.get("waiting") and progress.get("wait_explanation"):
-            reason = str(progress["wait_explanation"])
-        elif blockers:
-            reason = "; ".join(item["reason_code"] for item in blockers[:3])
-        else:
             reason = "No active blocker."
+        if state != "published" and progress.get("waiting") and progress.get("wait_explanation"):
+            reason = str(progress["wait_explanation"])
+        elif state != "published" and blockers:
+            reason = "; ".join(item["reason_code"] for item in blockers[:3])
         next_text = ", ".join(next_commands[:4]) if next_commands else "wait for input or inspect the process"
         return {
             "schema": "adaos.builder.compact_workflow_explanation.v1",
@@ -1609,6 +1667,10 @@ class BuilderWorkflowService:
             "state": state,
             "generation": int(description.get("generation") or 0),
             "target": copy.deepcopy(description.get("target")),
+            "project_title": project_title,
+            "published_version": published_version or None,
+            "installed": bool(installed),
+            "placement": copy.deepcopy(stable_placement),
             "summary": summary,
             "reason": reason,
             "blockers": blockers,
@@ -1626,6 +1688,60 @@ class BuilderWorkflowService:
         """Return one channel-neutral answer to what, why, and what next."""
 
         return self._compact_explanation(self.describe(object_type, object_id))
+
+    def process_explanation(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        locale: str | None = None,
+    ) -> dict[str, Any]:
+        """Render the canonical lineage as a useful compact channel timeline."""
+
+        projection = self.describe(object_type, object_id)
+        process = _mapping(projection.get("process"))
+        project = _mapping(projection.get("project"))
+        identity = _mapping(project.get("identity"))
+        selected_locale = normalize_builder_locale(locale)
+        labels = {
+            "change": {"en": "Change", "ru": "Изменение"},
+            "prototype": {"en": "Prototype", "ru": "Прототип"},
+            "automation": {"en": "Automation", "ru": "Автоматизация"},
+            "verification": {"en": "Verification", "ru": "Проверка"},
+            "trial": {"en": "Trial", "ru": "Апробация"},
+            "publication": {"en": "Stable release", "ru": "Стабильная версия"},
+            "workspace_installation": {"en": "Workspace installation", "ru": "Установка в Workspace"},
+            "placement": {"en": "Webspace placement", "ru": "Размещение в Webspace"},
+        }
+        nodes = [dict(item) for item in process.get("nodes") or [] if isinstance(item, Mapping)]
+        lines = [
+            (
+                f"Project: {identity.get('title') or object_id}"
+                if selected_locale == "en"
+                else f"Проект: {identity.get('title') or object_id}"
+            )
+        ]
+        for item in nodes:
+            kind = str(item.get("kind") or "")
+            label = str(_mapping(labels.get(kind)).get(selected_locale) or kind)
+            detail = str(item.get("label") or "").strip()
+            status = str(item.get("status") or "").strip()
+            lines.append(f"✓ {label}: {detail} [{status}]")
+        workflow_state = str(process.get("workflow_state") or "ready")
+        lines.append(
+            f"Current state: {workflow_state}"
+            if selected_locale == "en"
+            else f"Текущее состояние: {workflow_state}"
+        )
+        return {
+            "schema": "adaos.builder.process_explanation.v1",
+            "project_ref": process.get("project_ref"),
+            "workflow_state": workflow_state,
+            "generation": process.get("generation"),
+            "nodes": nodes,
+            "text": "\n".join(lines),
+            "locale_context": builder_surface_locale_context(selected_locale),
+        }
 
     @staticmethod
     def _project_summary(workflow: Mapping[str, Any]) -> dict[str, Any]:
@@ -1841,6 +1957,109 @@ class BuilderWorkflowService:
             self._write_state(kind, project_id, state)
         return {"ok": True, "workflow": self.describe(kind, project_id)}
 
+    def record_project_placement(
+        self,
+        object_type: str,
+        object_id: str,
+        placement: Mapping[str, Any],
+        *,
+        expected_generation: int,
+    ) -> dict[str, Any]:
+        """Persist one exact stable/Trial result placement under the Project aggregate."""
+
+        kind = _kind(object_type)
+        project_id = _project_id(object_id)
+        with _LOCK:
+            state = self._read_state(kind, project_id)
+            workflow = self._normalized_workflow(state, object_type=kind, object_id=project_id)
+            if int(workflow.get("generation") or 0) != int(expected_generation):
+                raise BuilderWorkflowError("stale Builder workflow generation")
+            project = _mapping(workflow.get("project"))
+            try:
+                normalized = normalize_project_placement(
+                    placement,
+                    project_ref=f"{kind}:{project_id}",
+                )
+            except BuilderPlacementError as exc:
+                raise BuilderWorkflowError(str(exc)) from exc
+            placements = [
+                copy.deepcopy(dict(item))
+                for item in project.get("placements") or []
+                if isinstance(item, Mapping)
+                and str(item.get("placement_id") or "") != normalized["placement_id"]
+            ]
+            if normalized["status"] == "active":
+                placements = [
+                    {
+                        **item,
+                        "status": "detached",
+                        "detached_at": normalized["updated_at"],
+                        "updated_at": normalized["updated_at"],
+                    }
+                    if str(item.get("kind") or "") == normalized["kind"]
+                    and str(item.get("status") or "") == "active"
+                    else item
+                    for item in placements
+                ]
+            project["placements"] = [*placements, normalized][-100:]
+            workflow["project"] = project
+            workflow["generation"] = int(workflow.get("generation") or 0) + 1
+            workflow["updated_at"] = normalized["updated_at"]
+            state["workflow"] = workflow
+            state["updated_at"] = workflow["updated_at"]
+            self._write_state(kind, project_id, state)
+        projection = self.describe(kind, project_id)
+        if callable(self.event_sink):
+            self.event_sink(projection)
+        return {"ok": True, "placement": normalized, "workflow": projection}
+
+    def project_placement_navigation(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        kind: str = "stable",
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Build a topology-aware link from an accepted ProjectPlacement."""
+
+        from adaos.sdk import navigation
+        from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL
+
+        projection = self.describe(object_type, object_id)
+        project = _mapping(projection.get("project"))
+        placement = active_project_placement(
+            [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+            kind=kind,
+        )
+        if placement is None:
+            raise BuilderWorkflowError(f"active {kind} ProjectPlacement is unavailable")
+        target = _mapping(placement.get("target"))
+        runtime_scope = navigation.runtime_scope()
+        zone = str(target.get("zone") or runtime_scope.get("zone") or "").strip()
+        subnet_id = str(target.get("subnet_id") or runtime_scope.get("subnet_id") or "").strip()
+        if not zone or not subnet_id:
+            raise BuilderWorkflowError("ProjectPlacement navigation requires zone and subnet identity")
+        result_ref = _mapping(placement.get("result_ref"))
+        destination = navigation.webspace_destination(
+            zone=zone,
+            subnet_id=subnet_id,
+            webspace_id=str(target.get("webspace_id") or ""),
+            space_kind=str(target.get("space_kind") or ("trial" if kind == "trial" else "workspace")),
+            expected_scenario_id=str(placement.get("scenario_id") or object_id).strip() or None,
+            expected_revision=str(result_ref.get("version") or "").strip() or None,
+            preview_stage="publication" if kind == "stable" else None,
+        )
+        return {
+            "schema": "adaos.builder.placement_navigation.v1",
+            "placement": copy.deepcopy(placement),
+            "destination": destination,
+            "url": navigation.build_url(
+                destination,
+                base_url=str(base_url or DEFAULT_PUBLIC_APP_BASE_URL),
+            ),
+        }
+
     def select_binding_profile(
         self,
         object_type: str,
@@ -1891,6 +2110,7 @@ class BuilderWorkflowService:
         automation = _mapping(workflow.get("automation"))
         delivery = _mapping(workflow.get("delivery"))
         publication = _mapping(workflow.get("publication"))
+        project = _mapping(workflow.get("project"))
         description = _mapping(workflow.get("workflow_description"))
         state = str(description.get("state") or _mapping(workflow.get("governed")).get("state") or "ready")
         nodes: list[dict[str, Any]] = []
@@ -1938,6 +2158,27 @@ class BuilderWorkflowService:
                 }
             )
             parent_ref = automation_ref
+        if automation_status == "completed" or state in {
+            "verification",
+            "trial_ready",
+            "trial_waiting",
+            "trial_review",
+            "publication_ready",
+            "publication_waiting",
+            "published",
+        }:
+            verification_ref = f"verification:{object_id}:{automation.get('head_task_id') or 'current'}"
+            nodes.append(
+                {
+                    "ref": verification_ref,
+                    "kind": "verification",
+                    "parent_ref": parent_ref,
+                    "label": "Verification",
+                    "status": "reviewing" if state == "verification" else "accepted",
+                    "source_ref": automation_ref,
+                }
+            )
+            parent_ref = verification_ref
         delivery_status = str(delivery.get("status") or "idle")
         if delivery_status not in {"idle", "stale"}:
             trial_ref = f"trial:{delivery.get('candidate_id') or object_id}"
@@ -1952,6 +2193,23 @@ class BuilderWorkflowService:
                 }
             )
             parent_ref = trial_ref
+            trial_placement = active_project_placement(
+                [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+                kind="trial",
+            )
+            if trial_placement:
+                trial_webspace = str(_mapping(trial_placement.get("target")).get("webspace_id") or "")
+                trial_placement_ref = f"placement:{trial_placement['placement_id']}"
+                nodes.append(
+                    {
+                        "ref": trial_placement_ref,
+                        "kind": "placement",
+                        "parent_ref": parent_ref,
+                        "label": f"Trial placement {trial_webspace}".strip(),
+                        "status": "active",
+                        "source_ref": trial_ref,
+                    }
+                )
         if str(publication.get("status") or "") == "published":
             version = str(publication.get("current_version") or "current")
             nodes.append(
@@ -1964,6 +2222,39 @@ class BuilderWorkflowService:
                     "preview": f"public:{object_id}:{version}",
                 }
             )
+            publication_ref = f"publication:{object_id}:{version}"
+            installed_release = _mapping(project.get("installed_release_ref"))
+            if installed_release:
+                installation_ref = f"workspace-installation:{object_id}:{version}"
+                nodes.append(
+                    {
+                        "ref": installation_ref,
+                        "kind": "workspace_installation",
+                        "parent_ref": publication_ref,
+                        "label": f"Workspace installation {version}",
+                        "status": "installed",
+                        "source_ref": publication_ref,
+                    }
+                )
+                placement_parent = installation_ref
+            else:
+                placement_parent = publication_ref
+            stable_placement = active_project_placement(
+                [dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)],
+                kind="stable",
+            )
+            if stable_placement:
+                webspace_id = str(_mapping(stable_placement.get("target")).get("webspace_id") or "")
+                nodes.append(
+                    {
+                        "ref": f"placement:{stable_placement['placement_id']}",
+                        "kind": "placement",
+                        "parent_ref": placement_parent,
+                        "label": f"Webspace {webspace_id}",
+                        "status": "active",
+                        "source_ref": publication_ref,
+                    }
+                )
         interaction = _mapping(workflow.get("interaction"))
         preview_options = [
             {"kind": item["kind"], "ref": item["ref"], "label": item["preview"]}
@@ -2006,6 +2297,7 @@ class BuilderWorkflowService:
         )
         workflow_explanation = _mapping(projection.get("workflow_description"))
         compact_explanation = self._compact_explanation(projection)
+        workflow_state = str(compact_explanation.get("state") or "ready")
         canonical_generation = int(workflow_explanation.get("generation") or 0)
         canonical_action_list = [
             dict(item)
@@ -2112,6 +2404,10 @@ class BuilderWorkflowService:
             if surface is None:
                 continue
             surface_command, label, risk, target = surface
+            # A published result starts a fresh Change; it must not expose a
+            # stale lifecycle continuation as though publication were Preview.
+            if workflow_state == "published" and surface_command == "builder.change.plan":
+                continue
             if surface_command in seen_surface_commands:
                 continue
             seen_surface_commands.add(surface_command)
@@ -2133,6 +2429,8 @@ class BuilderWorkflowService:
             if isinstance(item, Mapping)
         ]
         if (
+            workflow_state != "published"
+            and
             any(str(item.get("command") or "") == "builder.change.plan" for item in project_commands)
             and "builder.change.plan" not in seen_surface_commands
         ):
@@ -2143,26 +2441,55 @@ class BuilderWorkflowService:
                 target_ref=project_ref,
             )
 
+        project = _mapping(projection.get("project"))
+        project_placements = [
+            dict(item) for item in project.get("placements") or [] if isinstance(item, Mapping)
+        ]
+        stable_placement = active_project_placement(project_placements, kind="stable")
+        trial_placement = active_project_placement(project_placements, kind="trial")
+        if workflow_state == "published":
+            if stable_placement:
+                add_action(
+                    "builder.publication.open",
+                    "Open published project",
+                    "read",
+                    target_ref=f"placement:{stable_placement['placement_id']}",
+                )
+            else:
+                add_action(
+                    "builder.publication.place",
+                    "Place in Webspace",
+                    "workspace_activation",
+                    target_ref=project_ref,
+                )
+        elif trial_placement:
+            add_action(
+                "builder.trial.open",
+                "Open trial",
+                "read",
+                target_ref=f"placement:{trial_placement['placement_id']}",
+            )
+
         preview_options = {
             str(item.get("stage") or ""): dict(item)
             for item in _mapping(projection.get("process")).get("preview_options") or []
             if isinstance(item, Mapping)
         }
-        if "prototype" in preview_options:
+        if workflow_state != "published" and "prototype" in preview_options:
             add_action(
                 "builder.preview.prototype",
                 "Preview prototype",
                 "read",
                 target_ref=f"prototype:{projection['object_id']}:{_mapping(projection.get('prototype')).get('head_revision') or 'current'}",
             )
-        if "automation" in preview_options:
+        if workflow_state != "published" and "automation" in preview_options:
             add_action(
                 "builder.preview.active",
                 "Preview implementation",
                 "read",
                 target_ref=f"implementation:{projection['object_id']}:active",
             )
-        if "publication" in preview_options:
+        if workflow_state != "published" and "publication" in preview_options:
             add_action(
                 "builder.preview.publication",
                 "Preview publication",
@@ -2181,8 +2508,18 @@ class BuilderWorkflowService:
             presentation="panel",
             fallback="compact_status",
         )
+        if workflow_state == "published":
+            add_action(
+                "builder.change.plan",
+                "Refine project",
+                "local_reversible",
+                target_ref=project_ref,
+            )
         add_action("builder.project.list", "Show projects", "read", target_ref=project_ref)
-        add_action("builder.preview.link", "Preview link", "read", target_ref=project_ref)
+        if workflow_state == "published" and actions:
+            actions[-1]["label"] = "Сменить проект" if selected_locale == "ru" else "Change project"
+        if workflow_state != "published":
+            add_action("builder.preview.link", "Preview link", "read", target_ref=project_ref)
         add_action("builder.help", "Help", "read", target_ref=project_ref)
 
         views = [
@@ -2212,7 +2549,7 @@ class BuilderWorkflowService:
                 "implementation": automation_status,
                 "delivery": delivery_status,
                 "data_mode": str(_mapping(projection.get("data_binding")).get("selected_mode") or "mock"),
-                "workflow_state": compact_explanation["state"],
+                "workflow_state": workflow_state,
                 "reason": compact_explanation["reason"],
                 "next_commands": compact_explanation["next_commands"],
             },
@@ -2347,6 +2684,71 @@ class BuilderWorkflowService:
             },
         )
         return interaction
+
+    def conversation_input_interaction(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        surface_command: str,
+        conversation_id: str,
+        principal_id: str,
+        command_context_id: str,
+        metadata: Mapping[str, Any] | None = None,
+        locale: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a durable input-required continuation for a Builder affordance."""
+
+        command = str(surface_command or "").strip()
+        input_commands = {
+            "builder.change.plan",
+            "builder.change.extend",
+            "builder.prototype.edit",
+            "builder.implementation.iterate",
+            "builder.publication.place",
+        }
+        if command not in input_commands:
+            raise BuilderWorkflowError(f"Builder command does not accept conversational input: {command}")
+        projection = self.describe(object_type, object_id)
+        selected_locale = normalize_builder_locale(locale)
+        frame = self.interaction_frame(object_type, object_id, locale=selected_locale)
+        if not any(str(item.get("command") or "") == command for item in frame.get("actions") or []):
+            raise BuilderWorkflowError(f"Builder command is not available in the current state: {command}")
+        governed = _mapping(projection.get("governed"))
+        workflow_ref = {
+            "schema": "adaos.workflow.ref.v1",
+            "kind": "workflow",
+            "id": str(governed.get("instance_id") or ""),
+            "version": str(governed.get("definition_version") or ""),
+            "generation": int(governed.get("generation") or 0),
+        }
+        return create_interaction(
+            conversation_id=conversation_id,
+            owner=principal_id,
+            thread_id=command_context_id,
+            workflow_ref=workflow_ref,
+            prompt=builder_input_prompt(command, locale=selected_locale),
+            prompt_ref=f"builder.prompt.{command.removeprefix('builder.').replace('.', '_')}",
+            locale_context=builder_surface_locale_context(selected_locale),
+            input_spec={
+                "kind": "text",
+                "required_fields": ["text"],
+                "choices": [],
+                "sensitive": False,
+            },
+            actions=[],
+            fallbacks=("plain_text", "unsupported"),
+            metadata={
+                "domain": "builder",
+                "project_ref": f"{projection['object_type']}:{projection['object_id']}",
+                "continuation": {
+                    "surface_command": command,
+                    "expected_generation": int(projection.get("generation") or 0),
+                    "workflow_generation": int(governed.get("generation") or 0),
+                },
+                **copy.deepcopy(dict(metadata or {})),
+            },
+        )
 
     def invoke_interaction_response(
         self,
@@ -2742,12 +3144,15 @@ class BuilderWorkflowService:
             portfolio = normalize_portfolio(workflow.get("change_portfolio"), workflow)
             workflow["change_portfolio"] = portfolio
             previous_project = _mapping(workflow.get("project"))
+            manifest_metadata = self._project_manifest_metadata(kind, project_id)
             project = normalize_project(
                 previous_project,
                 object_type=kind,
                 object_id=project_id,
                 archived=False,
                 workflow=workflow,
+                title=manifest_metadata["title"],
+                description=manifest_metadata["description"],
                 now=changed_at,
             )
             project["generation"] = int(previous_project.get("generation") or 0) + 1

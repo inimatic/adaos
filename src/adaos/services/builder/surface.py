@@ -17,7 +17,7 @@ BUILDER_SURFACE_LOCALES = ("en", "ru")
 
 _ACTION_LABELS: dict[str, dict[str, str]] = {
     "builder.process.inspect": {"en": "Show process", "ru": "Показать процесс"},
-    "builder.change.plan": {"en": "Plan change", "ru": "Описать изменение"},
+    "builder.change.plan": {"en": "Refine project", "ru": "Доработать проект"},
     "builder.change.extend": {"en": "Add to change", "ru": "Дополнить изменение"},
     "builder.prototype.edit": {"en": "Refine prototype", "ru": "Доработать прототип"},
     "builder.prototype.approve": {"en": "Approve prototype", "ru": "Согласовать прототип"},
@@ -29,6 +29,9 @@ _ACTION_LABELS: dict[str, dict[str, str]] = {
     "builder.trial.accept": {"en": "Accept trial", "ru": "Принять апробацию"},
     "builder.trial.reject": {"en": "Request changes", "ru": "Вернуть на доработку"},
     "builder.publication.publish": {"en": "Begin publication", "ru": "Начать публикацию"},
+    "builder.publication.open": {"en": "Open published project", "ru": "Открыть опубликованный проект"},
+    "builder.publication.place": {"en": "Place in Webspace", "ru": "Разместить в Webspace"},
+    "builder.trial.open": {"en": "Open trial", "ru": "Открыть апробацию"},
     "builder.change.cancel": {"en": "Cancel change", "ru": "Отменить изменение"},
     "builder.preview.prototype": {"en": "Preview prototype", "ru": "Показать прототип"},
     "builder.preview.active": {"en": "Preview implementation", "ru": "Показать автоматизацию"},
@@ -36,6 +39,29 @@ _ACTION_LABELS: dict[str, dict[str, str]] = {
     "builder.project.list": {"en": "Show projects", "ru": "Показать проекты"},
     "builder.preview.link": {"en": "Preview link", "ru": "Ссылка на Preview"},
     "builder.help": {"en": "Help", "ru": "Помощь"},
+}
+
+_INPUT_PROMPTS: dict[str, dict[str, str]] = {
+    "builder.change.plan": {
+        "en": "Describe what should be changed. Builder will turn the request into Issues and a Change.",
+        "ru": "Опишите, что нужно изменить. Строитель разложит запрос на Issues и Change.",
+    },
+    "builder.change.extend": {
+        "en": "Describe the additional requirement for the current Change.",
+        "ru": "Опишите дополнительное замечание для текущего Change.",
+    },
+    "builder.prototype.edit": {
+        "en": "Describe the required prototype change.",
+        "ru": "Опишите требуемое изменение прототипа.",
+    },
+    "builder.implementation.iterate": {
+        "en": "Describe what should be corrected in the current implementation.",
+        "ru": "Опишите, что нужно исправить в текущей реализации.",
+    },
+    "builder.publication.place": {
+        "en": "Enter the target Workspace Webspace id for the published project.",
+        "ru": "Укажите id целевого Workspace Webspace для опубликованного проекта.",
+    },
 }
 
 
@@ -72,6 +98,17 @@ def builder_surface_locale_context(locale: Any = None) -> dict[str, Any]:
     }
 
 
+def builder_input_prompt(command: Any, *, locale: Any = None) -> str:
+    token = str(command or "").strip()
+    selected = normalize_builder_locale(locale)
+    values = _INPUT_PROMPTS.get(token) or {}
+    return str(
+        values.get(selected)
+        or values.get(BUILDER_SURFACE_DEFAULT_LOCALE)
+        or token
+    ).strip()
+
+
 def localize_builder_explanation(
     explanation: Mapping[str, Any],
     *,
@@ -92,6 +129,21 @@ def localize_builder_explanation(
         for item in explanation.get("next_commands") or []
     ]
     if selected == "ru":
+        if state == "published":
+            title = str(explanation.get("project_title") or "Проект")
+            version = str(explanation.get("published_version") or "текущая")
+            placement = explanation.get("placement") if isinstance(explanation.get("placement"), Mapping) else {}
+            target = placement.get("target") if isinstance(placement.get("target"), Mapping) else {}
+            webspace = str(target.get("webspace_id") or "").strip()
+            installed = bool(explanation.get("installed"))
+            lines = [f"Версия {version} проекта «{title}» опубликована в stable."]
+            lines.append("Установлена в Workspace." if installed else "Установка в Workspace не подтверждена.")
+            lines.append(
+                f"Размещена в Webspace {webspace}."
+                if webspace
+                else "Пока не размещена в Webspace."
+            )
+            return "\n".join(lines)
         summary = (
             f"Изменение {change_ref} находится в состоянии {state}."
             if change_ref
@@ -111,6 +163,7 @@ __all__ = [
     "BUILDER_SURFACE_LOCALES",
     "builder_action_label",
     "builder_action_label_ref",
+    "builder_input_prompt",
     "builder_surface_locale_context",
     "localize_builder_explanation",
     "normalize_builder_locale",
