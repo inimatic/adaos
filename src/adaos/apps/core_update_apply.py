@@ -368,7 +368,11 @@ def _copy_seed_venv_tree(source: Path, target: Path, *, checkout_dir: Path | Non
     if sys.platform.startswith("linux") and mode not in {"copy", "python", "shutil"}:
         cp = shutil.which("cp")
         if cp:
-            source_contents = str(source / ".")
+            # Keep the trailing ``/.`` literal. ``Path(source) / "."`` is
+            # normalized back to ``source``; with our pre-created target,
+            # GNU cp would then create ``target/<source.name>`` and leave the
+            # expected virtualenv executable one directory too deep.
+            source_contents = f"{source}/."
             if mode in {"auto", "reflink", "cow", "copy-on-write"}:
                 attempt = _run_seed_copy_command(
                     [cp, "-a", "--reflink=always", source_contents, str(target)],
