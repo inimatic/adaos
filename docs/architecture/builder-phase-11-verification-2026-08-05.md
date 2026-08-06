@@ -36,6 +36,18 @@ commit `eaa381015b55e0ac459c4f809417dcb8584dc6fa`). It contains one manifest-bou
 `workflow.json`, one conversational package, EN/RU output and context-dependent
 actions for `collecting`, `review`, `completed` and `cancelled`.
 
+The reference skill and the later acceptance dashboard deliberately have
+different responsibilities:
+
+- `conversational_workflow_lab_skill` owns the governed statechart and binds
+  `skill.yaml -> workflow.json`;
+- `workflow_lab_dashboard` is a declarative UI scenario and binds
+  `scenario.yaml -> webui.json` plus the read-only
+  `workflow_lab_dashboard_skill` companion;
+- the dashboard's procedural `scenario.yaml.steps` are not a second governed
+  workflow. A component may own zero or one governed workflow and declares one
+  only through `workflow.manifest`.
+
 A live call through the restarted local API and the active slot B runtime used
 `phase11-live-20260805` and proved:
 
