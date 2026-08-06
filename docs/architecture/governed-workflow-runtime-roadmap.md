@@ -380,6 +380,10 @@ blocked.
   not completion evidence for executor-backed mutating controls. The
   2026-08-06 Web/Voice increment additionally proves that a consumed semantic
   token is retired in the durable message projection and on the live client;
+  the follow-up increment separates immutable InteractionResponse content from
+  per-delivery metadata and projects Telegram user ingress into the canonical
+  Builder project conversation with a stable id. Local regressions cover the
+  previously failing Prototype approval and cross-channel user-turn history;
   live mutating Telegram acceptance is still required before closing this
   item.
 - [x] `[must]` `GWR2-08` Bind actions to principal, command context, workflow,
@@ -974,8 +978,10 @@ coverage.
   under pagination, fallback, reconnect, and resume. Core commit `46f681f1`
   and client commit `466b3c9` close Web/Voice consumed-control persistence and
   reload behavior; the 2026-08-06 live Web projection proves the localized
-  published action set. A new live Telegram mutating callback in both locales
-  is still required.
+  published action set. Local regression now also proves that delivery metadata
+  cannot alter a digest-protected approval and that `Add requirement` remains
+  semantically distinct from `Correct prototype`. A new live Telegram mutating
+  callback in both locales is still required.
 
 The 2026-08-04 local increment is recorded in the linked verification ledger.
 Commits `5e0ed333`, `6dfd3442`, `b0dd4fae`, and `b72f2a7d` respectively close
