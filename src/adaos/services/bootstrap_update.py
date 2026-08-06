@@ -58,6 +58,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/scenario/webspace_components/scenario_switching.py",
     "src/adaos/services/scenario/webspace_components/skill_catalog.py",
     "src/adaos/services/scenario/webspace_components/state.py",
+    "src/adaos/services/scenario/webspace_components/task_scheduling.py",
 )
 
 SIDECAR_CONTROLLED_PATHS: tuple[str, ...] = (

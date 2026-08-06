@@ -13,6 +13,7 @@ from .scenario_switching import (
 )
 from .skill_catalog import WebspaceSkillCatalogOperations, WebspaceSkillCatalogService
 from .state import WebspaceTaskState
+from .task_scheduling import WebspaceTaskSchedulingOperations, WebspaceTaskSchedulingService
 
 __all__ = [
     "MaterializationExecutorOwner",
@@ -33,4 +34,6 @@ __all__ = [
     "WebspaceSkillCatalogService",
     "WebspaceCacheState",
     "WebspaceTaskState",
+    "WebspaceTaskSchedulingOperations",
+    "WebspaceTaskSchedulingService",
 ]
