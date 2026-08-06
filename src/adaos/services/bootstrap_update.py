@@ -47,6 +47,7 @@ SUPERVISOR_BOOTSTRAP_PATHS: tuple[str, ...] = (
     "src/adaos/services/scenario/webspace_components/cache.py",
     "src/adaos/services/scenario/webspace_components/materialization.py",
     "src/adaos/services/scenario/webspace_components/projections.py",
+    "src/adaos/services/scenario/webspace_components/rebuild.py",
     "src/adaos/services/scenario/webspace_components/recovery.py",
     "src/adaos/services/scenario/webspace_components/scenario_switching.py",
     "src/adaos/services/scenario/webspace_components/state.py",
