@@ -16,6 +16,7 @@ from typing import Sequence
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
 from adaos.services.core_slots import write_slot_manifest
+from adaos.services.env_policy import env_float
 
 
 def _is_probably_git_sha(value: str) -> bool:
@@ -1079,6 +1080,16 @@ _PREPARED_SLOT_IMPORT_MODULES: tuple[str, ...] = (
     "adaos.apps.cli.commands.setup",
     "adaos.apps.cli.commands.skill",
 )
+_PREPARED_SLOT_IMPORT_TIMEOUT_ENV = "ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC"
+_PREPARED_SLOT_IMPORT_TIMEOUT_DEFAULT_SEC = 90.0
+
+
+def _prepared_slot_import_timeout_sec() -> float:
+    return env_float(
+        _PREPARED_SLOT_IMPORT_TIMEOUT_ENV,
+        _PREPARED_SLOT_IMPORT_TIMEOUT_DEFAULT_SEC,
+        minimum=10.0,
+    )
 
 
 def _validate_prepared_slot_imports(python_bin: Path) -> dict[str, object]:
@@ -1099,7 +1110,7 @@ def _validate_prepared_slot_imports(python_bin: Path) -> dict[str, object]:
         [str(python_bin), "-c", script],
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=_prepared_slot_import_timeout_sec(),
         env=env,
     )
     if completed.returncode != 0:

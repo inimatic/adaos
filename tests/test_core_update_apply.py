@@ -443,6 +443,7 @@ def test_validate_prepared_slot_imports_checks_installed_package_without_pythonp
     def _fake_run(cmd, *, capture_output=None, text=None, timeout=None, env=None):
         captured["cmd"] = list(cmd)
         captured["env"] = dict(env or {})
+        captured["timeout"] = timeout
         return subprocess.CompletedProcess(
             cmd,
             0,
@@ -458,6 +459,20 @@ def test_validate_prepared_slot_imports_checks_installed_package_without_pythonp
     assert payload["ok"] is True
     assert captured["cmd"][1] == "-c"
     assert "PYTHONPATH" not in captured["env"]
+    assert captured["timeout"] == 90.0
+
+
+def test_prepared_slot_import_timeout_is_configurable_and_bounded(monkeypatch) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC", "135")
+    assert mod._prepared_slot_import_timeout_sec() == 135.0
+
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC", "1")
+    assert mod._prepared_slot_import_timeout_sec() == 10.0
+
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC", "nan")
+    assert mod._prepared_slot_import_timeout_sec() == 90.0
 
 
 def test_checkout_build_version_uses_pyproject_and_git_metadata(monkeypatch, tmp_path: Path) -> None:

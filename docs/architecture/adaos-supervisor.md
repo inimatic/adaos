@@ -363,6 +363,13 @@ planned ownership split is complete; remaining physical reduction is limited
 to characterized orchestration extraction and is not an alternate mutable-state
 implementation.
 
+Prepared-slot critical imports have their own bounded cold-start budget. The
+default is 90 seconds and can be overridden with
+`ADAOS_CORE_UPDATE_IMPORT_VALIDATE_TIMEOUT_SEC` (minimum 10 seconds). This is
+separate from runtime readiness validation: it covers first-import disk and
+native-extension pressure after dependency synchronization, and an actual
+import exception still fails preparation immediately.
+
 Target-stand evidence, 2026-08-06: `.30` accepted commit `5422f6c7`, built
 slot `B` as `0.1.679+1.5422f6c`, completed root promotion, restarted the root
 supervisor, and reached terminal update state `succeeded` / attempt state
