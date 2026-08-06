@@ -34,7 +34,13 @@ def semantic_project(tmp_path: Path) -> tuple[BuilderSemanticUIService, BuilderW
                                 "fields": [
                                     {"id": "recipe-name", "type": "text", "label": "Name"}
                                 ],
-                            }
+                            },
+                            {
+                                "id": "recipe-summary",
+                                "type": "item.details",
+                                "area": "main",
+                                "title": "Summary",
+                            },
                         ],
                     }
                 }
@@ -231,3 +237,26 @@ def test_semantic_data_mode_switch_does_not_create_ui_revision(
     assert result["binding"]["selected_mode"] == "fixture"
     assert not (root / "ui_revisions" / "002.json").exists()
     assert configured["prototype"]["head_revision"] == "001"
+
+
+def test_semantic_move_uses_stable_anchor_and_records_reversible_order(
+    semantic_project: tuple[BuilderSemanticUIService, BuilderWorkflowService, Path],
+) -> None:
+    service, _workflow, root = semantic_project
+    result = service.apply(
+        {
+            "schema": "adaos.builder.semantic_ui_change.v1",
+            "operation_id": "RUN-move-summary",
+            "change_id": "CH-recipes-label",
+            "project_ref": "scenario:recipes",
+            "operation": "move",
+            "target_ref": "widget:recipe-summary",
+            "source_revision": "001",
+            "value": {"before_ref": "widget:recipe-list", "breakpoints": ["wide", "compact"]},
+            "risk": "local_reversible",
+        }
+    )
+    webui = json.loads((root / "webui.json").read_text(encoding="utf-8"))
+    widgets = webui["ui"]["application"]["desktop"]["pageSchema"]["widgets"]
+    assert [item["id"] for item in widgets] == ["recipe-summary", "recipe-list"]
+    assert result["undo"]["value"]["index"] == 1

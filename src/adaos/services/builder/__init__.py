@@ -7,6 +7,7 @@ from .project_catalog import BuilderProjectCatalogService
 from .workflow import BuilderWorkflowError, BuilderWorkflowService
 from .semantic_ui import BuilderSemanticUIService
 from .prototype_runtime import PrototypeDataRuntime
+from .composition import extract_composition_slice
 
 __all__ = [
     "BuilderAutomationService",
@@ -17,4 +18,5 @@ __all__ = [
     "BuilderWorkflowError",
     "BuilderWorkflowService",
     "PrototypeDataRuntime",
+    "extract_composition_slice",
 ]
