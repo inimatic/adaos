@@ -14,6 +14,7 @@ class WebspaceResolutionOperations:
     clone_json_like: Any
     clone_skill_ui_interface: Any
     coerce_dict: Any
+    coerce_live_branch_subset: Any
     decl_is_node_owned: Any
     dedupe_str_list: Any
     default_materialization_required_branches: Any
@@ -23,6 +24,7 @@ class WebspaceResolutionOperations:
     effective_branch_paths: Any
     elapsed_ms: Any
     fingerprint_json_like: Any
+    extract_scenario_sections_from_content: Any
     has_effective_branch_value: Any
     is_y_map_value: Any
     load_config: Any
@@ -30,6 +32,7 @@ class WebspaceResolutionOperations:
     log_webui_contract_issues: Any
     logger: Any
     mapping_items: Any
+    mapping_get: Any
     mark_entry: Any
     mark_modal_def: Any
     materialize_scenario_resource_descriptor: Any
@@ -48,11 +51,15 @@ class WebspaceResolutionOperations:
     preserve_live_remote_catalog_entries: Any
     preserve_live_remote_modals: Any
     preserve_live_remote_registry_tokens: Any
+    preserve_live_state_on_rebuild_enabled: Any
     raise_if_rebuild_request_superseded: Any
     read_effective_branch_fingerprints: Any
+    read_node_scoped_scenario_entry: Any
+    record_timing: Any
     refresh_pinned_widgets_from_catalog_entries: Any
     replace_map_value: Any
     resolved_output_branch_fingerprints: Any
+    resolve_scenario_sections_in_doc: Any
     resolver_inputs_type: Any
     resolver_outputs_type: Any
     runtime_environment_payload: Any
@@ -66,9 +73,197 @@ class WebspaceResolutionOperations:
     validate_application_ui_contract: Any
     whole_branch_replace_paths: Any
     write_effective_branch_fingerprints: Any
+    workspace_index: Any
 
 
 class WebspaceResolutionService:
+    def collect_inputs(
+        self,
+        runtime: Any,
+        operations: WebspaceResolutionOperations,
+        ydoc: Any,
+        webspace_id: str,
+        *,
+        materialization_identity: Mapping[str, Any] | None = None,
+        scenario_id_override: str | None = None,
+        skill_decls_override: Any = None,
+        skill_decls_fingerprint_override: str | None = None,
+        scenario_content_override: Mapping[str, Any] | None = None,
+    ) -> Any:
+        collect_timings: Dict[str, float] = {}
+        runtime._last_collect_inputs_timings_ms = None
+        stage_started = time.perf_counter()
+        ui_map = ydoc.get_map("ui")
+        data_map = ydoc.get_map("data")
+        registry_map = ydoc.get_map("registry")
+
+        scenario_id = (
+            str(scenario_id_override or "").strip()
+            or str(ui_map.get("current_scenario") or "web_desktop").strip()
+            or "web_desktop"
+        )
+        scenarios_ui = operations.mapping_get(ui_map, "scenarios") or {}
+        scenario_ui_entry = operations.read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
+        scenario_ui_application = operations.coerce_dict(scenario_ui_entry.get("application") or {})
+        scenario_registry_map = operations.mapping_get(registry_map, "scenarios") or {}
+        scenario_registry_entry = operations.read_node_scoped_scenario_entry(scenario_registry_map, scenario_id)
+        scenario_data_map = operations.mapping_get(data_map, "scenarios") or {}
+        scenario_data_entry = operations.read_node_scoped_scenario_entry(scenario_data_map, scenario_id)
+        scenario_catalog = operations.coerce_dict(scenario_data_entry.get("catalog") or {})
+        operations.record_timing(collect_timings, "collect_inputs_read_doc", stage_started)
+
+        mode = "mixed"
+        metadata: Dict[str, Any] = {}
+        overlay_snapshot: Dict[str, Any] = {}
+        stage_started = time.perf_counter()
+        try:
+            row = operations.workspace_index.get_workspace(webspace_id)
+            if row:
+                mode = row.effective_source_mode
+                metadata = {
+                    "title": row.title,
+                    "kind": row.effective_kind,
+                    "source_mode": row.effective_source_mode,
+                    "home_scenario": row.effective_home_scenario,
+                    "is_dev": row.is_dev,
+                }
+                if getattr(row, "has_ui_overlay", False):
+                    overlay_snapshot = {
+                        "installed": operations.coerce_dict(getattr(row, "installed_overlay", {}) or {}),
+                        "pinnedWidgets": operations.normalize_overlay_widget_entries(
+                            getattr(row, "pinned_widgets_overlay", []) or []
+                        ),
+                        "topbar": list(getattr(row, "topbar_overlay", []) or []),
+                        "pageSchema": operations.coerce_dict(getattr(row, "page_schema_overlay", {}) or {}),
+                        "iconOrder": list(getattr(row, "icon_order_overlay", []) or []),
+                        "widgetOrder": list(getattr(row, "widget_order_overlay", []) or []),
+                        "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
+                        "source": "workspace_manifest_overlay",
+                    }
+        except Exception:
+            mode = "mixed"
+            metadata = {}
+        operations.record_timing(collect_timings, "collect_inputs_manifest", stage_started)
+
+        stage_started = time.perf_counter()
+        if isinstance(scenario_content_override, Mapping) and scenario_content_override:
+            scenario_app_ui, base_catalog, registry_entry = operations.extract_scenario_sections_from_content(
+                scenario_content_override
+            )
+            scenario_source = "builder_preview_override"
+            legacy_fallback = False
+        else:
+            scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = operations.resolve_scenario_sections_in_doc(
+                ydoc,
+                webspace_id=webspace_id,
+                scenario_id=scenario_id,
+                source_mode=mode,
+            )
+        operations.record_timing(collect_timings, "collect_inputs_scenario_sections", stage_started)
+        if metadata:
+            metadata = dict(metadata)
+        metadata["scenario_source"] = scenario_source
+        metadata["legacy_scenario_fallback"] = legacy_fallback
+        metadata["materialization"] = operations.scenario_materialization_contract(
+            scenario_id,
+            source_mode=mode,
+            identity=materialization_identity,
+        )
+
+        preserve_live_state = operations.preserve_live_state_on_rebuild_enabled()
+        stage_started = time.perf_counter()
+        if preserve_live_state:
+            live_application = operations.coerce_live_branch_subset(
+                operations.mapping_get(ui_map, "application") or {},
+                ("modals", "interfaces"),
+            )
+            live_catalog = operations.coerce_live_branch_subset(
+                operations.mapping_get(data_map, "catalog") or {},
+                ("apps", "widgets"),
+            )
+            live_registry = operations.coerce_live_branch_subset(
+                operations.mapping_get(registry_map, "merged") or {},
+                ("modals", "widgets"),
+            )
+            live_desktop = operations.coerce_live_branch_subset(
+                operations.mapping_get(data_map, "desktop") or {},
+                ("installed", "topbar", "pageSchema", "pinnedWidgets", "iconOrder", "widgetOrder", "hiddenSections"),
+            )
+            live_routing = operations.coerce_live_branch_subset(
+                operations.mapping_get(data_map, "routing") or {},
+                ("routes",),
+            )
+        else:
+            live_application = {}
+            live_catalog = {}
+            live_registry = {}
+            live_desktop = {}
+            live_routing = {}
+        operations.record_timing(collect_timings, "collect_inputs_live_state", stage_started)
+
+        stage_started = time.perf_counter()
+        if skill_decls_override is None:
+            try:
+                runtime._last_skill_decls_fingerprint = ""
+            except Exception:
+                pass
+            skill_decls = runtime._collect_skill_decls(mode=mode)
+            skill_decls_fingerprint = str(getattr(runtime, "_last_skill_decls_fingerprint", "") or "").strip()
+        else:
+            skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
+            skill_decls_fingerprint = str(skill_decls_fingerprint_override or "").strip()
+            if not skill_decls_fingerprint:
+                skill_decls_fingerprint = operations.fingerprint_json_like(skill_decls)
+            runtime._last_skill_decls_fingerprint = skill_decls_fingerprint
+        operations.record_timing(collect_timings, "collect_inputs_skill_decls", stage_started)
+
+        stage_started = time.perf_counter()
+        desktop_scenarios = runtime._list_desktop_scenarios(space=mode)
+        operations.record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
+        runtime._last_collect_inputs_timings_ms = collect_timings
+
+        # Resolver work continues in the materialization CPU executor.  Never
+        # let thread-affine y_py values escape the owner loop through this
+        # boundary: shallow ``dict(...)`` conversion can retain nested YMap or
+        # YArray objects and make their parent YDoc finalize on the worker.
+        detached_live_state = operations.coerce_dict(
+            operations.clone_json_like(
+                {
+                    "application": live_application,
+                    "catalog": live_catalog,
+                    "registry": live_registry,
+                    "desktop": live_desktop,
+                    "routing": live_routing,
+                }
+            )
+        )
+        detached_skill_decls = operations.clone_json_like(skill_decls)
+
+        return operations.resolver_inputs_type(
+            webspace_id=webspace_id,
+            scenario_id=str(scenario_id),
+            source_mode=mode,
+            metadata=operations.coerce_dict(operations.clone_json_like(metadata)),
+            scenario_application=operations.coerce_dict(operations.clone_json_like(scenario_app_ui)),
+            scenario_catalog=operations.coerce_dict(operations.clone_json_like(base_catalog)),
+            scenario_registry=operations.coerce_dict(operations.clone_json_like(registry_entry)),
+            overlay_snapshot=operations.coerce_dict(operations.clone_json_like(overlay_snapshot)),
+            live_state=detached_live_state,
+            compatibility_cache_presence={
+                "scenario_ui_application": bool(scenario_ui_application),
+                "scenario_registry_entry": bool(scenario_registry_entry),
+                "scenario_catalog": bool(scenario_catalog),
+            },
+            skill_decls=[dict(item) for item in detached_skill_decls if isinstance(item, Mapping)]
+            if isinstance(detached_skill_decls, list)
+            else [],
+            skill_decls_fingerprint=skill_decls_fingerprint,
+            desktop_scenarios=desktop_scenarios,
+            scenario_source=scenario_source,
+            legacy_scenario_fallback=legacy_fallback,
+        )
+
+
     def resolve(self, runtime: Any, operations: WebspaceResolutionOperations, inputs: Any) -> Any:
         scenario_id = str(inputs.scenario_id or "").strip() or "web_desktop"
         source_mode = str(inputs.source_mode or "").strip() or "mixed"

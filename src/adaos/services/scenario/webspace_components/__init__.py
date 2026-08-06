@@ -1,5 +1,6 @@
 from .cache import WebspaceCacheState
 from .materialization import MaterializationExecutorOwner
+from .materialization_runtime import WebspaceMaterializationOperations, WebspaceMaterializationService
 from .projections import WebspaceProjectionService
 from .recovery import RecoveryDecision, WebspaceRecoveryCoordinator
 from .resolution import WebspaceResolutionOperations, WebspaceResolutionService
@@ -14,6 +15,8 @@ from .state import WebspaceTaskState
 
 __all__ = [
     "MaterializationExecutorOwner",
+    "WebspaceMaterializationOperations",
+    "WebspaceMaterializationService",
     "WebspaceProjectionService",
     "RecoveryDecision",
     "RebuildOperations",

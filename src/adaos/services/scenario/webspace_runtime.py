@@ -59,6 +59,8 @@ from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
 from .webspace_components import (
     MaterializationExecutorOwner,
+    WebspaceMaterializationOperations,
+    WebspaceMaterializationService,
     RebuildOperations,
     WebspaceCacheState,
     WebspaceProjectionService,
@@ -77,6 +79,7 @@ _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
 _TASK_STATE = WebspaceTaskState()
 _CACHE_STATE = WebspaceCacheState()
 _MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
+_MATERIALIZATION_SERVICE = WebspaceMaterializationService()
 _PROJECTION_SERVICE = WebspaceProjectionService()
 _RECOVERY_COORDINATOR = WebspaceRecoveryCoordinator(command_cache_limit=256)
 _REBUILD_SERVICE = WebspaceRebuildService()
@@ -95,6 +98,37 @@ _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
 
 
+def _materialization_operations() -> WebspaceMaterializationOperations:
+    return WebspaceMaterializationOperations(
+        build_materialization_snapshot_from_resolved=_build_materialization_snapshot_from_resolved,
+        clone_json_like=_clone_json_like,
+        coerce_dict=_coerce_dict,
+        copy_timing_map=_copy_timing_map,
+        default_materialization_required_branches=_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES,
+        describe_webspace_rebuild_state=describe_webspace_rebuild_state,
+        effective_branch_paths=_EFFECTIVE_BRANCH_PATHS,
+        finalize_timing_map=_finalize_timing_map,
+        get_cached_materialized_worker_result=_get_cached_materialized_worker_result,
+        get_ystore_for_webspace=get_ystore_for_webspace,
+        materialization_worker_enabled=_materialization_worker_enabled,
+        materialized_payload_inputs=_materialized_payload_inputs,
+        normalize_materialization_required_branches=_normalize_materialization_required_branches,
+        open_readonly_operational_ydoc=_open_readonly_operational_ydoc,
+        open_rebuild_ydoc_session=_open_rebuild_ydoc_session,
+        raise_if_rebuild_request_superseded=_raise_if_rebuild_request_superseded,
+        record_timing=_record_timing,
+        remember_materialized_worker_result=_remember_materialized_worker_result,
+        resolved_outputs_from_cache_payload=_resolved_outputs_from_cache_payload,
+        run_materialization_cpu=_run_materialization_cpu,
+        run_materialization_worker=_run_materialization_worker,
+        scenario_materialization_contract=_scenario_materialization_contract,
+        schedule_builder_ystore_snapshot_backup=_schedule_builder_ystore_snapshot_backup,
+        set_map_value_if_changed=_set_map_value_if_changed,
+        set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
+        ystore_write_metadata=ystore_write_metadata,
+    )
+
+
 def _resolution_operations() -> WebspaceResolutionOperations:
     return WebspaceResolutionOperations(
         apply_node_context_to_ui=_apply_node_context_to_ui,
@@ -103,6 +137,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         clone_json_like=_clone_json_like,
         clone_skill_ui_interface=_clone_skill_ui_interface,
         coerce_dict=_coerce_dict,
+        coerce_live_branch_subset=_coerce_live_branch_subset,
         decl_is_node_owned=_decl_is_node_owned,
         dedupe_str_list=_dedupe_str_list,
         default_materialization_required_branches=_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES,
@@ -111,6 +146,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         detached_member_node_ids=_detached_member_node_ids,
         effective_branch_paths=_EFFECTIVE_BRANCH_PATHS,
         elapsed_ms=_elapsed_ms,
+        extract_scenario_sections_from_content=_extract_scenario_sections_from_content,
         fingerprint_json_like=_fingerprint_json_like,
         has_effective_branch_value=_has_effective_branch_value,
         is_y_map_value=_is_y_map_value,
@@ -118,6 +154,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         local_node_id=_local_node_id,
         log_webui_contract_issues=log_webui_contract_issues,
         logger=_log,
+        mapping_get=_mapping_get,
         mapping_items=_mapping_items,
         mark_entry=_mark_entry,
         mark_modal_def=_mark_modal_def,
@@ -137,11 +174,15 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         preserve_live_remote_catalog_entries=_preserve_live_remote_catalog_entries,
         preserve_live_remote_modals=_preserve_live_remote_modals,
         preserve_live_remote_registry_tokens=_preserve_live_remote_registry_tokens,
+        preserve_live_state_on_rebuild_enabled=_preserve_live_state_on_rebuild_enabled,
         raise_if_rebuild_request_superseded=_raise_if_rebuild_request_superseded,
         read_effective_branch_fingerprints=_read_effective_branch_fingerprints,
+        read_node_scoped_scenario_entry=_read_node_scoped_scenario_entry,
+        record_timing=_record_timing,
         refresh_pinned_widgets_from_catalog_entries=_refresh_pinned_widgets_from_catalog_entries,
         replace_map_value=_replace_map_value,
         resolved_output_branch_fingerprints=_resolved_output_branch_fingerprints,
+        resolve_scenario_sections_in_doc=_resolve_scenario_sections_in_doc,
         resolver_inputs_type=WebspaceResolverInputs,
         resolver_outputs_type=WebspaceResolverOutputs,
         runtime_environment_payload=runtime_environment_payload,
@@ -157,6 +198,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         validate_application_ui_contract=validate_application_ui_contract,
         whole_branch_replace_paths=_WHOLE_BRANCH_REPLACE_PATHS,
         write_effective_branch_fingerprints=_write_effective_branch_fingerprints,
+        workspace_index=workspace_index,
     )
 
 
@@ -5475,177 +5517,16 @@ class WebspaceScenarioRuntime:
         skill_decls_fingerprint_override: str | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
-        collect_timings: Dict[str, float] = {}
-        self._last_collect_inputs_timings_ms = None
-        stage_started = time.perf_counter()
-        ui_map = ydoc.get_map("ui")
-        data_map = ydoc.get_map("data")
-        registry_map = ydoc.get_map("registry")
-
-        scenario_id = (
-            str(scenario_id_override or "").strip()
-            or str(ui_map.get("current_scenario") or "web_desktop").strip()
-            or "web_desktop"
-        )
-        scenarios_ui = _mapping_get(ui_map, "scenarios") or {}
-        scenario_ui_entry = _read_node_scoped_scenario_entry(scenarios_ui, scenario_id)
-        scenario_ui_application = _coerce_dict(scenario_ui_entry.get("application") or {})
-        scenario_registry_map = _mapping_get(registry_map, "scenarios") or {}
-        scenario_registry_entry = _read_node_scoped_scenario_entry(scenario_registry_map, scenario_id)
-        scenario_data_map = _mapping_get(data_map, "scenarios") or {}
-        scenario_data_entry = _read_node_scoped_scenario_entry(scenario_data_map, scenario_id)
-        scenario_catalog = _coerce_dict(scenario_data_entry.get("catalog") or {})
-        _record_timing(collect_timings, "collect_inputs_read_doc", stage_started)
-
-        mode = "mixed"
-        metadata: Dict[str, Any] = {}
-        overlay_snapshot: Dict[str, Any] = {}
-        stage_started = time.perf_counter()
-        try:
-            row = workspace_index.get_workspace(webspace_id)
-            if row:
-                mode = row.effective_source_mode
-                metadata = {
-                    "title": row.title,
-                    "kind": row.effective_kind,
-                    "source_mode": row.effective_source_mode,
-                    "home_scenario": row.effective_home_scenario,
-                    "is_dev": row.is_dev,
-                }
-                if getattr(row, "has_ui_overlay", False):
-                    overlay_snapshot = {
-                        "installed": _coerce_dict(getattr(row, "installed_overlay", {}) or {}),
-                        "pinnedWidgets": _normalize_overlay_widget_entries(
-                            getattr(row, "pinned_widgets_overlay", []) or []
-                        ),
-                        "topbar": list(getattr(row, "topbar_overlay", []) or []),
-                        "pageSchema": _coerce_dict(getattr(row, "page_schema_overlay", {}) or {}),
-                        "iconOrder": list(getattr(row, "icon_order_overlay", []) or []),
-                        "widgetOrder": list(getattr(row, "widget_order_overlay", []) or []),
-                        "hiddenSections": list(getattr(row, "hidden_sections_overlay", []) or []),
-                        "source": "workspace_manifest_overlay",
-                    }
-        except Exception:
-            mode = "mixed"
-            metadata = {}
-        _record_timing(collect_timings, "collect_inputs_manifest", stage_started)
-
-        stage_started = time.perf_counter()
-        if isinstance(scenario_content_override, Mapping) and scenario_content_override:
-            scenario_app_ui, base_catalog, registry_entry = _extract_scenario_sections_from_content(
-                scenario_content_override
-            )
-            scenario_source = "builder_preview_override"
-            legacy_fallback = False
-        else:
-            scenario_app_ui, base_catalog, registry_entry, scenario_source, legacy_fallback = _resolve_scenario_sections_in_doc(
-                ydoc,
-                webspace_id=webspace_id,
-                scenario_id=scenario_id,
-                source_mode=mode,
-            )
-        _record_timing(collect_timings, "collect_inputs_scenario_sections", stage_started)
-        if metadata:
-            metadata = dict(metadata)
-        metadata["scenario_source"] = scenario_source
-        metadata["legacy_scenario_fallback"] = legacy_fallback
-        metadata["materialization"] = _scenario_materialization_contract(
-            scenario_id,
-            source_mode=mode,
-            identity=materialization_identity,
-        )
-
-        preserve_live_state = _preserve_live_state_on_rebuild_enabled()
-        stage_started = time.perf_counter()
-        if preserve_live_state:
-            live_application = _coerce_live_branch_subset(
-                _mapping_get(ui_map, "application") or {},
-                ("modals", "interfaces"),
-            )
-            live_catalog = _coerce_live_branch_subset(
-                _mapping_get(data_map, "catalog") or {},
-                ("apps", "widgets"),
-            )
-            live_registry = _coerce_live_branch_subset(
-                _mapping_get(registry_map, "merged") or {},
-                ("modals", "widgets"),
-            )
-            live_desktop = _coerce_live_branch_subset(
-                _mapping_get(data_map, "desktop") or {},
-                ("installed", "topbar", "pageSchema", "pinnedWidgets", "iconOrder", "widgetOrder", "hiddenSections"),
-            )
-            live_routing = _coerce_live_branch_subset(
-                _mapping_get(data_map, "routing") or {},
-                ("routes",),
-            )
-        else:
-            live_application = {}
-            live_catalog = {}
-            live_registry = {}
-            live_desktop = {}
-            live_routing = {}
-        _record_timing(collect_timings, "collect_inputs_live_state", stage_started)
-
-        stage_started = time.perf_counter()
-        if skill_decls_override is None:
-            try:
-                self._last_skill_decls_fingerprint = ""
-            except Exception:
-                pass
-            skill_decls = self._collect_skill_decls(mode=mode)
-            skill_decls_fingerprint = str(getattr(self, "_last_skill_decls_fingerprint", "") or "").strip()
-        else:
-            skill_decls = [dict(item) for item in skill_decls_override if isinstance(item, Mapping)]
-            skill_decls_fingerprint = str(skill_decls_fingerprint_override or "").strip()
-            if not skill_decls_fingerprint:
-                skill_decls_fingerprint = _fingerprint_json_like(skill_decls)
-            self._last_skill_decls_fingerprint = skill_decls_fingerprint
-        _record_timing(collect_timings, "collect_inputs_skill_decls", stage_started)
-
-        stage_started = time.perf_counter()
-        desktop_scenarios = self._list_desktop_scenarios(space=mode)
-        _record_timing(collect_timings, "collect_inputs_desktop_scenarios", stage_started)
-        self._last_collect_inputs_timings_ms = collect_timings
-
-        # Resolver work continues in the materialization CPU executor.  Never
-        # let thread-affine y_py values escape the owner loop through this
-        # boundary: shallow ``dict(...)`` conversion can retain nested YMap or
-        # YArray objects and make their parent YDoc finalize on the worker.
-        detached_live_state = _coerce_dict(
-            _clone_json_like(
-                {
-                    "application": live_application,
-                    "catalog": live_catalog,
-                    "registry": live_registry,
-                    "desktop": live_desktop,
-                    "routing": live_routing,
-                }
-            )
-        )
-        detached_skill_decls = _clone_json_like(skill_decls)
-
-        return WebspaceResolverInputs(
-            webspace_id=webspace_id,
-            scenario_id=str(scenario_id),
-            source_mode=mode,
-            metadata=_coerce_dict(_clone_json_like(metadata)),
-            scenario_application=_coerce_dict(_clone_json_like(scenario_app_ui)),
-            scenario_catalog=_coerce_dict(_clone_json_like(base_catalog)),
-            scenario_registry=_coerce_dict(_clone_json_like(registry_entry)),
-            overlay_snapshot=_coerce_dict(_clone_json_like(overlay_snapshot)),
-            live_state=detached_live_state,
-            compatibility_cache_presence={
-                "scenario_ui_application": bool(scenario_ui_application),
-                "scenario_registry_entry": bool(scenario_registry_entry),
-                "scenario_catalog": bool(scenario_catalog),
-            },
-            skill_decls=[dict(item) for item in detached_skill_decls if isinstance(item, Mapping)]
-            if isinstance(detached_skill_decls, list)
-            else [],
-            skill_decls_fingerprint=skill_decls_fingerprint,
-            desktop_scenarios=desktop_scenarios,
-            scenario_source=scenario_source,
-            legacy_scenario_fallback=legacy_fallback,
+        return _RESOLUTION_SERVICE.collect_inputs(
+            self,
+            _resolution_operations(),
+            ydoc,
+            webspace_id,
+            materialization_identity=materialization_identity,
+            scenario_id_override=scenario_id_override,
+            skill_decls_override=skill_decls_override,
+            skill_decls_fingerprint_override=skill_decls_fingerprint_override,
+            scenario_content_override=scenario_content_override,
         )
 
     def resolve_webspace(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
@@ -5997,203 +5878,19 @@ class WebspaceScenarioRuntime:
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
-        """Resolve a materialized payload without mutating an intermediate YDoc."""
-        materialize_started = time.perf_counter()
-        timings: Dict[str, float] = {}
-        ydoc_timings: Dict[str, float] = {"payload_only": 0.0}
-        self._last_resolver_debug = None
-        self._last_collect_inputs_timings_ms = None
-        self._last_apply_summary = None
-        self._last_apply_phase_timings_ms = None
-        self._last_materialized_payload = None
-        self._last_rebuild_ydoc_timings_ms = None
-        self._last_rebuild_snapshot_update = None
-        self._last_rebuild_state_vector = None
-        self._last_worker_diagnostics = None
-
-        use_process_worker = (
-            _materialization_worker_enabled()
-            and isolate_process is not False
-            and not scenario_content_override
-            and not skill_source_mode
+        return await _MATERIALIZATION_SERVICE.resolve_payload(
+            self,
+            _materialization_operations(),
+            webspace_id,
+            request_id=request_id,
+            scenario_id=scenario_id,
+            materialization_identity=materialization_identity,
+            isolate_process=isolate_process,
+            skill_decls_snapshot=skill_decls_snapshot,
+            skill_decls_fingerprint=skill_decls_fingerprint,
+            scenario_content_override=scenario_content_override,
+            skill_source_mode=skill_source_mode,
         )
-        if use_process_worker:
-            stage_started = time.perf_counter()
-            worker_result = _get_cached_materialized_worker_result(
-                materialization_identity,
-                cache_mode="payload_only",
-                require_snapshot=False,
-            )
-            if worker_result is not None:
-                _record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
-                ydoc_timings["materialization_cache_hit"] = 0.0
-            else:
-                prepared_skill_decls = skill_decls_snapshot
-                prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-                if prepared_skill_decls is None:
-                    prepare_started = time.perf_counter()
-                    prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                        self._prepare_materialization_skill_decls_sync,
-                        webspace_id,
-                        skill_source_mode,
-                    )
-                    _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
-                worker_result = await _run_materialization_worker(
-                    webspace_id,
-                    mode="payload_only",
-                    request_id=request_id,
-                    scenario_id=scenario_id,
-                    materialization_identity=materialization_identity,
-                    skill_decls_snapshot=prepared_skill_decls,
-                    skill_decls_fingerprint=prepared_skill_fingerprint,
-                )
-                _record_timing(ydoc_timings, "payload_worker", stage_started)
-                ydoc_timings["materialization_cache_miss"] = 0.0
-                _remember_materialized_worker_result(
-                    materialization_identity,
-                    worker_result,
-                    cache_mode="payload_only",
-                    require_snapshot=False,
-                )
-            _raise_if_rebuild_request_superseded(webspace_id, request_id)
-            payload = worker_result.get("materialized_payload")
-            if not isinstance(payload, Mapping):
-                raise RuntimeError("materialization_worker_missing_payload")
-            self._last_materialized_payload = dict(payload)
-            self._last_rebuild_timings_ms = _copy_timing_map(
-                worker_result.get("rebuild_timings_ms")
-            )
-            self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
-            self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
-            self._last_apply_phase_timings_ms = _copy_timing_map(
-                worker_result.get("apply_phase_timings_ms")
-            )
-            self._last_worker_diagnostics = {
-                "mode": "payload_only",
-                "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
-                "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
-                "init_ms": worker_result.get("worker_init_ms"),
-                "materialize_ms": worker_result.get("worker_materialize_ms"),
-                "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
-                "result_bytes": worker_result.get("worker_result_bytes"),
-                "materialization_cache": dict(worker_result.get("materialization_cache") or {})
-                if isinstance(worker_result.get("materialization_cache"), Mapping)
-                else None,
-            }
-            worker_ydoc_timings = _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {}
-            worker_ydoc_timings["worker_process"] = round(
-                float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
-                3,
-            )
-            self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(
-                worker_ydoc_timings,
-                started_at=materialize_started,
-            )
-            resolved = _resolved_outputs_from_cache_payload(payload)
-            inputs = _materialized_payload_inputs(
-                webspace_id,
-                payload,
-                resolved,
-                materialization_identity=materialization_identity,
-            )
-            materialization_contract = _coerce_dict(inputs.metadata.get("materialization") or {})
-            materialization_snapshot = _build_materialization_snapshot_from_resolved(
-                webspace_id=webspace_id,
-                resolved=resolved,
-                compatibility_presence=inputs.compatibility_cache_presence,
-                rebuild_state=describe_webspace_rebuild_state(webspace_id),
-                required_branches=_normalize_materialization_required_branches(materialization_contract)
-                or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-                snapshot_source="semantic_rebuild:payload_worker",
-                phase_name="complete",
-                stale=False,
-            )
-            if str(request_id or "").strip():
-                _set_webspace_rebuild_status_if_current(
-                    webspace_id,
-                    request_id,
-                    materialization=materialization_snapshot,
-                )
-            return resolved.to_registry_entry()
-
-        prepared_skill_decls = skill_decls_snapshot
-        prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-        if prepared_skill_decls is None:
-            stage_started = time.perf_counter()
-            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                self._prepare_materialization_skill_decls_sync,
-                webspace_id,
-                skill_source_mode,
-            )
-            _record_timing(timings, "prepare_skill_decls", stage_started)
-
-        operational_doc_started = time.perf_counter()
-        operational_doc_close_started = operational_doc_started
-        async with _open_readonly_operational_ydoc(webspace_id) as ydoc:
-            _record_timing(timings, "open_operational_doc", operational_doc_started)
-            _raise_if_rebuild_request_superseded(webspace_id, request_id)
-            stage_started = time.perf_counter()
-            inputs = self._collect_resolver_inputs_in_doc(
-                ydoc,
-                webspace_id,
-                materialization_identity=materialization_identity,
-                scenario_id_override=scenario_id,
-                skill_decls_override=prepared_skill_decls,
-                skill_decls_fingerprint_override=prepared_skill_fingerprint,
-                scenario_content_override=scenario_content_override,
-            )
-            _record_timing(timings, "collect_inputs", stage_started)
-            collect_phase_timings = _copy_timing_map(self._last_collect_inputs_timings_ms) or {}
-            timings.update(collect_phase_timings)
-
-            resolved, payload, worker_timings = await _run_materialization_cpu(
-                self._resolve_materialized_payload_from_inputs_sync,
-                inputs,
-            )
-            timings.update(worker_timings)
-            operational_doc_close_started = time.perf_counter()
-        _record_timing(timings, "close_operational_doc", operational_doc_close_started)
-
-        _raise_if_rebuild_request_superseded(webspace_id, request_id)
-        self._last_materialized_payload = payload
-        materialization_contract = _coerce_dict(inputs.metadata.get("materialization") or {})
-        if not materialization_contract:
-            materialization_contract = _scenario_materialization_contract(
-                resolved.scenario_id,
-                source_mode=resolved.source_mode,
-            )
-        materialization_snapshot = _build_materialization_snapshot_from_resolved(
-            webspace_id=webspace_id,
-            resolved=resolved,
-            compatibility_presence=inputs.compatibility_cache_presence,
-            rebuild_state=describe_webspace_rebuild_state(webspace_id),
-            required_branches=_normalize_materialization_required_branches(materialization_contract)
-            or list(_DEFAULT_MATERIALIZATION_REQUIRED_BRANCHES),
-            snapshot_source="semantic_rebuild:payload_only",
-            phase_name="complete",
-            stale=False,
-        )
-        if str(request_id or "").strip():
-            _set_webspace_rebuild_status_if_current(
-                webspace_id,
-                request_id,
-                materialization=materialization_snapshot,
-            )
-
-        stage_started = time.perf_counter()
-        entry = resolved.to_registry_entry()
-        _record_timing(timings, "to_registry_entry", stage_started)
-        self._last_rebuild_timings_ms = _finalize_timing_map(timings, started_at=materialize_started)
-        self._last_apply_summary = {
-            "branch_count": len(_EFFECTIVE_BRANCH_PATHS),
-            "changed_branches": 0,
-            "unchanged_branches": 0,
-            "failed_branches": 0,
-            "payload_only": True,
-        }
-        self._last_apply_phase_timings_ms = None
-        self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(ydoc_timings, started_at=materialize_started)
-        return entry
 
     # --- public API ------------------------------------------------------
 
@@ -6298,174 +5995,18 @@ class WebspaceScenarioRuntime:
         fresh_doc: bool = False,
         replace_ystore_snapshot: bool = False,
     ) -> WebUIRegistryEntry:
-        """
-        Async counterpart of :meth:`compute_registry_for_webspace` for use
-        inside running event loops.
-        """
-        rebuild_started = time.perf_counter()
-        ydoc_timings: Dict[str, float] = {}
-        self._last_rebuild_ydoc_timings_ms = None
-        self._last_rebuild_snapshot_update = None
-        self._last_rebuild_state_vector = None
-        self._last_materialized_payload = None
-        self._last_worker_diagnostics = None
-        use_live_room = bool(publish_live_room) if prefer_live_room is None else bool(prefer_live_room)
-        try:
-            if fresh_doc:
-                ystore = get_ystore_for_webspace(webspace_id) if replace_ystore_snapshot else None
-                if ystore is not None:
-                    stage_started = time.perf_counter()
-                    await ystore.start()
-                    _record_timing(ydoc_timings, "ystore_start", stage_started)
-                else:
-                    ydoc_timings["ystore_start"] = 0.0
-                try:
-                    stage_started = time.perf_counter()
-                    worker_result = _get_cached_materialized_worker_result(materialization_identity)
-                    if worker_result is not None:
-                        _record_timing(ydoc_timings, "materialization_cache_lookup", stage_started)
-                        ydoc_timings["fresh_doc_worker"] = 0.0
-                        ydoc_timings["materialization_cache_hit"] = 0.0
-                    else:
-                        if _materialization_worker_enabled():
-                            prepare_started = time.perf_counter()
-                            prepared_skill_decls, prepared_skill_fingerprint = await _run_materialization_cpu(
-                                self._prepare_materialization_skill_decls_sync,
-                                webspace_id,
-                            )
-                            _record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
-                            worker_result = await _run_materialization_worker(
-                                webspace_id,
-                                mode="fresh_doc",
-                                request_id=request_id,
-                                scenario_id=initial_scenario_id,
-                                materialization_identity=materialization_identity,
-                                skill_decls_snapshot=prepared_skill_decls,
-                                skill_decls_fingerprint=prepared_skill_fingerprint,
-                            )
-                        else:
-                            worker_result = await _run_materialization_cpu(
-                                self._rebuild_fresh_doc_snapshot_sync,
-                                webspace_id,
-                                request_id=request_id,
-                                initial_scenario_id=initial_scenario_id,
-                                materialization_identity=materialization_identity,
-                            )
-                        _record_timing(ydoc_timings, "fresh_doc_worker", stage_started)
-                        ydoc_timings["materialization_cache_miss"] = 0.0
-                        _remember_materialized_worker_result(materialization_identity, worker_result)
-                    _raise_if_rebuild_request_superseded(webspace_id, request_id)
-                    entry = worker_result["entry"]
-                    snapshot_update = bytes(worker_result.get("snapshot_update") or b"")
-                    state_vector = bytes(worker_result.get("state_vector") or b"")
-                    self._last_rebuild_snapshot_update = snapshot_update
-                    self._last_rebuild_state_vector = state_vector
-                    materialized_payload = worker_result.get("materialized_payload")
-                    self._last_materialized_payload = (
-                        _clone_json_like(materialized_payload)
-                        if isinstance(materialized_payload, Mapping)
-                        else None
-                    )
-                    worker_ydoc_timings = _copy_timing_map(worker_result.get("ydoc_timings_ms")) or {}
-                    for timing_key, timing_value in worker_ydoc_timings.items():
-                        if timing_key == "total":
-                            continue
-                        ydoc_timings[timing_key] = timing_value
-                    if worker_result.get("worker_parent_elapsed_ms") is not None:
-                        ydoc_timings["worker_process"] = round(
-                            float(worker_result.get("worker_parent_elapsed_ms") or 0.0),
-                            3,
-                        )
-                        self._last_worker_diagnostics = {
-                            "mode": "fresh_doc",
-                            "elapsed_ms": worker_result.get("worker_parent_elapsed_ms"),
-                            "child_elapsed_ms": worker_result.get("worker_elapsed_ms"),
-                            "init_ms": worker_result.get("worker_init_ms"),
-                            "materialize_ms": worker_result.get("worker_materialize_ms"),
-                            "peak_rss_bytes": worker_result.get("worker_peak_rss_bytes"),
-                            "result_bytes": worker_result.get("worker_result_bytes"),
-                        }
-                    self._last_rebuild_timings_ms = _copy_timing_map(worker_result.get("rebuild_timings_ms"))
-                    self._last_resolver_debug = dict(worker_result.get("resolver_debug") or {})
-                    self._last_apply_summary = dict(worker_result.get("apply_summary") or {})
-                    self._last_apply_phase_timings_ms = _copy_timing_map(
-                        worker_result.get("apply_phase_timings_ms")
-                    )
-                    if ystore is not None:
-                        stage_started = time.perf_counter()
-                        async with ystore_write_metadata(
-                            root_names=["ui", "data", "registry", "runtime"],
-                            source="webspace_runtime.rebuild_async.replace_snapshot",
-                            owner="core:webspace_runtime",
-                            channel="core.webspace_runtime.snapshot_replace",
-                            governed=True,
-                        ):
-                            replace_result = await ystore.replace_snapshot_update(
-                                snapshot_update,
-                                state_vector=state_vector,
-                                backup_kind="builder_revision_apply_snapshot_replace",
-                                persist_snapshot=False,
-                                notify=False,
-                            )
-                        _record_timing(ydoc_timings, "ystore_replace_snapshot", stage_started)
-                        backup_schedule = _schedule_builder_ystore_snapshot_backup(
-                            webspace_id,
-                            reason="builder_revision_apply_snapshot_replace_deferred",
-                        )
-                        ydoc_timings["ystore_backup_deferred"] = 0.0 if backup_schedule.get("scheduled") else -1.0
-                        if isinstance(replace_result, Mapping):
-                            try:
-                                ydoc_timings["ystore_replace_persist"] = round(
-                                    float(replace_result.get("persist_ms") or 0.0),
-                                    3,
-                                )
-                            except Exception:
-                                pass
-                            try:
-                                ydoc_timings["ystore_replace_notify"] = round(
-                                    float(replace_result.get("notify_ms") or 0.0),
-                                    3,
-                                )
-                            except Exception:
-                                pass
-                    else:
-                        ydoc_timings["ystore_replace_snapshot"] = 0.0
-                    ydoc_timings["encode_diff"] = 0.0
-                    ydoc_timings["ystore_write_update"] = 0.0
-                    ydoc_timings["room_update"] = 0.0
-                    return entry
-                finally:
-                    if ystore is not None:
-                        stage_started = time.perf_counter()
-                        try:
-                            ystore.stop()
-                        except Exception:
-                            pass
-                        _record_timing(ydoc_timings, "ystore_stop", stage_started)
-            async with _open_rebuild_ydoc_session(
-                webspace_id,
-                timings=ydoc_timings,
-                publish_live_room=publish_live_room,
-                prefer_live_room=use_live_room,
-            ) as ydoc:
-                seed_scenario = str(initial_scenario_id or "").strip()
-                if seed_scenario:
-                    stage_started = time.perf_counter()
-                    ui_map = ydoc.get_map("ui")
-                    with ydoc.begin_transaction() as txn:
-                        _set_map_value_if_changed(ui_map, txn, "current_scenario", seed_scenario)
-                    _record_timing(ydoc_timings, "seed_initial_scenario", stage_started)
-                stage_started = time.perf_counter()
-                entry = self._rebuild_in_doc(
-                    ydoc,
-                    webspace_id,
-                    expected_request_id=request_id,
-                    materialization_identity=materialization_identity,
-                )
-                _record_timing(ydoc_timings, "in_doc_rebuild", stage_started)
-                return entry
-        finally:
-            self._last_rebuild_ydoc_timings_ms = _finalize_timing_map(ydoc_timings, started_at=rebuild_started)
+        return await _MATERIALIZATION_SERVICE.rebuild(
+            self,
+            _materialization_operations(),
+            webspace_id,
+            request_id=request_id,
+            publish_live_room=publish_live_room,
+            prefer_live_room=prefer_live_room,
+            initial_scenario_id=initial_scenario_id,
+            materialization_identity=materialization_identity,
+            fresh_doc=fresh_doc,
+            replace_ystore_snapshot=replace_ystore_snapshot,
+        )
 
 
 # --- webspace helpers ---------------------------------------------------
