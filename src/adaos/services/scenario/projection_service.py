@@ -1274,7 +1274,14 @@ def _ensure_nested_y_map(parent: Any, txn: Any, key: str, ymap_cls: Any) -> Any 
         return None
 
 
-def _set_nested_y_map_path(root: Any, txn: Any, segments: List[str], payload: Any) -> bool | None:
+def _set_nested_y_map_path(
+    root: Any,
+    txn: Any,
+    segments: List[str],
+    payload: Any,
+    *,
+    write_context: dict[str, int] | None = None,
+) -> bool | None:
     """
     Mutate long Yjs projection paths in-place when the backing values are YMaps.
 
@@ -1294,9 +1301,21 @@ def _set_nested_y_map_path(root: Any, txn: Any, segments: List[str], payload: An
         key = str(raw_key or "").strip()
         if not key:
             return None
+        try:
+            current = parent.get(key)
+        except Exception:
+            current = None
+        legacy_mapping_conversion = (
+            not _is_mutable_y_map(current)
+            and _mapping_items(current) is not None
+        )
         parent = _ensure_nested_y_map(parent, txn, key, ymap_cls)
         if parent is None or not _is_mutable_y_map(parent):
             return None
+        if legacy_mapping_conversion and write_context is not None:
+            write_context["legacy_mapping_ancestors_converted"] = (
+                int(write_context.get("legacy_mapping_ancestors_converted") or 0) + 1
+            )
     leaf_key = str(segments[-1] or "").strip()
     if not leaf_key:
         return None
@@ -1520,6 +1539,7 @@ class ProjectionService:
             return
         detached_compaction_needed = False
         detached_update_written = False
+        write_context: dict[str, int] = {"legacy_mapping_ancestors_converted": 0}
 
         def _on_yjs_update(update_meta: Mapping[str, Any]) -> None:
             nonlocal detached_compaction_needed, detached_update_written
@@ -1530,6 +1550,28 @@ class ProjectionService:
                 and bool(update_meta.get("persisted"))
             ):
                 detached_update_written = True
+            legacy_mapping_ancestors_converted = int(
+                write_context.get("legacy_mapping_ancestors_converted") or 0
+            )
+            if legacy_mapping_ancestors_converted > 0:
+                # Older materializations stored ``data.nodes`` and its
+                # descendants as embedded JSON mappings. The first governed
+                # write converts those ancestors to attached YMaps so later
+                # leaf updates stay small. That one-time structural update can
+                # legitimately be much larger than the skill payload; treating
+                # it as amplification suppresses the immediately following
+                # terminal snapshot (for example ``searching`` -> ``done``).
+                _log.info(
+                    "YJS projection migrated legacy mapping ancestors "
+                    "webspace=%s owner=%s slot=%s path=%s ancestors=%s update_bytes=%s",
+                    ws_id,
+                    owner,
+                    slot,
+                    path,
+                    legacy_mapping_ancestors_converted,
+                    _int_or_zero(update_meta.get("update_bytes")),
+                )
+                return
             compaction_needed = _record_yjs_projection_write_amplification(
                 webspace_id=ws_id,
                 owner=owner,
@@ -1568,7 +1610,13 @@ class ProjectionService:
                 set_map_value_if_changed(root, txn, key, projected_value)
                 return
 
-            changed_y_map = _set_nested_y_map_path(root, txn, segments[1:], projected_value)
+            changed_y_map = _set_nested_y_map_path(
+                root,
+                txn,
+                segments[1:],
+                projected_value,
+                write_context=write_context,
+            )
             if changed_y_map is not None:
                 return
 

@@ -507,6 +507,75 @@ def test_nested_y_map_projection_reconciles_mapping_leaf_in_place(monkeypatch) -
     assert root["nodes"]["hub"]["weather"] == payload
 
 
+def test_projection_service_does_not_suppress_terminal_write_after_legacy_y_map_conversion(monkeypatch) -> None:
+    fake_state = {
+        "data": _FakeMap(
+            {
+                "nodes": {
+                    "hub": {
+                        "media_indexer": {
+                            "status": {"value": "ready"},
+                            "results": [{"title": "Gwen"}],
+                        }
+                    }
+                }
+            }
+        )
+    }
+    live_calls: list[dict[str, object]] = []
+
+    async def _submit_live_room_mutation(_ws: str, mutator, **kwargs) -> dict[str, object]:
+        mutator(_FakeDoc(fake_state), _FakeTxn())
+        callback = kwargs.get("update_callback")
+        assert callable(callback)
+        callback(
+            {
+                "update_bytes": 96 * 1024 if not live_calls else 512,
+                "live_room": True,
+            }
+        )
+        live_calls.append(dict(kwargs))
+        return {"accepted": True, "applied": True, "changed": True, "reason": "applied"}
+
+    target = SimpleNamespace(backend="yjs", path="data/media_indexer", webspace_id=None)
+    registry = SimpleNamespace(
+        resolve_rule=lambda _scope, _slot: SimpleNamespace(targets=[target], budget={}, route={}),
+        resolve=lambda _scope, _slot: [target],
+    )
+    service = projection_service_module.ProjectionService(ctx=SimpleNamespace(), registry=registry)
+
+    monkeypatch.setattr(projection_service_module, "_yjs_map_class", lambda: _FakeMap)
+    monkeypatch.setattr(projection_service_module, "submit_live_room_mutation", _submit_live_room_mutation)
+    monkeypatch.setattr(projection_service_module, "_local_node_id", lambda: "hub")
+    monkeypatch.setattr(
+        projection_service_module,
+        "get_current_skill",
+        lambda: SimpleNamespace(name="media_indexer_skill"),
+    )
+
+    asyncio.run(
+        service.apply(
+            "subnet",
+            "media_indexer.snapshot",
+            {"status": {"value": "searching"}, "results": []},
+            webspace_id="desktop",
+        )
+    )
+    asyncio.run(
+        service.apply(
+            "subnet",
+            "media_indexer.snapshot",
+            {"status": {"value": "done"}, "results": [{"title": "No Doubt"}]},
+            webspace_id="desktop",
+        )
+    )
+
+    assert len(live_calls) == 2
+    assert fake_state["data"]["nodes"]["hub"]["media_indexer"]["status"]["value"] == "done"
+    assert fake_state["data"]["nodes"]["hub"]["media_indexer"]["results"] == [{"title": "No Doubt"}]
+    assert projection_service_module.yjs_projection_guard_snapshot(webspace_id="desktop")["total"] == 0
+
+
 def test_projection_service_marks_skill_owner_in_write_metadata(monkeypatch) -> None:
     fake_state = {"data": _FakeMap()}
     metadata_calls: list[dict[str, object]] = []
