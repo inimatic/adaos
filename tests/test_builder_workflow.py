@@ -1155,6 +1155,13 @@ def test_change_set_advances_through_automation_trial_and_publication(
         "builder.project.list",
         "builder.help",
     ]
+    process_by_kind = {item["kind"]: item for item in hydrated["process"]["nodes"]}
+    assert process_by_kind["trial"]["status"] == "accepted"
+    process_ru = service.process_explanation("scenario", "recipes", locale="ru")
+    assert "Прототип:" in process_ru["text"]
+    assert "зафиксировано" in process_ru["text"]
+    assert "Апробация:" in process_ru["text"]
+    assert "принято" in process_ru["text"]
 
     placed = service.record_project_placement(
         "scenario",

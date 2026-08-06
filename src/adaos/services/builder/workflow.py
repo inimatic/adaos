@@ -1714,6 +1714,8 @@ class BuilderWorkflowService:
             "placement": {"en": "Webspace placement", "ru": "Размещение в Webspace"},
         }
         status_labels = {
+            "frozen": {"en": "frozen", "ru": "зафиксировано"},
+            "ready": {"en": "ready", "ru": "готово"},
             "active": {"en": "active", "ru": "активно"},
             "working": {"en": "in progress", "ru": "в работе"},
             "waiting": {"en": "waiting", "ru": "ожидание"},
@@ -1740,6 +1742,7 @@ class BuilderWorkflowService:
             status = str(item.get("status") or "").strip()
             generic_prefixes = {
                 "change": "Change ",
+                "prototype": "Prototype ",
                 "automation": "Automation ",
                 "verification": "Verification",
                 "trial": "Trial ",
@@ -2227,13 +2230,24 @@ class BuilderWorkflowService:
         delivery_status = str(delivery.get("status") or "idle")
         if delivery_status not in {"idle", "stale"}:
             trial_ref = f"trial:{delivery.get('candidate_id') or object_id}"
+            # Delivery continues beyond Trial, but the Trial lineage node must
+            # retain its own business outcome. A later Publication state is not
+            # a second Trial status.
+            trial_status = {
+                "accepted": "accepted",
+                "published": "accepted",
+                "rejected": "rejected",
+                "trial": "reviewing",
+                "prepared": "active",
+                "preparing": "working",
+            }.get(delivery_status, delivery_status)
             nodes.append(
                 {
                     "ref": trial_ref,
                     "kind": "trial",
                     "parent_ref": parent_ref,
                     "label": f"Trial {delivery.get('candidate_id') or ''}".strip(),
-                    "status": delivery_status,
+                    "status": trial_status,
                     "candidate_digest": delivery.get("package_digest") or delivery.get("release_digest"),
                 }
             )
