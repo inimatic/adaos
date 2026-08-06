@@ -2,7 +2,7 @@
   "schema": "adaos.builder.prototype_workflow_slice.v1",
   "slice_id": "service-request-conversation-v1",
   "source_definition_ref": "workflow.json@1.0.0",
-  "source_definition_digest": "sha256:8f087f827a2502286824368b9cff978ed89da584933b139ec6f8f720a10aa3a5",
+  "source_definition_digest": "sha256:2d97fdfb8251b7abe7b0eed5a25edee9d183db6a4815ed3467474d3472df90a1",
   "source_generation": 0,
   "profile": "conversational_mvp",
   "entry_command": "start",
@@ -11,7 +11,7 @@
   "activity_requirements": [
     {
       "activity_id": "builder.prototype.derive",
-      "input_schema": {"type": "object", "additionalProperties": true},
+      "input_schema": {"type": "object", "properties": {"confirmed": {"type": "boolean"}, "evidence_refs": {"type": "array", "items": {"type": "string"}}, "legacy_action": {"type": "string"}}, "additionalProperties": true},
       "output_schema": {"type": "object"},
       "implementation_status": "mapped",
       "implementation_ref": "adaos:builder.prototype.derive"
@@ -117,11 +117,11 @@
       "start": {"instance_id": "request:input", "state": "draft", "generation": 0, "context": {}},
       "steps": [
         {
-          "user": "Продолжить с неизвестным полем",
+          "user": "Продолжить с неверным подтверждением",
           "given": {
             "proposal": {
               "kind": "workflow_command", "intent_id": "request.start", "command": "start",
-              "skill_id": null, "operation_id": null, "arguments": {"unknown": true}, "confidence": 1.0,
+              "skill_id": null, "operation_id": null, "arguments": {"confirmed": "yes"}, "confidence": 1.0,
               "action_policy": {"schema": "adaos.conversation.action_policy.v1", "risk_class": "local_reversible", "side_effect": "reversible", "confirmation": "none"}
             },
             "event": null, "skill_result": null, "output_ref": null,
@@ -129,9 +129,9 @@
           },
           "expect": {
             "proposal": {"kind": "workflow_command", "command": "start", "confidence_at_least": 1.0},
-            "command": "start", "transition_id": null, "state": "draft", "reason_code": "invalid_input:$",
+            "command": "start", "transition_id": null, "state": "draft", "reason_code": "invalid_input:confirmed",
             "accepted": false, "generation": 0,
-            "output": {"kind": "repair", "output_ref": null, "summary": "invalid input:$", "actions": [], "next_expected_input": "none"}
+            "output": {"kind": "repair", "output_ref": null, "summary": "invalid input:confirmed", "actions": [], "next_expected_input": "none"}
           }
         }
       ]
