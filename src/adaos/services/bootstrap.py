@@ -2,31 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json as _json
 import logging
-import math
 import os
-import re
 import socket
-import sys
-import tempfile
-import threading
-import time
-import traceback
-import uuid
-from collections import deque
 from pathlib import Path
-from typing import Any, Awaitable, Callable, List, Optional, Sequence
-from urllib.parse import urlparse
-
-import nats as _nats
+from typing import Any, Awaitable, Callable, Optional
 
 from adaos.adapters.db.sqlite_schema import ensure_schema
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.adapters.skills.git_repo import GitSkillRepository
-from adaos.domain import Event
 from adaos.ports.heartbeat import HeartbeatPort
 from adaos.ports.skills_loader import SkillsLoaderPort
 from adaos.ports.subnet_registry import SubnetRegistryPort
@@ -38,69 +23,31 @@ from adaos.services.chat_io import telemetry as tm
 from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
 from adaos.services.chat_io.nlu_bridge import register_chat_nlu_bridge  # chat->NLU bridge
 from adaos.services.eventbus import LocalEventBus
-from adaos.services.io_bus.http_fallback import HttpFallbackBus
 from adaos.services.io_bus.local_bus import LocalIoBus
 from adaos.services.nats_config import (
-    PUBLIC_NATS_WS_API,
-    PUBLIC_NATS_WS_DEDICATED,
     normalize_nats_ws_url,
     nats_url_uses_websocket,
-    order_nats_ws_candidates,
     public_nats_ws_api,
     public_nats_tcp_candidates,
     public_nats_ws_candidates,
 )
 from adaos.services.reliability import (
-    ReadinessStatus,
     configure_hub_root_transport_strategy,
-    hub_root_protocol_class_policy,
-    hub_root_protocol_traffic_class,
     hub_root_transport_strategy_snapshot,
-    mark_root_control_down,
-    note_root_control_reconnect,
-    mark_root_control_up,
-    mark_route_degraded,
-    mark_route_ready,
-    note_route_incident,
-    observe_route_e2e,
-    observe_hub_root_integration_outbox,
-    observe_hub_root_protocol_publish,
-    observe_hub_root_protocol_subscription,
-    observe_hub_root_route_flow,
     observe_hub_root_route_runtime,
     record_hub_root_transport_event,
-    set_integration_readiness,
 )
 from adaos.services.realtime_sidecar import (
-    probe_realtime_sidecar_ready,
     realtime_sidecar_diag_path,
-    realtime_sidecar_enabled,
-    realtime_sidecar_host,
-    realtime_sidecar_log_path,
     realtime_sidecar_local_url,
-    realtime_sidecar_port,
     realtime_sidecar_route_tunnel_ws_bases,
-    resolve_realtime_remote_candidates,
 )
 from adaos.services.node_config import NodeConfig, generate_provisional_subnet_id, load_config, set_role as cfg_set_role
 from adaos.services.node_runtime_state import (
     load_member_hub_token,
-    load_nats_runtime_config,
-    migrate_legacy_nats_runtime_config,
-    save_nats_runtime_config,
 )
-from adaos.services.nats_errors import (
-    install_transient_nats_log_filter,
-    is_transient_nats_error,
-    nats_error_summary,
-)
-from adaos.services.hub_root_outbox_store import load_outbox_items, outbox_store_path, save_outbox_items
 from adaos.services.root.control_lifecycle_sync import report_hub_control_lifecycle_state
-from adaos.services.root.core_update_sync import reconcile_hub_core_update
 from adaos.services.runtime_identity import (
-    runtime_connect_name,
-    runtime_identity_snapshot,
-    runtime_instance_id,
     runtime_transition_role,
 )
 from adaos.services.scheduler import start_scheduler, stop_scheduler
@@ -112,7 +59,6 @@ from adaos.services import weather as _weather_services  # ensure weather observ
 from adaos.services import nlu as _nlu_services  # ensure NLU dispatcher subscriptions
 from adaos.services import named_entity_projection as _named_entity_projection  # ensure named-entity projection subscriptions
 from adaos.services import pending_actions as _pending_actions  # ensure Pending Actions subscriptions
-from adaos.services.bounded_io import bounded_text_tail_lines
 from adaos.services.bootstrap_runtime import (
     BootstrapBootCoordinator,
     BootstrapBootOperations,
@@ -132,8 +78,6 @@ from adaos.services.bootstrap_runtime.nats_root_runtime import start_nats_root_t
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
 from adaos.services.skill.service_supervisor import get_service_supervisor
-from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, canonical_zone_id, zone_public_base_url
-from adaos.services.subnet_alias import save_subnet_alias
 from adaos.integrations.telegram.sender import TelegramSender
 
 

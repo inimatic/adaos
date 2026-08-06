@@ -15,10 +15,8 @@ import re
 import secrets
 import sys
 import time
-import traceback
 
 import y_py as Y
-import yaml
 
 from adaos.domain.project_events import (
     BUILDER_CONTEXT_SELECTED,
@@ -1867,13 +1865,6 @@ def _merge_registry_lists(base: List[str], extras: List[List[str]]) -> List[str]
                 merged.append(token)
     return merged
 
-
-def _filter_installed(installed: Dict[str, List[str]], apps: List[Dict[str, Any]], widgets: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    app_ids = {str(item.get("id")) for item in apps if item.get("id")}
-    widget_ids = {str(item.get("id")) for item in widgets if item.get("id")}
-    current_apps = [a for a in (installed.get("apps") or []) if a in app_ids]
-    current_widgets = [w for w in (installed.get("widgets") or []) if w in widget_ids]
-    return {"apps": current_apps, "widgets": current_widgets}
 
 def _dedupe_str_list(values: Any) -> List[str]:
     # YJS may return YArray-like values which are iterable but not `list`.

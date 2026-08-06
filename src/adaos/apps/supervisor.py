@@ -53,7 +53,7 @@ from adaos.apps.supervisor_runtime import (
     create_supervisor_app,
     create_supervisor_routes,
 )
-from adaos.apps.cli.commands.api import _advertise_base, _uvicorn_loop_mode
+from adaos.apps.cli.commands.api import _uvicorn_loop_mode
 from adaos.services.agent_context import get_ctx
 from adaos.services.bootstrap_update import SIDECAR_CONTROLLED_PATHS
 from adaos.services.bounded_io import bounded_jsonl_tail, bounded_text_tail_lines, path_size_snapshot
@@ -126,7 +126,6 @@ from adaos.services.supervisor_memory import (
     supervisor_memory_session_artifacts_dir,
     supervisor_memory_session_operations_path,
     supervisor_memory_sessions_index_path,
-    supervisor_memory_state_dir,
     supervisor_memory_telemetry_path,
     write_memory_session_index,
     write_memory_session_summary,
@@ -141,7 +140,6 @@ _SUPERVISOR_INSTANCE_STARTED_AT = time.time()
 _PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
 _UPDATE_STATE_MACHINE = UpdateStateMachine()
 _UPDATE_RECONCILIATION = UpdateReconciliationService()
-_RUNTIME_RECOVERY_POLICY = RuntimeRecoveryPolicy()
 _MEMORY_PROFILING = MemoryProfilingService()
 
 
@@ -1059,10 +1057,6 @@ def _post_recovery_member_hub_refresh_cooldown_sec() -> float:
         return 60.0
 
 
-def _terminal_update_states() -> set[str]:
-    return set(_UPDATE_STATE_MACHINE.TERMINAL_STATES)
-
-
 UPDATE_ATTEMPT_CONTRACT_VERSION = "1"
 
 
@@ -1259,10 +1253,6 @@ def _is_root_restart_pending_status(payload: dict[str, Any] | None) -> bool:
     return _UPDATE_STATE_MACHINE.is_root_restart_pending_status(payload)
 
 
-def _root_promotion_owner_instance(payload: dict[str, Any] | None) -> str:
-    return _UPDATE_STATE_MACHINE.root_promotion_owner_instance(payload)
-
-
 def _root_restart_crossed_supervisor_generation(payload: dict[str, Any] | None) -> bool:
     return _UPDATE_STATE_MACHINE.crossed_supervisor_generation(
         payload,
@@ -1368,10 +1358,6 @@ def _clear_orphaned_subsequent_transition_status(
 
 def _target_version_matches(left: Any, right: Any) -> bool:
     return _UPDATE_STATE_MACHINE.target_version_matches(left, right)
-
-
-def _looks_like_git_sha(value: Any) -> bool:
-    return _UPDATE_STATE_MACHINE.looks_like_git_sha(value)
 
 
 def _transition_request_has_resolved_target(request: dict[str, Any] | None) -> bool:
@@ -2081,18 +2067,6 @@ def _proc_details(proc: subprocess.Popen[Any] | None, *, cwd_hint: str | None = 
 
 def _process_family_rss_bytes(pid: int | None) -> tuple[int | None, int | None]:
     return _MEMORY_PROFILING.family_rss_bytes(pid, psutil_module=psutil)
-
-
-def _process_cmdline_label(cmdline: list[str]) -> str | None:
-    return _MEMORY_PROFILING.cmdline_label(cmdline)
-
-
-def _process_skill_runtime_name(cmdline: list[str]) -> str | None:
-    return _MEMORY_PROFILING.skill_runtime_name(cmdline)
-
-
-def _process_memory_item(proc: Any) -> dict[str, Any] | None:
-    return _MEMORY_PROFILING.process_item(proc)
 
 
 def _process_family_memory_snapshot(pid: int | None, *, max_children: int = 12) -> dict[str, Any]:
