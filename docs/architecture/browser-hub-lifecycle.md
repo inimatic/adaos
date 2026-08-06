@@ -86,6 +86,12 @@ The browser lifecycle coordinator is created before control WS and YWS:
    changes the applicable capability.
 6. On lease expiry, close/gate the affected transports and keep the SSE watch.
 
+The channel layer itself starts denied, before Angular finishes constructing
+eager subscribers. Only the lifecycle coordinator may install a remote lease
+or explicitly clear the gate for a local-only runtime. This closes the startup
+race in which an injected data source could open one legacy control WS before
+`AppComponent.ngOnInit()` established the pending Hub lease.
+
 The client does not fan out zone status probes from YDoc. Reliability summary
 is sampled once after a meaningful lifecycle or transport change; it has no
 independent degraded-state heartbeat. Supervisor/update presentation is
@@ -103,6 +109,11 @@ denied server capability.
 WebRTC is not sidecar-owned in this phase. Runtime owns signaling semantics and
 the server `RTCPeerConnection`; the sidecar owns only the transport and
 diagnostic bridge described above.
+
+Runtime likewise remains the semantic owner of YWS rooms, documents, readiness,
+and sessions. A sidecar listener may transparently proxy YWS frames to preserve
+the route across an A/B slot switch; that transport pass-through is not a
+transfer of YWS authority to sidecar.
 
 After signaling, an established `webrtc_data:events` channel may carry member
 commands without reopening Root control WS. `webrtc_data:yjs` may carry sync
