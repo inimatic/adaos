@@ -31,6 +31,22 @@ from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 _log = logging.getLogger("adaos.skill.service")
 
 
+def _bounded_env_seconds(name: str, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(str(os.getenv(name) or default).strip())
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _path_discovery_signature(path: Path) -> tuple[str, int, int, int]:
+    try:
+        stat = path.stat()
+        return (str(path), int(stat.st_mtime_ns), int(stat.st_ctime_ns), int(stat.st_size))
+    except OSError:
+        return (str(path), -1, -1, -1)
+
+
 def _ensure_failure_cooloff_s(failures: int) -> float:
     try:
         base = float(str(os.getenv("ADAOS_SERVICE_ENSURE_FAILURE_COOLOFF_S") or "15").strip())
@@ -498,22 +514,54 @@ class ServiceSkillSupervisor:
         self._discover_async_lock_loop: asyncio.AbstractEventLoop | None = None
         self._discover_executor: ThreadPoolExecutor | None = None
         self._discover_last_at = 0.0
+        self._discover_last_full_at = 0.0
+        self._discover_source_state: tuple[tuple[str, int, int, int], ...] | None = None
+        self._discover_probe_interval_s = _bounded_env_seconds(
+            "ADAOS_SERVICE_DISCOVERY_PROBE_INTERVAL_S",
+            default=5.0,
+            minimum=1.0,
+            maximum=300.0,
+        )
+        self._discover_full_interval_s = _bounded_env_seconds(
+            "ADAOS_SERVICE_DISCOVERY_FULL_INTERVAL_S",
+            default=300.0,
+            minimum=30.0,
+            maximum=3600.0,
+        )
         self._manifest_state: dict[str, tuple[Any, ...]] = {}
         self._shutdown_requested = False
 
     # ------------------------------------------------------------------ public
+    def _discovery_source_signature(self, skills_root: Path) -> tuple[tuple[str, int, int, int], ...]:
+        workspace_root_raw = self._ctx.paths.workspace_dir()
+        workspace_root = Path(workspace_root_raw() if callable(workspace_root_raw) else workspace_root_raw)
+        return tuple(
+            _path_discovery_signature(path)
+            for path in (
+                skills_root,
+                skills_root / ".runtime",
+                workspace_root / "registry.json",
+            )
+        )
+
     def ensure_discovered(self, *, force: bool = False) -> None:
         now = time.monotonic()
-        if not force and (now - self._discover_last_at) < 5.0:
+        if not force and (now - self._discover_last_at) < self._discover_probe_interval_s:
             return
         skills_root_raw = self._ctx.paths.skills_dir()
         skills_root = Path(skills_root_raw() if callable(skills_root_raw) else skills_root_raw)
         if not skills_root.exists():
+            self._discover_last_at = now
             return
 
         with self._discover_lock:
             now = time.monotonic()
-            if not force and (now - self._discover_last_at) < 5.0:
+            if not force and (now - self._discover_last_at) < self._discover_probe_interval_s:
+                return
+            source_state = self._discovery_source_signature(skills_root)
+            full_scan_fresh = (now - self._discover_last_full_at) < self._discover_full_interval_s
+            if not force and full_scan_fresh and source_state == self._discover_source_state:
+                self._discover_last_at = now
                 return
             next_specs: dict[str, ServiceSpec] = {}
             next_state: dict[str, tuple[Any, ...]] = {}
@@ -556,10 +604,12 @@ class ServiceSkillSupervisor:
             self._specs = next_specs
             self._manifest_state = next_state
             self._discover_last_at = now
+            self._discover_last_full_at = now
+            self._discover_source_state = self._discovery_source_signature(skills_root)
 
     async def refresh_discovered(self, *, force: bool = False) -> None:
         now = time.monotonic()
-        if not force and (now - self._discover_last_at) < 5.0:
+        if not force and (now - self._discover_last_at) < self._discover_probe_interval_s:
             return
         loop = asyncio.get_running_loop()
         if self._discover_async_lock is None or self._discover_async_lock_loop is not loop:
@@ -567,7 +617,7 @@ class ServiceSkillSupervisor:
             self._discover_async_lock_loop = loop
         async with self._discover_async_lock:
             now = time.monotonic()
-            if not force and (now - self._discover_last_at) < 5.0:
+            if not force and (now - self._discover_last_at) < self._discover_probe_interval_s:
                 return
             if self._discover_executor is None:
                 self._discover_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adaos-skill-discovery")
