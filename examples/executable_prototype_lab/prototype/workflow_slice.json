@@ -2,13 +2,20 @@
   "schema": "adaos.builder.prototype_workflow_slice.v1",
   "slice_id": "service-request-conversation-v1",
   "source_definition_ref": "workflow.json@1.0.0",
-  "source_definition_digest": "sha256:e90e623c052d2af634825e2748ff253b8bd6e926b12c3a41ea307a7ca43e9370",
+  "source_definition_digest": "sha256:8f087f827a2502286824368b9cff978ed89da584933b139ec6f8f720a10aa3a5",
   "source_generation": 0,
   "profile": "conversational_mvp",
   "entry_command": "start",
   "cancel_command": "cancel",
   "definition": {"source_ref": "workflow.json"},
   "activity_requirements": [
+    {
+      "activity_id": "builder.prototype.derive",
+      "input_schema": {"type": "object", "additionalProperties": true},
+      "output_schema": {"type": "object"},
+      "implementation_status": "mapped",
+      "implementation_ref": "adaos:builder.prototype.derive"
+    },
     {
       "activity_id": "prototype.request.collect",
       "input_schema": {"type": "object", "properties": {"title": {"type": "string"}, "details": {"type": "string"}}, "additionalProperties": false},
