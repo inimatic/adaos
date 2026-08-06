@@ -23,6 +23,7 @@ REV="rev2026"
 ZONE_ID=""
 NO_VOICE="0"
 DEV_MODE="0"
+BUILD_VENDORED_Y_PY="0"
 PYTHON_ARG=""
 NODE_NAME=""
 NO_CORE_UPDATE="0"
@@ -543,6 +544,7 @@ while [[ $# -gt 0 ]]; do
     --no-core-update|--no_core_update) NO_CORE_UPDATE="1"; shift ;;
     --no_voice|--no-voice) NO_VOICE="1"; shift ;;
     --dev) DEV_MODE="1"; shift ;;
+    --build-vendored-y-py) BUILD_VENDORED_Y_PY="1"; shift ;;
     -h|--help)
       cat <<EOF
 Usage: tools/bootstrap.sh [options]
@@ -560,6 +562,7 @@ Usage: tools/bootstrap.sh [options]
   --workspace-registry-repo URL
   --no-core-update      Disable hub/member core updates from CI/CD signals for this node
   --dev
+  --build-vendored-y-py Build repository vendor/y-py (requires Rust/Cargo >=1.72)
   --no_voice            Disable optional Rasa NLU service/training
 EOF
       exit 0
@@ -655,10 +658,16 @@ if ! venv_is_usable; then
 fi
 . "$VENV_ACTIVATE"
 python -m pip install -U pip >/dev/null
-command -v cargo >/dev/null 2>&1 || fail "Rust/Cargo >=1.72 is required to build vendor/y-py. Prefer tools/bootstrap_uv.sh after installing rustup."
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
-python -m pip install ./vendor/y-py || fail "vendored y-py install failed"
-python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
+if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]; then
+  command -v cargo >/dev/null 2>&1 || fail "Rust/Cargo >=1.72 is required with --build-vendored-y-py. Install Rust with rustup."
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/.adaos/build/y-py-target}"
+  python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
+  python -m pip install --force-reinstall --no-deps ./vendor/y-py || fail "vendored y-py install failed"
+else
+  python -m pip install --only-binary y-py -e .[dev] || fail "pip install -e .[dev] failed"
+fi
+python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
+  || fail "AdaOS requires patched y-py==0.6.2+adaos.1"
 
 log "Bootstrapping .env..."
 if [[ ! -f .env ]]; then

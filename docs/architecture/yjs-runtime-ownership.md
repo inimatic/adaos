@@ -35,9 +35,10 @@ real owners are dropped.
 
 ## Fork Policy
 
-AdaOS pins `y-py==0.6.2+adaos.1` and resolves it from `vendor/y-py`. The fork
-keeps the 0.6.2 Python API and vendors Yrs 0.12.2 with only the ownership
-backport. Provenance and build instructions are in
+AdaOS pins `y-py==0.6.2+adaos.1`. User installs resolve immutable release
+wheels, while repository source-development mode resolves `vendor/y-py`.
+The fork keeps the 0.6.2 Python API and vendors Yrs 0.12.2 with only the
+ownership backport. Provenance and build instructions are in
 `vendor/y-py/ADAOS.md`.
 
 Moving directly to `y-py 0.7.0a1` was rejected for this transition. Its Yrs
@@ -45,11 +46,12 @@ ownership is corrected, but its transaction behavior is not API-compatible
 with current AdaOS call sites. The minimal fork separates memory correctness
 from a future API migration.
 
-`.github/workflows/y-py-wheels.yml` builds CPython 3.11 wheels on Linux,
-Windows, and macOS. A `y-py-v*` tag publishes the matrix artifacts to a GitHub
-release. Normal repository installs build the same pinned source through
-`uv.lock`; Rust output must stay outside `vendor/y-py` so Python metadata
-discovery never traverses Cargo artifacts.
+`.github/workflows/y-py-wheels.yml` builds CPython 3.11 wheels on Linux x86-64,
+Windows x86-64, macOS ARM64, and macOS x86-64. A `y-py-v*` tag publishes the
+matrix artifacts to a GitHub release. Explicit repository source-development
+installs build the same pinned source through `uv.lock`; Rust output must stay
+outside `vendor/y-py` so Python metadata discovery never traverses Cargo
+artifacts.
 
 The
 [`y-py-v0.6.2-adaos.1` release](https://github.com/inimatic/adaos/releases/tag/y-py-v0.6.2-adaos.1)
@@ -61,12 +63,13 @@ The workflow can be rerun with `workflow_dispatch` and an existing
 tag.
 
 Release wheels are delivery artifacts for packaged runtimes. The platform
-requirements in `pyproject.toml` point Linux x86-64, Windows AMD64, and macOS
-ARM64 installs at those immutable release assets; a normal `pip install` must
-not depend on a private package index or silently fall back to public
+requirements in `pyproject.toml` point Linux x86-64, Windows AMD64, macOS
+ARM64, and macOS x86-64 installs at those immutable release assets. A normal
+`pip install` must not depend on a private package index or silently fall back to public
 `y-py 0.6.2`. Repository development intentionally overrides that dependency
-with `[tool.uv.sources]` and resolves the vendored source, so a local Rust
-toolchain remains required even if a release wheel was installed separately.
+with `[tool.uv.sources]` and resolves the vendored source. User-facing
+`uv` bootstraps bypass that development override with `--no-sources`; a local
+Rust toolchain is required only with the explicit vendored build flag.
 
 ## Thread Ownership
 

@@ -3,6 +3,7 @@ param(
   [string]$JoinCode = "",
   [string]$Role = "",
   [switch]$Dev,
+  [switch]$BuildVendoredYPy,
   [switch]$NoVoice,
   [ValidateSet("auto", "always", "never")]
   [string]$InstallService = "auto",
@@ -197,30 +198,41 @@ uv python install $minPython
 if ($LASTEXITCODE -ne 0) { throw "uv python install $minPython failed" }
 $env:UV_PYTHON = $minPython
 
-# 2) Sync Python deps (creates .venv and installs project)
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-  throw "Rust/Cargo >=1.72 is required to build the repository-pinned vendor/y-py source. Install Rust with rustup."
-}
-if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-  $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
-}
-if (Test-Path "uv.lock") {
-  Write-Host "Syncing environment from uv.lock..."
-  uv sync --python $env:UV_PYTHON --locked
-  if ($LASTEXITCODE -ne 0) {
-    Write-Warning "uv sync --locked failed, refreshing lock..."
+# 2) Install Python deps (creates .venv and installs project)
+if ($BuildVendoredYPy) {
+  if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    throw "Rust/Cargo >=1.72 is required with -BuildVendoredYPy. Install Rust with rustup."
+  }
+  if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
+  }
+  if (Test-Path "uv.lock") {
+    Write-Host "Syncing development environment from uv.lock..."
+    uv sync --python $env:UV_PYTHON --locked --extra dev
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "uv sync --locked failed, refreshing lock..."
+      uv lock
+      if ($LASTEXITCODE -ne 0) { throw "uv lock failed" }
+      uv sync --python $env:UV_PYTHON --extra dev
+      if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
+    }
+  } else {
+    Write-Host "Locking and syncing development environment..."
     uv lock
     if ($LASTEXITCODE -ne 0) { throw "uv lock failed" }
-    uv sync --python $env:UV_PYTHON
+    uv sync --python $env:UV_PYTHON --extra dev
     if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
   }
 } else {
-  Write-Host "Locking and syncing environment..."
-  uv lock
-  if ($LASTEXITCODE -ne 0) { throw "uv lock failed" }
-  uv sync --python $env:UV_PYTHON
-  if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
+  Write-Host "Creating user environment from precompiled dependencies..."
+  uv venv --python $env:UV_PYTHON .venv
+  if ($LASTEXITCODE -ne 0) { throw "uv venv failed" }
+  $adaosPython = Join-Path $PWD ".venv\Scripts\python.exe"
+  uv pip install --python $adaosPython --no-sources --only-binary y-py --editable ".[dev]"
+  if ($LASTEXITCODE -ne 0) { throw "AdaOS dependency install failed" }
 }
+.\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"
+if ($LASTEXITCODE -ne 0) { throw "AdaOS requires patched y-py==0.6.2+adaos.1." }
 
 # 4) .env bootstrap
 if (-not (Test-Path ".env")) {

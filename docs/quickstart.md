@@ -9,6 +9,7 @@
 Optional components:
 
 - `uv` for the Windows bootstrap flow
+- Rust/Cargo `1.72+` only when rebuilding the repository-pinned `vendor/y-py`
 - private submodules if you also work on the client, backend, or infrastructure repositories
 
 ## Clone the repository
@@ -59,12 +60,16 @@ powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1
 
 Bootstrap scripts support zone-aware Root routing via `--zone` or `-ZoneId`. Use only a two-letter country or region code such as `ru`. This affects hub bootstrap (`adaos dev root init`), owner login (`adaos dev root login`), member join via join-code, and hub join-code creation when the default public Root URL is in use. National zones follow the `[zone].api.inimatic.com` rule; right now `ru` becomes `https://ru.api.inimatic.com`, while the other zones still stay on `https://api.inimatic.com`. The optional `--dev` / `-Dev` flag writes `ENV_TYPE=dev` into `.env`.
 
+Normal bootstrap installs the precompiled patched `y-py` release wheel and does not require Rust. To rebuild the vendored fork while developing it, pass `--build-vendored-y-py` on Bash or `-BuildVendoredYPy` on PowerShell; that explicit source-build mode requires Rust/Cargo `1.72+`.
+
 ### Manual editable install
 
 ```bash
 rustc --version  # Rust 1.72 or newer
 uv sync --locked --extra dev
 ```
+
+The manual `uv sync` command is a repository-development flow and therefore uses `vendor/y-py` through `[tool.uv.sources]`.
 
 ## First commands
 

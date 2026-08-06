@@ -99,6 +99,7 @@ adaos --help
 bash tools/bootstrap.sh --zone ru --dev
 bash tools/bootstrap.sh --python /usr/bin/python3.11 --zone ru --dev
 bash tools/bootstrap.sh --node-name "Local Dev Node" --zone ru --dev
+bash tools/bootstrap.sh --dev --build-vendored-y-py  # y-py source development; requires Rust
 ```
 
 Windows with `uv`:
@@ -109,6 +110,7 @@ powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1
 .\.venv\Scripts\Activate.ps1
 adaos --help
 powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1 -ZoneId ru -Dev
+powershell -ExecutionPolicy Bypass -File tools/bootstrap_uv.ps1 -Dev -BuildVendoredYPy  # requires Rust
 ```
 
 Windows with `pip`:
@@ -126,6 +128,8 @@ rustc --version  # Rust 1.72 or newer
 uv sync --locked --extra dev
 adaos --help
 ```
+
+Normal bootstrap uses precompiled patched `y-py` wheels. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above.
 
 ## Git checkout maintenance
 

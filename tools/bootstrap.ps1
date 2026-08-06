@@ -5,6 +5,7 @@ param(
     [string]$JoinCode = "",
     [string]$Role = "",
     [switch]$Dev,
+    [switch]$BuildVendoredYPy,
     [switch]$NoVoice,
     [ValidateSet("auto", "always", "never")]
     [string]$InstallService = "auto",
@@ -237,6 +238,7 @@ if (-not $pyCands -or $pyCands.Count -eq 0) {
             -JoinCode $JoinCode `
             -Role $Role `
             -Dev:$Dev `
+            -BuildVendoredYPy:$BuildVendoredYPy `
             -NoVoice:$NoVoice `
             -InstallService $InstallService `
             -ServeHost $ServeHost `
@@ -318,17 +320,25 @@ catch { }
 
 .\.venv\Scripts\python.exe -m pip install -U pip
 if ($LASTEXITCODE -ne 0) { Write-Host "pip upgrade failed." -ForegroundColor Red; exit 1 }
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    Write-Host "Rust/Cargo >=1.72 is required to build vendor/y-py. Prefer tools/bootstrap_uv.ps1 after installing rustup." -ForegroundColor Red
-    exit 1
+if ($BuildVendoredYPy) {
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Write-Host "Rust/Cargo >=1.72 is required with -BuildVendoredYPy. Install Rust with rustup." -ForegroundColor Red
+        exit 1
+    }
+    if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+        $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
+    }
+    .\.venv\Scripts\python.exe -m pip install -e .[dev]
+    if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
+    .\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps .\vendor\y-py
+    if ($LASTEXITCODE -ne 0) { Write-Host "vendored y-py install failed." -ForegroundColor Red; exit 1 }
 }
-if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
-    $env:CARGO_TARGET_DIR = Join-Path $PWD ".adaos\build\y-py-target"
+else {
+    .\.venv\Scripts\python.exe -m pip install --only-binary y-py -e .[dev]
+    if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
 }
-.\.venv\Scripts\python.exe -m pip install .\vendor\y-py
-if ($LASTEXITCODE -ne 0) { Write-Host "vendored y-py install failed." -ForegroundColor Red; exit 1 }
-.\.venv\Scripts\python.exe -m pip install -e .[dev]
-if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
+.\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"
+if ($LASTEXITCODE -ne 0) { Write-Host "AdaOS requires patched y-py==0.6.2+adaos.1." -ForegroundColor Red; exit 1 }
 
 try {
     .\.venv\Scripts\python.exe -c "import adaos; print('adaos import ok')" | Out-Null

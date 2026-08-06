@@ -9,6 +9,7 @@
 Опционально:
 
 - `uv` для bootstrap-потока на Windows
+- Rust/Cargo `1.72+` только для сборки репозиторного `vendor/y-py`
 - приватные submodule, если вы работаете ещё и с клиентом, backend или infra-репозиториями
 
 ## Клонирование
@@ -58,12 +59,16 @@ powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1
 
 Bootstrap-скрипты поддерживают zonal Root routing через `--zone` или `-ZoneId`. Используем только двухбуквенный код страны или региона, например `ru`. Это влияет на `adaos dev root init`, `adaos dev root login`, member join по join-code и создание join-code на hub, если используется стандартный публичный Root URL. Для национальных зон действует правило `[zone].api.inimatic.com`; сейчас это актуально для `ru`, поэтому будет выбран `https://ru.api.inimatic.com`, а остальные зоны пока остаются на `https://api.inimatic.com`. Дополнительно флаг `--dev` / `-Dev` записывает `ENV_TYPE=dev` в `.env`.
 
+Обычный bootstrap устанавливает предкомпилированный wheel патченного `y-py` и не требует Rust. Для сборки `vendor/y-py` из исходников используйте `--build-vendored-y-py` в Bash или `-BuildVendoredYPy` в PowerShell; этот явный developer-режим требует Rust/Cargo `1.72+`.
+
 ### Ручная editable-установка
 
 ```bash
 rustc --version  # Rust 1.72+
 uv sync --locked --extra dev
 ```
+
+Ручной `uv sync` — это developer-режим репозитория; он собирает `vendor/y-py` через `[tool.uv.sources]`.
 
 ## Первые команды
 
