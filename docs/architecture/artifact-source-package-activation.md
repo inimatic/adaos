@@ -661,6 +661,50 @@ If stable moved:
 
 Evidence is never silently copied from an old digest to a changed candidate.
 
+### MVP Runtime Trial And Project Placement
+
+The first deployable Trial does not require a second full Workspace. It uses a
+runtime-only activation derived from the immutable candidate:
+
+```text
+DEV source
+  -> Candidate PackageRef
+  -> durable TrialActivation
+  -> workspace/.runtime materialization
+  -> Webspace-scoped runtime binding
+  -> optional launcher placement with Trial badge
+```
+
+The candidate digest, not the mutable DEV tree, is the authority. The
+`workspace/.runtime` tree is replaceable derived state. The durable
+`adaos.trial.activation.v1` record contains at minimum:
+
+- `trial_id`, project/candidate/release refs and exact package digests;
+- zone, subnet, target Webspace, scenario entry point, and audience;
+- data mode and approval/reversibility evidence;
+- resolved runtime dependency bindings and previous bindings;
+- start, expiry, completion, detach, and reconciliation timestamps;
+- status, health evidence, rollback/cleanup disposition, and idempotency key.
+
+`adaos.project.placement.v1` is the durable answer to "where can this result be
+opened?" It binds either a TrialActivation or stable Release to a destination
+and host capability. Placement is not publication and does not mutate channel
+identity. A stable result may be published and installed but not yet placed; a
+Trial may be placed while stable remains unchanged.
+
+The single-version runtime constraint remains fail-closed. Before Trial
+activation AdaOS compares every candidate skill binding with active reverse
+consumers. The same version or a unique skill is admitted. A different version
+of a shared active skill is rejected unless a Webspace-scoped resolver proves
+that the candidate cannot leak into another scenario. Context-aware
+multi-version resolution is deferred, but conflict detection is mandatory.
+
+For the MVP, `empty`, `mock`, and proven `read_only` modes are admitted by
+default. `real` writes require an explicit approval plus a tested reversible
+effect/rollback contract; unknown or irreversible effects are blocked. Full
+data-space isolation, simultaneous shared-skill versions, public alpha/beta
+channels, and audience rollout policy remain deferred extension seams.
+
 ## Stable Subscription And Update
 
 Installation creates a minimal stable subscription record:
@@ -842,6 +886,8 @@ Migration uses adapters instead of a flag-day rewrite:
 The architecture reserves, but does not implement:
 
 - multiple active versions through context-aware dependency bindings;
+- full Trial data sandboxing and per-Webspace state isolation;
+- public alpha/beta candidate channels and audience rollout policy;
 - feature and edition variants through additional channel and release metadata;
 - multi-user extraction from WorkLog into ChangeSets;
 - trusted development groups and zone-specific approvals;

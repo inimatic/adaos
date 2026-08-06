@@ -91,6 +91,8 @@ Minimum fields:
 - installed WorkspaceLock/component bindings and current DEV base refs;
 - accepted Prototype and retained Implementation refs plus active candidate,
   Trial, and Publication refs where applicable;
+- durable TrialActivation and ProjectPlacement refs that distinguish an
+  immutable released result from where it is currently runnable or visible;
 - open/terminal Issue and Change refs, Change dependency/conflict summary, and
   focused Change refs by scoped command context;
 - component boundary, declared contracts, resolved dependency-lock refs, and
@@ -245,6 +247,38 @@ Trial proves one immutable candidate in an isolated activation context. Release
 is a promoted immutable `ProjectRelease`; Publication is the decision and
 operation that moves a channel pointer to it. Neither is an editable phase.
 
+Trial activation, stable publication, Workspace installation, and Webspace
+placement are different facts:
+
+```text
+Candidate -> TrialActivation -> runtime binding -> optional launcher placement
+Candidate -> Release -> stable channel -> WorkspaceLock -> ProjectPlacement
+```
+
+`TrialActivation` runs an immutable Candidate PackageRef. It never executes a
+mutable DEV directory directly and never moves the stable channel or primary
+WorkspaceLock selection. In the single-user MVP its files may be materialized
+under `workspace/.runtime` as a derived cache, while a durable activation
+record retains the candidate digest, target Webspace, runtime bindings, data
+mode, expiry, previous bindings, and terminal/rollback status. A restart
+rebuilds the cache from the same digest; the cache is not source truth.
+
+`ProjectPlacement` records where a Trial or stable Release is exposed to a
+user. It binds a project result, zone/subnet/Webspace destination, host
+capability, scenario entry point, audience, data mode, runtime slot/binding,
+and placement status. The first implementation may discover eligible desktop
+hosts from the installed `web_desktop` scenario, but the durable contract uses
+a host capability and does not hard-code that scenario as the final model.
+
+Full data sandboxing and simultaneous versions of one shared skill are
+deferred. Safety is not deferred: Trial admits `empty`, `mock`, and proven
+`read_only` data by default; live writes require explicit approval and proven
+reversibility. A different version of a shared active skill is blocked unless
+the runtime can prove a safe Webspace-scoped binding. Alpha and beta are future
+distribution channels/audiences, not mandatory business states. The MVP may
+show an `alpha`/`Trial` badge for a transient placement but must not claim that
+the candidate was published to an alpha registry channel.
+
 ## Builder Change Statechart
 
 The following is the normative single-user business statechart. Exact
@@ -352,7 +386,7 @@ not display every stage command at once:
 | `trial_waiting` / `trial_review` | Show status / accept Trial | Reject to Automation or Prototype according to the declared transition |
 | `publication_ready` | Begin Publication | Inspect exact candidate and approvals |
 | `publication_waiting` | Show Publication status | Cancel/reconcile only when declared; never repeat an uncertain publish |
-| `published` | Inspect Publication | Start a new Change |
+| `published` | Open the placed stable result, or place it when absent | Show useful lineage, start a new Change, change project |
 
 `Accept Prototype` and `Start Automation` remain separate commands. Acceptance
 freezes one immutable requirement revision and records its lineage; starting
@@ -366,6 +400,53 @@ list, Help, or Preview link. Capability limits may paginate or move secondary
 actions, but must not silently evict the only safe workflow continuation.
 Internal bookkeeping commands such as experiment recording remain available
 to tools and inspectors without occupying the user's primary `Next` summary.
+
+### Outcome-Oriented Published Projection
+
+The `published` state is presented as a useful product outcome, not as raw
+state-machine diagnostics. The compact message names the project, exact
+version and channel, then separately reports Workspace installation and
+Webspace placement. It must not expose implementation commands such as
+`builder.change.plan` in prose or describe a terminal state merely as
+"Change ... is in published".
+
+When a placement exists, the default actions are:
+
+1. `Open published project`;
+2. `Show process`;
+3. `Refine project`;
+4. `Change project`;
+5. `Help`.
+
+When no placement exists, `Place in Webspace` replaces the first action.
+`Preview link` is not a published-state action: Preview is a DEV projection,
+whereas a published link is derived from the accepted `ProjectPlacement` via
+the Navigation SDK. An active Trial uses `Open trial` and retains an explicit
+Trial/alpha badge and data-mode explanation.
+
+`Show process` renders a semantic lineage/timeline, with the same nodes in
+every channel: request/Change, accepted Prototype when present, Automation,
+verification, Trial, stable publication, Workspace installation, and
+ProjectPlacement. Web may render a graph; compact channels render ordered
+status lines. Both name the exact current result and the next useful action.
+
+### Durable Conversational Continuation
+
+An action that asks the user for prose, including `Refine project`,
+`Add to change`, `Refine prototype`, and `Continue implementation`, does not
+return a prompt-only compatibility message. It creates a durable
+`ConversationInteraction` in `input_required` with a typed text/form input,
+project/Change refs, expected generation, and continuation command. The next
+message is resolved against that `InteractionRef`, admitted once, and either
+creates Issues/Change or resumes the exact workflow activity.
+
+After any accepted response, the originating presentation is consumed. Its
+controls are removed or disabled and annotated with the accepted result; a
+new Interaction is projected from the new workflow generation. This rule is
+transport-neutral and applies equally to Telegram, Web chat, and Voice chat.
+Transport message editing is an optional presentation capability; inability
+to edit a historical message must still make its action tokens unusable and
+render it without active controls on reload.
 
 Availability is the intersection of the canonical transition, guards,
 principal policy, target/generation freshness, executor readiness, and channel

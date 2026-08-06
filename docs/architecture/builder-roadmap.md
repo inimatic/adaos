@@ -131,7 +131,7 @@ gate easy to read by priority.
 | 8. Product Experience | Complete for the current Builder refactor: dedicated Builder scenario, durable Review context, declarative tabs/modal/page/multistep behavior ABI, and stable no-op projections are covered. | Complete: a 32-cycle equal-object reload soak preserves live Yjs root identity. | Open: richer Automation log and cross-project history views. | Open: autonomous reproduction, large-module decomposition, and legacy Prompt IDE retirement. |
 | 9. Reference Runtime | Complete for the current reference slice: stable async job messages, bounded context/memory/repair evidence, broadened goldens, eval-to-repair backlinks, and a validated public generated-skill example exist. | Complete: the generated example demonstrates skill-owned conversation, consent-gated memory, Pending Action, and browser UI. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
-| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, Process projection, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gate: one production IntentProposal rail, localized semantic Interaction ABI, dependent Prototype -> Automation -> Trial -> Publication controls, concrete activity executors, compatibility-rail retirement, and one operational empty-scenario acceptance run. | Open: Teacher-candidate promotion, complete Builder-caller migration, durable delivery receipts, canonical address-bar/history projection, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, Process projection, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gate: durable prose continuation (not prompt-only), outcome-oriented published/Trial projection, ProjectPlacement and runtime-only Trial activation, one production IntentProposal rail, compatibility-rail retirement, and one operational empty-scenario acceptance run. | Open: complete Builder-caller migration, consumed-control parity in Web/Voice, durable external delivery receipts, human wide/compact and mutating Telegram-callback acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: full Trial data isolation, simultaneous shared-skill versions, public alpha/beta rollout channels, hard Telegram parity, miniapp, interactive workflow/conversation studio, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -1116,11 +1116,14 @@ Commands, projections, and Workbench:
   response event. The executable-command allowlist, supplemental navigation
   action table, and hard-coded Russian action-label map are no longer control
   authorities; the governed definition and locale catalog are.
-- [x] `[must]` Project the dependent conversational bridge from one governed
+- [ ] `[must]` Project the dependent conversational bridge from one governed
   snapshot: accept Prototype, start Automation, accept verification, start
   Trial, accept Trial, and begin Publication. Show the primary continuation
   before optional inspect/navigation actions, preserve lineage and generation,
-  and explain missing approval, input, or executor readiness.
+  and explain missing approval, input, or executor readiness. The state-derived
+  actions exist, but this gate remains open until prose actions create durable
+  `input_required` continuations and published/Trial outcomes stop falling back
+  to generic Preview and state-machine diagnostics.
 - [x] `[must]` Return accepted/progress/input-required/terminal
   ResponseEnvelopes for long LLM/Codex/Trial/Publication work. Persist the
   terminal result once and retry ReplyRoute DeliveryAttempts independently;
@@ -1706,6 +1709,28 @@ The dated entries below remain the chronological implementation ledger.
   (`b0dd4fae`), and Story runner v2 plus Run/Trial metrics evidence
   (`b72f2a7d`). The local verification ledger keeps these proofs distinct from
   the open durable Telegram target-zone receipt and default cutover rollout.
+- [ ] `[must]` Add `adaos.project.placement.v1` and persist the distinction
+  between stable publication, Workspace installation, and a runnable Webspace
+  placement. Published actions must open the placement through Navigation SDK
+  or offer `Place in Webspace` when it is absent.
+- [ ] `[must]` Replace raw published-state diagnostics with an outcome-oriented
+  localized message and a semantic Process lineage containing exact version,
+  Prototype, Automation, verification, Trial, stable Release, Workspace
+  installation, and placement evidence.
+- [ ] `[must]` Replace prompt-only `builder.change.plan`/extend/edit/iterate
+  controls with durable typed `input_required` interactions. Resume the exact
+  project/change/generation once and project a fresh action set.
+- [ ] `[must]` Implement runtime-only Trial activation from an immutable
+  Candidate PackageRef into derived `workspace/.runtime` state, with a durable
+  TrialActivation record, restart reconstruction, explicit detach, bounded
+  data modes, and fail-closed shared-skill version-conflict detection.
+- [ ] `[should]` Apply the consumed-control lifecycle to Web/Voice chat as well
+  as Telegram: accepted historical tokens are unusable, old controls disappear
+  on live update and reload, and the replacement Interaction comes from the
+  new workflow generation.
+- [ ] `[deferred]` Add full Trial data sandboxing, simultaneous versions of a
+  shared skill, and public alpha/beta channel rollout. The MVP may render a
+  Trial/alpha badge but cannot claim a registry channel promotion.
 
 ## Cross-Document Anchors
 
