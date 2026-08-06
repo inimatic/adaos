@@ -658,6 +658,24 @@ NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
 `sys.ready` also run in workers. Target-stand pressure evidence is still needed
 before closing the tracking items.
 
+Delivery validation on 2026-08-06 promoted `0.1.684+1.37e2655` to `.30` slot
+`A`. The first attempt exposed a bootstrap defect: `Path(source) / "."` lost
+the literal `/.`, so GNU `cp` nested a seeded virtualenv under `venv/venv` and
+forced a network-only pip fallback while PyPI was unavailable. The updater now
+preserves the literal contents path; a one-time supervisor `copy` override
+bootstrapped the fixed updater, and the successful retry used the active-slot
+seed with `uv` before rooted promotion. During the three-minute post-cutover
+window the node, required upstream link, `/ws` and `/yws` handoff, sidecar, and
+runtime-fault gates remained ready; there were no errors, `recovering` records,
+NATS disconnects, or Root timeouts, and one 287.7 ms event-loop-lag warning.
+
+That checkpoint did not close browser reconnect acceptance. The browser
+control connection remained active, but the replacement runtime observed zero
+active YWS connections and no post-cutover `/yws` open attempt; state sync
+therefore correctly stayed `degraded` with `firstSyncState=timeout` instead of
+being masked as ready. Phase 3 browser channel-survival work and the M4
+provider reattach proof remain open.
+
 ### Exit criteria
 
 - [x] `[must]` Route pressure cannot starve control readiness.
