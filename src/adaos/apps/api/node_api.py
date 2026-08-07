@@ -1262,7 +1262,13 @@ def _thin_runtime_reliability_payload(
     if status_plane is not None:
         payload["updatedAt"] = status_plane.get("updatedAt")
         payload["statusPlane"] = status_plane
-    if requested_mode == "details":
+    # Member availability is part of the browser's compact availability
+    # contract, not merely an on-demand diagnostics detail.  Omitting it from
+    # the runtime beacon forces the header to infer rollout state from the
+    # eventually-consistent data.nodes projection.  In particular, a terminal
+    # update can retain phase=validate in that projection and look active long
+    # after the supervisor has reported success.
+    if requested_mode in {"runtime", "details"}:
         payload["memberAvailability"] = _current_compact_member_availability()
     return payload
 

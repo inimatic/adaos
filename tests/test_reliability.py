@@ -3234,6 +3234,17 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
             "browserYwsHandoffState": "disabled",
         },
     )
+    monkeypatch.setattr(
+        node_api,
+        "_current_compact_member_availability",
+        lambda: {
+            "source": "hub_member_connection_state",
+            "role": "hub",
+            "state": "nominal",
+            "total": 1,
+            "online": 1,
+        },
+    )
     monkeypatch.setattr(node_api, "load_config", lambda: SimpleNamespace(role="hub"))
     monkeypatch.setattr(
         node_api,
@@ -3265,7 +3276,8 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
     assert payload["observer"]["authority"] == "local_runtime_only"
     assert "root_browser" in payload["observer"]["doesNotImply"]
     assert "statusPlane" not in payload
-    assert "memberAvailability" not in payload
+    assert payload["memberAvailability"]["source"] == "hub_member_connection_state"
+    assert payload["memberAvailability"]["role"] == "hub"
 
     unchanged = client.get(
         "/api/node/reliability/runtime?webspace_id=desktop",
