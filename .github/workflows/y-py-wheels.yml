@@ -34,11 +34,13 @@ jobs:
           - os: macos-15
             label: macos-arm64
             machine: arm64
+            deployment_target: "11.0"
             asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_arm64.whl
           - os: macos-15-intel
             label: macos-x86_64
             machine: x86_64
-            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_11_0_x86_64.whl
+            deployment_target: "10.15"
+            asset: y_py-0.6.2+adaos.1-cp311-cp311-macosx_10_15_x86_64.whl
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +57,7 @@ jobs:
       - name: Configure macOS deployment target
         if: runner.os == 'macOS'
         shell: bash
-        run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}" >> "$GITHUB_ENV"
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -80,6 +82,35 @@ jobs:
           python -m pip install pytest
           python -m pip install --no-index --find-links dist "y-py==0.6.2+adaos.1"
           python -m pytest -q vendor/y-py/tests
+
+      - name: Verify macOS minimum deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          EXPECTED_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          import y_py
+
+          native = next(pathlib.Path(y_py.__file__).parent.glob("*.so"))
+          load_commands = subprocess.check_output(["otool", "-l", str(native)], text=True)
+          match = re.search(r"^\s*(?:minos|version)\s+([0-9]+(?:\.[0-9]+)*)\s*$", load_commands, re.MULTILINE)
+          assert match, load_commands
+
+          def normalized(value: str) -> tuple[int, int, int]:
+              parts = [int(part) for part in value.split(".")]
+              return tuple((parts + [0, 0, 0])[:3])
+
+          actual = normalized(match.group(1))
+          expected = normalized(os.environ["EXPECTED_DEPLOYMENT_TARGET"])
+          assert actual == expected, f"Mach-O minimum macOS is {actual}, expected {expected}"
+          print(f"Verified {native.name}: minimum macOS {match.group(1)}")
+          PY
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

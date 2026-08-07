@@ -73,4 +73,8 @@ def test_wheel_workflow_builds_both_macos_architectures() -> None:
     assert "machine: arm64" in workflow
     assert "os: macos-15-intel" in workflow
     assert "machine: x86_64" in workflow
-    assert "MACOSX_DEPLOYMENT_TARGET=11.0" in workflow
+    assert 'deployment_target: "11.0"' in workflow
+    assert 'deployment_target: "10.15"' in workflow
+    assert "macosx_10_15_x86_64.whl" in workflow
+    assert 'MACOSX_DEPLOYMENT_TARGET=${{ matrix.deployment_target }}' in workflow
+    assert "Verify macOS minimum deployment target" in workflow
