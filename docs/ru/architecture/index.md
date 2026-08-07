@@ -38,6 +38,8 @@ runtime.
 
 - [Model Runtime and Registry](model-runtime-and-registry.md): target-state слой `models` для model execution, artifact registry, local/remote backend, session и job architecture
 - [Model Runtime Roadmap](model-runtime-roadmap.md): чеклист реализации core model infrastructure перед миграцией Neural NLU и face vision
+- [AdaOS Research Fabric](../../architecture/research-fabric.md): целевая архитектура общего исследовательского каркаса, storage/tracker/executor boundaries, интеграция MLflow и Ray и TLP reference case
+- [Research Fabric Roadmap](../../architecture/research-fabric-roadmap.md): приоритетный чеклист от локального research kernel до TLP proof, второго домена и отложенного слоя aResearcher
 
 - [Infrascope](infrascope.md): human-facing архитектура control plane поверх
   canonical system model

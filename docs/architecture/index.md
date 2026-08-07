@@ -56,6 +56,8 @@ Current target-state control-plane extensions are documented in:
 - [Roadmap Inventory and Authority Map](roadmap-inventory.md): ownership rules and index for cross-domain, MVP, domain, and execution planning
 - [Model Runtime and Registry](model-runtime-and-registry.md): target model execution, artifact registry, local/remote backend, session, and job architecture for neural and external model-backed skills
 - [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots
+- [AdaOS Research Fabric](research-fabric.md): target governed research framework, storage/tracker/executor boundaries, MLflow and Ray integration, evidence model, and TLP reference case
+- [Research Fabric Roadmap](research-fabric-roadmap.md): prioritized delivery and proof gates from a local research kernel through storage capability, MLflow, Ray, TLP, generalization, and the deferred aResearcher assistance layer
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md): priority checklist for moving skills and scenarios to demand-driven per-webspace projections
 - [Skill Projection and Stream Boundary](skill-projection-and-stream-boundary.md): current stabilization status and target roadmap for skill-owned Yjs projections, stream data, node-aware addressing, and temporary per-skill bridges
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md): target SDK/core rails for projection slots, stream receivers, dirty routing, fingerprinted Yjs writes, and skill migration checklists

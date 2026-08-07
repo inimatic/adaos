@@ -1,0 +1,593 @@
+# AdaOS Research Fabric Roadmap
+
+Status: domain roadmap for the proposed AdaOS Research Fabric.
+
+Last reviewed: 2026-08-07.
+
+This roadmap sequences the implementation of the
+[AdaOS Research Fabric](research-fabric.md). TLP is the first reference case
+and conformance fixture. It is not a reason to put TLP-specific semantics into
+AdaOS core.
+
+## Outcome
+
+A clean AdaOS node can install and activate a general research manager plus
+optional MLflow and Ray providers through the existing skill/scenario
+lifecycle, run a locked and paired TLP study locally or on Ray, survive restart
+and provider failures, and export a portable evidence bundle from which the
+declared primary analysis can be reproduced.
+
+The outcome is infrastructure and evidence integrity. It does not predetermine
+that TLP will outperform MaxPool.
+
+## Priority and Maturity Rules
+
+- `[must]`: blocks the proof gate of the current milestone;
+- `[should]`: required before broad, repeated, or unattended use;
+- `[could]`: useful experiment that must not delay the current gate;
+- `[deferred]`: deliberately postponed until the named admission condition.
+
+Checkboxes report only the exact statement beside them:
+
+- `[x]` means the documented artifact or evidence exists at the stated
+  maturity;
+- `[ ]` means it is not complete or has not passed its evidence gate.
+
+Priority is independent from maturity. Use the repository-wide progression:
+
+```text
+hypothesis -> specified -> implemented -> integrated
+  -> validated-local -> validated-stand -> production-accepted
+```
+
+A schema draft is not an implemented capability. A successful run is not a
+scientific conclusion. A local demo is not production acceptance.
+
+## Planning Authority
+
+1. [AdaOS Research Fabric](research-fabric.md) owns the research-domain
+   boundary, invariants, provider roles, storage topology, and TLP reference
+   acceptance.
+2. This roadmap owns implementation order and evidence gates for the research
+   framework.
+3. [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
+   owns the generic workflow metamodel and executor semantics. This roadmap
+   owns the research workflow definition that consumes them.
+4. [Artifact Source, Package, and Activation Roadmap](artifact-source-package-activation-roadmap.md)
+   owns package, publication, activation, and rollback semantics. Research
+   skills and scenarios consume that path without inventing another installer.
+5. [Model Runtime Roadmap](model-runtime-roadmap.md) owns promoted model
+   artifacts, model backends, and generic `ModelJob` direction. This roadmap
+   owns trial/checkpoint evidence before model promotion.
+6. MLflow and Ray provider roadmaps, if later split out, own provider-specific
+   delivery details but cannot redefine the provider-neutral research model.
+7. A future general storage-capability architecture may take ownership of
+   relational/blob provisioning after the ARF conformance slice. Until then,
+   ARF2 owns the minimum requirements proven by research.
+8. The Issue Tracker owns concrete implementation runs and evidence links; it
+   does not redefine the architecture or mark gates complete by itself.
+
+## Guardrails
+
+- No `.adaos/research` top-level directory.
+- No `adaos research ...` install/runtime command family.
+- No direct access to MLflow or Ray private database schemas.
+- No separately installed DBMS per integration.
+- No claim that changing the current SQL connection string is PostgreSQL
+  support.
+- No retry that silently becomes another scientific sample.
+- No confirmatory use of the test set before its workflow gate.
+- No acceptance based only on a dashboard screenshot or notebook output.
+- No promotion of TLP-specific entities into core.
+- No autonomous claim acceptance or publication in the first framework.
+
+## Current Baseline
+
+| Capability | Repository baseline | Assessment |
+| --- | --- | --- |
+| Skill/scenario lifecycle | Package, install, activate, service-skill supervision, A/B runtime buckets | useful implemented foundation |
+| Workflow governance | Versioned governed workflow architecture and growing runtime | reusable authority; research workflow not defined |
+| Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | local foundation; not provider-neutral provisioning |
+| Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | correct local placement for provider state |
+| Database capability | Low-level `SQL.connect()`-style port | insufficient requirements, isolation, migration, backup, and binding semantics |
+| PostgreSQL | Not integrated into the core persistence path | target provider, not an implicit current capability |
+| Artifacts/models | Governed artifact pipeline and partial model-artifact control | reusable references; portable research evidence bundle absent |
+| Execution | Process sandbox and specialized background/job fragments | no common durable run/attempt/executor contract for research |
+| Tracking | No provider-neutral experiment tracker or MLflow service skill | open |
+| Distributed execution | No Ray provider | open |
+| Research domain | No canonical Study/Protocol/Trial/Evidence model | open |
+| TLP | Exploratory notebook and preliminary interpretation | valuable input; not reproducible confirmatory evidence |
+
+## Milestone Sequence
+
+| Milestone | Outcome | Current maturity | Horizon |
+| --- | --- | --- | --- |
+| ARF0 | Architecture, ownership, exclusions, and reference case are discoverable | `specified` | now |
+| ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `hypothesis` | next |
+| ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `hypothesis` | next |
+| ARF3 | Logical runs and physical attempts are durable and provider-neutral | `hypothesis` | next |
+| ARF4 | MLflow is a conforming optional tracker service skill | `hypothesis` | later |
+| ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
+| ARF6 | TLP passes the scientific and operational reference proof | `hypothesis` | later |
+| ARF7 | A second domain and operational hardening prove generality | `deferred` | long-term |
+| ARF8 | aResearcher adds governed agent assistance above the proven fabric | `deferred` | long-term |
+
+Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
+ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
+
+## ARF0. Architecture and Decision Baseline
+
+**Outcome:** one authoritative target design and one sequencing owner describe
+the research framework without claiming implementation.
+
+**Exit gate:** the documents are in navigation and the authority map, name
+current limitations honestly, and preserve existing AdaOS lifecycle and state
+ownership.
+
+- [x] `[must]` `ARF0-01` Define the Research Fabric target architecture,
+  provider boundaries, scientific invariants, and TLP reference acceptance in
+  [AdaOS Research Fabric](research-fabric.md).
+- [x] `[must]` `ARF0-02` Adopt `AdaOS Research Fabric` as the working
+  architecture name and reserve `aResearcher` for a future product/assistant
+  surface; defer final public identifiers until the first package slice.
+- [x] `[must]` `ARF0-03` Record that research uses existing skill, service
+  skill, scenario, governed-workflow, package, and activation paths without a
+  research-specific CLI or `.adaos/research` tree.
+- [x] `[must]` `ARF0-04` Define MLflow as an optional typed tracker and Ray as
+  an optional executor, with AdaOS retaining protocol, workflow, and evidence
+  authority.
+- [x] `[must]` `ARF0-05` Define SQLite as the local default and PostgreSQL as a
+  future scoped capability/provider rather than one DBMS per component.
+- [x] `[must]` `ARF0-06` Register the architecture and roadmap in the
+  architecture navigation and planning authority map.
+- [x] `[should]` `ARF0-07` Record the preliminary TLP notebook limitations and
+  the clean-room protocol requirements without treating historical outputs as
+  confirmatory evidence.
+- [x] `[deferred]` `ARF0-08` Do not select an autonomous research-agent design
+  before the deterministic framework and evidence gates exist.
+
+## ARF1. Local Research Kernel and TLP Skeleton
+
+**Outcome:** a minimal research-manager skill can describe and govern a study
+end to end using only local providers.
+
+**Admission gate:** ARF0 is complete.
+
+**Exit proof:** contract and workflow tests create a TLP study, lock a protocol,
+materialize paired trial specs, execute a no-training fixture, ingest typed
+observations, enforce test access, and export an evidence bundle after restart.
+
+- [ ] `[must]` `ARF1-01` Define versioned schemas for `Study`, `Hypothesis`,
+  `Protocol`, `AnalysisPlan`, `TrialGroup`, `Trial`, `Run`,
+  `ExecutionAttempt`, `Observation`, `EvidenceBundle`, and `ClaimDecision`.
+- [ ] `[must]` `ARF1-02` Define immutable identity and digest rules, including
+  protocol, analysis plan, code/package, environment, dataset, split,
+  operator, trial, run, attempt, and evidence identities.
+- [ ] `[must]` `ARF1-03` Define protocol amendment semantics that create a new
+  version, preserve lineage, and explicitly invalidate or retain prior trials.
+- [ ] `[must]` `ARF1-04` Implement the research lifecycle as a package-bound
+  governed workflow with review, lock, smoke, execution, QC, test-unblind,
+  analysis, and claim-review gates.
+- [ ] `[must]` `ARF1-05` Implement a research-manager service skill through the
+  existing skill lifecycle; keep mutable state in its versioned runtime data
+  area.
+- [ ] `[must]` `ARF1-06` Implement a minimal local tracker that satisfies the
+  initial typed tracker contract without requiring MLflow.
+- [ ] `[must]` `ARF1-07` Implement a local fixture executor sufficient to prove
+  scientific run identity separately from physical attempt identity.
+- [ ] `[must]` `ARF1-08` Define named RNG stream descriptors for initialization,
+  data ordering, augmentation, operator initialization, and analysis; reject
+  undeclared stochastic inputs in confirmatory mode.
+- [ ] `[must]` `ARF1-09` Implement sealed test bindings and auditable unblind
+  transitions. Validation and robustness suites must not alias the sealed test
+  source accidentally.
+- [ ] `[must]` `ARF1-10` Define a portable, versioned evidence manifest with
+  content-addressed references and a deterministic verification command or SDK
+  operation.
+- [ ] `[must]` `ARF1-11` Package a TLP study scenario skeleton with protocol,
+  analysis-plan, trial-matrix, and evidence fixtures; do not copy executable
+  notebook state into the scenario.
+- [ ] `[should]` `ARF1-12` Add schema migration fixtures and backward/forward
+  compatibility policy for research-manager runtime buckets.
+- [ ] `[should]` `ARF1-13` Add property/model-based tests for illegal workflow
+  transitions, stale generations, duplicate commands, amendments, and evidence
+  finalization.
+- [ ] `[could]` `ARF1-14` Import selected notebook cells as explicitly marked
+  exploratory provenance artifacts after sanitization and digesting.
+
+## ARF2. Relational Storage Capability
+
+**Outcome:** components request relational persistence by requirements and
+receive isolated bindings; provider lifecycle and schema ownership are
+explicit.
+
+**Admission gate:** ARF1 has exposed concrete local persistence requirements.
+
+**Exit proof:** the research-manager and tracker conformance fixtures run
+against provisioned SQLite bindings; the same binding contract provisions an
+isolated PostgreSQL test scope and passes migration plus backup/restore tests
+without cross-owner table access.
+
+- [ ] `[must]` `ARF2-01` Inventory current `SQL`, SQLite repository, path,
+  transaction, migration, and backup assumptions before changing the port.
+- [ ] `[must]` `ARF2-02` Write the provider-neutral storage decision record
+  for `RelationalStorageRequirement`, `RelationalBinding`, provider readiness,
+  secret references, ownership, and lifecycle.
+- [ ] `[must]` `ARF2-03` Include durability, transaction, concurrent-writer,
+  JSON, locality, capacity, backup/restore, retention, migration-owner,
+  rollback, and role requirements in the binding contract.
+- [ ] `[must]` `ARF2-04` Implement a local SQLite provider that places
+  component-owned files or binding metadata under the owning skill's
+  `data/db`, with safe locking and atomic initialization.
+- [ ] `[must]` `ARF2-05` Make schema migrations owner-supplied, versioned,
+  idempotent where required, staged before activation, and covered by rollback
+  or restore policy.
+- [ ] `[must]` `ARF2-06` Keep credentials behind AdaOS secret references and
+  expose only scoped bindings to the owning component.
+- [ ] `[must]` `ARF2-07` Add provider conformance tests for isolation,
+  transactions, contention, migration failure, disk exhaustion, backup,
+  restore, and deletion/retention policy.
+- [ ] `[should]` `ARF2-08` Implement a PostgreSQL provider using one
+  operator-managed cluster per deployment profile and isolated logical
+  database/schema plus role per migration owner.
+- [ ] `[should]` `ARF2-09` Add PostgreSQL health, connection-pool limits,
+  credential rotation, backup/restore, and upgrade evidence to the service
+  lifecycle.
+- [ ] `[should]` `ARF2-10` Run research-manager and local-tracker repository
+  tests against both SQLite and PostgreSQL; document any deliberately
+  unsupported dialect behavior.
+- [ ] `[could]` `ARF2-11` Define a companion blob/object-storage requirement
+  and binding for large immutable evidence and checkpoints.
+- [ ] `[deferred]` `ARF2-12` Do not migrate all existing core SQLite
+  repositories until provider-neutral repository boundaries and measured
+  concurrency or operations needs justify it.
+- [ ] `[deferred]` `ARF2-13` Do not offer one shared writable SQL schema across
+  core, research manager, MLflow, and other skills.
+
+## ARF3. Durable Execution and Local Provider
+
+**Outcome:** AdaOS can distinguish a scientific run from provider attempts and
+reconcile long-running work without inventing a second workflow authority.
+
+**Admission gate:** ARF1 contracts exist; ARF2 supplies durable local bindings
+or an explicitly temporary compatibility repository.
+
+**Exit proof:** a local training fixture can be submitted idempotently, report
+heartbeats/logs/observations, checkpoint, be interrupted across AdaOS restart,
+reconcile an unknown outcome, resume as a new attempt of the same run, and
+cancel with an auditable terminal state.
+
+- [ ] `[must]` `ARF3-01` Align `ExecutionSpec`, `Run`, `ExecutionAttempt`,
+  `ResourceRequest`, lease, heartbeat, cancellation, checkpoint, and failure
+  contracts with governed workflow activity semantics and the model-job
+  direction.
+- [ ] `[must]` `ARF3-02` Define immutable entrypoint, package, input, output,
+  environment, resource, network, secret, and determinism fields in an
+  execution specification.
+- [ ] `[must]` `ARF3-03` Implement submission idempotency and an explicit
+  `unknown` outcome that requires provider reconciliation before retry.
+- [ ] `[must]` `ARF3-04` Persist provider binding, status history, heartbeat,
+  logs, failure classification, cancellation handshake, timestamps, and
+  resource observations per attempt.
+- [ ] `[must]` `ARF3-05` Preserve logical run/trial identity across
+  infrastructure retries; record when policy intentionally requests a new
+  scientific sample.
+- [ ] `[must]` `ARF3-06` Define checkpoint manifests with parent digest,
+  producer attempt, code/environment compatibility, RNG state, and resume
+  policy.
+- [ ] `[must]` `ARF3-07` Implement a local provider adapter with bounded CPU,
+  memory, wall time, logs, cancellation, and declared outputs.
+- [ ] `[must]` `ARF3-08` Add recovery and fault-injection tests for crash before
+  and after submit, lost heartbeat, duplicate callback, partial artifact,
+  cancellation race, and AdaOS restart.
+- [ ] `[should]` `ARF3-09` Add accelerator inventory and allocation contracts
+  for GPU count/type, memory, exclusivity, and readiness without leaking a Ray
+  object into skill APIs.
+- [ ] `[should]` `ARF3-10` Add a stronger container/OCI-backed provider before
+  running third-party or agent-generated code unattended; document the process
+  runner as non-hostile isolation.
+- [ ] `[should]` `ARF3-11` Define admission budgets for attempts, compute time,
+  storage, and monetary cost with fail-closed enforcement.
+- [ ] `[could]` `ARF3-12` Add preemption-aware scheduling once checkpoints and
+  attempt identity are proven locally.
+
+## ARF4. Tracker Contract and MLflow Provider
+
+**Outcome:** MLflow can be installed and activated as an ordinary service skill
+and swapped with the local tracker without changing study semantics.
+
+**Admission gate:** ARF1 tracker semantics and ARF2 binding semantics are
+stable enough for provider conformance.
+
+**Exit proof:** one paired fixture produces equivalent normalized observations
+and evidence exports with the local tracker and MLflow. MLflow may be stopped,
+restarted, and reconciled without losing or silently accepting confirmatory
+observations.
+
+- [ ] `[must]` `ARF4-01` Freeze the provider-neutral tracker contract for
+  experiment/run registration, parameters, metrics, tags, artifact refs,
+  finalization, query, export, health, and provider links.
+- [ ] `[must]` `ARF4-02` Define normalized metric identity including name,
+  value type, unit, split, step/epoch, aggregation, timestamp role, producer
+  attempt, and provenance.
+- [ ] `[must]` `ARF4-03` Package an `mlflow-tracker` service skill using the
+  existing install, activate, status, restart, and rollback lifecycle.
+- [ ] `[must]` `ARF4-04` Use MLflow's supported REST API or SDK only; prohibit
+  direct queries and migrations against MLflow backend tables.
+- [ ] `[must]` `ARF4-05` Map AdaOS study, protocol, trial-group, trial, run,
+  attempt, source, environment, data, trace, and evidence identities to
+  documented MLflow tags/artifacts.
+- [ ] `[must]` `ARF4-06` Start the local provider with backend metadata under
+  the service skill's `data/db` and artifacts under `data/files`; do not add a
+  top-level research or MLflow directory.
+- [ ] `[must]` `ARF4-07` Implement bounded buffering, backpressure, duplicate
+  handling, degraded status, flush, and explicit terminal failure for required
+  observations.
+- [ ] `[must]` `ARF4-08` Export all evidence-required MLflow data into a
+  versioned, content-addressed AdaOS evidence bundle and verify the export
+  independently of the live server.
+- [ ] `[must]` `ARF4-09` Add tracker conformance tests covering ordering,
+  duplicate steps, retries, missing provider, restart, large artifact,
+  finalization, export, and deletion after evidence acceptance.
+- [ ] `[should]` `ARF4-10` Support a provisioned PostgreSQL backend binding and
+  a provisioned object/blob artifact binding without exposing either schema to
+  the research manager.
+- [ ] `[should]` `ARF4-11` Support externally managed MLflow through an
+  authenticated service binding and capability/version probe.
+- [ ] `[should]` `ARF4-12` Register an optional generic service UI surface for
+  MLflow behind AdaOS routing, access policy, origin/CSP controls, health, and
+  lifecycle handling.
+- [ ] `[could]` `ARF4-13` Embed the advanced MLflow UI in an iframe only after
+  the governed same-origin/proxy path passes authentication and browser tests.
+- [ ] `[deferred]` `ARF4-14` Do not use MLflow Model Registry as the automatic
+  AdaOS model-promotion authority; integrate promotion with the owning model
+  runtime contract later.
+
+## ARF5. Ray Executor Provider
+
+**Outcome:** the same immutable trial/run can execute through Ray while AdaOS
+retains identity, workflow, and evidence authority.
+
+**Admission gate:** ARF3 executor conformance and attempt recovery are proven
+locally.
+
+**Exit proof:** a multi-worker fixture executes on Ray, streams normalized
+status/logs/observations, survives worker and AdaOS restart scenarios,
+reconciles an unknown submission, cancels correctly, and produces the same
+evidence analysis as the local provider.
+
+- [ ] `[must]` `ARF5-01` Package a `ray-executor` service skill or external
+  provider adapter through the existing skill lifecycle and service discovery.
+- [ ] `[must]` `ARF5-02` Integrate through the supported Ray Jobs API/client;
+  keep Ray task, actor, and object references behind the adapter boundary.
+- [ ] `[must]` `ARF5-03` Bind AdaOS attempt idempotency keys to stable provider
+  submission metadata and reconcile before retry after ambiguous responses.
+- [ ] `[must]` `ARF5-04` Map provider states into normalized queued, running,
+  cancelling, succeeded, failed, cancelled, lost, and unknown semantics with
+  raw diagnostic details retained.
+- [ ] `[must]` `ARF5-05` Implement log/status collection, cancellation,
+  heartbeat/liveness, terminal outputs, and checkpoint references without
+  relying on the Ray Dashboard as an API.
+- [ ] `[must]` `ARF5-06` Map CPU, memory, GPU, accelerator, placement, and
+  environment requirements with explicit rejection for unsupported requests.
+- [ ] `[must]` `ARF5-07` Ensure workers receive only scoped secrets and
+  preassigned AdaOS/tracker identities; do not let workers invent study/run
+  identity.
+- [ ] `[must]` `ARF5-08` Add fault-injection tests for duplicate submit, head
+  loss, worker loss, network partition, delayed status, checkpoint failure,
+  cancellation race, and tracker outage.
+- [ ] `[should]` `ARF5-09` Support authenticated external Ray clusters through
+  an executor binding before automating a local managed cluster lifecycle.
+- [ ] `[should]` `ARF5-10` Support Ray Tune only for an explicitly exploratory
+  search space, scheduler, resource/time budget, and lineage export; chosen
+  candidates require a new locked confirmatory protocol.
+- [ ] `[should]` `ARF5-11` Expose Ray Dashboard only as an access-controlled
+  operator/debug service UI surface.
+- [ ] `[could]` `ARF5-12` Add data locality and gang-placement optimizations
+  after correctness and recovery evidence exists.
+
+## ARF6. TLP Reference Proof
+
+**Outcome:** TLP validates scientific reproducibility, provider portability,
+failure recovery, evidence integrity, and useful inspection across the full
+fabric.
+
+**Admission gate:** ARF1 and ARF3 are validated locally. ARF4 and ARF5 are
+required for their respective provider portability sub-gates, not for the
+first local scientific pilot.
+
+**Exit proof:** a clean install executes the locked paired study; the evidence
+verifier independently reconstructs the primary analysis; local and Ray runs
+have equivalent semantics; native AdaOS views and optional MLflow views resolve
+to the same identities; and a reviewer records an accepted, rejected,
+inconclusive, or follow-up decision without relying on notebook state.
+
+### Operator and package
+
+- [ ] `[must]` `ARF6-01` Extract one canonical TLP implementation into a
+  versioned package with no notebook-defined runtime operator variants.
+- [ ] `[must]` `ARF6-02` Use a centered spatial-kernel parameterization and an
+  explicit scalar level term if scientifically required; document the
+  identifiability rationale.
+- [ ] `[must]` `ARF6-03` Prove zero shape parameters reproduce ordinary MaxPool
+  within declared tolerance across supported shapes, strides, padding, dtypes,
+  and devices.
+- [ ] `[must]` `ARF6-04` Add forward, gradient, tie, serialization,
+  determinism, CPU/GPU parity, invalid-input, and property tests.
+- [ ] `[must]` `ARF6-05` Package data preparation, model definitions, training,
+  evaluation, analysis, and visualizations as testable components referenced
+  by the study scenario.
+
+### Protocol and statistics
+
+- [ ] `[must]` `ARF6-06` Create immutable dataset and split manifests with
+  train/validation/test separation and digest verification.
+- [ ] `[must]` `ARF6-07` Freeze a deterministic evaluation suite and a
+  separately named, fixed robustness-transform suite; prohibit stochastic
+  transforms in ordinary test evaluation.
+- [ ] `[must]` `ARF6-08` Declare the primary hypothesis, estimand/contrast,
+  metric, effect size, uncertainty interval, exclusion rule, multiplicity
+  treatment, failure/missing-data policy, and stop rule before execution.
+- [ ] `[must]` `ARF6-09` Justify confirmatory sample size from pilot variance,
+  power/sequential policy, and compute budget; treat ten paired seeds only as
+  an initial engineering floor when appropriate.
+- [ ] `[must]` `ARF6-10` Pair TLP and MaxPool variants by split,
+  initialization lineage, data order, augmentation, and named RNG streams.
+- [ ] `[must]` `ARF6-11` Include ordinary MaxPool, parameter-count controls,
+  and scientifically relevant fixed/constrained morphological baselines.
+- [ ] `[must]` `ARF6-12` Seal test access until protocol, smoke, completeness,
+  and QC gates pass; record every unblind and protocol version.
+
+### Mechanism and evidence
+
+- [ ] `[must]` `ARF6-13` Record layer/seed kernel shapes, winner-position
+  distributions, entropy, activation/gradient statistics, and shift
+  sensitivity with versioned metric definitions.
+- [ ] `[must]` `ARF6-14` Run predeclared centering, freezing, permutation, and
+  removal ablations that can distinguish learned phase bias from parameter
+  count or optimization effects.
+- [ ] `[must]` `ARF6-15` Produce a portable evidence bundle containing protocol,
+  analysis plan, trial matrix, normalized observations, provider exports,
+  code/environment/data/operator digests, artifacts, exclusions, and analysis
+  output.
+- [ ] `[must]` `ARF6-16` Recompute the primary comparison in a clean verifier
+  environment without a live MLflow or Ray dependency.
+- [ ] `[must]` `ARF6-17` Demonstrate restart/reconciliation and one deliberate
+  worker failure without changing the scientific sample identity.
+- [ ] `[must]` `ARF6-18` Present protocol, paired progress, QC, comparisons,
+  mechanisms, evidence, and claim actions in a native AdaOS Research Workbench.
+- [ ] `[must]` `ARF6-19` Record the reviewer decision as accepted, rejected,
+  inconclusive, or follow-up-required with evidence and rationale; do not make
+  framework acceptance depend on a positive TLP result.
+- [ ] `[should]` `ARF6-20` Repeat a representative subset on a second hardware
+  profile and record numerical/performance portability limits.
+- [ ] `[should]` `ARF6-21` Compare local-tracker/local-executor results with
+  MLflow/Ray normalized exports through provider conformance assertions.
+- [ ] `[could]` `ARF6-22` Generate a paper/report draft from the accepted
+  evidence manifest, with every table and figure linked to an analysis digest.
+- [ ] `[deferred]` `ARF6-23` Do not import existing notebook outputs as
+  confirmatory trials; retain them only as exploratory provenance.
+
+## ARF7. Generalization and Operational Hardening
+
+**Outcome:** the fabric is demonstrably general and operable beyond the TLP
+pilot before research-domain contracts are promoted into core.
+
+**Admission gate:** ARF6 has a reproducible local proof and documented gaps.
+
+**Exit proof:** a second non-TLP study uses the same stable contracts, backup
+and restore pass on a PostgreSQL-backed deployment, provider failure and load
+tests meet declared SLOs, and each proposed core promotion has compatibility
+evidence from both domains.
+
+- [ ] `[must]` `ARF7-01` Select a second case with materially different data,
+  execution, and analysis shape, such as simulation, retrieval evaluation, or
+  a device experiment.
+- [ ] `[must]` `ARF7-02` Run the second case without changing candidate core
+  contracts; record which research-skill schemas legitimately remain
+  domain-specific.
+- [ ] `[must]` `ARF7-03` Review every proposed core promotion against two-case
+  reuse, provider conformance, migration ownership, and overlap with workflow,
+  model, artifact, event, and UI authorities.
+- [ ] `[must]` `ARF7-04` Exercise PostgreSQL backup, point-in-time or declared
+  restore policy, credential rotation, migration failure, and owner isolation
+  on a representative deployment.
+- [ ] `[must]` `ARF7-05` Define SLOs and run soak/load/failure tests for tracker
+  ingestion, scheduler reconciliation, artifact export, restart, and evidence
+  verification.
+- [ ] `[must]` `ARF7-06` Add access-control and audit evidence for study roles,
+  test unblinding, provider admin surfaces, secrets, and remote execution.
+- [ ] `[should]` `ARF7-07` Add content-addressed object/blob storage for large
+  artifacts with retention, quota, garbage collection, and accepted-evidence
+  protection.
+- [ ] `[should]` `ARF7-08` Add OpenTelemetry-compatible trace export and
+  OpenLineage-compatible dataset/job events while preserving AdaOS identities
+  without those services.
+- [ ] `[should]` `ARF7-09` Add multi-user proposal/review concurrency only after
+  identity, authorization, expected-generation, and audit semantics pass the
+  owning architecture gates.
+- [ ] `[should]` `ARF7-10` Publish a provider compatibility matrix and recovery
+  playbook for supported SQLite/PostgreSQL, local/MLflow, and local/Ray
+  combinations.
+- [ ] `[could]` `ARF7-11` Add additional tracker or executor adapters to test
+  portability rather than to maximize integration count.
+- [ ] `[deferred]` `ARF7-12` Do not declare research-domain schemas stable core
+  ABI based on the TLP case alone.
+
+## ARF8. aResearcher Assistance Layer
+
+**Outcome:** agent assistance increases research throughput above a proven,
+deterministic, governed substrate without becoming an unreviewed source of
+scientific truth.
+
+**Admission gate:** ARF7 establishes two-domain reproducibility, budgets,
+access control, and measurable framework baselines.
+
+**Exit proof:** blinded evaluation shows that agent-assisted proposals and
+analyses improve declared quality/efficiency metrics without increased test
+leakage, unsupported claims, budget violations, or irreproducible evidence.
+
+- [ ] `[deferred]` `ARF8-01` Add `aResearcher` as a product/assistant surface
+  over Research Fabric APIs, not as a privileged alternate runtime.
+- [ ] `[deferred]` `ARF8-02` Add literature retrieval with source identity,
+  quotation limits, claim-to-source links, and snapshot provenance.
+- [ ] `[deferred]` `ARF8-03` Let agents propose hypotheses, protocols,
+  experiment trees, analyses, and follow-ups only as versioned candidates
+  subject to the same validation and approval gates as human proposals.
+- [ ] `[deferred]` `ARF8-04` Add independent planner, executor, analyst, and
+  critic roles only when evaluations show a benefit over a simpler single
+  assistant workflow.
+- [ ] `[deferred]` `ARF8-05` Enforce compute, cost, trial-count, time, data
+  access, and tool budgets before unattended exploration.
+- [ ] `[deferred]` `ARF8-06` Prevent the assistant from unblinding test data,
+  amending locked protocols, accepting claims, promoting models, or publishing
+  results without the configured human/policy authority.
+- [ ] `[deferred]` `ARF8-07` Evaluate proposal novelty, protocol validity,
+  execution success, analysis correctness, citation support, reproducibility,
+  and cost on frozen tasks with contamination controls.
+- [ ] `[deferred]` `ARF8-08` Generate narrative reports only from verified
+  evidence references and mark interpretations that are not direct protocol
+  outputs.
+
+## Cross-Cutting Evidence Matrix
+
+| Gate | Minimum evidence |
+| --- | --- |
+| Contract | Versioned schema snapshots, compatibility tests, invalid fixtures |
+| Local integration | Clean-node install/activate record, deterministic fixture, restart test |
+| Storage | Isolation, migration, backup/restore, contention, secret-rotation tests |
+| Tracker | Provider conformance, outage/restart, normalized export verification |
+| Executor | Idempotent submit, unknown reconciliation, cancellation, checkpoint, fault injection |
+| Scientific | Locked protocol/analysis plan, paired trial manifest, QC/exclusions, independent recomputation |
+| UI | Native state/action contract tests; provider UI access and auth tests if enabled |
+| Stand | Environment identity, SLO/load/failure report, residual risks |
+| Production | Explicit human acceptance and rollback/recovery evidence |
+
+## Definition of Framework MVP
+
+Research Fabric MVP is complete only when all of the following are true:
+
+- ARF1 and ARF3 `[must]` items are `validated-local`;
+- the local TLP proof covers ARF6 operator, protocol, evidence, restart, native
+  UI, and reviewer-decision requirements;
+- MLflow and Ray remain optional and their absence does not prevent the local
+  proof;
+- provider-specific claims are made only after ARF4 or ARF5 conformance gates;
+- PostgreSQL is not called supported until ARF2 PostgreSQL conformance and
+  backup/restore evidence pass;
+- documentation and manifests contain no research-specific installation CLI,
+  `.adaos/research` state root, direct provider-schema access, or accidental
+  test unblinding.
+
+ARF7 and ARF8 are not MVP requirements. ARF7 is the gate for broader platform
+claims and core promotion; ARF8 is the gate for an autonomous-assistance
+product claim.
+
+## Related Plans
+
+- [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
+- [Artifact Source, Package, and Activation Roadmap](artifact-source-package-activation-roadmap.md)
+- [Model Runtime Roadmap](model-runtime-roadmap.md)
+- [Operational Event Model Roadmap](operational-event-model-roadmap.md)
+- [Projection Subscription Roadmap](projection-subscription-roadmap.md)
+- [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)

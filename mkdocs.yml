@@ -183,6 +183,8 @@ nav:
       - Operational Event Model Roadmap: architecture/operational-event-model-roadmap.md
       - Model Runtime and Registry: architecture/model-runtime-and-registry.md
       - Model Runtime Roadmap: architecture/model-runtime-roadmap.md
+      - AdaOS Research Fabric: architecture/research-fabric.md
+      - Research Fabric Roadmap: architecture/research-fabric-roadmap.md
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
@@ -231,6 +233,7 @@ nav:
   - Roadmap:
       - Planning Authority: architecture/roadmap-inventory.md
       - Governed Evolution: architecture/governed-evolution-roadmap.md
+      - Research Fabric: architecture/research-fabric-roadmap.md
       - MVP Roadmap: mvp_roadmap.md
       - Historical Roadmap (2025): roadmap.md
       - Historical LLM Skill Creation: llm-skill-creation-roadmap.md
