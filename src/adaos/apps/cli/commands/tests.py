@@ -127,6 +127,7 @@ def _prune_duplicate_skill_tests(paths: List[str]) -> List[str]:
         except Exception:
             pp = _P(p)
         parts = pp.parts
+        matched_skill_path = False
         try:
             # find pattern .../src/skills/<name>/(runtime/)?tests
             if "src" in parts and "skills" in parts:
@@ -136,8 +137,10 @@ def _prune_duplicate_skill_tests(paths: List[str]) -> List[str]:
                 if name:
                     base = _P(*parts[: sk + 2])  # up to src/skills/<name>
                     grouped.setdefault(str(base), set()).add(str(pp))
+                    matched_skill_path = True
         except ValueError:
-            # not a skill path; keep as-is
+            pass
+        if not matched_skill_path:
             grouped.setdefault("__other__", set()).add(str(pp))
 
     keep: set[str] = set()
@@ -186,8 +189,6 @@ def _run_one_group(
     pytest_args = [
         "-q",
         "--strict-markers",
-        "-o",
-        "markers=asyncio: mark asyncio tests",
         "-o",
         "importmode=importlib",  # avoid import file mismatch when duplicate basenames exist
         *paths,
@@ -260,7 +261,8 @@ def _run_one_group(
         # preserve user's opts and ensure our importmode survives
         extra_env["PYTEST_ADDOPTS"] = addopts
     cmd = [(venv_python or py_exec), *([] if venv_python else py_prefix), "-m", "pytest", *pytest_args]
-    return _sandbox_run(cmd, cwd=base_dir, extra_env=extra_env, use_sandbox=use_sandbox)
+    test_cwd = Path(ctx.paths.repo_root()).resolve() if ctx is not None else base_dir
+    return _sandbox_run(cmd, cwd=test_cwd, extra_env=extra_env, use_sandbox=use_sandbox)
 
 
 def _mk_sandbox(base_dir: Path, profile: str = "tool"):
@@ -498,7 +500,7 @@ def run_tests(
     # ctx уже читает настройки с учётом только что установленного ADAOS_BASE_DIR
     ctx = get_ctx()
     base_dir = Path(os.environ["ADAOS_BASE_DIR"])
-    repo_root = Path(".").resolve()
+    repo_root = Path(ctx.paths.repo_root()).resolve()
     pytest_paths: List[str] = []
     # 1) Подготовка dev venv (однократно), затем используем его python
     if bootstrap and sandbox:
@@ -587,7 +589,7 @@ def run_tests(
         addopts_parts += ["-m", marker]
     if extra:
         addopts_parts += extra
-    addopts_str = " ".join(addopts_parts).strip()
+    addopts_str = subprocess.list2cmdline(addopts_parts).strip()
 
     # 5) Прогон по группам (каждую — через venv_python)
     overall_code = 0
