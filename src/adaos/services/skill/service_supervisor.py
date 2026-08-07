@@ -720,10 +720,21 @@ class ServiceSkillSupervisor:
             return
 
         if proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            # Service entrypoints may supervise their own child process (for
+            # example an MLflow/Uvicorn server).  Terminating only the tracked
+            # launcher can leave a healthy orphan on the configured port; the
+            # next start then misclassifies that endpoint as external.  Stop
+            # the complete owned tree while we still know its root PID.
+            terminated_tree = await asyncio.to_thread(
+                _terminate_process_tree,
+                int(proc.pid),
+                timeout_s=timeout_s,
+            )
+            if not terminated_tree:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
 
             deadline = time.time() + timeout_s
             while time.time() < deadline and proc.poll() is None:

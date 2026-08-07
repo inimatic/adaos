@@ -462,6 +462,42 @@ def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
     assert status["external_ready"] is True
 
 
+def test_service_supervisor_stop_terminates_owned_process_tree(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    alive = True
+    terminated: list[tuple[int, float]] = []
+
+    class _Proc:
+        pid = 9129
+
+        def poll(self):
+            return None if alive else 0
+
+        def terminate(self):
+            raise AssertionError("tree termination should handle the tracked process")
+
+        def kill(self):
+            raise AssertionError("tree termination should handle the tracked process")
+
+    def _terminate(pid: int, *, timeout_s: float) -> bool:
+        nonlocal alive
+        terminated.append((pid, timeout_s))
+        alive = False
+        return True
+
+    monkeypatch.setattr(mod, "_terminate_process_tree", _terminate)
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._procs["nested_service"] = _Proc()
+    supervisor._proc_specs["nested_service"] = ("old",)
+
+    asyncio.run(supervisor.stop("nested_service", timeout_s=1.25))
+
+    assert terminated == [(9129, 1.25)]
+    assert "nested_service" not in supervisor._procs
+    assert "nested_service" not in supervisor._proc_specs
+
+
 def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod
