@@ -272,6 +272,38 @@ def _coerce_json_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _data_node_branch(data_map: Any, node_key: str) -> tuple[Any, dict[str, Any]]:
+    nodes_value = data_map.get("nodes")
+    if (
+        not isinstance(nodes_value, (dict, str))
+        and callable(getattr(nodes_value, "get", None))
+        and callable(getattr(nodes_value, "set", None))
+    ):
+        return nodes_value, _coerce_json_dict(nodes_value.get(node_key))
+    return nodes_value, _coerce_json_dict(_coerce_json_dict(nodes_value).get(node_key))
+
+
+def _set_data_node_branch(
+    data_map: Any,
+    txn: Any,
+    *,
+    nodes_value: Any,
+    node_key: str,
+    node_state: dict[str, Any],
+) -> str:
+    if (
+        not isinstance(nodes_value, (dict, str))
+        and callable(getattr(nodes_value, "get", None))
+        and callable(getattr(nodes_value, "set", None))
+    ):
+        nodes_value.set(txn, node_key, node_state)
+        return "node_branch"
+    nodes = _coerce_json_dict(nodes_value)
+    nodes[node_key] = node_state
+    data_map.set(txn, "nodes", nodes)
+    return "nodes_envelope"
+
+
 def _member_infrastate_webspaces() -> list[str]:
     raw = str(os.getenv("ADAOS_SUBNET_YJS_REPLICATION_WEBSPACES") or "desktop").strip()
     out: list[str] = []
@@ -1169,8 +1201,7 @@ class HubLinkManager:
 
             def _merge_projection(ydoc: Any, txn: Any) -> None:
                 data_map = ydoc.get_map("data")
-                nodes = _coerce_json_dict(data_map.get("nodes"))
-                node_state = _coerce_json_dict(nodes.get(node_key))
+                nodes_value, node_state = _data_node_branch(data_map, node_key)
                 existing_projection = _coerce_json_dict(node_state.get("infrastate"))
                 if existing_projection == projection_copy or _member_infrastate_projection_material_matches(
                     existing_projection,
@@ -1178,8 +1209,13 @@ class HubLinkManager:
                 ):
                     return
                 node_state["infrastate"] = projection_copy
-                nodes[node_key] = node_state
-                data_map.set(txn, "nodes", nodes)
+                _set_data_node_branch(
+                    data_map,
+                    txn,
+                    nodes_value=nodes_value,
+                    node_key=node_key,
+                    node_state=node_state,
+                )
 
             live_scheduled = mutate_live_room(
                 ws_id,
@@ -1201,8 +1237,7 @@ class HubLinkManager:
                     ):
                         async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
                             data_map = ydoc.get_map("data")
-                            nodes = _coerce_json_dict(data_map.get("nodes"))
-                            node_state = _coerce_json_dict(nodes.get(node_key))
+                            nodes_value, node_state = _data_node_branch(data_map, node_key)
                             existing_projection = _coerce_json_dict(node_state.get("infrastate"))
                             if existing_projection == projection_copy or _member_infrastate_projection_material_matches(
                                 existing_projection,
@@ -1212,9 +1247,14 @@ class HubLinkManager:
                                 self._member_infrastate_projection_last_at[cache_key] = now
                                 continue
                             node_state["infrastate"] = projection_copy
-                            nodes[node_key] = node_state
                             with ydoc.begin_transaction() as txn:
-                                data_map.set(txn, "nodes", nodes)
+                                _set_data_node_branch(
+                                    data_map,
+                                    txn,
+                                    nodes_value=nodes_value,
+                                    node_key=node_key,
+                                    node_state=node_state,
+                                )
                 except Exception:
                     self._member_infrastate_projection_failed_total += 1
                     _log.debug(
@@ -1748,15 +1788,19 @@ class HubLinkManager:
 
         def _merge_node_state(ydoc: Any, txn: Any) -> None:
             data_map = ydoc.get_map("data")
-            nodes = _coerce_json_dict(data_map.get("nodes"))
-            existing_state = nodes.get(node_key)
+            nodes_value, existing_state = _data_node_branch(data_map, node_key)
             merged_state = _member_node_state_for_ingest(existing_state, state_copy)
             if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
                 if state_fingerprint:
                     self._member_node_state_fingerprints[cache_key] = state_fingerprint
                 return
-            nodes[node_key] = merged_state
-            data_map.set(txn, "nodes", nodes)
+            _set_data_node_branch(
+                data_map,
+                txn,
+                nodes_value=nodes_value,
+                node_key=node_key,
+                node_state=merged_state,
+            )
             if state_fingerprint:
                 self._member_node_state_fingerprints[cache_key] = state_fingerprint
 
@@ -1789,16 +1833,20 @@ class HubLinkManager:
             ):
                 async with async_get_ydoc(ws_id, load_mark_roots=["data"], governed=True) as ydoc:
                     data_map = ydoc.get_map("data")
-                    nodes = _coerce_json_dict(data_map.get("nodes"))
-                    existing_state = nodes.get(node_key)
+                    nodes_value, existing_state = _data_node_branch(data_map, node_key)
                     merged_state = _member_node_state_for_ingest(existing_state, state_copy)
                     if existing_state == merged_state or _member_node_state_material_matches(existing_state, merged_state):
                         if state_fingerprint:
                             self._member_node_state_fingerprints[cache_key] = state_fingerprint
                         return
-                    nodes[node_key] = merged_state
                     with ydoc.begin_transaction() as txn:
-                        data_map.set(txn, "nodes", nodes)
+                        _set_data_node_branch(
+                            data_map,
+                            txn,
+                            nodes_value=nodes_value,
+                            node_key=node_key,
+                            node_state=merged_state,
+                        )
                     if state_fingerprint:
                         self._member_node_state_fingerprints[cache_key] = state_fingerprint
             self._yjs_live_apply_total += 1

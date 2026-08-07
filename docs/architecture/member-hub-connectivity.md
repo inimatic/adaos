@@ -109,6 +109,10 @@ skill and node state into its local Yjs/YStore under:
 The hub receives that state over the member link as `yjs.node_state` and merges
 only that member-owned branch into the hub-side webspace document. This semantic
 merge avoids clobbering sibling nodes in the shared `data.nodes` envelope.
+When `data.nodes` is a shared YMap, both state ingestion and hub-owned
+infrastate projection update `data.nodes/<member_node_id>` directly; they must
+not decode and rewrite the complete nodes envelope, because its cost grows with
+unrelated members and can block the realtime event loop.
 
 The hub owns:
 

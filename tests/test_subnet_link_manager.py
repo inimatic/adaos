@@ -612,6 +612,54 @@ def test_member_node_state_material_match_ignores_volatile_timestamps() -> None:
     assert not mod._member_node_state_material_matches(existing, incoming)
 
 
+def test_member_node_branch_write_does_not_replace_shared_nodes_envelope() -> None:
+    class _SharedMap:
+        def __init__(self) -> None:
+            self.data = {
+                "member-1": {"desktop": {"theme": "dark"}},
+                "sibling": {"large": "x" * 100_000},
+            }
+            self.set_calls: list[tuple[object, str, object]] = []
+
+        def get(self, key: str) -> object:
+            return self.data.get(key)
+
+        def set(self, txn: object, key: str, value: object) -> None:
+            self.set_calls.append((txn, key, value))
+            self.data[key] = value
+
+    class _DataMap:
+        def __init__(self, nodes: _SharedMap) -> None:
+            self.nodes = nodes
+            self.set_calls: list[tuple[object, str, object]] = []
+
+        def get(self, key: str) -> object:
+            assert key == "nodes"
+            return self.nodes
+
+        def set(self, txn: object, key: str, value: object) -> None:
+            self.set_calls.append((txn, key, value))
+
+    txn = object()
+    nodes = _SharedMap()
+    data_map = _DataMap(nodes)
+
+    nodes_value, node_state = mod._data_node_branch(data_map, "member-1")
+    node_state["desktop"]["theme"] = "light"
+    mode = mod._set_data_node_branch(
+        data_map,
+        txn,
+        nodes_value=nodes_value,
+        node_key="member-1",
+        node_state=node_state,
+    )
+
+    assert mode == "node_branch"
+    assert data_map.set_calls == []
+    assert nodes.set_calls == [(txn, "member-1", node_state)]
+    assert nodes.data["sibling"] == {"large": "x" * 100_000}
+
+
 def test_member_node_state_ingest_skips_cached_same_material_before_live_room(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     state = {
