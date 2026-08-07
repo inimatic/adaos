@@ -136,6 +136,15 @@ def test_yjs_thread_affinity_fault_is_degraded_and_specialized() -> None:
     assert "state-sync" in item["tags"]
 
 
+def test_yjs_thread_affinity_fault_recognizes_doc_and_transaction_wrappers() -> None:
+    assert incidents.is_yjs_thread_affinity_fault(
+        RuntimeError("y_py::y_doc::YDoc is unsendbale, but is dropped on another thread!")
+    )
+    assert incidents.is_yjs_thread_affinity_fault(
+        RuntimeError("y_py::y_transaction::YTransaction is unsendbale, but is dropped on another thread!")
+    )
+
+
 def test_process_io_delta_sample_reports_deltas(monkeypatch) -> None:
     rows = iter(
         [

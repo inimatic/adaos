@@ -2741,7 +2741,13 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
     with _YROOM_LIFECYCLE_LOCK:
         meta = dict(_YROOM_LIFECYCLE.get(key) or {})
 
-    ydoc = getattr(room, "ydoc", None) if room is not None else None
+    # Do not borrow ``room.ydoc`` here. Reliability/control snapshots can run
+    # in a worker thread while the event-loop thread tears a room down. Merely
+    # retaining the Python YDoc wrapper until this function returns can make
+    # the worker the owner of its final decref after ``_release_room_refs``
+    # clears the room attribute. y_py objects are thread-affine on Windows and
+    # reject that cross-thread drop. The object id is captured as plain data by
+    # ``_mark_room_created`` on the room owner thread instead.
     ystore = getattr(room, "ystore", None) if room is not None else None
     clients = getattr(room, "clients", None) if room is not None else None
     send_stream_stats = _memory_stream_statistics(getattr(room, "_update_send_stream", None) if room is not None else None)
@@ -2883,7 +2889,7 @@ def _room_debug_snapshot(webspace_id: str, room: Any | None, now: float) -> dict
         "last_reset_closed_webrtc_peers": int(meta.get("last_reset_closed_webrtc_peers") or 0),
         "last_reset_room_dropped": bool(meta.get("last_reset_room_dropped")),
         "room_object_id": id(room) if room is not None else meta.get("last_room_object_id"),
-        "ydoc_object_id": id(ydoc) if ydoc is not None else meta.get("last_ydoc_object_id"),
+        "ydoc_object_id": meta.get("last_ydoc_object_id"),
         "client_total": len(clients) if isinstance(clients, list) else 0,
         "ready": bool(getattr(room, "_ready", False)) if room is not None else False,
         "started": bool(getattr(started_event, "is_set", lambda: False)()) if started_event is not None else False,

@@ -134,7 +134,23 @@ def is_yjs_thread_affinity_fault(value: Any) -> bool:
         return False
     return (
         "y_py::" in text
-        and ("ymap" in text or "y_map" in text or "yarray" in text or "y_array" in text)
+        and any(
+            object_name in text
+            for object_name in (
+                "ymap",
+                "y_map",
+                "yarray",
+                "y_array",
+                "ydoc",
+                "y_doc",
+                "ytransaction",
+                "y_transaction",
+                "ytext",
+                "y_text",
+                "yxml",
+                "y_xml",
+            )
+        )
         and ("dropped on another thread" in text or "unsendbale" in text or "unsendable" in text)
     )
 

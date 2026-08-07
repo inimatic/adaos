@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import importlib
 import json
 import sys
 import threading
 import time
 import types
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from adaos.services.webio_snapshot_demand import clear_snapshot_demand_for_tests
@@ -2330,6 +2332,56 @@ def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     assert transport["room_bootstrap_total"] >= 1
     assert transport["room_bootstrap_success_total"] >= 1
     assert transport["update_stream_buffer_used_total"] >= 5
+
+
+def test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker(capfd) -> None:
+    entered_snapshot = threading.Event()
+    release_snapshot = threading.Event()
+
+    class _BlockingStore:
+        def runtime_snapshot(self, *, now_ts: float) -> dict[str, int]:  # noqa: ARG002
+            entered_snapshot.set()
+            assert release_snapshot.wait(timeout=5.0)
+            return {}
+
+    class _Room:
+        def __init__(self, ydoc) -> None:
+            self.ydoc = ydoc
+            self.ystore = _BlockingStore()
+            self.clients = []
+
+        def _diag_snapshot(self) -> dict[str, object]:
+            return {}
+
+    key = "gateway-worker-snapshot-thread-affinity"
+    ydoc = y_py.YDoc()
+    room = _Room(ydoc)
+    gateway_module.y_server.rooms[key] = room
+    gateway_module._mark_room_created(key, room)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            snapshot_future = pool.submit(gateway_module.gateway_transport_snapshot)
+            assert entered_snapshot.wait(timeout=5.0)
+
+            # Room teardown owns this mutation and final YDoc reference release
+            # on the event-loop thread. The worker must only retain plain data.
+            room.ydoc = None
+            del ydoc
+            gc.collect()
+            release_snapshot.set()
+            snapshot = snapshot_future.result(timeout=5.0)
+
+        gc.collect()
+        room_snapshot = snapshot["rooms"][key]
+        assert room_snapshot["ydoc_object_id"] is not None
+        assert "dropped on another thread" not in capfd.readouterr().err
+    finally:
+        release_snapshot.set()
+        room.ydoc = None
+        gateway_module.y_server.rooms.pop(key, None)
+        gateway_module._YROOM_LIFECYCLE.pop(key, None)
+        gc.collect()
 
 
 def test_apply_materialized_payload_reports_gateway_phase_timings(monkeypatch) -> None:
