@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
 import time
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,6 +22,8 @@ from adaos.domain.execution import (
 )
 from adaos.domain.ownership import OwnershipIsolationError
 from adaos.domain.runtime_bindings import ContentRef
+from adaos.services.execution import local as local_execution
+from adaos.services.execution import local_worker
 from adaos.services.execution.local import LocalProcessExecutor
 from adaos.services.execution.oci import OCIExecutor
 
@@ -50,6 +52,30 @@ def _spec(tmp_path: Path, *command: str, wall_time_s: float | None = None) -> Ex
         working_directory=str(tmp_path),
         resources=ExecutionResourceRequest(wall_time_s=wall_time_s),
     )
+
+
+@pytest.mark.parametrize("module", (local_execution, local_worker))
+def test_execution_atomic_state_write_retries_transient_replace_lock(
+    module, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / f"{module.__name__.rsplit('.', 1)[-1]}.json"
+    original = module.os.replace
+    calls = 0
+
+    def transient_once(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            error = PermissionError("sharing violation")
+            error.winerror = 32
+            raise error
+        return original(source, target)
+
+    monkeypatch.setattr(module.os, "replace", transient_once)
+    module._atomic_json(destination, {"status": "running"})
+
+    assert calls == 2
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"status": "running"}
 
 
 def test_local_execution_is_idempotent_and_restart_reconcilable(tmp_path) -> None:

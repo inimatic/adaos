@@ -26,7 +26,15 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, path)
+    for attempt in range(8):
+        try:
+            os.replace(temporary, path)
+            return
+        except OSError as exc:
+            transient = isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {5, 32, 33}
+            if not transient or attempt == 7:
+                raise
+            time.sleep(min(0.005 * (2**attempt), 0.1))
 
 
 def _kill_tree(process: subprocess.Popen[Any]) -> None:
