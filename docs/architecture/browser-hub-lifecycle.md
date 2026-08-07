@@ -243,6 +243,9 @@ authority also remains in runtime.
 - `draining`, `updating`, and `restarting` come from supervisor state delivered
   through sidecar; the UI shows a planned transition instead of a generic
   network failure.
+- A successful intermediate phase such as `succeeded:root_promoted` remains a
+  planned `restarting` transition. Only the final `succeeded:validate` phase is
+  terminal.
 - `warming` means transport may exist but runtime control or YWS is not ready.
 - `degraded` can allow direct commands while denying Root-routed control.
 - `offline` means Root has no usable Hub transport/runtime evidence.
