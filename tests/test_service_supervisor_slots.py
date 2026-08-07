@@ -498,6 +498,33 @@ def test_service_supervisor_stop_terminates_owned_process_tree(monkeypatch):
     assert "nested_service" not in supervisor._proc_specs
 
 
+def test_service_supervisor_serializes_concurrent_starts(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    active = 0
+    max_active = 0
+
+    async def _ensure_started_owned(name, spec, *, force):  # noqa: ANN001, ARG001
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+
+    monkeypatch.setattr(supervisor, "_ensure_started_owned", _ensure_started_owned)
+
+    async def _run() -> None:
+        await asyncio.gather(
+            supervisor.ensure_started("nested_service", object(), force=False),
+            supervisor.ensure_started("nested_service", object(), force=True),
+        )
+
+    asyncio.run(_run())
+
+    assert max_active == 1
+
+
 def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod

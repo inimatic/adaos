@@ -509,6 +509,7 @@ class ServiceSkillSupervisor:
         self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
         self._external_ready_at: dict[str, float] = {}
         self._ensure_failure_counts: dict[str, int] = {}
+        self._operation_locks: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
         self._discover_lock = threading.Lock()
         self._discover_async_lock: asyncio.Lock | None = None
         self._discover_async_lock_loop: asyncio.AbstractEventLoop | None = None
@@ -713,6 +714,10 @@ class ServiceSkillSupervisor:
         self._ensure_background_tasks()
 
     async def stop(self, name: str, *, timeout_s: float = 3.0) -> None:
+        async with self._operation_lock(name):
+            await self._stop_owned(name, timeout_s=timeout_s)
+
+    async def _stop_owned(self, name: str, *, timeout_s: float = 3.0) -> None:
         self._external_ready_specs.pop(name, None)
         self._external_ready_at.pop(name, None)
         proc = self._procs.get(name)
@@ -753,8 +758,14 @@ class ServiceSkillSupervisor:
     async def restart(self, name: str) -> None:
         if self._shutdown_requested:
             return
-        await self.stop(name)
-        await self.start(name)
+        await self.refresh_discovered()
+        spec = self._specs.get(name)
+        if not spec:
+            raise KeyError(name)
+        async with self._operation_lock(name):
+            await self._stop_owned(name)
+            await self._ensure_started_owned(name, spec, force=True)
+        self._ensure_background_tasks()
 
     async def start_all(self) -> None:
         if self._shutdown_requested:
@@ -809,6 +820,10 @@ class ServiceSkillSupervisor:
         return await self._run_hook(spec, spec.hook_on_self_heal, payload={"reason": reason, "issue": issue})
 
     async def ensure_started(self, name: str, spec: ServiceSpec, *, force: bool) -> None:
+        async with self._operation_lock(name):
+            await self._ensure_started_owned(name, spec, force=force)
+
+    async def _ensure_started_owned(self, name: str, spec: ServiceSpec, *, force: bool) -> None:
         if self._shutdown_requested:
             return
         proc = self._procs.get(name)
@@ -817,7 +832,7 @@ class ServiceSkillSupervisor:
             if self._proc_specs.get(name) == spec_key:
                 self._ensure_failure_counts.pop(name, None)
                 return
-            await self.stop(name, timeout_s=3.0)
+            await self._stop_owned(name, timeout_s=3.0)
 
         now = time.time()
         cooloff_until = float(self._cooloff_until.get(name) or 0.0)
@@ -1038,6 +1053,15 @@ class ServiceSkillSupervisor:
         self._discover_async_lock_loop = None
 
     # ------------------------------------------------------------------ internals
+    def _operation_lock(self, name: str) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        current = self._operation_locks.get(name)
+        if current is None or current[0] is not loop:
+            lock = asyncio.Lock()
+            self._operation_locks[name] = (loop, lock)
+            return lock
+        return current[1]
+
     def _ensure_background_tasks(self) -> None:
         if self._shutdown_requested:
             return
