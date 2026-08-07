@@ -12,6 +12,11 @@ from adaos.services.storage.relational import RelationalStorageBroker
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1] / ".adaos" / "workspace" / "skills" / "research_manager_skill"
+if not (SKILL_ROOT / "research").is_dir():
+    pytest.skip(
+        "research_manager_skill is an optional workspace skill and is not installed",
+        allow_module_level=True,
+    )
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 

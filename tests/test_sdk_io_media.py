@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+import pytest
+
+
+Image = pytest.importorskip("PIL.Image", reason="SDK image variants require the optional Pillow dependency")
 
 
 def test_sdk_io_media_creates_cached_variant_and_publish_descriptor(monkeypatch, tmp_path):
