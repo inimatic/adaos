@@ -216,11 +216,13 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The locally validated packages are `research_manager_skill` `0.3.0` and
-`tlp_research` `0.1.2`. They were published, installed, validated, tested, and
-executed through the normal AdaOS managers and CLI. Scenario calls are routed
-only to skill tools declared in package dependencies; the workflow does not
-gain ambient access to unrelated skills.
+The locally validated packages are `research_manager_skill` `0.4.0` and
+`tlp_research` `0.1.3`. They were published, installed, validated, tested, and
+executed through the normal AdaOS managers and CLI. The TLP package is a
+Desktop scenario with a declarative read-only study/workflow surface; its
+Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
+gates. Scenario calls are routed only to skill tools declared in package
+dependencies; the workflow does not gain ambient access to unrelated skills.
 
 ## Responsibility Boundaries
 

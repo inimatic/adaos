@@ -274,10 +274,12 @@ adaos scenario run tlp_research
 adaos tests run --only-sdk ...
 ```
 
-The published `research_manager_skill` `0.3.0` passed six package tests and was
-healthy in its active service slot. The published `tlp_research` `0.1.2`
-passed four package tests; installation reused the matching healthy dependency
-runtime and execution reached the idempotent `protocol_review` state. The
+The published `research_manager_skill` `0.4.0` passed six package tests and was
+healthy in its active service slot. Its bounded `get_study` browser route is
+read-only. The published desktop scenario `tlp_research` `0.1.3` passed five
+package tests; installation activated the matching dependency runtime,
+execution reached the idempotent `protocol_review` state, and a live Desktop
+reload projected `scenario:tlp_research` into the installed app catalog. The
 focused native SDK run passed with two environment-gated PostgreSQL skips; the
 same PostgreSQL coverage passed in the separate live run above.
 

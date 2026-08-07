@@ -117,12 +117,13 @@ Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
 ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
 
 Delivery snapshot (2026-08-07): the native registry contains
-`research_manager_skill` `0.3.0` (registry commit `07dff1e`) and
-`tlp_research` `0.1.2` (registry commit `b524a41`). Both packages were
+`research_manager_skill` `0.4.0` (registry commit `5944451`) and
+`tlp_research` `0.1.3` (registry commit `33153f6`). Both packages were
 published and installed through the existing AdaOS skill/scenario lifecycle.
 Strict skill validation with tool probes, six isolated skill tests, scenario
-validation, four scenario tests, service health, dependency reuse, and a
-successful scenario run to `protocol_review` provide local package evidence.
+validation, five scenario tests, service health, dependency reuse, a successful
+scenario run to `protocol_review`, and live Desktop catalog projection provide
+local package evidence.
 The focused core SDK run through `adaos tests run` also passed, with only the
 two PostgreSQL cases skipped when no live test URL was supplied; those cases
 passed separately in the 35-test live PostgreSQL run described below.
@@ -282,7 +283,7 @@ event-derived lifecycle, sealed split/unblind audit, deterministic fixture,
 and content-addressed evidence verifier. `tlp_research` supplies a
 package-bound governed workflow plus protocol, analysis, trial, evidence, and
 sanitized exploratory-provenance fixtures. Strict tool probing, workflow
-compilation, six isolated skill tests, four scenario tests, restart
+compilation, six isolated skill tests, five scenario tests, restart
 rehydration, and the native package lifecycle are the acceptance path. No
 notebook code or output is
 executed or promoted as confirmatory evidence.
