@@ -213,6 +213,7 @@ nav:
   - SDK:
       - Overview: sdk/index.md
       - Relational Storage: sdk/relational-storage.md
+      - Durable Execution: sdk/execution.md
       - Bus: sdk/bus.md
       - Context: sdk/context.md
       - Decorators: sdk/decorators.md

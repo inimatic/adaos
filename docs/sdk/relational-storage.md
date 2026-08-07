@@ -1,6 +1,7 @@
 # Relational Storage
 
-Status: experimental ARF0.5 SDK contract.
+Status: experimental ARF2 SDK contract, validated locally with SQLite and
+PostgreSQL 16.
 
 The relational-storage SDK gives a skill a private logical database without
 exposing a filesystem path, SQLAlchemy engine, DSN, username, or password.
@@ -55,9 +56,34 @@ with db.transaction() as tx:
     )
 ```
 
-`execute`, `fetch_one`, `fetch_all`, `scalar`, `transaction`, and `health` are
-the current small surface. A transaction commits on normal exit and rolls back
-when its block raises.
+`execute`, `fetch_one`, `fetch_all`, `scalar`, `transaction`, `migrate`,
+`backup`, `restore`, and `health` are the current small surface. A transaction
+commits on normal exit and rolls back when its block raises.
+
+Owner migrations are versioned and checksum-pinned:
+
+```python
+from adaos.sdk.data import RelationalMigration
+
+db.migrate(
+    (
+        RelationalMigration(
+            version=1,
+            name="create runs",
+            statements=(
+                "CREATE TABLE runs "
+                "(run_id TEXT PRIMARY KEY, status TEXT NOT NULL)",
+            ),
+        ),
+    ),
+    staged=True,
+)
+```
+
+Applied migration history cannot be rewritten under the same version. SQLite
+uses a safety backup for pending DDL; PostgreSQL relies on transactional DDL or
+an explicitly requested restore policy. Skills should run migrations from
+their existing activation/bucket migration lifecycle.
 
 The handle is provider-neutral, but arbitrary SQL is not dialect-neutral. A
 skill supporting both SQLite and PostgreSQL must use a shared SQL subset or
@@ -88,16 +114,18 @@ binding, not the provider skill's database binding.
 ## Providers
 
 SQLite is the default node-local provider. It offers transactions, foreign-key
-enforcement, WAL mode, a busy timeout, optional JSON probing, and one advertised
-concurrent writer.
+enforcement, WAL mode, a busy timeout, optional JSON probing, capacity limits,
+backup/restore, explicit retention, and one advertised concurrent writer.
 
-PostgreSQL is optional and operator-configured. The preparatory adapter uses
+PostgreSQL is optional and operator-configured. The adapter uses
 the core-owned `ADAOS_RELATIONAL_POSTGRES_URL` and provisions one deterministic
-logical database per binding. The administrator URL remains private to the
-adapter. Per-owner roles, credential rotation, migrations, backup/restore,
-quotas, retention, and lifecycle health projections are later roadmap work.
-Install the `adaos[postgres]` optional dependency and use a SQLAlchemy URL such
-as `postgresql+psycopg://...`; the URL belongs to the operator, not to a skill.
+logical database per binding and one no-login role per skill owner. The
+administrator URL remains private to the adapter. Bounded pools, health,
+operator credential refresh, owner migrations, and backup/restore are
+implemented. PostgreSQL capacity limits and TTL retention fail closed because
+this provider does not enforce them. Install the `adaos[postgres]` optional
+dependency and use a SQLAlchemy URL such as `postgresql+psycopg://...`; the URL
+belongs to the operator, not to a skill.
 
 Provider preference is a constraint, not a connection selection escape hatch:
 
@@ -105,6 +133,9 @@ Provider preference is a constraint, not a connection selection escape hatch:
 requirements = RelationalStorageRequirements(
     concurrent_writers=4,
     json_required=True,
+    backup_required=True,
+    restore_required=True,
+    roles_required=True,
     locality="network",
     preferred_providers=("postgresql",),
 )

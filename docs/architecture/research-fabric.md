@@ -1,8 +1,9 @@
 # AdaOS Research Fabric
 
-Status: target architecture. The ARF0.5 generic storage, binding, content-ref,
-and local-execution foundation is implemented; the research framework itself
-is not yet implemented.
+Status: target architecture with ARF1-ARF3 validated locally. The
+provider-neutral storage/execution foundations, research-manager skill, local
+tracker, and TLP governed scenario are implemented; MLflow, Ray, and the full
+TLP scientific proof remain later milestones.
 
 Last reviewed: 2026-08-07.
 
@@ -39,7 +40,7 @@ pack, and aResearcher as a solution agent or workbench are governed by the
    Ray schedules work. Ray does not own the research protocol, approval state,
    or claim decision.
 7. Database support evolves as a capability with scoped bindings. SQLite is
-   the local default. PostgreSQL is a future shared service/provider with
+   the local default. PostgreSQL is an optional shared service/provider with
    isolated logical databases or schemas and roles, not one database server
    installed by every integration.
 8. TLP is the first end-to-end conformance case. Its domain types and operator
@@ -186,8 +187,40 @@ generic storage/execution seams, artifacts, events, and projections. It does
 not supply TLP semantics.
 ```
 
-The names `research-manager`, `mlflow-tracker`, and `ray-executor` describe
-roles, not fixed final package names.
+The first package slice uses `research_manager_skill` and `tlp_research` as
+AdaOS identifiers. `research-manager`, `mlflow-tracker`, and `ray-executor`
+otherwise describe roles, not a requirement to hard-code one provider.
+
+### Implemented ARF1-ARF3 slice
+
+The implementation intentionally follows existing AdaOS extension points:
+
+- `research_manager_skill` is a normal service skill with
+  `storage.relational` and `execution.jobs` capabilities, lifecycle migrations,
+  tool entrypoints, a local typed tracker, and an evidence verifier;
+- `tlp_research` is a normal package-bound workflow scenario with immutable
+  protocol, analysis-plan, trial-matrix, evidence-policy, and sanitized
+  exploratory-provenance fixtures;
+- skills acquire private databases through `adaos.sdk.data.relational`; owner,
+  physical path, DSN, and administrator credentials are not skill inputs;
+- skills construct, submit, reconcile, and cancel immutable work through
+  `adaos.sdk.execution`; a scientific run may have multiple physical attempts;
+- SQLite is the node-local default. The PostgreSQL provider uses one isolated
+  database and one no-login owner role per skill owner inside an
+  operator-managed cluster;
+- the local process executor is bounded but not hostile isolation. The optional
+  OCI adapter requires a digest-pinned image and provides the stronger boundary
+  for third-party or generated workloads.
+
+Mutable research state remains inside the activated skill compatibility
+bucket. The scenario package contains definitions and fixtures, not a private
+database or copied notebook runtime.
+
+The locally validated packages are `research_manager_skill` `0.3.0` and
+`tlp_research` `0.1.2`. They were published, installed, validated, tested, and
+executed through the normal AdaOS managers and CLI. Scenario calls are routed
+only to skill tools declared in package dependencies; the workflow does not
+gain ambient access to unrelated skills.
 
 ## Responsibility Boundaries
 
@@ -202,7 +235,7 @@ roles, not fixed final package names.
 
 ## Research Domain Model
 
-The first framework skill should own versioned schemas for these concepts:
+The research-manager skill owns versioned schemas for these concepts:
 
 `Study`
 : Stable aggregate for a research question, owners, policy, budget, and
@@ -254,7 +287,7 @@ worker loss from inflating the sample count.
 
 ## Workflow
 
-The research manager should express its lifecycle with the existing governed
+The research manager expresses its lifecycle with the existing governed
 workflow model:
 
 ```text
@@ -281,10 +314,10 @@ test leakage an auditable policy violation rather than a notebook convention.
 
 ## Core Capability Foundation and Gaps
 
-The framework should not be implemented by expanding the current raw `SQL`
-protocol or by putting every research entity in core. The following narrow
-capabilities are the useful core seams. The implemented ARF0.5 subset and its
-remaining limitations are recorded in
+The framework is not implemented by expanding the current raw `SQL` protocol
+or by putting every research entity in core. The following narrow capabilities
+are the implemented core seams. Their convergence boundaries and remaining
+limitations are recorded in
 [Research Fabric Core Readiness](research-fabric-core-readiness.md).
 
 ### Relational storage provisioning
@@ -295,7 +328,7 @@ request contains:
 ```yaml
 schema: adaos.storage.relational.requirement.v1
 capability: storage.relational
-owner_ref: skill:research-manager
+owner_ref: skill:research_manager_skill
 logical_name: experiments
 requirements:
   durability: durable
@@ -304,7 +337,7 @@ requirements:
   json_required: true
   locality: node
   backup_required: false
-  migration_owner: skill:research-manager
+  migration_owner: skill:research_manager_skill
 ```
 
 The returned binding describes a provider, logical scope, secret reference,
@@ -325,31 +358,36 @@ The current `ctx.sql.connect()`-style boundary remains a legacy SQLite path
 until repositories are separated from provider-specific behavior. Merely
 changing a DSN is not PostgreSQL support.
 
-The ARF0.5 SDK implementation derives `owner_ref` from the active skill
-context after checking the existing `storage.relational` capability, returns a
-redacted binding, and rechecks that owner for every transaction. A skill cannot
-request another skill's binding. When multiple
+The ARF2 SDK implementation derives `owner_ref` from the active skill context
+after checking the existing `storage.relational` capability, returns a
+redacted binding with the negotiated requirements, and rechecks that owner for
+every transaction, migration, backup, and restore. A skill cannot request
+another skill's binding. Unsupported capacity, retention, role, dialect, or
+locality requirements fail closed. When multiple
 skills need the same governed dataset, a specialized provider skill owns its
 database and publishes stable logical views through typed service APIs or
 projections. Direct cross-owner SQL remains out of scope.
 
 ### Execution provider
 
-A provider-neutral boundary needs immutable `ExecutionSpec`, durable `Run` and
-`ExecutionAttempt` identities, `ResourceRequest`, submission idempotency,
-lease/heartbeat, log and artifact streams, cancellation, checkpoint references,
-and reconciliation after an unknown outcome.
+A provider-neutral boundary now supplies immutable `ExecutionSpec`, durable
+`ExecutionAttempt` identity, resource/network/determinism/budget contracts,
+submission idempotency, lease/heartbeat, bounded log and artifact streams,
+cancellation, checkpoint/preemption contracts, accelerator inventory and
+allocation records, and reconciliation after an unknown outcome. `Run` remains
+research-domain state and is referenced rather than redefined by core.
 
-This contract should align with existing governed-workflow activity semantics
+This contract aligns with existing governed-workflow activity semantics
 and the `ModelJob` direction in
 [Model Runtime and Registry](model-runtime-and-registry.md). It must not create
-a second workflow engine or a second model registry.
+a second workflow engine or a second model registry. Skill-facing usage and
+provider limits are documented in [Durable Execution](../sdk/execution.md).
 
 ### Tracker provider
 
-The tracker port supports typed operations for experiment/run registration,
-parameters, metrics, tags, artifact references, finalization, export, and
-provider links. It is initially owned by the research framework package. It
+The local tracker supports typed operations for run registration, parameters,
+metrics, tags, finalization, export, and provider identity. It is owned by the
+research framework package and persisted through the neutral relational SDK. It
 becomes a core candidate only if a second non-research domain needs the same
 contract.
 

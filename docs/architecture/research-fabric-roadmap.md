@@ -86,17 +86,17 @@ scientific conclusion. A local demo is not production acceptance.
 | Capability | Repository baseline | Assessment |
 | --- | --- | --- |
 | Skill/scenario lifecycle | Package, install, activate, service-skill supervision, A/B runtime buckets | useful implemented foundation |
-| Workflow governance | Versioned governed workflow architecture and growing runtime | reusable authority; research workflow not defined |
+| Workflow governance | Versioned governed workflow plus package-bound research lifecycle | TLP workflow compiled and executed through declared skill routes |
 | Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | deliberately unchanged; legacy core repositories are outside ARF0.5 |
-| Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | correct local placement for provider state |
-| Database capability | Typed `storage.relational` requirement/binding, SDK gate, per-skill isolation, and SQLite provider; legacy `SQL` remains | preparatory path validated locally; migrations and lifecycle operations remain |
-| PostgreSQL | Isolated-database provider passed its live local conformance test on `postgres:16-alpine` | preparatory path validated locally; roles, rotation, and backup remain ARF2 |
-| Artifacts/models | Governed artifact pipeline plus generic `ContentRef`; model promotion rules unchanged | reusable reference foundation; portable research evidence bundle absent |
-| Execution | Generic spec/attempt ABI and restart-reconcilable local provider beside existing process/job fragments | preparatory path validated locally; workflow integration, resources, and remote providers remain |
-| Tracking | No provider-neutral experiment tracker or MLflow service skill | open |
+| Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | research-manager migrations and restart rehydration validated locally |
+| Database capability | Negotiated `storage.relational` requirement/binding, owner migrations, backup/restore, retention, lifecycle SDK, and SQLite provider; legacy `SQL` remains | ARF2 local contract validated; legacy repositories deliberately unchanged |
+| PostgreSQL | Isolated database and no-login owner role per skill, bounded pools, health, credential refresh, backup/restore | ARF2 conformance validated locally on `postgres:16-alpine` |
+| Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | ARF1/ARF3 evidence slice validated locally |
+| Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 validated locally; local process remains non-hostile isolation |
+| Tracking | Provider-neutral local tracker inside research-manager; no MLflow service skill | ARF1 local provider validated; MLflow remains ARF4 |
 | Distributed execution | No Ray provider | open |
-| Research domain | No canonical Study/Protocol/Trial/Evidence model | open |
-| TLP | Exploratory notebook and preliminary interpretation | valuable input; not reproducible confirmatory evidence |
+| Research domain | Versioned skill-owned Study/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts and governed workflow | ARF1 validated locally; core promotion remains gated by a second domain |
+| TLP | Published governed scenario, clean protocol/analysis/trial fixtures, sanitized exploratory provenance | ARF1 conformance case validated locally; no confirmatory TLP claim |
 
 ## Milestone Sequence
 
@@ -104,9 +104,9 @@ scientific conclusion. A local demo is not production acceptance.
 | --- | --- | --- | --- |
 | ARF0 | Architecture, ownership, exclusions, and reference case are discoverable | `specified` | now |
 | ARF0.5 | Generic storage/binding/content/execution seams exist before research code | `validated-local` | now |
-| ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `hypothesis` | next |
-| ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `hypothesis` | next |
-| ARF3 | Logical runs and physical attempts are durable and provider-neutral | `hypothesis` | next |
+| ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `validated-local` | complete |
+| ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `validated-local` | complete |
+| ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local` | complete |
 | ARF4 | MLflow is a conforming optional tracker service skill | `hypothesis` | later |
 | ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
 | ARF6 | TLP passes the scientific and operational reference proof | `hypothesis` | later |
@@ -115,6 +115,17 @@ scientific conclusion. A local demo is not production acceptance.
 
 Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
 ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
+
+Delivery snapshot (2026-08-07): the native registry contains
+`research_manager_skill` `0.3.0` (registry commit `07dff1e`) and
+`tlp_research` `0.1.2` (registry commit `b524a41`). Both packages were
+published and installed through the existing AdaOS skill/scenario lifecycle.
+Strict skill validation with tool probes, six isolated skill tests, scenario
+validation, four scenario tests, service health, dependency reuse, and a
+successful scenario run to `protocol_review` provide local package evidence.
+The focused core SDK run through `adaos tests run` also passed, with only the
+two PostgreSQL cases skipped when no live test URL was supplied; those cases
+passed separately in the 35-test live PostgreSQL run described below.
 
 ## ARF0. Architecture and Decision Baseline
 
@@ -227,43 +238,54 @@ ARF1 development slice that makes no PostgreSQL support claim.
 materialize paired trial specs, execute a no-training fixture, ingest typed
 observations, enforce test access, and export an evidence bundle after restart.
 
-- [ ] `[must]` `ARF1-01` Define versioned schemas for `Study`, `Hypothesis`,
+- [x] `[must]` `ARF1-01` Define versioned schemas for `Study`, `Hypothesis`,
   `Protocol`, `AnalysisPlan`, `TrialGroup`, `Trial`, `Run`,
   `ExecutionAttempt`, `Observation`, `EvidenceBundle`, and `ClaimDecision`.
-- [ ] `[must]` `ARF1-02` Define immutable identity and digest rules, including
+- [x] `[must]` `ARF1-02` Define immutable identity and digest rules, including
   protocol, analysis plan, code/package, environment, dataset, split,
   operator, trial, run, attempt, and evidence identities.
-- [ ] `[must]` `ARF1-03` Define protocol amendment semantics that create a new
+- [x] `[must]` `ARF1-03` Define protocol amendment semantics that create a new
   version, preserve lineage, and explicitly invalidate or retain prior trials.
-- [ ] `[must]` `ARF1-04` Implement the research lifecycle as a package-bound
+- [x] `[must]` `ARF1-04` Implement the research lifecycle as a package-bound
   governed workflow with review, lock, smoke, execution, QC, test-unblind,
   analysis, and claim-review gates.
-- [ ] `[must]` `ARF1-05` Implement a research-manager service skill through the
+- [x] `[must]` `ARF1-05` Implement a research-manager service skill through the
   existing skill lifecycle; keep mutable state in its versioned runtime data
   area.
-- [ ] `[must]` `ARF1-06` Implement a minimal local tracker that satisfies the
+- [x] `[must]` `ARF1-06` Implement a minimal local tracker that satisfies the
   initial typed tracker contract without requiring MLflow.
-- [ ] `[must]` `ARF1-07` Implement a local fixture executor sufficient to prove
+- [x] `[must]` `ARF1-07` Implement a local fixture executor sufficient to prove
   scientific run identity separately from physical attempt identity.
-- [ ] `[must]` `ARF1-08` Define named RNG stream descriptors for initialization,
+- [x] `[must]` `ARF1-08` Define named RNG stream descriptors for initialization,
   data ordering, augmentation, operator initialization, and analysis; reject
   undeclared stochastic inputs in confirmatory mode.
-- [ ] `[must]` `ARF1-09` Implement sealed test bindings and auditable unblind
+- [x] `[must]` `ARF1-09` Implement sealed test bindings and auditable unblind
   transitions. Validation and robustness suites must not alias the sealed test
   source accidentally.
-- [ ] `[must]` `ARF1-10` Define a portable, versioned evidence manifest with
+- [x] `[must]` `ARF1-10` Define a portable, versioned evidence manifest with
   content-addressed references and a deterministic verification command or SDK
   operation.
-- [ ] `[must]` `ARF1-11` Package a TLP study scenario skeleton with protocol,
+- [x] `[must]` `ARF1-11` Package a TLP study scenario skeleton with protocol,
   analysis-plan, trial-matrix, and evidence fixtures; do not copy executable
   notebook state into the scenario.
-- [ ] `[should]` `ARF1-12` Add schema migration fixtures and backward/forward
+- [x] `[should]` `ARF1-12` Add schema migration fixtures and backward/forward
   compatibility policy for research-manager runtime buckets.
-- [ ] `[should]` `ARF1-13` Add property/model-based tests for illegal workflow
+- [x] `[should]` `ARF1-13` Add property/model-based tests for illegal workflow
   transitions, stale generations, duplicate commands, amendments, and evidence
   finalization.
-- [ ] `[could]` `ARF1-14` Import selected notebook cells as explicitly marked
+- [x] `[could]` `ARF1-14` Import selected notebook cells as explicitly marked
   exploratory provenance artifacts after sanitization and digesting.
+
+Implementation evidence (2026-08-07): `research_manager_skill` owns the
+versioned research schemas, checksum-pinned migrations, local tracker,
+event-derived lifecycle, sealed split/unblind audit, deterministic fixture,
+and content-addressed evidence verifier. `tlp_research` supplies a
+package-bound governed workflow plus protocol, analysis, trial, evidence, and
+sanitized exploratory-provenance fixtures. Strict tool probing, workflow
+compilation, six isolated skill tests, four scenario tests, restart
+rehydration, and the native package lifecycle are the acceptance path. No
+notebook code or output is
+executed or promoted as confirmatory evidence.
 
 ## ARF2. Relational Storage Capability
 
@@ -284,36 +306,48 @@ without cross-owner table access.
 - [x] `[must]` `ARF2-02` Write the provider-neutral storage decision record
   for `RelationalStorageRequirement`, `RelationalBinding`, provider readiness,
   secret references, ownership, and lifecycle.
-- [ ] `[must]` `ARF2-03` Include durability, transaction, concurrent-writer,
+- [x] `[must]` `ARF2-03` Include durability, transaction, concurrent-writer,
   JSON, locality, capacity, backup/restore, retention, migration-owner,
   rollback, and role requirements in the binding contract.
 - [x] `[must]` `ARF2-04` Implement a local SQLite provider that places
   component-owned files or binding metadata under the owning skill's
   `data/db`, with safe locking and atomic initialization.
-- [ ] `[must]` `ARF2-05` Make schema migrations owner-supplied, versioned,
+- [x] `[must]` `ARF2-05` Make schema migrations owner-supplied, versioned,
   idempotent where required, staged before activation, and covered by rollback
   or restore policy.
 - [x] `[must]` `ARF2-06` Keep credentials behind AdaOS secret references and
   expose only scoped bindings to the owning component.
-- [ ] `[must]` `ARF2-07` Add provider conformance tests for isolation,
+- [x] `[must]` `ARF2-07` Add provider conformance tests for isolation,
   transactions, contention, migration failure, disk exhaustion, backup,
   restore, and deletion/retention policy.
-- [ ] `[should]` `ARF2-08` Implement a PostgreSQL provider using one
+- [x] `[should]` `ARF2-08` Implement a PostgreSQL provider using one
   operator-managed cluster per deployment profile and isolated logical
   database/schema plus role per migration owner.
-- [ ] `[should]` `ARF2-09` Add PostgreSQL health, connection-pool limits,
+- [x] `[should]` `ARF2-09` Add PostgreSQL health, connection-pool limits,
   credential rotation, backup/restore, and upgrade evidence to the service
   lifecycle.
-- [ ] `[should]` `ARF2-10` Run research-manager and local-tracker repository
+- [x] `[should]` `ARF2-10` Run research-manager and local-tracker repository
   tests against both SQLite and PostgreSQL; document any deliberately
   unsupported dialect behavior.
-- [ ] `[could]` `ARF2-11` Define a companion blob/object-storage requirement
+- [x] `[could]` `ARF2-11` Define a companion blob/object-storage requirement
   and binding for large immutable evidence and checkpoints.
 - [ ] `[deferred]` `ARF2-12` Do not migrate all existing core SQLite
   repositories until provider-neutral repository boundaries and measured
   concurrency or operations needs justify it.
 - [ ] `[deferred]` `ARF2-13` Do not offer one shared writable SQL schema across
   core, research manager, MLflow, and other skills.
+
+Implementation evidence (2026-08-07): the public SDK derives the current
+skill owner and returns a redacted binding with its negotiated requirements.
+SQLite and PostgreSQL share migration, transaction, backup/restore, health,
+retention, and deletion semantics while rejecting unsupported requirements.
+PostgreSQL uses an isolated database and no-login owner role per skill, bounded
+pools, and an operator-only credential refresh path. The full focused suite
+passed against `postgres:16-alpine`, including research repository/tracker
+migrations and backup/restore; the exact test databases and container were
+removed afterward. TTL is deliberately rejected because no retention
+scheduler exists yet. Deferred repository migration and shared-schema items
+remain intentionally unchecked.
 
 ## ARF3. Durable Execution and Local Provider
 
@@ -328,39 +362,50 @@ heartbeats/logs/observations, checkpoint, be interrupted across AdaOS restart,
 reconcile an unknown outcome, resume as a new attempt of the same run, and
 cancel with an auditable terminal state.
 
-- [ ] `[must]` `ARF3-01` Align `ExecutionSpec`, `Run`, `ExecutionAttempt`,
+- [x] `[must]` `ARF3-01` Align `ExecutionSpec`, `Run`, `ExecutionAttempt`,
   `ResourceRequest`, lease, heartbeat, cancellation, checkpoint, and failure
   contracts with governed workflow activity semantics and the model-job
   direction.
-- [ ] `[must]` `ARF3-02` Define immutable entrypoint, package, input, output,
+- [x] `[must]` `ARF3-02` Define immutable entrypoint, package, input, output,
   environment, resource, network, secret, and determinism fields in an
   execution specification.
-- [ ] `[must]` `ARF3-03` Implement submission idempotency and an explicit
+- [x] `[must]` `ARF3-03` Implement submission idempotency and an explicit
   `unknown` outcome that requires provider reconciliation before retry.
-- [ ] `[must]` `ARF3-04` Persist provider binding, status history, heartbeat,
+- [x] `[must]` `ARF3-04` Persist provider binding, status history, heartbeat,
   logs, failure classification, cancellation handshake, timestamps, and
   resource observations per attempt.
-- [ ] `[must]` `ARF3-05` Preserve logical run/trial identity across
+- [x] `[must]` `ARF3-05` Preserve logical run/trial identity across
   infrastructure retries; record when policy intentionally requests a new
   scientific sample.
-- [ ] `[must]` `ARF3-06` Define checkpoint manifests with parent digest,
+- [x] `[must]` `ARF3-06` Define checkpoint manifests with parent digest,
   producer attempt, code/environment compatibility, RNG state, and resume
   policy.
-- [ ] `[must]` `ARF3-07` Implement a local provider adapter with bounded CPU,
+- [x] `[must]` `ARF3-07` Implement a local provider adapter with bounded CPU,
   memory, wall time, logs, cancellation, and declared outputs.
-- [ ] `[must]` `ARF3-08` Add recovery and fault-injection tests for crash before
+- [x] `[must]` `ARF3-08` Add recovery and fault-injection tests for crash before
   and after submit, lost heartbeat, duplicate callback, partial artifact,
   cancellation race, and AdaOS restart.
-- [ ] `[should]` `ARF3-09` Add accelerator inventory and allocation contracts
+- [x] `[should]` `ARF3-09` Add accelerator inventory and allocation contracts
   for GPU count/type, memory, exclusivity, and readiness without leaking a Ray
   object into skill APIs.
-- [ ] `[should]` `ARF3-10` Add a stronger container/OCI-backed provider before
+- [x] `[should]` `ARF3-10` Add a stronger container/OCI-backed provider before
   running third-party or agent-generated code unattended; document the process
   runner as non-hostile isolation.
-- [ ] `[should]` `ARF3-11` Define admission budgets for attempts, compute time,
+- [x] `[should]` `ARF3-11` Define admission budgets for attempts, compute time,
   storage, and monetary cost with fail-closed enforcement.
-- [ ] `[could]` `ARF3-12` Add preemption-aware scheduling once checkpoints and
+- [x] `[could]` `ARF3-12` Add preemption-aware scheduling once checkpoints and
   attempt identity are proven locally.
+
+Implementation evidence (2026-08-07): immutable spec, attempt, checkpoint,
+resource, network, determinism, budget, accelerator inventory/allocation, and
+preemption contracts are exposed through the skill SDK. The local provider
+persists receipts and status history, enforces attempt/CPU/memory/wall/log/
+storage/compute budgets, verifies declared outputs, and reconciles ambiguous
+outcomes before retry. Fault tests cover restart, duplicate submission and
+callback, missing/partial output, heartbeat loss, cancellation race, and
+preempted-run resume without changing scientific run identity. The optional
+OCI adapter requires a digest-pinned image and rejects unsupported network and
+secret handling; the process provider remains explicitly non-hostile.
 
 ## ARF4. Tracker Contract and MLflow Provider
 

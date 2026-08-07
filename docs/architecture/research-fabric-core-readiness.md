@@ -1,11 +1,12 @@
 # Research Fabric Core Readiness
 
-Status: ARF0.5 implementation record. SQLite, PostgreSQL, ABI, and
-local-execution paths are validated locally.
+Status: ARF0.5 plus ARF2/ARF3 implementation record. SQLite, PostgreSQL,
+relational lifecycle, execution ABI, local process, and OCI-admission paths
+are validated locally.
 
 Last reviewed: 2026-08-07.
 
-This page records the narrow core foundation implemented before the first
+This page records the narrow core foundation now consumed by the first
 Research Fabric skill. It is subordinate to the
 [AdaOS Research Fabric](research-fabric.md) architecture and
 [roadmap](research-fabric-roadmap.md). It does not introduce research-domain
@@ -30,8 +31,10 @@ entities into core.
    generic ABI. `EvidenceBundle`, scientific `Run`, `Trial`, and protocol
    semantics remain research-manager entities.
 7. The local executor is a reference adapter for idempotency, cancellation,
-   terminal receipts, logs, and restart reconciliation. It is not a hostile
-   code sandbox and rejects resource/secret requests it cannot enforce.
+   terminal receipts, bounded resources/logs/outputs, heartbeats, unknown
+   reconciliation, checkpoints, preemption admission, and restart recovery. It
+   is not a hostile code sandbox and rejects GPU, network, cost, or secret
+   requests it cannot enforce.
 8. Existing `OperationManager`, governed-workflow activities, model jobs, and
    the executor ABI are related but are not collapsed into a new global job
    manager in this slice.
@@ -45,7 +48,7 @@ entities into core.
 | `ResourceTicket` | Operator/resource request stored in KV | Remains a request record; not an execution attempt |
 | `Process` port | Start/stop/status for process handles | Remains process lifecycle; not durable scientific or execution identity |
 | `OperationManager` | User-visible install/update operations and notifications | Remains its current authority; later maps to generic operation references where useful |
-| `WorkflowActivityDispatcher` | Dispatch intent from governed transitions | Later consumes an executor/service binding; it does not become the provider |
+| `WorkflowActivityDispatcher` | Dispatch intent from governed transitions | Uses the executor activity adapter without becoming the provider |
 | `ProcSandbox` | Synchronous bounded process execution | Remains an operational limit; no hostile-code claim |
 | `ArtifactKind = skill/scenario` | Release/package identity | Unchanged; `ContentRef` does not add a `research` release kind |
 | Future `ModelJob` | Model-runtime long-running operation | Must reuse the execution attempt/provider semantics rather than fork them |
@@ -59,7 +62,9 @@ The packaged ABI now includes:
 - `adaos.content.ref.v1`;
 - `adaos.service.binding.v1`;
 - `adaos.execution.spec.v1`;
-- `adaos.execution.attempt.v1`.
+- `adaos.execution.attempt.v1`;
+- `adaos.execution.checkpoint.v1`;
+- `adaos.storage.blob.requirement.v1`.
 
 Python domain types validate the same identities and serialize to those ABI
 payloads. The generic owner-reference validator is shared by storage, service
@@ -148,18 +153,19 @@ this guard protects supported SDK use and makes ownership mistakes explicit.
 
 `sqlite`
 : Default node-local provider. It supplies one database file per logical
-  binding, transactions, foreign keys, WAL, busy timeout, and optional JSON
+  binding, transactions, owner migrations, foreign keys, WAL, busy timeout,
+  capacity enforcement, backup/restore, explicit retention, and optional JSON
   capability probing. It advertises one concurrent writer and rejects stronger
   requirements.
 
 `postgresql`
 : Optional provider enabled by the core-owned
   `ADAOS_RELATIONAL_POSTGRES_URL`. It provisions a deterministic isolated
-  logical database per owner/binding. The administrator URL remains inside the
-  adapter and the binding contains only a secret reference. Live use installs
-  the `adaos[postgres]` extra and requires a server; production roles,
-  credential rotation, backup/restore, quotas, and upgrade policy remain ARF2
-  work.
+  logical database per owner/binding and a no-login owner role per skill. The
+  administrator URL remains inside the adapter and the binding contains only a
+  secret reference. Bounded pools, health, operator credential refresh,
+  backup/restore, and migration upgrade evidence are implemented. Capacity and
+  TTL requirements are rejected because this provider does not enforce them.
 
 The broker never silently weakens a requirement. If no provider supports the
 requested concurrency, locality, JSON, transaction, durability, or backup
@@ -184,11 +190,12 @@ lineage, revocation, and snapshot-consistency contract.
 
 ## Execution Foundation
 
-`ExecutionSpec` captures owner, immutable command, working directory,
-non-secret environment, secret references, resources, input `ContentRef`s,
-expected outputs, checkpoint, and metadata. `ExecutionAttempt` captures one
-physical provider submission. Scientific `Run` identity is deliberately not
-part of this ABI.
+`ExecutionSpec` captures owner, immutable command/package/code/environment,
+working directory, non-secret environment, secret references, resources,
+network policy, named RNG determinism, budgets, input `ContentRef`s, declared
+outputs, checkpoint, preemption policy, and metadata. `ExecutionAttempt`
+captures one physical provider submission and references, but does not own,
+scientific trial/run identity.
 
 The local reference provider persists attempt state under:
 
@@ -201,16 +208,20 @@ It provides:
 - deterministic idempotency-key to attempt identity;
 - rejection when one key is reused with a different spec digest;
 - detached worker execution and atomic terminal receipt;
-- stdout/stderr `ContentRef`s;
+- bounded stdout/stderr and declared-output `ContentRef`s;
 - owner checks for reconcile and cancel;
 - restart reconciliation using receipt plus PID/create-time identity;
-- wall-time failure and explicit cancellation;
-- `lost` rather than fabricated success when process and receipt are absent.
+- CPU affinity, memory, wall, compute, storage, log, and attempt budgets;
+- heartbeat/lease observations and explicit cancellation handshake;
+- `unknown` reconciliation before retry and then `lost` rather than fabricated
+  success when process and receipt are absent;
+- compatible checkpoint and bounded preemption-resume admission.
 
-CPU, memory, GPU, secret injection, checkpoint resume, heartbeat/lease,
-container isolation, remote submission, and unknown-submit recovery remain
-ARF3 work. The local provider rejects unenforced CPU, memory, GPU, and secret
-requirements.
+The local provider rejects GPU allocation, secret injection, restricted
+networking, and monetary budgets. An optional OCI adapter builds a
+digest-pinned Docker-compatible invocation with CPU, memory, GPU, offline
+network, and declared-output boundaries. Allowlisted egress and secret drivers
+remain fail-closed; Ray/remote submission remains ARF5.
 
 ## Local Evidence
 
@@ -220,6 +231,8 @@ Focused verification:
 .venv/Scripts/python.exe -m pytest \
   tests/test_relational_storage_capability.py \
   tests/test_execution_foundation.py \
+  tests/test_provider_status_and_execution_workflow.py \
+  tests/test_research_manager_storage_conformance.py \
   tests/test_runtime_bindings.py -q
 ```
 
@@ -227,29 +240,61 @@ The tests cover:
 
 - per-skill SQLite separation and stale-handle rejection;
 - runtime-bucket placement and redacted bindings;
-- transaction rollback and named parameters;
+- transaction rollback, owner migrations, capacity, backup/restore, retention,
+  deletion, and named parameters;
 - fail-closed capability negotiation;
 - migration-owner and path-traversal rejection;
 - ABI schema validation;
-- execution idempotency, owner isolation, cancellation, timeout, logs, and
-  restart reconciliation;
+- execution idempotency, owner isolation, budgets, declared outputs,
+  cancellation, timeout, heartbeat loss, unknown outcomes, preemption,
+  accelerator contracts, OCI admission, and restart reconciliation;
 - an environment-gated live PostgreSQL conformance run.
 
 The PostgreSQL test uses `ADAOS_TEST_POSTGRES_URL` and creates a uniquely named
 test database. It drops only that exact `adaos_*` database after the test. A
 missing server produces an explicit skip and is not PostgreSQL acceptance.
 
-On 2026-08-07 the PostgreSQL case passed locally against the temporary
-`postgres:16-alpine` container using the `psycopg` driver. The provider created
-and removed its isolated logical database, and the exact `--rm` test container
-was stopped afterward.
+On 2026-08-07 the 35-test focused core/research suite passed locally against a
+temporary `postgres:16-alpine` container using the `psycopg` driver. The live
+cases covered isolated databases and roles, pool/health and credential-refresh
+behavior, migrations, backup/restore, and research-manager/local-tracker
+conformance. The provider removed its exact databases/backups and the exact
+`--rm` test container was stopped afterward.
 
-## Remaining Admission Work
+Native package/lifecycle verification used the existing AdaOS commands rather
+than a research-specific CLI:
 
-Before ARF1 starts depending on these contracts beyond the validated local
-slice:
+```text
+adaos skill validate research_manager_skill --strict --probe-tools
+adaos skill test research_manager_skill --json
+adaos scenario validate tlp_research --json
+adaos scenario test tlp_research
+adaos scenario install tlp_research
+adaos scenario run tlp_research
+adaos tests run --only-sdk ...
+```
 
-- decide whether database migration hooks extend the current skill bucket
-  migration file or receive a narrower SDK contract;
-- keep the first research manager on the public SDK only, with no adapter or
-  private-path imports.
+The published `research_manager_skill` `0.3.0` passed six package tests and was
+healthy in its active service slot. The published `tlp_research` `0.1.2`
+passed four package tests; installation reused the matching healthy dependency
+runtime and execution reached the idempotent `protocol_review` state. The
+focused native SDK run passed with two environment-gated PostgreSQL skips; the
+same PostgreSQL coverage passed in the separate live run above.
+
+The lifecycle exercise also hardened generic core paths: quarantine can be
+recovered by a strictly newer skill version, scenarios dispatch only skill
+routes declared by their package dependencies, repeated scenario installation
+reuses a healthy exact-version service runtime, and `adaos tests run` resolves
+suites and its working directory through `CTX.paths.repo_root()`.
+
+## Preserved Boundaries
+
+The completed slice deliberately leaves these items to their owning milestones:
+
+- existing core repositories remain on their current SQLite boundaries;
+- research schemas remain owned by `research_manager_skill` and use only the
+  public storage/execution SDKs;
+- cross-skill data sharing requires a specialized provider skill and typed
+  views/APIs, never another skill's SQL binding;
+- MLflow, Ray, object/blob provider implementation, remote secrets/network
+  drivers, and broad production operations remain ARF4+ work.
