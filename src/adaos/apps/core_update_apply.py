@@ -352,7 +352,10 @@ def _linux_hardlink_seed_allowed(*, source: Path, target: Path, checkout_dir: Pa
         return True
     if mode not in {"auto", "auto-hardlink", "hardlink-auto"}:
         return False
-    if not _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK_AUTO", "1"):
+    # A failed installer must be able to fall back to the seeded environment.
+    # Hardlink copies can no longer be trusted after an installer has touched
+    # them, so keep the optimization opt-in instead of sacrificing recovery.
+    if not _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK_AUTO", "0"):
         return False
     if checkout_dir is None or not (checkout_dir / "uv.lock").exists() or not _uv_install_enabled():
         return False
@@ -490,6 +493,52 @@ def _root_seed_venv(repo_root_dir: Path | None) -> Path | None:
     return None
 
 
+def _venv_build_toolchain_snapshot(venv_dir: Path) -> dict[str, object]:
+    """Report whether a copied venv can build the local project without PyPI.
+
+    Core updates normally seed the inactive slot from an already working
+    environment. Requiring an unconditional online upgrade of pip/setuptools/
+    wheel defeats that fallback and made member updates fail during transient
+    PyPI outages.
+    """
+
+    venv = Path(venv_dir).expanduser().resolve()
+    if not _venv_is_usable(venv):
+        return {"ready": False, "reason": "venv_unusable", "packages": {}}
+    code = (
+        "import importlib.metadata as m,json; "
+        "names=('pip','setuptools','wheel'); "
+        "installed={str(d.metadata.get('Name') or '').lower():d.version for d in m.distributions()}; "
+        "versions={name:installed.get(name,'') for name in names}; "
+        "print(json.dumps(versions,sort_keys=True))"
+    )
+    try:
+        completed = subprocess.run(
+            [str(_venv_python(venv)), "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+        packages = json.loads(completed.stdout or "{}") if completed.returncode == 0 else {}
+    except Exception as exc:
+        return {
+            "ready": False,
+            "reason": "probe_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "packages": {},
+        }
+    if not isinstance(packages, dict):
+        packages = {}
+    normalized = {name: str(packages.get(name) or "").strip() for name in ("pip", "setuptools", "wheel")}
+    missing = [name for name, version in normalized.items() if not version]
+    return {
+        "ready": not missing,
+        "reason": "ready" if not missing else "packages_missing",
+        "packages": normalized,
+        "missing": missing,
+    }
+
+
 def _prepare_seed_venv(
     *,
     venv_dir: Path,
@@ -505,15 +554,22 @@ def _prepare_seed_venv(
             "reason": "disabled_by_env",
             "target_venv_dir": str(venv_dir),
         }
+    candidates: list[tuple[str, Path, dict[str, object]]] = []
     for source_name, source_path in (
         ("active_slot", _active_slot_seed_venv(slot_dir)),
         ("root_venv", _root_seed_venv(repo_root_dir)),
     ):
         if source_path is None:
             continue
+        candidates.append((source_name, source_path, _venv_build_toolchain_snapshot(source_path)))
+    # Prefer an environment that already contains the local build toolchain.
+    # Stable sorting preserves active_slot preference when both are complete.
+    candidates.sort(key=lambda item: not bool(item[2].get("ready")))
+    for source_name, source_path, toolchain in candidates:
         try:
             result = _copy_seed_venv(source_path, venv_dir, checkout_dir=checkout_dir)
             result["source"] = source_name
+            result["source_build_toolchain"] = toolchain
             if bool(result.get("ok")):
                 return result
         except Exception as exc:
@@ -592,17 +648,41 @@ def _install_slot_project(
                 "installer": "pip",
                 "returncode": None,
                 "seed_discarded": True,
-                "seed_discard_reason": "hardlink_seed_not_reused_for_pip_fallback",
+                "seed_discard_reason": "hardlink_seed_replaced_before_pip_fallback",
             }
         )
         shutil.rmtree(venv_dir, ignore_errors=True)
+        source_venv = Path(str(seed.get("source_venv_dir") or "")).expanduser()
+        if str(seed.get("source_venv_dir") or "").strip() and _venv_is_usable(source_venv):
+            reseed = _copy_seed_venv(source_venv, venv_dir, checkout_dir=None)
+            attempts.append(
+                {
+                    "installer": "pip_seed",
+                    "returncode": 0 if bool(reseed.get("ok")) else 1,
+                    "reason": "safe_copy_after_uv_hardlink_attempt",
+                    "copy_method": reseed.get("copy_method"),
+                }
+            )
 
     if not _venv_is_usable(venv_dir):
         _run([sys.executable, "-m", "venv", str(venv_dir)])
     py = _venv_python(venv_dir)
+    toolchain = _venv_build_toolchain_snapshot(venv_dir)
     try:
-        _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-        _run([str(py), "-m", "pip", "install", str(checkout_dir)])
+        if bool(toolchain.get("ready")):
+            attempts.append(
+                {
+                    "installer": "pip_toolchain",
+                    "returncode": 0,
+                    "bootstrap_skipped": True,
+                    "reason": "seeded_build_toolchain_ready",
+                    "packages": toolchain.get("packages"),
+                }
+            )
+            _run([str(py), "-m", "pip", "install", "--no-build-isolation", str(checkout_dir)])
+        else:
+            _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+            _run([str(py), "-m", "pip", "install", str(checkout_dir)])
     except Exception as first_exc:
         attempts.append(
             {

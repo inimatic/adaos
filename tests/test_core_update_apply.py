@@ -209,6 +209,7 @@ def test_copy_seed_venv_auto_uses_hardlink_after_reflink_fails_for_uv(monkeypatc
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(mod.sys, "platform", "linux")
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK_AUTO", "1")
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/bin/cp" if name == "cp" else None)
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
@@ -221,6 +222,127 @@ def test_copy_seed_venv_auto_uses_hardlink_after_reflink_fails_for_uv(monkeypatc
         ["/bin/cp", "-a", "--reflink=always", f"{source}/.", str(target)],
         ["/bin/cp", "-al", f"{source}/.", str(target)],
     ]
+
+
+def test_prepare_seed_venv_prefers_source_with_complete_build_toolchain(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    active = tmp_path / "active" / "venv"
+    root = tmp_path / "root" / ".venv"
+    target = tmp_path / "target" / "venv"
+    copied: list[Path] = []
+
+    monkeypatch.setattr(mod, "_active_slot_seed_venv", lambda _slot_dir: active)
+    monkeypatch.setattr(mod, "_root_seed_venv", lambda _repo_root: root)
+    monkeypatch.setattr(
+        mod,
+        "_venv_build_toolchain_snapshot",
+        lambda path: {
+            "ready": Path(path) == root,
+            "packages": {"pip": "24", "setuptools": "79", "wheel": "0.45" if Path(path) == root else ""},
+        },
+    )
+
+    def _fake_copy(source, target_venv, *, checkout_dir=None):
+        copied.append(Path(source))
+        return {
+            "ok": True,
+            "seeded": True,
+            "source_venv_dir": str(source),
+            "target_venv_dir": str(target_venv),
+            "copy_method": "cp_archive",
+        }
+
+    monkeypatch.setattr(mod, "_copy_seed_venv", _fake_copy)
+
+    result = mod._prepare_seed_venv(
+        venv_dir=target,
+        slot_dir=tmp_path / "slots" / "B",
+        repo_root_dir=tmp_path / "root",
+        checkout_dir=tmp_path / "checkout",
+    )
+
+    assert copied == [root]
+    assert result["source"] == "root_venv"
+    assert result["source_build_toolchain"]["ready"] is True
+
+
+def test_install_slot_project_reuses_seeded_build_toolchain_without_online_upgrade(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    venv = tmp_path / "venv"
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_venv_is_usable", lambda _path: True)
+    monkeypatch.setattr(
+        mod,
+        "_venv_build_toolchain_snapshot",
+        lambda _path: {
+            "ready": True,
+            "packages": {"pip": "24", "setuptools": "79", "wheel": "0.45"},
+        },
+    )
+    monkeypatch.setattr(mod, "_run", lambda cmd, *, cwd=None: commands.append(list(cmd)))
+
+    result = mod._install_slot_project(
+        checkout_dir=checkout,
+        venv_dir=venv,
+        seed={"seeded": True, "copy_method": "cp_archive"},
+    )
+
+    assert commands == [
+        [str(mod._venv_python(venv)), "-m", "pip", "install", "--no-build-isolation", str(checkout)]
+    ]
+    assert result["ok"] is True
+    assert result["attempts"][0]["bootstrap_skipped"] is True
+
+
+def test_install_slot_project_reseeds_hardlink_copy_before_pip_fallback(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    venv = tmp_path / "venv"
+    venv.mkdir()
+    source = tmp_path / "source-venv"
+    copy_calls: list[tuple[Path, Path, Path | None]] = []
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(mod, "_venv_is_usable", lambda _path: True)
+
+    def _fake_copy(source_venv, target_venv, *, checkout_dir=None):
+        copy_calls.append((Path(source_venv), Path(target_venv), checkout_dir))
+        Path(target_venv).mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "seeded": True, "copy_method": "cp_archive"}
+
+    monkeypatch.setattr(mod, "_copy_seed_venv", _fake_copy)
+    monkeypatch.setattr(
+        mod,
+        "_venv_build_toolchain_snapshot",
+        lambda _path: {
+            "ready": True,
+            "packages": {"pip": "24", "setuptools": "79", "wheel": "0.45"},
+        },
+    )
+    monkeypatch.setattr(mod, "_run", lambda cmd, *, cwd=None: commands.append(list(cmd)))
+
+    result = mod._install_slot_project(
+        checkout_dir=checkout,
+        venv_dir=venv,
+        seed={
+            "seeded": True,
+            "copy_method": "cp_hardlink",
+            "source_venv_dir": str(source),
+        },
+    )
+
+    assert copy_calls == [(source, venv, None)]
+    assert commands == [
+        [str(mod._venv_python(venv)), "-m", "pip", "install", "--no-build-isolation", str(checkout)]
+    ]
+    assert result["attempts"][0]["seed_discard_reason"] == "hardlink_seed_replaced_before_pip_fallback"
+    assert result["attempts"][1]["copy_method"] == "cp_archive"
 
 
 def test_replace_slot_dir_quarantines_destination_when_cleanup_leaves_destination(
