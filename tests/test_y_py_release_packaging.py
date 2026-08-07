@@ -29,6 +29,14 @@ def test_catalina_intel_uses_legacy_compatible_webrtc_stack() -> None:
         "aiortc>=1.9.0 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     ]
 
+    cryptography_requirements = [
+        str(item) for item in project["dependencies"] if str(item).startswith("cryptography")
+    ]
+    assert cryptography_requirements == [
+        "cryptography>=42.0.0,<49.0.0 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+        "cryptography>=42.0.0 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    ]
+
 
 def test_repository_development_keeps_vendored_y_py_override() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -62,19 +70,23 @@ def test_user_bootstraps_only_require_rust_for_explicit_vendored_builds() -> Non
         script = (repo_root / relative_path).read_text(encoding="utf-8")
         assert "--build-vendored-y-py" in script
         assert script.index('if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]') < script.index("command -v cargo")
+        assert "--only-binary :all:" in script
+        assert "--only-binary y-py" not in script
 
     uv_bash = (repo_root / "tools/bootstrap_uv.sh").read_text(encoding="utf-8")
     assert "uv pip install --python \"$ADAOS_PY\" --no-sources" in uv_bash
-    assert "--only-binary y-py" in uv_bash
+    assert "--only-binary :all:" in uv_bash
 
     for relative_path in ("tools/bootstrap.ps1", "tools/bootstrap_uv.ps1"):
         script = (repo_root / relative_path).read_text(encoding="utf-8")
         assert "BuildVendoredYPy" in script
         assert script.index("if ($BuildVendoredYPy)") < script.index("Get-Command cargo")
+        assert "--only-binary :all:" in script
+        assert "--only-binary y-py" not in script
 
     uv_powershell = (repo_root / "tools/bootstrap_uv.ps1").read_text(encoding="utf-8")
     assert "uv pip install --python $adaosPython --no-sources" in uv_powershell
-    assert "--only-binary y-py" in uv_powershell
+    assert "--only-binary :all:" in uv_powershell
 
 
 def test_wheel_workflow_builds_both_macos_architectures() -> None:

@@ -335,7 +335,7 @@ if ($BuildVendoredYPy) {
     if ($LASTEXITCODE -ne 0) { Write-Host "vendored y-py install failed." -ForegroundColor Red; exit 1 }
 }
 else {
-    .\.venv\Scripts\python.exe -m pip install --only-binary y-py -e $userInstallSpec
+    .\.venv\Scripts\python.exe -m pip install --only-binary :all: -e $userInstallSpec
     if ($LASTEXITCODE -ne 0) { Write-Host "pip install -e . failed." -ForegroundColor Red; exit 1 }
 }
 .\.venv\Scripts\python.exe -c "import importlib.metadata as m; assert m.version('y-py') == '0.6.2+adaos.1', m.version('y-py')"

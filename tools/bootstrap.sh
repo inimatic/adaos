@@ -668,7 +668,7 @@ if [[ "$BUILD_VENDORED_Y_PY" == "1" ]]; then
   python -m pip install -e .[dev] || fail "pip install -e .[dev] failed"
   python -m pip install --force-reinstall --no-deps ./vendor/y-py || fail "vendored y-py install failed"
 else
-  python -m pip install --only-binary y-py -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
+  python -m pip install --only-binary :all: -e "$USER_INSTALL_SPEC" || fail "pip install -e $USER_INSTALL_SPEC failed"
 fi
 python -c 'import importlib.metadata as m; assert m.version("y-py") == "0.6.2+adaos.1", m.version("y-py")' \
   || fail "AdaOS requires patched y-py==0.6.2+adaos.1"
