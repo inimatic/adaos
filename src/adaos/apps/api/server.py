@@ -2062,6 +2062,20 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                 )
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+        if node_role == "member" and isinstance(reconnect_result, dict):
+            # A promoted member starts its upstream session asynchronously.
+            # Supervisor may adopt it without pre-emptively stealing the
+            # active member identity, unlike a hub candidate which must prove
+            # root-route authority before adoption.
+            reconnect_result = dict(reconnect_result)
+            reconnect_result.setdefault(
+                "authority",
+                {
+                    "kind": "member_hub",
+                    "required": False,
+                    "ready": None,
+                },
+            )
         authority = (
             reconnect_result.get("authority")
             if isinstance(reconnect_result, dict) and isinstance(reconnect_result.get("authority"), dict)

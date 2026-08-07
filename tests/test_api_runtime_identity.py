@@ -739,6 +739,11 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
 
     assert payload["ok"] is True
     assert payload["reconnect"]["role"] == "member"
+    assert payload["reconnect"]["authority"] == {
+        "kind": "member_hub",
+        "required": False,
+        "ready": None,
+    }
     assert member_reconnect_forces == [True]
     assert wait_values == []
 

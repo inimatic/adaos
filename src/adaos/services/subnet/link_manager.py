@@ -817,7 +817,16 @@ def _member_update_in_progress(snapshot: dict[str, Any], target_version: str) ->
     action = str(update_status.get("action") or "").strip().lower()
     if action not in {"", "update", "start"}:
         return False
-    if state not in {"scheduled", "preparing", "countdown", "draining", "stopping", "restarting", "applying"}:
+    if state not in {
+        "planned",
+        "scheduled",
+        "preparing",
+        "countdown",
+        "draining",
+        "stopping",
+        "restarting",
+        "applying",
+    }:
         return False
     updated_at = _coerce_epoch(update_status.get("updated_at"))
     if updated_at > 0.0 and time.time() - updated_at > _member_core_in_progress_max_age_s():

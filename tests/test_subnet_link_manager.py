@@ -1192,6 +1192,22 @@ def test_member_ahead_comparison_ignores_same_release_build_metadata() -> None:
     assert target_version == "0.1.704"
 
 
+def test_planned_member_retry_is_still_update_in_progress() -> None:
+    assert mod._member_update_in_progress(
+        {
+            "update_status": {
+                "state": "planned",
+                "phase": "scheduled",
+                "action": "update",
+                "target_version": "new-target-abcdef0",
+                "updated_at": mod.time.time(),
+                "planned_reason": "candidate_cutover_failed",
+            }
+        },
+        "new-target-abcdef0",
+    ) is True
+
+
 def test_update_member_status_retries_failed_member_control_request(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     ws = _FakeWebSocket()

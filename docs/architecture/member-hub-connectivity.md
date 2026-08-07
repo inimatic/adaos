@@ -86,6 +86,11 @@ As of the current implementation increment:
   activates member registration and the upstream link. The hub also closes a
   replaced member socket so a surviving runtime reconnects instead of keeping
   an orphaned session after short-lived duplicate overlap.
+- promotion does not require a member candidate to prove `hub_root` authority:
+  the supervisor may adopt it after the runtime reports the active role, then
+  the member establishes `member_hub` asynchronously. A deferred/planned
+  cutover remains update-in-progress so hub reconciliation cannot hot-loop a
+  second update request while the supervisor owns the retry.
 - hub-driven member reconciliation is monotonic by semantic base version. A
   member on a newer release is reported as `member_ahead_of_hub` and is not
   sent an older update target; exact artifact identity still decides whether
