@@ -30,6 +30,14 @@ restarted, upgraded, or temporarily unavailable without removing the sidecar's
 transport observation. The sidecar is the durable diagnostic bridge, but it
 does not reinterpret supervisor update state or runtime business semantics.
 
+Root must not publish browser lifecycle from its process-local socket registry
+alone. In a blue-green or multi-replica deployment the Hub transport and the
+browser SSE can terminate on different Root processes. Root therefore combines
+the Redis-backed sidecar transport lease with the Redis-backed runtime
+control/route report. Sidecar transport without runtime route evidence projects
+`connecting`; both fresh reports project the same `ready` state and semantic
+revision on owning and non-owning Root replicas.
+
 During a core A/B cutover the outgoing supervisor leaves the sidecar process
 alive and persists the fingerprint of the code generation that process actually
 loaded. The incoming supervisor adopts both the listener and that fingerprint;
@@ -190,8 +198,9 @@ diagnostically distinct without asking every browser to rediscover the cause.
 
 ## Verification gates
 
-- Root lifecycle unit tests cover offline, ready, update, stale-source, and
-  direct-work-with-degraded-route states.
+- Root lifecycle unit tests cover offline, ready, update, stale-source,
+  direct-work-with-degraded-route states, and identical cross-replica route
+  projection during blue-green operation.
 - Sidecar tests cover compact state assembly, heartbeat/change reporting, and
   report failure backoff.
 - Browser tests cover fail-closed lease expiry, event-gated WS/YWS, lifecycle
