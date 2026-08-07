@@ -1044,6 +1044,38 @@ def test_hub_member_semantic_channels_snapshot_exposes_media_route_contract() ->
     ]
 
 
+def test_hub_member_semantic_channels_treats_runtime_bound_member_sync_as_nominal() -> None:
+    _reset_state()
+    snapshot = hub_member_semantic_channels_snapshot(
+        role="hub",
+        route_mode="hub",
+        connected_to_hub=None,
+        hub_root_protocol={},
+        transport_evidence={
+            "webrtc_data:events": {"available": True},
+            "webrtc_data:yjs": {
+                "available": True,
+                "browser_hub_only": True,
+                "runtime_bound": False,
+            },
+            "ws": {"available": True},
+            "yws": {"available": True},
+            "root_route_proxy": {"available": True},
+            "member_link_ws": {"available": True},
+            "webrtc_media": {"available": False},
+            "member_browser_webrtc_media": {"available": False},
+            "root_media_relay": {"available": True},
+        },
+    )
+
+    assert snapshot["channels"]["hub_member.command"]["active_path"] == "webrtc_data:events"
+    assert snapshot["channels"]["hub_member.sync"]["active_path"] == "member_link_ws"
+    assert snapshot["assessment"] == {
+        "state": "nominal",
+        "reason": "single_active_authority_paths",
+    }
+
+
 def test_hub_member_transport_evidence_counts_only_media_capable_members(monkeypatch) -> None:
     import adaos.services.media_capability as media_capability
 

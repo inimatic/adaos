@@ -3547,15 +3547,18 @@ def hub_member_semantic_channels_snapshot(
             for channel_id in primary_ids
             if isinstance(channels.get(channel_id), dict)
         ]
-        active_paths = {
-            str(item.get("active_path") or "")
-            for item in primary_channels
-            if isinstance(item, dict) and str(item.get("active_path") or "").strip()
-        }
         if any(str(item.get("state") or "") == "freeze_hold" for item in primary_channels if isinstance(item, dict)):
             assessment_state = "transitioning"
             assessment_reasons.append("freeze_hold_active")
-        elif any(path in {"root_route_proxy", "member_link_ws"} for path in active_paths):
+        elif any(
+            str(item.get("active_path") or "") == "root_route_proxy"
+            or (
+                str(item.get("active_path") or "") == "member_link_ws"
+                and str(item.get("channel_id") or "") != "hub_member.sync"
+            )
+            for item in primary_channels
+            if isinstance(item, dict)
+        ):
             assessment_state = "fallback"
             assessment_reasons.append("fallback_path_active")
     if not assessment_reasons:
