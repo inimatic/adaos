@@ -157,7 +157,10 @@ WebRTC attempt whose control session closes or is replaced in flight is likewise
 not peer-health evidence: the replacement control-session `open` schedules one
 new debounced attempt without carrying the obsolete route's backoff. A failed
 attempt while lifecycle denies commands also cannot postpone recovery after the
-Hub returns.
+Hub returns. Each new ready epoch also grants exactly one five-second retry for
+an initial `dc_open_timeout`; a second timeout returns to the normal two-minute
+pressure backoff, so transient peer cleanup does not create either a long relay
+stall or an RTC retry storm.
 
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
