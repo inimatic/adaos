@@ -396,6 +396,47 @@ def test_member_link_client_skips_hub_succeeded_status_when_already_current(monk
     assert client._last_follow_result == {}
 
 
+def test_member_control_keeps_supervisor_read_timeout_pending(monkeypatch) -> None:
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        async def send(self, payload: str) -> None:
+            import json
+
+            self.messages.append(json.loads(payload))
+
+    client = mod.MemberLinkClient()
+    ws = _FakeWebSocket()
+
+    def _ambiguous_timeout(*_args, **_kwargs):
+        raise RuntimeError(
+            "supervisor_update_route_unavailable: http://127.0.0.1:8776: "
+            "ReadTimeout: HTTPConnectionPool read timed out"
+        )
+
+    monkeypatch.setattr(mod.MemberLinkClient, "_post_local_admin", staticmethod(_ambiguous_timeout))
+    asyncio.run(
+        client._on_core_update_request(
+            ws,
+            {
+                "request_id": "member-update-1",
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "target-abcdef0",
+            },
+        )
+    )
+
+    assert client._last_control_result["ok"] is None
+    assert client._last_control_result["pending"] is True
+    assert client._last_control_result["state"] == "submission_unconfirmed"
+    assert client._last_control_request["state"] == "submission_unconfirmed"
+    assert client._last_control_request["ok"] is None
+    assert ws.messages[-1]["t"] == "core.update.result"
+    assert ws.messages[-1]["result"]["pending"] is True
+
+
 def test_member_link_client_catchup_reads_target_from_hub_manifest(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     calls: list[tuple[str, dict]] = []

@@ -1875,6 +1875,13 @@ class MemberLinkClient:
         return mapping.get(text, "")
 
     @staticmethod
+    def _is_ambiguous_supervisor_submission_error(exc: BaseException) -> bool:
+        text = f"{type(exc).__name__}: {exc}".strip().lower()
+        return "supervisor_update_route_unavailable" in text and (
+            "readtimeout" in text or "read timed out" in text
+        )
+
+    @staticmethod
     def _local_supervisor_bases() -> list[str]:
         return supervisor_base_candidates_from_env(require_signal=True)
 
@@ -2025,16 +2032,32 @@ class MemberLinkClient:
                 }
             except Exception as exc:
                 self._last_control_error = f"{type(exc).__name__}: {exc}"
-                result = {
-                    "ok": False,
-                    "request_id": request_id,
-                    "action": action,
-                    "error": self._last_control_error,
-                }
+                if action in {"update", "rollback"} and self._is_ambiguous_supervisor_submission_error(exc):
+                    # A supervisor POST read timeout does not prove rejection: the
+                    # transition may already be persisted and running. Keep the
+                    # command pending until the regular member snapshot confirms
+                    # its update state instead of publishing a false hard failure.
+                    result = {
+                        "ok": None,
+                        "accepted": None,
+                        "pending": True,
+                        "state": "submission_unconfirmed",
+                        "request_id": request_id,
+                        "action": action,
+                        "error": self._last_control_error,
+                    }
+                else:
+                    result = {
+                        "ok": False,
+                        "request_id": request_id,
+                        "action": action,
+                        "error": self._last_control_error,
+                    }
         self._last_control_completed_at = time.time()
         self._last_control_result = dict(result)
-        self._last_control_request["state"] = "completed"
-        self._last_control_request["ok"] = bool(result.get("ok"))
+        pending_confirmation = bool(result.get("pending"))
+        self._last_control_request["state"] = "submission_unconfirmed" if pending_confirmation else "completed"
+        self._last_control_request["ok"] = None if pending_confirmation else bool(result.get("ok"))
         if not result.get("ok") and result.get("error"):
             self._last_control_request["error"] = str(result.get("error"))
         self._queue_node_snapshot()
