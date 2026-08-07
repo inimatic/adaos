@@ -326,6 +326,72 @@ def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
     assert str(Path(package_dir).resolve().parent) in entries
 
 
+def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    name = "owned_service"
+    skill_root = (
+        tmp_path / ".runtime" / name / "v0.1" / "slots" / "A" / "src" / "skills" / name
+    )
+    skill_root.mkdir(parents=True)
+    spec = mod.ServiceSpec(
+        skill=name,
+        skill_root=skill_root,
+        host="127.0.0.1",
+        port=18129,
+        command=["-m", "handlers.service"],
+        workdir=skill_root,
+        env_mode="global",
+        python_selector=None,
+        venv_dir=None,
+        dependencies=[],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+    captured = {}
+
+    class _Proc:
+        pid = 9129
+
+        def poll(self):
+            return None
+
+    def _popen(_cmd, **kwargs):
+        captured.update(kwargs["env"])
+        return _Proc()
+
+    monkeypatch.setenv("ADAOS_SKILL_NAME", "foreign_skill")
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(tmp_path / "foreign" / "skill_env.json"))
+    monkeypatch.setattr(mod, "_service_health_ok", lambda _spec: False)
+    monkeypatch.setattr(mod, "_service_listener_snapshot", lambda _spec: {"pid": 0})
+    monkeypatch.setattr(mod.subprocess, "Popen", _popen)
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs[name] = spec
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    supervisor._wait_ready = lambda _spec: asyncio.sleep(0)  # type: ignore[method-assign]
+    asyncio.run(supervisor.ensure_started(name, spec, force=True))
+
+    bucket = skill_root.parents[4]
+    assert captured["ADAOS_SKILL_NAME"] == name
+    assert captured["ADAOS_SKILL_ROOT"] == str(skill_root)
+    assert captured["ADAOS_SKILL_ENV_PATH"] == str(bucket / "data" / "db" / "skill_env.json")
+
+
 def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod

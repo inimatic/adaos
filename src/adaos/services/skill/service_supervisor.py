@@ -911,16 +911,19 @@ class ServiceSkillSupervisor:
         if bucket_root is not None:
             skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
             internal_data = bucket_root / "data" / "internal"
-            env.setdefault("ADAOS_SKILL_ENV_PATH", str(skill_env_path))
-            env.setdefault("ADAOS_SKILL_MEMORY_PATH", str(skill_env_path))
-            env.setdefault("ADAOS_SKILL_INTERNAL_DATA_ROOT", str(internal_data))
-            env.setdefault("ADAOS_SKILL_INTERNAL_ACTIVE_PATH", str(internal_data))
-            env.setdefault("ADAOS_SKILL_INTERNAL_TARGET_PATH", str(internal_data))
-        env.setdefault("ADAOS_SKILL_NAME", name)
-        env.setdefault("ADAOS_SKILL_PACKAGE", f"skills.{name}")
-        env.setdefault("ADAOS_SKILL_ROOT", str(spec.skill_root))
-        env.setdefault("ADAOS_SKILL_MODE", "runtime")
-        env.setdefault("ADAOS_BASE_DIR", str(_path_value(self._ctx.paths.base_dir())))
+            # Owner identity and storage paths are capabilities of this service,
+            # never ambient values inherited from the process that happened to
+            # start it.  Reusing a caller's skill environment breaks isolation.
+            env["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
+            env["ADAOS_SKILL_MEMORY_PATH"] = str(skill_env_path)
+            env["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(internal_data)
+            env["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(internal_data)
+            env["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(internal_data)
+        env["ADAOS_SKILL_NAME"] = name
+        env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"
+        env["ADAOS_SKILL_ROOT"] = str(spec.skill_root)
+        env["ADAOS_SKILL_MODE"] = "runtime"
+        env["ADAOS_BASE_DIR"] = str(_path_value(self._ctx.paths.base_dir()))
         for env_name, path_value in (
             ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
             ("ADAOS_REPO_ROOT", _optional_path_value(self._ctx.paths, "repo_root")),
@@ -929,7 +932,7 @@ class ServiceSkillSupervisor:
             ("ADAOS_LOGS_DIR", _optional_path_value(self._ctx.paths, "logs_dir")),
         ):
             if path_value is not None:
-                env.setdefault(env_name, str(path_value))
+                env[env_name] = str(path_value)
         env["PYTHONPATH"] = _service_pythonpath(self._ctx.paths, spec.skill_root, env.get("PYTHONPATH", ""))
 
         cmd = self._build_command(python, spec.command)
