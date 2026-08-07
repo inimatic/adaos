@@ -57,6 +57,7 @@ event: lifecycle
 The snapshot includes:
 
 - semantic `state` and `reason`;
+- normalized `outage.kind` and `outage.planned`;
 - `transition` with update/restart phase and target version;
 - root transport and route readiness;
 - runtime, control, and runtime-owned YWS readiness;
@@ -82,6 +83,11 @@ change, and otherwise sends a 15-second heartbeat. Report failures use bounded
 exponential backoff in the sidecar only. Browser clients never multiply that
 recovery loop.
 
+On an orderly service stop, sidecar first stops its heartbeat loop and sends
+one final `shutdown.kind=planned` report. If the process or host disappears
+without that marker, Root changes the diagnosis to `unexpected_shutdown` when
+the last sidecar lease expires. A new sidecar epoch replaces either diagnosis.
+
 ## Browser behavior
 
 The browser lifecycle coordinator is created before control WS and YWS:
@@ -94,6 +100,12 @@ The browser lifecycle coordinator is created before control WS and YWS:
    changes the applicable capability.
 6. On lease expiry, close/gate the affected transports and keep the SSE watch.
 
+Transport actions are edge-triggered. Renewing a lease or receiving an SSE
+heartbeat with unchanged capabilities must not call `connect()` or
+`disconnect()` again. A routed YWS URL additionally requires
+`transport.route_ready`; this route condition does not disable an already
+established direct `webrtc_data:yjs` channel.
+
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
 or explicitly clear the gate for a local-only runtime. This closes the startup
@@ -105,6 +117,17 @@ is sampled once after a meaningful lifecycle or transport change; it has no
 independent degraded-state heartbeat. Supervisor/update presentation is
 derived from the lifecycle stream, not from periodic runtime or supervisor
 requests.
+
+UI diagnostics use the same lifecycle gate. While a routed Root path is
+unavailable, events remain in a bounded local queue and no diagnostics POST is
+started. After recovery, flushes are rate-limited and the reliability probe has
+a 15-second retrigger cooldown so the lifecycle, control, and sync edges of one
+restart cannot each produce a request.
+
+Local bootstrap probing also has exactly one request owner. A CORS `fetch`
+includes its preflight in the same completion path; the client never aborts it
+and immediately starts an XHR fallback. Failed local discovery uses exponential
+backoff from 2 to 60 seconds and probes only the canonical node-status route.
 
 Availability flags use the lifecycle lease as their authoritative source.
 Components may use `canRunCommands`, `canTrustStateSync`,
@@ -146,6 +169,22 @@ authority also remains in runtime.
 - stale source evidence expires capabilities even if the last semantic state
   was `ready`.
 
+The browser-facing reasons are deliberately distinct:
+
+| Reason | Authority | Meaning |
+| --- | --- | --- |
+| `planned_shutdown` | sidecar final marker / supervisor | orderly service stop |
+| update phase such as `shutdown` or `activate_candidate` | supervisor through sidecar | planned staged core update |
+| `runtime_crashed` | sidecar plus supervisor process evidence | runtime was desired but is no longer alive |
+| `unexpected_shutdown` | Root lease inference | Hub vanished without a planned marker |
+| `root_transport_disconnected` | Root plus sidecar | Hub/runtime may live, but the Root route is down |
+| `root_unreachable` | browser | internet appears online, but lifecycle authority cannot be reached |
+| `no_internet` | browser network event | the browser itself reports network loss |
+
+`root_unreachable` and `no_internet` cannot be authored by Root because Root is
+the missing observer in those cases. They are fail-closed client projections
+and are replaced only by a fresh Root lifecycle snapshot/event.
+
 This separation keeps an update, a route outage, and a runtime readiness gap
 diagnostically distinct without asking every browser to rediscover the cause.
 
@@ -160,4 +199,6 @@ diagnostically distinct without asking every browser to rediscover the cause.
   command delivery without reopening Root control.
 - Stand verification must observe one lifecycle SSE connection per browser,
   no repeated browser `status`/`summary` requests while offline/updating, and a
-  transition to the ready capabilities after the Root event.
+  transition to the ready capabilities after the Root event. A stop/start
+  capture must show at most one routed YWS connection attempt for the recovery
+  edge and no canceled-fetch/XHR pair behind a pending CORS preflight.

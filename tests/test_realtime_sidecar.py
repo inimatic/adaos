@@ -97,6 +97,25 @@ def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: P
     )
 
 
+def test_sidecar_lifecycle_report_marks_a_planned_shutdown(tmp_path: Path) -> None:
+    payload = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": True},
+        runtime_listener_ready=False,
+        source_epoch="epoch-a",
+        revision=4,
+        reported_at=120.0,
+        shutdown_kind="planned",
+        shutdown_reason="service_stop",
+    )
+
+    assert payload["shutdown"] == {
+        "kind": "planned",
+        "reason": "service_stop",
+        "observed_at": 120.0,
+    }
+
+
 def test_sidecar_lifecycle_tls_appends_hub_ca_to_system_trust(monkeypatch, tmp_path: Path) -> None:
     ca_path = tmp_path / "adaos-ca.pem"
     ca_path.write_text("test-ca", encoding="utf-8")

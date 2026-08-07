@@ -1654,6 +1654,8 @@ def build_sidecar_lifecycle_report(
     source_epoch: str,
     revision: int,
     reported_at: float | None = None,
+    shutdown_kind: str | None = None,
+    shutdown_reason: str | None = None,
 ) -> dict[str, Any]:
     now = time.time() if reported_at is None else float(reported_at)
     state_dir = Path(base_dir).resolve() / "state"
@@ -1683,7 +1685,7 @@ def build_sidecar_lifecycle_report(
     else:
         transport_state = "offline"
 
-    return {
+    payload = {
         "schema": "adaos.hub.lifecycle.sidecar.v1",
         "source": "realtime_sidecar",
         "source_epoch": str(source_epoch),
@@ -1707,6 +1709,14 @@ def build_sidecar_lifecycle_report(
             "session_id": str(transport_snapshot.get("session_id") or "").strip() or None,
         },
     }
+    normalized_shutdown_kind = str(shutdown_kind or "").strip().lower()
+    if normalized_shutdown_kind:
+        payload["shutdown"] = {
+            "kind": normalized_shutdown_kind,
+            "reason": str(shutdown_reason or "service_stop").strip() or "service_stop",
+            "observed_at": now,
+        }
+    return payload
 
 
 def _sidecar_lifecycle_report_target() -> tuple[str, Path | None, Path, Path] | None:
@@ -2053,6 +2063,10 @@ class RealtimeSidecarServer:
                     with contextlib.suppress(BaseException):
                         await shutdown_task
 
+    @property
+    def shutdown_requested(self) -> bool:
+        return self._shutdown_requested.is_set()
+
     async def _handle_control_client(
         self,
         reader: asyncio.StreamReader,
@@ -2080,7 +2094,34 @@ class RealtimeSidecarServer:
             self._log("graceful shutdown requested through local control endpoint")
             self._shutdown_requested.set()
 
-    async def close(self) -> None:
+    async def close(self, *, planned_shutdown: bool = False) -> None:
+        lifecycle_reporting = self._lifecycle_task is not None
+        if self._lifecycle_task is not None and not self._lifecycle_task.done():
+            self._lifecycle_task.cancel()
+            with contextlib.suppress(BaseException):
+                await self._lifecycle_task
+        self._lifecycle_task = None
+        if planned_shutdown and lifecycle_reporting:
+            try:
+                payload = build_sidecar_lifecycle_report(
+                    base_dir=current_base_dir(),
+                    transport_snapshot=self._diag_snapshot(),
+                    runtime_listener_ready=False,
+                    source_epoch=self._lifecycle_source_epoch,
+                    revision=self._lifecycle_revision + 1,
+                    shutdown_kind="planned",
+                    shutdown_reason="service_stop",
+                )
+                await asyncio.wait_for(
+                    asyncio.to_thread(_post_sidecar_lifecycle_report, payload),
+                    timeout=6.0,
+                )
+                self._log("planned shutdown lifecycle report delivered")
+            except Exception as exc:
+                self._log(
+                    "planned shutdown lifecycle report deferred "
+                    f"err={type(exc).__name__}: {exc}"
+                )
         self._stopped.set()
         active_tasks = self._live_session_tasks()
         for task in active_tasks:
@@ -2114,11 +2155,6 @@ class RealtimeSidecarServer:
             self._diag_task.cancel()
             with contextlib.suppress(BaseException):
                 await self._diag_task
-        if self._lifecycle_task is not None and not self._lifecycle_task.done():
-            self._lifecycle_task.cancel()
-            with contextlib.suppress(BaseException):
-                await self._lifecycle_task
-
     async def _start_route_tunnel_listeners(self) -> None:
         listeners = realtime_sidecar_route_tunnel_listeners()
         for kind, listener in listeners.items():
@@ -3095,7 +3131,9 @@ async def run_realtime_sidecar(*, host: str | None = None, port: int | None = No
             shutdown_task.cancel()
             with contextlib.suppress(BaseException):
                 await shutdown_task
-        await server.close()
+        await server.close(
+            planned_shutdown=shutdown_requested.is_set() or server.shutdown_requested,
+        )
         _restore_realtime_shutdown_handlers(previous_handlers)
     return 0
 
