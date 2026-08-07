@@ -14,6 +14,7 @@
     "isolation",
     "locator",
     "migration_owner",
+    "protocol_version",
     "capabilities",
     "secret_ref"
   ],
@@ -30,6 +31,7 @@
       "pattern": "^[a-z][a-z0-9_.-]*:[a-z0-9_./-]+$"
     },
     "migration_owner": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "protocol_version": { "const": "1.0" },
     "capabilities": { "type": "object" },
     "secret_ref": {
       "oneOf": [

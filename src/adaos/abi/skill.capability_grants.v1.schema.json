@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.skill_capability_grants.v1",
+  "title": "AdaOS Per-Skill Capability Admission Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "subjects"],
+  "properties": {
+    "schema": { "const": "adaos.skill_capability_grants.v1" },
+    "subjects": {
+      "type": "object",
+      "patternProperties": {
+        "^skill:[a-z0-9_.-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" }
+            },
+            "deny": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

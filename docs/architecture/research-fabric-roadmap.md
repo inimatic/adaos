@@ -198,17 +198,21 @@ The implementation and convergence inventory are recorded in
 - [x] `[must]` `ARF05-10` Reject CPU, memory, GPU, secret, and working-directory
   requirements that the local provider cannot enforce; keep the process
   adapter explicitly outside the hostile-code trust boundary.
-- [ ] `[should]` `ARF05-11` Bind governed workflow activity dispatch to the
+- [x] `[should]` `ARF05-11` Bind governed workflow activity dispatch to the
   executor port and generic operation reference without replacing or
-  duplicating `OperationManager`.
-- [ ] `[should]` `ARF05-12` Define provider health/status projections and
-  protocol-version negotiation for relational and execution bindings.
+  duplicating `OperationManager`. The generic activity adapter now submits an
+  immutable execution spec and returns separate workflow, attempt, and
+  operation references.
+- [x] `[should]` `ARF05-12` Define provider health/status projections and
+  protocol-version negotiation for relational and execution bindings. Both
+  advertise protocol `1.0` and redacted feature/status records.
 - [x] `[deferred]` `ARF05-13` Do not migrate existing core SQLite repositories,
   add cross-skill SQL grants, implement MLflow/Ray, or introduce research-domain
   entities in this preparation milestone.
-- [ ] `[should]` `ARF05-14` Replace the current baseline `core` capability
-  fallback with authoritative manifest/profile-driven per-skill admission when
-  that policy path is ready; keep binding ownership independent of admission.
+- [x] `[should]` `ARF05-14` Replace the baseline `core` capability fallback
+  with authoritative manifest/profile-driven per-skill admission. A profile
+  may narrow but cannot invent a capability, and binding ownership remains
+  independent of admission.
 
 ## ARF1. Local Research Kernel and TLP Skeleton
 

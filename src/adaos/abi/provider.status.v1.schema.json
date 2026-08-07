@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.provider.status.v1",
+  "title": "AdaOS Capability Provider Status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "capability",
+    "provider_id",
+    "protocol_version",
+    "health",
+    "features",
+    "checked_at",
+    "reason_code",
+    "details"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.provider.status.v1" },
+    "capability": { "type": "string", "minLength": 1 },
+    "provider_id": { "type": "string", "minLength": 1 },
+    "protocol_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "health": { "enum": ["healthy", "degraded", "unavailable"] },
+    "features": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "checked_at": { "type": "string", "minLength": 1 },
+    "reason_code": { "type": ["string", "null"] },
+    "details": { "type": "object" }
+  }
+}

@@ -249,6 +249,16 @@
       }
     },
 
+    "capabilities": {
+      "description": "Fine-grained SDK capabilities requested by this skill and admitted by the active profile.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+      }
+    },
+
     "events": {
       "description": "Static event wiring hints for the skill (topics it subscribes to or publishes).",
       "type": "object",

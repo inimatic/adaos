@@ -121,6 +121,7 @@ from .relational_storage import (
     RelationalStorageRequirements,
 )
 from .ownership import OwnershipContractError, OwnershipIsolationError, validate_owner_ref
+from .provider_status import ProviderProtocolError, ProviderStatus, protocol_compatible
 from .runtime_bindings import ContentRef, RuntimeBindingContractError, ServiceBinding
 from .execution import (
     EXECUTION_STATUSES,
@@ -129,6 +130,7 @@ from .execution import (
     ExecutionContractError,
     ExecutionResourceRequest,
     ExecutionSpec,
+    ExecutorProviderCapabilities,
 )
 
 __all__ = [
@@ -236,6 +238,8 @@ __all__ = [
     "ContentRef",
     "OwnershipContractError",
     "OwnershipIsolationError",
+    "ProviderProtocolError",
+    "ProviderStatus",
     "RelationalProviderCapabilities",
     "RelationalStorageBinding",
     "RelationalStorageCapabilityError",
@@ -248,7 +252,9 @@ __all__ = [
     "EXECUTION_TERMINAL_STATUSES",
     "ExecutionAttempt",
     "ExecutionContractError",
+    "ExecutorProviderCapabilities",
     "ExecutionResourceRequest",
     "ExecutionSpec",
     "validate_owner_ref",
+    "protocol_compatible",
 ]

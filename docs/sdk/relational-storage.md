@@ -74,11 +74,11 @@ own explicit provider variants and conformance tests.
 - Public bindings contain opaque locators and secret references only.
 - The in-process Python runtime is not a hostile-code security boundary.
 
-The current node bootstrap grants `storage.relational` through the SDK
-resolver's core fallback, so the gate is presently an integration/admission
-seam rather than a per-skill authorization boundary. Database ownership and
-stale-handle checks do not depend on that fallback. Manifest/profile-driven
-per-skill grant hydration remains policy work.
+The skill must declare `storage.relational` in `skill.yaml:capabilities`.
+An optional node profile at `state/capabilities/skill_grants.json` may narrow
+that declaration with per-skill allow/deny rules; a profile cannot grant a
+capability absent from the signed/installed manifest. Database ownership and
+stale-handle checks remain independent, defense-in-depth enforcement.
 
 Direct cross-skill SQL access is deliberately unsupported. Shared data should
 be owned by a specialized provider skill that publishes typed APIs, events,

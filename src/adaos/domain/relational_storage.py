@@ -137,24 +137,41 @@ class RelationalProviderCapabilities:
     backup_restore: bool
     localities: tuple[str, ...]
     isolation: str
+    protocol_version: str = "1.0"
 
     def __post_init__(self) -> None:
         provider_id = _required_token(self.provider_id, "provider_id").lower()
         durability = tuple(dict.fromkeys(str(item).strip().lower() for item in self.durability))
         localities = tuple(dict.fromkeys(str(item).strip().lower() for item in self.localities))
         isolation = str(self.isolation or "").strip().lower()
+        protocol_version = str(self.protocol_version or "").strip()
         if not durability or any(item not in _ALLOWED_DURABILITY for item in durability):
             raise RelationalStorageContractError("provider durability profile is invalid")
         if not localities or any(item not in _ALLOWED_LOCALITY for item in localities):
             raise RelationalStorageContractError("provider locality profile is invalid")
         if isolation not in _ALLOWED_ISOLATION:
             raise RelationalStorageContractError("provider isolation mode is invalid")
+        if protocol_version != "1.0":
+            raise RelationalStorageContractError("unsupported relational provider protocol version")
         if self.max_concurrent_writers is not None and int(self.max_concurrent_writers) < 1:
             raise RelationalStorageContractError("max_concurrent_writers must be >= 1 or null")
         object.__setattr__(self, "provider_id", provider_id)
         object.__setattr__(self, "durability", durability)
         object.__setattr__(self, "localities", localities)
         object.__setattr__(self, "isolation", isolation)
+        object.__setattr__(self, "protocol_version", protocol_version)
+
+    @property
+    def features(self) -> tuple[str, ...]:
+        values = ["transactions" if self.transactions else ""]
+        values.extend(f"durability:{item}" for item in self.durability)
+        values.extend(f"locality:{item}" for item in self.localities)
+        values.append(f"isolation:{self.isolation}")
+        if self.json:
+            values.append("json")
+        if self.backup_restore:
+            values.append("backup_restore")
+        return tuple(item for item in values if item)
 
     def rejection_reasons(self, requirements: RelationalStorageRequirements) -> tuple[str, ...]:
         reasons: list[str] = []
@@ -185,6 +202,8 @@ class RelationalProviderCapabilities:
             "backup_restore": self.backup_restore,
             "localities": list(self.localities),
             "isolation": self.isolation,
+            "protocol_version": self.protocol_version,
+            "features": list(self.features),
         }
 
 
@@ -201,6 +220,7 @@ class RelationalStorageBinding:
     isolation: str
     locator: str
     migration_owner: str
+    protocol_version: str = "1.0"
     capabilities: Mapping[str, Any] = field(default_factory=dict)
     secret_ref: str | None = None
 
@@ -212,12 +232,15 @@ class RelationalStorageBinding:
         isolation = str(self.isolation or "").strip().lower()
         locator = _required_token(self.locator, "locator")
         migration_owner = validate_owner_ref(self.migration_owner)
+        protocol_version = str(self.protocol_version or "").strip()
         if isolation not in _ALLOWED_ISOLATION:
             raise RelationalStorageContractError("binding isolation mode is invalid")
         if migration_owner != owner_ref:
             raise RelationalStorageIsolationError(
                 "private binding migration_owner must equal owner_ref"
             )
+        if protocol_version != "1.0":
+            raise RelationalStorageContractError("unsupported relational binding protocol version")
         if (
             any(token in locator.lower() for token in ("password=", "://", "@"))
             or not _LOCATOR_RE.fullmatch(locator)
@@ -243,6 +266,7 @@ class RelationalStorageBinding:
         object.__setattr__(self, "isolation", isolation)
         object.__setattr__(self, "locator", locator)
         object.__setattr__(self, "migration_owner", migration_owner)
+        object.__setattr__(self, "protocol_version", protocol_version)
         object.__setattr__(self, "capabilities", dict(self.capabilities))
         object.__setattr__(self, "secret_ref", secret_ref)
 
@@ -264,6 +288,7 @@ class RelationalStorageBinding:
             "isolation": self.isolation,
             "locator": self.locator,
             "migration_owner": self.migration_owner,
+            "protocol_version": self.protocol_version,
             "capabilities": dict(self.capabilities),
             "secret_ref": self.secret_ref,
         }

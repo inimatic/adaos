@@ -102,10 +102,24 @@ Acquisition passes through the current AdaOS SDK capability resolver for
 `storage.relational`; ownership isolation is enforced separately by the
 binding and active skill context.
 
-The current bootstrap grants this baseline capability through the resolver's
-`core` fallback. That makes the gate an integration seam today, not a claim of
-fine-grained in-process authorization. Future manifest/profile grant hydration
-may narrow admission without changing binding ownership or the SDK contract.
+Admission is fail-closed and per skill: the installed `skill.yaml` must declare
+`storage.relational`, and an optional node profile may narrow it with explicit
+allow/deny rules. A profile cannot invent an undeclared capability. Binding
+ownership and stale-handle checks remain independent defense in depth.
+
+### Provider status and workflow binding
+
+Relational and execution providers expose protocol `1.0`, typed feature sets,
+and redacted `ProviderStatus` records. `ProviderStatusRegistry` produces one
+bounded projection and rejects incompatible major/minor requirements before a
+binding is used.
+
+`ExecutionWorkflowActivityAdapter` is a handler for the existing durable
+`WorkflowActivityRunner`. It submits an immutable `ExecutionSpec` through the
+generic executor port and, when requested, creates a reference in the existing
+`OperationManager`. Workflow activity identity, physical execution identity,
+and user-visible operation identity remain separate; no second workflow or
+operation authority was introduced.
 
 The SQL facade uses SQLAlchemy-style named parameters. The interface is
 provider-neutral; SQL dialect and owner migrations are not magically portable.
@@ -237,10 +251,5 @@ slice:
 
 - decide whether database migration hooks extend the current skill bucket
   migration file or receive a narrower SDK contract;
-- bind execution activities to the governed workflow without duplicating
-  `OperationManager` authority;
-- define provider health/status projection and feature-version negotiation;
-- connect `storage.relational` admission to authoritative per-skill
-  manifest/profile grants when that policy path is ready;
 - keep the first research manager on the public SDK only, with no adapter or
   private-path imports.

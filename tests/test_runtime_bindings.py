@@ -14,6 +14,7 @@ from adaos.domain.runtime_bindings import (
     RuntimeBindingContractError,
     ServiceBinding,
 )
+from adaos.domain.provider_status import ProviderStatus
 
 
 def test_content_ref_is_generic_and_content_addressed() -> None:
@@ -95,6 +96,8 @@ def test_relational_binding_rejects_inline_secret_values() -> None:
 def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None:
     abi_root = Path(__file__).resolve().parents[1] / "src" / "adaos" / "abi"
     names = (
+        "provider.status.v1.schema.json",
+        "skill.capability_grants.v1.schema.json",
         "content.ref.v1.schema.json",
         "service.binding.v1.schema.json",
         "storage.relational_requirement.v1.schema.json",
@@ -158,6 +161,22 @@ def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None
         status="accepted",
     )
     payloads = {
+        "provider.status.v1.schema.json": ProviderStatus(
+            capability="storage.relational",
+            provider_id="sqlite",
+            protocol_version="1.0",
+            health="healthy",
+            features=("transactions",),
+        ).to_dict(),
+        "skill.capability_grants.v1.schema.json": {
+            "schema": "adaos.skill_capability_grants.v1",
+            "subjects": {
+                "skill:fixture": {
+                    "allow": ["storage.relational"],
+                    "deny": [],
+                }
+            },
+        },
         "content.ref.v1.schema.json": content.to_dict(),
         "service.binding.v1.schema.json": service.to_dict(),
         "storage.relational_requirement.v1.schema.json": requirement.to_dict(),

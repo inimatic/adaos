@@ -17,18 +17,23 @@ from adaos.domain.relational_storage import (
     RelationalStorageRequirements,
 )
 from adaos.sdk.data.relational import database
-from adaos.sdk.core.errors import CapabilityError
-from adaos.services.policy.capabilities import InMemoryCapabilities
+from adaos.services.policy.skill_capabilities import SkillCapabilityAdmissionError
 from adaos.services.storage.relational import RelationalStorageBroker
 
 
-def _activate_skill(ctx, name: str) -> Path:
-    if not hasattr(ctx.caps, "has") and not hasattr(ctx.caps, "allows"):
-        caps = InMemoryCapabilities()
-        caps.grant("core", "storage.relational")
-        object.__setattr__(ctx, "caps", caps)
+def _activate_skill(
+    ctx,
+    name: str,
+    *,
+    capabilities: tuple[str, ...] = ("storage.relational",),
+) -> Path:
     source = Path(ctx.paths.skills_dir()) / name
     source.mkdir(parents=True, exist_ok=True)
+    (source / "skill.yaml").write_text(
+        "name: " + name + "\nversion: 0.1.0\ncapabilities:\n"
+        + "".join(f"  - {item}\n" for item in capabilities),
+        encoding="utf-8",
+    )
     assert ctx.skill_ctx.set(name, source)
     return source
 
@@ -69,10 +74,32 @@ def test_sdk_database_is_private_to_current_skill(_autocontext) -> None:
 
 def test_sdk_database_requires_relational_capability(_autocontext) -> None:
     ctx = _autocontext
-    _activate_skill(ctx, "ungranted_skill")
-    object.__setattr__(ctx, "caps", InMemoryCapabilities())
+    _activate_skill(ctx, "ungranted_skill", capabilities=())
 
-    with pytest.raises(CapabilityError, match="storage.relational"):
+    with pytest.raises(SkillCapabilityAdmissionError, match="not_declared"):
+        database("main")
+
+
+def test_profile_can_deny_a_declared_relational_capability(_autocontext) -> None:
+    ctx = _autocontext
+    _activate_skill(ctx, "profile_denied_skill")
+    profile = Path(ctx.paths.state_dir()) / "capabilities" / "skill_grants.json"
+    profile.parent.mkdir(parents=True, exist_ok=True)
+    profile.write_text(
+        json.dumps(
+            {
+                "schema": "adaos.skill_capability_grants.v1",
+                "subjects": {
+                    "skill:profile_denied_skill": {
+                        "deny": ["storage.relational"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SkillCapabilityAdmissionError, match="profile_denied"):
         database("main")
 
 

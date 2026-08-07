@@ -14,7 +14,8 @@ from adaos.domain.relational_storage import (
     RelationalStorageIsolationError,
     RelationalStorageRequirements,
 )
-from adaos.sdk.core._cap import require_cap
+from adaos.sdk.core._ctx import require_ctx
+from adaos.services.policy.skill_capabilities import require_skill_capability
 from adaos.services.storage.relational import (
     RelationalDatabase,
     RelationalResult,
@@ -28,7 +29,8 @@ def database(
     *,
     requirements: RelationalStorageRequirements | None = None,
 ) -> RelationalDatabase:
-    ctx = require_cap("storage.relational")
+    ctx = require_ctx("sdk.data.relational.database")
+    require_skill_capability(ctx, "storage.relational")
     return RelationalStorageService(ctx).acquire_for_current_skill(
         name,
         requirements=requirements,

@@ -22,6 +22,34 @@ class ExecutionContractError(ValueError):
     """Raised when an execution specification or attempt is invalid."""
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutorProviderCapabilities:
+    provider_id: str
+    protocol_version: str = "1.0"
+    features: tuple[str, ...] = ()
+    hostile_isolation: bool = False
+
+    def __post_init__(self) -> None:
+        provider_id = _token(self.provider_id, "provider_id").lower()
+        protocol = str(self.protocol_version or "").strip()
+        if protocol != "1.0":
+            raise ExecutionContractError("unsupported executor provider protocol version")
+        features = tuple(
+            dict.fromkeys(str(item).strip().lower() for item in self.features if str(item).strip())
+        )
+        object.__setattr__(self, "provider_id", provider_id)
+        object.__setattr__(self, "protocol_version", protocol)
+        object.__setattr__(self, "features", features)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider_id": self.provider_id,
+            "protocol_version": self.protocol_version,
+            "features": list(self.features),
+            "hostile_isolation": self.hostile_isolation,
+        }
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -116,6 +144,39 @@ class ExecutionSpec:
             "checkpoint": self.checkpoint.to_dict() if self.checkpoint else None,
             "metadata": dict(self.metadata),
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ExecutionSpec":
+        def _content(raw: Any) -> ContentRef | None:
+            if not isinstance(raw, Mapping):
+                return None
+            return ContentRef(
+                uri=str(raw.get("uri") or ""),
+                digest=str(raw.get("digest") or ""),
+                size_bytes=int(raw.get("size_bytes") or 0),
+                media_type=str(raw.get("media_type") or "application/octet-stream"),
+                owner_ref=str(raw.get("owner_ref") or ""),
+                kind=str(raw.get("kind") or "artifact"),
+                metadata=dict(raw.get("metadata") or {}),
+            )
+
+        resources = dict(value.get("resources") or {})
+        inputs = tuple(
+            item for item in (_content(raw) for raw in value.get("inputs") or []) if item is not None
+        )
+        return cls(
+            spec_id=str(value.get("spec_id") or ""),
+            owner_ref=str(value.get("owner_ref") or ""),
+            command=tuple(str(item) for item in value.get("command") or ()),
+            working_directory=str(value.get("working_directory") or ""),
+            environment=dict(value.get("environment") or {}),
+            secret_refs=tuple(str(item) for item in value.get("secret_refs") or ()),
+            resources=ExecutionResourceRequest(**resources),
+            inputs=inputs,
+            expected_outputs=tuple(str(item) for item in value.get("expected_outputs") or ()),
+            checkpoint=_content(value.get("checkpoint")),
+            metadata=dict(value.get("metadata") or {}),
+        )
 
     @property
     def digest(self) -> str:
@@ -250,6 +311,7 @@ __all__ = [
     "EXECUTION_TERMINAL_STATUSES",
     "ExecutionAttempt",
     "ExecutionContractError",
+    "ExecutorProviderCapabilities",
     "ExecutionResourceRequest",
     "ExecutionSpec",
 ]

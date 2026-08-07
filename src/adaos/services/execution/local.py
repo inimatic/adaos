@@ -20,6 +20,7 @@ from adaos.domain.execution import (
     ExecutionAttempt,
     ExecutionContractError,
     ExecutionSpec,
+    ExecutorProviderCapabilities,
 )
 from adaos.domain.ownership import OwnershipIsolationError, validate_owner_ref
 from adaos.domain.runtime_bindings import ContentRef
@@ -71,6 +72,21 @@ class LocalProcessExecutor:
     """
 
     provider_id = "local-process"
+
+    @property
+    def capabilities(self) -> ExecutorProviderCapabilities:
+        return ExecutorProviderCapabilities(
+            provider_id=self.provider_id,
+            features=(
+                "idempotency",
+                "cancellation",
+                "restart_reconciliation",
+                "stdout",
+                "stderr",
+                "wall_time",
+            ),
+            hostile_isolation=False,
+        )
 
     def __init__(self, *, state_root: Path, allowed_roots: tuple[Path, ...]) -> None:
         self._root = (Path(state_root).expanduser().resolve() / "executions" / "local").resolve()
