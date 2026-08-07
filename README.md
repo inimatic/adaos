@@ -2,12 +2,20 @@
 
 ![AdaOS CI](https://github.com/inimatic/adaos/actions/workflows/ci.yml/badge.svg)
 
-AdaOS is a developer platform for personal assistant runtimes. It connects hubs,
-member nodes, browsers, skills, scenarios, and operational tooling into one
-assistant environment while keeping the lower-level runtime machinery available
-for diagnostics and integration work.
+AdaOS is a local-first platform for building and operating distributed
+assistant environments that connect people, AI agents, applications, and
+devices. It connects hubs, member nodes, browsers, skills, scenarios, and
+governed operational tooling while keeping the lower-level runtime machinery
+available for development, diagnostics, and integration work.
+
+This repository contains the shared developer-facing runtime foundation.
+AdaOS Home, aResearcher, AdaOS Campus, and AdaOS Enterprise are solution
+directions built on that foundation; they are not separate runtimes or codebases
+and currently have different maturity levels.
 
 [Documentation](https://inimatic.github.io/adaos/) |
+[Product model](docs/product/index.md) |
+[Russian overview](docs/ru/index.md) |
 [Quickstart](docs/quickstart.md) |
 [Deployment](docs/deployment.md) |
 [Versioning](docs/operations/versioning.md)
@@ -35,6 +43,22 @@ for diagnostics and integration work.
 - **Scenarios** coordinate multi-step flows across services, skills, and nodes.
 - **Webspaces** define web access and projection contexts such as Main, Owner,
   Guests, or Developer.
+
+## Product and solution directions
+
+| Direction | Kind | Purpose |
+| --- | --- | --- |
+| **AdaOS Home** | Deployment profile | A private environment for a person, household, routines, and devices. |
+| **aResearcher** | Solution agent and workbench | A governed, reproducible research loop over AdaOS Research Fabric. |
+| **AdaOS Campus** | Institutional deployment profile | Course, teaching, learning, seminar, and laboratory environments. |
+| **AdaOS Enterprise** | Organizational deployment profile | Team, process, policy, integration, and audit environments. |
+| **reDevice** | Endpoint family | A reusable physical interaction, media, sensing, or control endpoint across domains. |
+
+Home, Campus, and Enterprise describe deployment and governance profiles.
+aResearcher is a cross-profile solution agent. reDevice is an endpoint family,
+not a separate application domain. See [AdaOS Product Model](docs/product/index.md)
+and [Solution Directions](docs/product/solution-directions.md) for the normative
+boundaries, maturity labels, canonical scenarios, and non-goals.
 
 ## Quick start
 
@@ -237,6 +261,12 @@ AdaOS is an evolving platform. This repository is the open developer-facing
 runtime foundation for building, testing, and operating skills, scenarios, and
 node services. Hosted infrastructure, publication workflows, and broader
 operator tooling may evolve in adjacent integration repositories.
+
+English documentation is authoritative. The maintained Russian layer is a
+faithful translation of a small, stable public-facing subset; detailed
+architecture, roadmaps, evidence, CLI, and SDK documentation remain
+English-first. See the
+[Documentation Language and Translation Policy](docs/documentation-language-policy.md).
 
 ## License
 

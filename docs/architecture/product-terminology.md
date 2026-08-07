@@ -1,6 +1,14 @@
 # AdaOS Product Terminology
 
-AdaOS is an environment for personal digital assistants. Internally the runtime still uses subnets, scenarios, widgets, browser sessions, hub/member roles, and Yjs webspaces, but normal product UI should lead with named user-facing entities.
+AdaOS is a platform for personal and shared assistant environments. Internally
+the runtime still uses subnets, scenarios, widgets, browser sessions,
+hub/member roles, and Yjs webspaces, but normal product UI should lead with
+named user-facing entities.
+
+This page governs user-facing object names inside an AdaOS environment. The
+portfolio-level distinction between platform, deployment profile, solution
+pack, solution agent, endpoint, and channel is governed by the
+[AdaOS Product Model](../product/index.md).
 
 ## Primary Model
 
@@ -29,6 +37,29 @@ Assistant
   -> Interfaces
   -> Catalog
 ```
+
+A managed deployment may contain one or more Assistant environments. The
+simplest current product shape is one Assistant backed by one subnet. Campus
+and Enterprise may eventually manage collections or federations of Assistants;
+that future topology must not change the meaning of the current user-facing
+objects prematurely.
+
+## Portfolio-Level Terms
+
+| Term | Product meaning | Boundary |
+| --- | --- | --- |
+| AdaOS platform | Shared runtime and governed capability foundation | Not one deployment offer, endpoint, or vertical solution |
+| Managed deployment | An operated AdaOS installation for a person or organization | May contain one or more Assistant environments |
+| Deployment profile | Versioned topology, role, policy, application, skill, and integration defaults | Configuration and composition, not a new runtime kind |
+| Solution pack | Domain skills, scenarios, workflows, policies, templates, and projections | Uses the shared package and activation lifecycle |
+| Solution agent or workbench | User-facing role and interaction surface over solution packs | Does not own a second persistence or workflow truth |
+| Endpoint family | Browser, reDevice, or another participation surface | Cross-cutting; it does not define an application domain |
+| Activation channel | How AdaOS reaches users | Distribution experiment, not platform architecture |
+
+AdaOS Home, Campus, and Enterprise are deployment-profile directions.
+aResearcher is a solution-agent direction over the Research Fabric. reDevice is
+an endpoint family. These names must not be presented as peers at the same
+architectural layer.
 
 ## Builder
 

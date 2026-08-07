@@ -4,9 +4,10 @@ This page is the routing table for AdaOS planning documentation. It identifies
 where direction, sequencing, active execution, and evidence belong. It is not a
 roadmap and intentionally contains no implementation-status checklist.
 
-English documents are the primary planning surface. Russian documents and
-older concept notes may provide useful context, but they do not override the
-owners listed here.
+English documents are the authoritative planning surface. The maintained
+Russian layer is a translation of stable public-facing pages and never owns
+planning decisions. See the
+[Documentation Language and Translation Policy](../documentation-language-policy.md).
 
 Current cross-domain implementation evidence for source → package → trial →
 publication → activation is recorded in
@@ -22,6 +23,7 @@ When documents disagree, use the narrowest authoritative source in this table.
 
 | Planning surface | Owns | Does not own |
 | --- | --- | --- |
+| [AdaOS Product Model](../product/index.md) and [Solution Directions](../product/solution-directions.md) | Portfolio vocabulary, deployment-versus-solution boundaries, named direction framing, and product maturity labels | Cross-domain implementation priority, delivery dates, or technical completion |
 | [Governed Evolution](governed-evolution.md) | Long-term roles, invariants, value flow, and boundaries across domains | Delivery dates or domain implementation details |
 | [Governed Evolution Roadmap](governed-evolution-roadmap.md) | Cross-domain milestones, ordering constraints, and proof gates | Duplicated technical task lists |
 | [MVP Roadmap](../mvp_roadmap.md) | Current repository-wide MVP completion target and release gates | Long-term product direction |
@@ -33,16 +35,18 @@ When documents disagree, use the narrowest authoritative source in this table.
 
 ## Conflict Resolution
 
-1. Governed Evolution selects the long-term direction; its roadmap selects the
-   cross-domain milestone and proof gate.
-2. The MVP Roadmap selects the current repository-wide completion target.
-3. A domain architecture document owns its contracts and invariants. A domain
+1. The Product Model selects portfolio vocabulary and named solution
+   boundaries. It does not schedule implementation.
+2. Governed Evolution selects the long-term architectural direction; its
+   roadmap selects the cross-domain milestone and proof gate.
+3. The MVP Roadmap selects the current repository-wide completion target.
+4. A domain architecture document owns its contracts and invariants. A domain
    roadmap owns implementation order and completion evidence inside that scope.
-4. The Issue Tracker may schedule work, but cannot redefine architecture or
+5. The Issue Tracker may schedule work, but cannot redefine architecture or
    mark a roadmap gate complete without the evidence required by its owner.
-5. A checked item records only the maturity explicitly stated by its owning
+6. A checked item records only the maturity explicitly stated by its owning
    roadmap. It does not implicitly mean production acceptance.
-6. If two domain roadmaps overlap and neither declares the boundary, record the
+7. If two domain roadmaps overlap and neither declares the boundary, record the
    ownership gap here before adding another checklist.
 
 ## Roadmap Vocabulary
@@ -66,6 +70,7 @@ the acceptance records required by the owning roadmap.
 
 | Domain | Architecture owner | Sequencing / roadmap owner | Execution / evidence surface |
 | --- | --- | --- | --- |
+| Product portfolio, deployment profiles, solution directions, and maturity vocabulary | [AdaOS Product Model](../product/index.md), [Solution Directions](../product/solution-directions.md), [AdaOS Product Terminology](product-terminology.md) | Future explicitly approved product roadmap; no technical roadmap may infer portfolio priority | Product decisions and durable Issues; named end-to-end solution evidence |
 | Runtime, skills, scenarios, install lifecycle | [Skill Runtime Lifecycle](../skill_runtime.md), [Skills](../skills.md), [Scenarios](../scenarios.md) | [Registry, Marketplace, and Operations Roadmap](registry-marketplace-operations-roadmap.md) | Issue Tracker; lifecycle and operations tests; release records |
 | Governed capability development | [AdaOS Builder](builder.md), [Builder Conversational Development](builder-conversational-development.md), [Builder SDK Boundary](builder-sdk-boundary.md) | [Builder Roadmap](builder-roadmap.md), [Skill Factory](skill-factory.md) | Builder acceptance evidence; isolated DEV runs; Git and publication records |
 | Governed data-driven workflow models, transitions, interactions, and intent mediation | [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md), [Runtime Inventory](governed-workflow-runtime-inventory.md), [Reference Persistence Decision](workflow-reference-persistence-decision.md) | [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md) | Definition/relationship-plane validation; `workflow.json` authoring/admission; registry and role policy; package-atomic publication/activation; four-channel ingress and executor readiness; full turn-to-delivery trace; Story runner v2; Builder Run/Trial metrics evidence; async result/delivery recovery; Builder Project and second-domain reference runs; conditional persistence ADR |
@@ -82,7 +87,7 @@ the acceptance records required by the owning roadmap.
 | Browser UI, webspaces, and semantic addressing | [Web UI Architecture](web-ui-architecture.md), [UI Addressing](ui-addressing.md) | [Webspace Scenario Pointer/Projection Roadmap](webspace-scenario-pointer-projection-roadmap.md), [Webspace Evolution Roadmap](webspace-evolution-roadmap.md) | Client tests; UI runtime diagnostics; browser E2E evidence |
 | Security, onboarding, and mTLS | [Security](security.md), [Member-Hub Connectivity](member-hub-connectivity.md), [Device Access and Browsers](device-access-and-browsers.md) | [Device Access Roadmap](device-access-roadmap.md) | Security and join tests; threat-model evidence; onboarding acceptance |
 | Observability, incidents, guarding, and post-deploy validation | [Incident Registry](incident-registry.md), [Runtime Guarding](runtime-guarding.md), [Post-Deploy E2E Testing](post-deploy-e2e-testing.md) | Roadmaps embedded in those architecture documents | Deterministic symptom checks; incident records; diagnostics; post-deploy evidence |
-| Product terminology and human-facing control plane | [AdaOS Product Terminology](product-terminology.md), [Infrascope](infrascope.md) | [Infrascope Roadmap](infrascope-roadmap.md) | Contract and UI tests; terminology review; Issue Tracker |
+| Human-facing operational control plane | [Infrascope](infrascope.md), [AdaOS Product Terminology](product-terminology.md) | [Infrascope Roadmap](infrascope-roadmap.md) | Contract and UI tests; terminology review; Issue Tracker |
 | Devices, endpoints, and audio | [Endpoint Infrastructure](endpoint-infrastructure.md), [Endpoint Audio Service](endpoint-audio-service.md), [Device Access and Browsers](device-access-and-browsers.md) | [Device Access Roadmap](device-access-roadmap.md) plus endpoint-local checklists | Endpoint contract tests; routing diagnostics; device acceptance evidence |
 
 The two webspace sequencing documents have distinct ownership:

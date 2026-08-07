@@ -7,6 +7,12 @@ AdaOS is built as a local-first runtime with a layered Python codebase and a sma
 - services manage skills, scenarios, node state, Yjs webspaces, and runtime lifecycle
 - adapters isolate filesystem, database, git, audio, secret, and integration-specific IO
 
+This section describes implemented runtime structure and target technical
+contracts. Portfolio concepts such as Home, Campus, Enterprise, aResearcher,
+solution packs, and deployment profiles are defined by the
+[AdaOS Product Model](../product/index.md), not by individual architecture
+pages.
+
 ## Main runtime building blocks
 
 - `src/adaos/apps`: CLI, API server, launchers, and process entry points
@@ -31,6 +37,8 @@ When a page is explicitly labeled as a roadmap or target-state design, it captur
 
 Current target-state control-plane extensions are documented in:
 
+- [AdaOS Product Model](../product/index.md): portfolio boundary between platform, managed deployment, deployment profile, solution pack, solution agent, endpoint, and channel
+- [Solution Directions](../product/solution-directions.md): named Home, Research, Campus, Enterprise, and reDevice directions with explicit maturity and non-goals
 - [Governed Evolution](governed-evolution.md): cross-domain target model from human signal and durable issue through Builder, publication, runtime evidence, and repair
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): major product and architecture milestones, proof gates, and references to the roadmaps that own implementation detail
 - [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md): canonical `workflow.json`, states, transitions, registry and authority boundaries, relationship planes, capability-negotiated interactions, package-atomic activation, and asynchronous reply/delivery contracts that keep workflows consistent across skills, Web, Telegram, NLU, and tests

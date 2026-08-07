@@ -31,6 +31,9 @@ These concepts must remain distinct:
 | --- | --- |
 | AdaOS runtime | The platform foundation that installs, activates, executes, observes, guards, and rolls back skills and scenarios. |
 | Managed deployment | A product/service offer in which AdaOS is installed and operated for a user or organization. |
+| Deployment profile | Versioned topology, role, policy, application, skill, and integration defaults for a class of managed deployments such as Home, Campus, or Enterprise. It is configuration and composition, not a separate runtime. |
+| Solution pack | A domain-oriented composition of skills, scenarios, workflows, policies, templates, and UI projections that uses the shared AdaOS lifecycle. |
+| Solution agent or workbench | A user-facing role and interaction surface over solution packs, such as aResearcher. It does not own a second persistence or workflow truth. |
 | Personal Builder | The user-facing product for turning approved work into governed AdaOS artifacts in an isolated DEV space. |
 | Support Agent | The proposed issue-intake and support role that turns human and machine signals into actionable, non-duplicated work. |
 | Activation channel | A way a deployment reaches users. Direct local installation, institutional deployment, or a device reuse program are channel experiments, not definitions of AdaOS. |
@@ -40,6 +43,10 @@ These concepts must remain distinct:
 No single deployment offer, endpoint class, UI, or distribution experiment is
 the platform architecture. Conversely, calling a future capability a network
 does not imply that a marketplace or network effect has been validated.
+
+The portfolio-level definitions, named solution directions, and maturity
+vocabulary are governed by the [AdaOS Product Model](../product/index.md) and
+[Solution Directions](../product/solution-directions.md).
 
 ## Target Evolution Loop
 

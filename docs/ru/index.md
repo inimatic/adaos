@@ -1,48 +1,97 @@
 # AdaOS
 
-AdaOS - это Python-платформа для построения распределенных ассистентных систем из навыков, сценариев, сервисов узла и локальных API управления.
+AdaOS — local-first платформа для создания и эксплуатации распределённых
+ассистентных сред, объединяющих людей, AI-агентов, приложения и устройства.
 
-Текущий репозиторий содержит ядро разработки и runtime:
+Этот репозиторий содержит общий developer-facing runtime-фундамент. В него
+входят CLI, локальный control API, SDK, сервисы узлов, навыки, сценарии,
+webspaces, контракты интеграции устройств и браузеров, а также управляемый
+жизненный цикл артефактов, на которых строятся решения AdaOS.
 
-- локальный CLI `adaos`
-- управляющий API на FastAPI
-- runtime-сервисы для узла, навыков, сценариев и webspace
-- SDK-модули для навыков, данных, событий и control plane
-- bootstrap-скрипты, тесты и документацию MkDocs
+Авторитетный источник: [AdaOS documentation home](../index.md).
+
+## Одна платформа, несколько направлений решений
+
+AdaOS использует единый runtime и package lifecycle в разных средах
+развёртывания и областях применения:
+
+```text
+AdaOS Core
+  -> профили развёртывания: Home, Campus, Enterprise
+  -> каркасы и агенты решений: Research Fabric, aResearcher
+  -> пакеты решений: skills, scenarios, workflows, policies, UI
+  -> endpoints: Browser, reDevice, hub и member nodes
+```
+
+Эти имена не являются отдельными форками AdaOS. Home, Campus и Enterprise
+описывают профили развёртывания и управления. Research и aResearcher описывают
+предметный каркас и пользовательское решение. reDevice является сквозным
+семейством endpoints.
+
+Нормативные различия определены в [Продуктовой модели AdaOS](product/index.md),
+а текущие портфельные гипотезы и метки зрелости — в
+[Направлениях решений](product/solution-directions.md).
 
 ## Что AdaOS умеет сейчас
 
-Текущая реализация сосредоточена на локальных и приватных развертываниях:
+Текущая реализация сосредоточена на локальных и частных развёртываниях:
 
-- запуск узла в роли `hub` или `member`
-- управление навыками и сценариями из CLI
-- локальное HTTP-управление через токенизированный API
-- управление service-type skills через supervisor и `/api/services/*`
-- работа с Yjs-based webspace через `adaos node yjs ...`
-- onboarding member-узлов через join code и управление обновлениями
-- developer workflow для Root и Forge-подобной публикации
+- запускать узел как `hub` или `member` и подключать member-узлы по join codes;
+- устанавливать, проверять, активировать, запускать, обновлять и исследовать
+  навыки и сценарии;
+- предоставлять runtime-управление через FastAPI-сервис с локальной
+  token-based аутентификацией;
+- управлять service-type skills и жизненным циклом runtime через supervisor;
+- синхронизировать webspaces и видимое браузеру состояние приложений через Yjs;
+- подключать браузеры и reDevice-style endpoints через явные контракты доступа
+  и назначения;
+- управлять профилями, членством, разрешениями, приглашениями, областями
+  приватности и аудитом через развивающийся фундамент personalization и access;
+- создавать, проверять, упаковывать, публиковать, активировать, наблюдать и
+  исправлять управляемые артефакты через developer- и Builder-workflows.
 
-## Основные разделы
+Реализованный фундамент не означает завершённости каждого именованного
+решения. Страницы со статусом target architecture, roadmap, strategic direction
+или long-term direction следует читать в соответствии с указанной зрелостью.
 
-- [Быстрый старт](quickstart.md)
-- [Архитектура](architecture/index.md)
-- [CLI](cli/index.md)
-- [SDK](sdk/index.md)
-- [Навыки](skills.md)
-- [Сценарии](scenarios.md)
-- [DevPortal](devportal.md)
-- [Целевая архитектура артефактов](../architecture/artifact-source-package-activation.md)
-- [Проверка pipeline от 2026-07-24](../architecture/artifact-pipeline-local-evidence-2026-07-24.md)
+## Основная модель runtime
 
-## Pipeline разработки артефактов
+- **Assistant** — пользовательская среда, внутренне поддерживаемая подсетью.
+- **Hub** владеет и координирует подсеть.
+- **Member** — другой runtime-узел, подключённый к подсети.
+- **Webspace** — контекст доступа и проекций внутри Assistant.
+- **Application** — продуктовое представление сценария.
+- **Skill** предоставляет сфокусированную исполняемую capability.
+- **Scenario** координирует многошаговое поведение навыков, сервисов, людей и
+  узлов.
+- **Device** — физический или виртуальный host; **Agent** или endpoint —
+  программный участник, работающий на нём или через него.
 
-Однопользовательский путь `DEV → immutable checkpoint → package → trial →
-publication → Workspace` проверен локально на реальных сценарии и навыке.
-Builder назначает отдельный `change_id` каждой итерации Automation и не
-повторяет автоматически команды с неизвестным результатом. Backend-маршрут
-проверки дерева исходников развернут в production, но до включения package-only
-режима по умолчанию остается проверка на чистом stand/второй машине.
+Подробное соответствие продуктовой и технической терминологии находится в
+английском документе
+[AdaOS Product Terminology](../architecture/product-terminology.md).
 
-## Текущий фокус
+## Выберите путь
 
-В репозитории уже реализованы реальные операционные функции: роли узлов, autostart, orchestration обновлений ядра, service supervision, monitoring и управление Yjs webspace. Поэтому страницы вне разделов `Roadmap` и `Concepts` здесь приведены к текущей реализации в `src/adaos`.
+| Цель | С чего начать |
+| --- | --- |
+| Понять AdaOS и области применения | [Продуктовая модель](product/index.md) и [Направления решений](product/solution-directions.md) |
+| Установить и запустить локальную среду разработки | [Quickstart](../quickstart.md) |
+| Развернуть или эксплуатировать узел | [Deployment](../deployment.md) и [Runtime and Operations](../cli/runtime.md) |
+| Создать skill или scenario | [Skills](../skills.md), [Scenarios](../scenarios.md) и [SDK](../sdk/index.md) |
+| Понять реализованный runtime | [Architecture Overview](../architecture/index.md) |
+| Понять долгосрочную модель управляемого развития | [Governed Evolution](../architecture/governed-evolution.md) |
+| Найти текущий источник планирования | [Roadmap Inventory](../architecture/roadmap-inventory.md) и [Issue Tracker](../issue-tracker.md) |
+| Проверить Builder end to end | [Builder Verification Guide](../guides/builder-verification.md) |
+
+## Статус и язык документации
+
+Текущее поведение, целевая архитектура, пункты дорожных карт и записи
+свидетельств намеренно разделены. Прежде чем считать проект или чеклист
+реализованным поведением, проверьте статус страницы и
+[Roadmap Inventory](../architecture/roadmap-inventory.md).
+
+Авторитетна английская документация. Русская документация — поддерживаемый
+перевод небольшого стабильного публичного слоя; подробные технические страницы
+остаются англоязычными и могут показываться в русской локали как fallback. См.
+[Политику языков и перевода документации](documentation-language-policy.md).

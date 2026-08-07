@@ -238,6 +238,110 @@ Task-shaped context bundle for LLM or automation:
 
 This packet is the preferred LLM interface. It avoids dumping the entire infrastructure or leaking unauthorized data.
 
+## Subnet Shared-State Model
+
+The AdaOS operational control plane needs two distinct classes of shared state,
+and they must not be conflated:
+
+1. **Operational shared state** covers node, runtime, rollout, availability,
+   capacity, control-result, and subnet-connectivity state.
+2. **Collaborative shared state** covers Yjs and webspace state for scenarios,
+   UI, and user collaboration.
+
+Yjs is appropriate for collaborative state. It must not become the primary
+source of truth for subnet health or local operational planning.
+
+### Target data path
+
+The target operational shared-state path for a subnet is:
+
+1. **Runtime producers.** Members and the hub publish live signals such as
+   heartbeats, capacity, runtime snapshots, link events, and update or control
+   results.
+2. **Hub semantic aggregation.** The hub accepts rich member snapshots over the
+   member link and normalizes them into a common semantic envelope.
+3. **Durable subnet read model.** The hub stores the normalized subnet
+   projection in local SQLite as a durable read model.
+4. **Subnet replication.** Members receive the normalized subnet snapshot from
+   the hub and maintain a local SQLite copy of the read model.
+5. **Canonical system model.** `system_model`, `reliability`, and SDK
+   control-plane helpers build neighborhood, overview, and task packets from
+   the SQLite read model plus local runtime sources.
+6. **Operator and LLM planning.** UI, skills, and models consume projections
+   and task packets instead of raw transport payloads, `node.yaml`, or Yjs.
+
+This is a target architecture. Current producers and persistence paths may
+cover only part of the sequence and must not be described as a complete
+replicated operational directory without acceptance evidence.
+
+### Source-of-truth roles
+
+- `node.yaml` owns bootstrap configuration and the minimum durable node identity
+  required for startup.
+- Member links and runtime events are the live transport and on-demand
+  observation layer.
+- The subnet SQLite directory is the target durable read model for planning,
+  routing, observability, and degraded-mode reasoning.
+- `system_model` is the canonical object layer and shared vocabulary for UI,
+  SDK, and LLM consumers.
+- Yjs owns collaborative webspace, scenario, and UI state, not operational
+  topology truth.
+
+### Durable subnet read-model content
+
+The minimum target record includes:
+
+- identity and topology: `node_id`, `subnet_id`, `roles`, `hostname`, and
+  `base_url`;
+- liveness and routing: `online`, `last_seen`, `node_state`, `route_mode`, and
+  `connected_to_hub`;
+- runtime and build: `ready`, `runtime_version`, `git_commit`,
+  `git_short_commit`, `git_branch`, and `git_subject`;
+- rollout and update: `update_state`, `update_phase`, `target_rev`,
+  `target_version`, `target_slot`, and `finished_at`;
+- operator control: the latest remote control request and result with
+  timestamps;
+- capacity: `io`, `skills`, and `scenarios`;
+- rich snapshot payload: a bounded best-effort raw snapshot that lets richer
+  projections be recovered without discarding the semantic envelope.
+
+### Runtime-projection freshness contract
+
+A persisted runtime projection needs one freshness contract understood by
+`reliability`, `system_model`, UI, and LLM planning:
+
+- `fresh`: captured recently enough to act as current operational truth;
+- `aging`: still useful for reasoning, but consumers must account for possible
+  drift from live state;
+- `stale`: old or associated with an offline node, so planning treats it as
+  degraded authority;
+- `pending`: no persisted runtime projection has yet been collected for the
+  node.
+
+The minimum normalized envelope is `state`, `reason`, `captured_at`, `age_s`,
+`aging_after_s`, `stale_after_s`, and `online`.
+
+### Why local planning needs durability
+
+A local node should retain useful knowledge about its neighbors through hub
+restart, member-link loss with a surviving heartbeat, local degraded mode, and
+UI or model restart. Planning therefore cannot depend only on an in-memory link
+manager, and it cannot depend only on bootstrap configuration. It needs a
+durable subnet read model that survives transport churn and remains locally
+available.
+
+### Architectural rule
+
+Each new operator-facing or LLM-facing subnet insight should, where practical:
+
+1. be published once by its runtime producer;
+2. enter the durable subnet read model;
+3. be exposed through `system_model` as a canonical projection;
+4. only then be consumed by UI, routing, reliability, or automation.
+
+Planning should depend on a durable semantic projection of the control plane,
+not on one particular transport.
+
 ## Relationship to Root MCP Foundation
 
 `Infrascope` is the human-facing control-plane workspace over the canonical system model. `Root MCP Foundation` is the root-hosted agent-facing companion layer.

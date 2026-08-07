@@ -1,6 +1,6 @@
 strict: true
 site_name: AdaOS
-site_description: "AdaOS developer and runtime documentation"
+site_description: "AdaOS product, developer, runtime, and architecture documentation"
 site_url: https://inimatic.github.io/adaos/
 repo_url: https://github.com/inimatic/adaos
 repo_name: inimatic/adaos
@@ -61,6 +61,10 @@ plugins:
           name: Русский
           nav_translations:
             Home: Главная
+            Product: Продукт
+            Product Model: Продуктовая модель
+            Solution Directions: Направления решений
+            Documentation Language Policy: Язык и перевод документации
             Quickstart: Быстрый старт
             Architecture: Архитектура
             Overview: Обзор
@@ -104,6 +108,9 @@ plugins:
             Scenario Runtime: Runtime сценария
             First Launch Scenario: Первый запуск сценария
             Scenario Target State: Сценарии и целевое состояние
+            Guides: Руководства
+            Builder Scenario Development: Разработка сценариев через Builder
+            Builder Verification: Проверка Builder
   - git-revision-date-localized:
       enable_creation_date: true
       enable_git_follow: false
@@ -145,6 +152,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Product:
+      - Product Model: product/index.md
+      - Solution Directions: product/solution-directions.md
+      - Documentation Language Policy: documentation-language-policy.md
   - Issue Tracker: issue-tracker.md
   - Quickstart: quickstart.md
   - Deployment: deployment.md
@@ -230,6 +241,10 @@ nav:
   - Skills: skills.md
   - Scenarios: scenarios.md
   - DevPortal: devportal.md
+  - Guides:
+      - Builder Scenario Development: guides/builder-scenario-development.md
+      - Builder Verification: guides/builder-verification.md
+      - Testing: guides/testing.md
   - Roadmap:
       - Planning Authority: architecture/roadmap-inventory.md
       - Governed Evolution: architecture/governed-evolution-roadmap.md

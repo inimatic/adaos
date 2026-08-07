@@ -12,6 +12,11 @@ turn TLP, MLflow, Ray, or a particular database into AdaOS core concepts.
 Implementation order and acceptance evidence are owned by the
 [Research Fabric Roadmap](research-fabric-roadmap.md).
 
+Portfolio placement and the distinction between Research Fabric, a solution
+pack, and aResearcher as a solution agent or workbench are governed by the
+[AdaOS Product Model](../product/index.md) and
+[Solution Directions](../product/solution-directions.md).
+
 ## Decision Summary
 
 1. The working architecture name is **AdaOS Research Fabric** (`ARF`). It
