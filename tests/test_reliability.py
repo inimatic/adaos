@@ -849,6 +849,8 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
     assert member["effective_name"] == "Kitchen tablet"
     assert member["connected_to_subnet"] is True
     assert member["observed_via"] == "subnet_directory"
+    assert member["availability_scope"] == "active"
+    assert member["availability_reason"] == "directory_online"
     assert member["label"] == "Kitchen tablet"
     assert member["node_names"] == ["Kitchen East"]
     assert member["snapshot_ready"] is True
@@ -856,6 +858,57 @@ def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkl
     assert member["runtime_projection_freshness"]["state"] == "fresh"
     assert member["snapshot_update_state"] == "succeeded"
     assert member["snapshot_runtime_version"] == "0.2.0"
+
+
+def test_hub_member_connection_state_keeps_old_linkless_member_as_dormant_inventory(monkeypatch) -> None:
+    monkeypatch.delenv("ADAOS_MEMBER_AVAILABILITY_DORMANT_AFTER_S", raising=False)
+
+    class _FakeDirectory:
+        def list_known_nodes(self):
+            return [
+                {
+                    "node_id": "codespaces-old",
+                    "roles": ["member"],
+                    "hostname": "codespaces-old",
+                    "last_seen": 1_699_000_000.0,
+                    "online": False,
+                    "runtime_projection": {
+                        "captured_at": 1_699_000_000.0,
+                        "node_names": ["Old codespace"],
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(
+        "adaos.services.subnet.link_manager.hub_link_manager_snapshot",
+        lambda: {"members": [], "member_total": 0, "connected_total": 0, "updated_at": 1_700_000_000.0},
+    )
+    monkeypatch.setattr(
+        "adaos.services.registry.subnet_directory.get_directory",
+        lambda: _FakeDirectory(),
+    )
+    monkeypatch.setattr(
+        "adaos.services.device_inventory.list_devices",
+        lambda kind=None, include_detached=False: [],
+    )
+    monkeypatch.setattr("adaos.services.reliability.time.time", lambda: 1_700_000_000.0)
+
+    snapshot = hub_member_connection_state_snapshot(
+        role="hub",
+        route_mode="hub",
+        connected_to_hub=None,
+        node_id="hub-1",
+        node_names=["Main Hub"],
+    )
+
+    assert snapshot["known_total"] == 1
+    assert snapshot["linkless_total"] == 1
+    assert snapshot["assessment"] == {"state": "idle", "reason": "no_members_connected"}
+    member = snapshot["known_members"][0]
+    assert member["availability_scope"] == "dormant"
+    assert member["availability_reason"] == "offline_retention"
+    assert member["last_seen_ago_s"] == 1_000_000.0
+    assert snapshot["availability_policy"]["dormant_after_s"] == 604_800.0
 
 
 def test_hub_member_connection_state_ignores_detached_linkless_members(monkeypatch) -> None:

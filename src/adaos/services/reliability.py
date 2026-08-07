@@ -27,6 +27,10 @@ from adaos.services.incident_registry import (
     record_yjs_thread_affinity_fault,
 )
 from adaos.services.node_display import node_display_from_config, node_display_payload
+from adaos.services.registry.subnet_member_availability import (
+    subnet_member_availability_policy,
+    subnet_member_availability_scope,
+)
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
@@ -3791,6 +3795,12 @@ def hub_member_connection_state_snapshot(
             if runtime_ref:
                 version_counts[runtime_ref] = int(version_counts.get(runtime_ref) or 0) + 1
             inventory_overlay = _member_inventory_overlay(inventory_by_id.get(member_id))
+            availability = subnet_member_availability_scope(
+                connected=connected,
+                online=online,
+                last_seen_at=last_seen,
+                now=now,
+            )
             label = str(inventory_overlay.get("effective_name") or "").strip() or str(directory_item.get("node_label") or "").strip() or _node_label(
                 member_names,
                 fallback=f"Node {index}",
@@ -3812,7 +3822,9 @@ def hub_member_connection_state_snapshot(
                     "connected": connected,
                     "online": online,
                     "observed_via": "member_link",
-                    "last_seen_ago_s": round(max(0.0, now - last_seen), 3) if last_seen > 0.0 else None,
+                    "last_seen_ago_s": availability.get("last_seen_ago_s"),
+                    "availability_scope": availability.get("scope"),
+                    "availability_reason": availability.get("reason"),
                     "snapshot_state": snapshot_state,
                     "rollout_state": rollout_state,
                     "snapshot_ready": bool(node_snapshot.get("ready")),
@@ -3897,6 +3909,12 @@ def hub_member_connection_state_snapshot(
             except Exception:
                 media_capability = {}
             inventory_overlay = _member_inventory_overlay(inventory_by_id.get(known_id))
+            availability = subnet_member_availability_scope(
+                connected=False,
+                online=online,
+                last_seen_at=last_seen,
+                now=now,
+            )
             label = str(inventory_overlay.get("effective_name") or "").strip() or label
             known_members.append(
                 {
@@ -3916,7 +3934,9 @@ def hub_member_connection_state_snapshot(
                     "connected": False,
                     "online": online,
                     "observed_via": "subnet_directory",
-                    "last_seen_ago_s": round(max(0.0, now - last_seen), 3) if last_seen > 0.0 else None,
+                    "last_seen_ago_s": availability.get("last_seen_ago_s"),
+                    "availability_scope": availability.get("scope"),
+                    "availability_reason": availability.get("reason"),
                     "runtime_projection_freshness": projection_freshness,
                     "snapshot_state": snapshot_state,
                     "rollout_state": rollout_state,
@@ -3986,6 +4006,7 @@ def hub_member_connection_state_snapshot(
             "connected_total": len(items),
             "known_total": len(known_members),
             "linkless_total": max(0, len(known_members) - len(items)),
+            "availability_policy": subnet_member_availability_policy(),
             "members": items,
             "known_members": known_members,
             "update_rollout": {

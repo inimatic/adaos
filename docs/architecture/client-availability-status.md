@@ -146,7 +146,7 @@ quality depends on available devices, not only on browser-hub transport.
 Target member aggregate:
 
 ```text
-members: total, online, stale, offline, updating, unknown, excluded
+members: total, online, stale, offline, updating, unknown, dormant, excluded
 media_capable: ready/total
 direct_candidates: ready/total
 blocking_members: ids with reason
@@ -161,6 +161,14 @@ device-policy lifecycle states such as `revoked`, `expired`, `disabled`,
 `ignored`, `retired`, or `deleted` are reported under `excluded` and must not
 keep the hub in `Limited`. `knownTotal` can still expose the raw inventory size
 for diagnostics.
+
+An offline directory member moves to `dormant` after the member-availability
+retention window (seven days by default, configurable with
+`ADAOS_MEMBER_AVAILABILITY_DORMANT_AFTER_S`). Dormant members remain in
+`knownTotal` and in device inventory, but are excluded from `total`,
+`blockingMembers`, and the hub availability state. This is distinct from
+`excluded`: dormant is an observed liveness state, while excluded is an
+explicit device-policy lifecycle decision.
 
 Canonical `memberAvailability` is volatile runtime evidence, not a stable
 status-plane card. It is loaded with the details projection while the user is

@@ -1732,6 +1732,7 @@ def _compact_member_availability(value: Any) -> dict[str, Any]:
         "updating": 0,
         "unknown": 0,
         "excluded": 0,
+        "dormant": 0,
         "connectedTotal": 0,
         "knownTotal": 0,
         "linklessTotal": 0,
@@ -1762,6 +1763,9 @@ def _compact_member_availability(value: Any) -> dict[str, Any]:
             expired = bool(item.get("expired"))
             if revoked or expired or managed_state in {"revoked", "expired", "disabled", "ignored", "retired", "deleted"}:
                 result["excluded"] += 1
+                continue
+            if str(item.get("availability_scope") or "").strip().lower() == "dormant":
+                result["dormant"] += 1
                 continue
             active_total += 1
             connected = bool(item.get("connected"))
