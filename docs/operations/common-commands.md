@@ -129,7 +129,7 @@ uv sync --locked --extra dev
 adaos --help
 ```
 
-Normal bootstrap uses precompiled patched `y-py` wheels and omits the optional Vosk offline-STT backend. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above. On systems for which Vosk publishes a wheel, add offline STT explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
+Normal bootstrap uses precompiled patched `y-py` wheels, including an Intel wheel compatible with macOS 10.15, and omits the optional Vosk offline-STT backend. Intel macOS also resolves the last WebRTC branch with Catalina-compatible binary dependencies. Rust is needed only for the explicit vendored source-build commands and manual repository-development sync above. On systems for which Vosk publishes a wheel, add offline STT explicitly with `uv pip install --python .venv/bin/python -e ".[offline-stt]"`.
 
 ## Git checkout maintenance
 

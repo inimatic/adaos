@@ -8,7 +8,7 @@ license = {text = "MIT"}
 name = "adaos"
 readme = "README.md"
 requires-python = ">=3.11.9,<3.12"
-version = "0.1.707"
+version = "0.1.708"
 
 authors = [
   {name = "AdaOS Team"},
@@ -41,7 +41,7 @@ dependencies = [
   "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-win_amd64.whl ; sys_platform == 'win32' and platform_machine == 'AMD64'",
   "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_arm64.whl ; sys_platform == 'darwin' and platform_machine == 'arm64'",
-  "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_11_0_x86_64.whl ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-macosx_10_15_x86_64.whl ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
   "ypy-websocket>=0.12.4",
   "httpx>=0.27.0",
   "aiohttp>=3.10.0",
@@ -51,7 +51,8 @@ dependencies = [
   "keyring>=24.2.0",
   "cryptography>=42.0.0",
   "psutil>=5.9.0",
-  "aiortc>=1.9.0",
+  "aiortc>=1.9.0,<1.11.0 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "aiortc>=1.9.0 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 
 [project.scripts]
