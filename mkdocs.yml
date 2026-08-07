@@ -158,6 +158,8 @@ nav:
       - Developer Surface Map: architecture/developer-surface-map.md
       - MVP Release Evidence: architecture/mvp-release-evidence.md
       - Runtime Overview: architecture/overview.md
+      - Android Full Node: architecture/android-full-node.md
+      - Android Full Node Roadmap: architecture/android-full-node-roadmap.md
       - Product Terminology: architecture/product-terminology.md
       - Layers: architecture/layers.md
       - Agent Context: architecture/context.md
@@ -233,6 +235,7 @@ nav:
       - Testing: guides/testing.md
   - Roadmap:
       - Planning Authority: architecture/roadmap-inventory.md
+      - Android Full Node: architecture/android-full-node-roadmap.md
       - Governed Evolution: architecture/governed-evolution-roadmap.md
       - Research Fabric: architecture/research-fabric-roadmap.md
       - MVP Roadmap: mvp_roadmap.md

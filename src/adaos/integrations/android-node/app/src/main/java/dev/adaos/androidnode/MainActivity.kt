@@ -1,0 +1,154 @@
+package dev.adaos.androidnode
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+
+class MainActivity : Activity() {
+    private lateinit var phaseView: TextView
+    private lateinit var detailView: TextView
+    private lateinit var factsView: TextView
+    private lateinit var openButton: Button
+    private val statusListener: (NodeStatus) -> Unit = { status -> render(status) }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(buildContent())
+        requestNotificationPermission()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        NodeStateStore.subscribe(statusListener)
+    }
+
+    override fun onStop() {
+        NodeStateStore.unsubscribe(statusListener)
+        super.onStop()
+    }
+
+    private fun buildContent(): View {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.rgb(17, 24, 39))
+            isFillViewport = true
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(24), dp(48), dp(24), dp(32))
+        }
+
+        content.addView(label("AdaOS Node", 32f, Color.WHITE, true))
+        content.addView(
+            label(
+                "Experimental arm64 full-node host",
+                16f,
+                Color.rgb(156, 163, 175),
+                false,
+            )
+        )
+        phaseView = label("STOPPED", 22f, Color.rgb(129, 140, 248), true)
+        detailView = label("Node is stopped", 18f, Color.WHITE, false)
+        factsView = label("", 14f, Color.rgb(209, 213, 219), false)
+        content.addView(phaseView)
+        content.addView(detailView)
+        content.addView(factsView)
+        content.addView(button("Start node") { startNode() })
+        content.addView(button("Stop node") { stopNode() })
+        openButton = button("Open AdaOS") { openAdaos() }.apply { isEnabled = false }
+        content.addView(openButton)
+        content.addView(
+            label(
+                "This first APK proves Android lifecycle, CPython 3.11 and the " +
+                    "loopback LO discovery endpoint. Yjs and bundled skills are the next gate.",
+                14f,
+                Color.rgb(156, 163, 175),
+                false,
+            )
+        )
+        scroll.addView(
+            content,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        return scroll
+    }
+
+    private fun startNode() {
+        val intent = Intent(this, NodeService::class.java).setAction(NodeService.ACTION_START)
+        startForegroundService(intent)
+    }
+
+    private fun stopNode() {
+        startService(Intent(this, NodeService::class.java).setAction(NodeService.ACTION_STOP))
+    }
+
+    private fun openAdaos() {
+        startActivity(
+            Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://inimatic.com/?zone=lo&try_local_hub=1"),
+            )
+        )
+    }
+
+    private fun render(status: NodeStatus) {
+        phaseView.text = status.phase.name
+        detailView.text = status.detail
+        factsView.text = listOfNotNull(
+            status.pythonVersion?.let { "Python $it" },
+            status.port?.let { "LO http://127.0.0.1:$it" },
+            status.dataRoot?.let { "Data $it" },
+            "APK ${BuildConfig.VERSION_NAME}",
+        ).joinToString("\n")
+        openButton.isEnabled = status.phase == NodePhase.READY
+    }
+
+    private fun label(text: String, size: Float, color: Int, bold: Boolean): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = size
+            setTextColor(color)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(10), 0, dp(10))
+            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+
+    private fun button(text: String, listener: (View) -> Unit): Button = Button(this).apply {
+        this.text = text
+        isAllCaps = false
+        textSize = 17f
+        setOnClickListener(listener)
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(56),
+        )
+        params.topMargin = dp(10)
+        layoutParams = params
+    }
+
+    private fun requestNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1701)
+        }
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}

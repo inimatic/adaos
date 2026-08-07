@@ -85,6 +85,8 @@ Current target-state control-plane extensions are documented in:
 - [Root MCP Roadmap](root-mcp-roadmap.md): sequencing for planes, descriptor cache, session leases, and companion slices such as `ProfileOps`
 - [Context Compression Layer](context-compression.md): lossless machine contracts, compact model views, drill-down, token budgets, and validation for LLM-facing surfaces
 - [AdaOS Supervisor](adaos-supervisor.md): local always-on process and update supervision authority above the restartable runtime
+- [AdaOS Android Full Node](android-full-node.md): experimental target architecture for an arm64 Android APK with embedded Python, an Android-owned lifecycle, an immutable skill bundle, browser access through zone LO, and optional member-hub connectivity
+- [AdaOS Android Full Node Roadmap](android-full-node-roadmap.md): first-runnable-draft sequence from an embedded-Python sentinel and Android `y-py` wheel through the curated skill, browser, member-link, and 2 GB device proofs
 - [Runtime Guarding](runtime-guarding.md): target shared guard architecture and roadmap for memory, CPU, Yjs pressure, HTTP health, skill overload, quarantine, supervisor hard safety, and diagnostic snapshots
 - [Realtime Rebuild Lag Hardening](realtime-rebuild-lag-hardening.md): implemented coalescing, deferral, activation-admission, YStore, and event-loop lag diagnostics for rebuild and stream snapshot storms
 - [Incident Registry](incident-registry.md): production direction for normalizing transport, runtime, skill, sync, and pressure symptoms into domain-attributed incidents for humans and LLM planning
