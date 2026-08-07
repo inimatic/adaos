@@ -106,6 +106,15 @@ one final `shutdown.kind=planned` report. If the process or host disappears
 without that marker, Root changes the diagnosis to `unexpected_shutdown` when
 the last sidecar lease expires. A new sidecar epoch replaces either diagnosis.
 
+The sidecar also probes the persisted runtime listener on each lifecycle scan.
+If a previously ready, still-desired runtime stays unreachable for six seconds,
+and neither a supervisor/core-update transition nor an orderly stop is active,
+the sidecar overrides stale `managed_alive=true` evidence with
+`runtime_state=crashed`. Root can therefore publish `runtime_crashed` promptly
+after an ungraceful terminal/process exit instead of waiting for the transport
+lease to age into a generic route outage. The grace is configurable with
+`ADAOS_SIDECAR_RUNTIME_CRASH_GRACE_S` and never reclassifies a staged update.
+
 ## Browser behavior
 
 The browser lifecycle coordinator is created before control WS and YWS:
@@ -138,9 +147,12 @@ through `offline`, `draining`, `updating`, or `restarting`.
 On the edge from an unavailable/waiting lifecycle epoch to a fresh `ready`
 epoch, the browser clears outage-derived WebRTC retry and link-upgrade cooldown.
 It first reopens the allowed routed sessions and then makes one debounced direct
-upgrade attempt. A failed WebRTC attempt while lifecycle denies commands is not
-counted as peer-health evidence and cannot postpone recovery after the Hub
-returns.
+upgrade attempt, even when the sidecar-owned control socket survived the outage
+and therefore produces no new WebSocket-open edge. If the lifecycle reports a
+new runtime instance, the browser skips ICE restart of the obsolete peer and
+immediately performs a full renegotiation. A failed WebRTC attempt while
+lifecycle denies commands is not counted as peer-health evidence and cannot
+postpone recovery after the Hub returns.
 
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
@@ -238,8 +250,9 @@ diagnostically distinct without asking every browser to rediscover the cause.
 - Root lifecycle unit tests cover offline, ready, update, stale-source,
   direct-work-with-degraded-route states, and identical cross-replica route
   projection during blue-green operation.
-- Sidecar tests cover compact state assembly, heartbeat/change reporting, and
-  report failure backoff.
+- Sidecar tests cover compact state assembly, heartbeat/change reporting,
+  listener-proven crash classification, planned-update exclusion, and report
+  failure backoff.
 - Browser tests cover fail-closed lease expiry, event-gated WS/YWS, lifecycle
   availability flags, zero diagnostic polling while waiting, and direct
   command delivery without reopening Root control.

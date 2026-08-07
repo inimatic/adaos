@@ -116,6 +116,64 @@ def test_sidecar_lifecycle_report_marks_a_planned_shutdown(tmp_path: Path) -> No
     }
 
 
+def test_sidecar_lifecycle_report_marks_previously_ready_runtime_crashed_after_probe_grace(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "state" / "supervisor").mkdir(parents=True)
+    (tmp_path / "state" / "supervisor" / "runtime.json").write_text(
+        '{"runtime_state":"ready","runtime_api_ready":true,"managed_alive":true,'
+        '"desired_running":true,"runtime_instance_id":"runtime-a"}',
+        encoding="utf-8",
+    )
+
+    payload = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": True},
+        runtime_listener_ready=False,
+        runtime_listener_unavailable_for_s=6.0,
+        runtime_crash_grace_s=6.0,
+        source_epoch="epoch-a",
+        revision=5,
+        reported_at=130.0,
+    )
+
+    runtime = payload["supervisor"]["runtime"]
+    assert runtime["managed_alive"] is False
+    assert runtime["runtime_state"] == "crashed"
+    assert runtime["runtime_api_ready"] is False
+    assert runtime["listener_evidence"] == "unreachable_after_grace"
+
+
+def test_sidecar_lifecycle_report_does_not_call_update_restart_a_crash(tmp_path: Path) -> None:
+    (tmp_path / "state" / "supervisor").mkdir(parents=True)
+    (tmp_path / "state" / "core_update").mkdir(parents=True)
+    (tmp_path / "state" / "supervisor" / "runtime.json").write_text(
+        '{"runtime_state":"ready","runtime_api_ready":true,"managed_alive":true,'
+        '"desired_running":true,"runtime_instance_id":"runtime-a"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "state" / "core_update" / "status.json").write_text(
+        '{"state":"running","phase":"restart"}',
+        encoding="utf-8",
+    )
+
+    payload = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": True},
+        runtime_listener_ready=False,
+        runtime_listener_unavailable_for_s=60.0,
+        runtime_crash_grace_s=6.0,
+        source_epoch="epoch-a",
+        revision=6,
+        reported_at=140.0,
+    )
+
+    runtime = payload["supervisor"]["runtime"]
+    assert runtime["managed_alive"] is True
+    assert runtime["runtime_state"] == "unavailable"
+    assert "listener_evidence" not in runtime
+
+
 def test_sidecar_lifecycle_tls_appends_hub_ca_to_system_trust(monkeypatch, tmp_path: Path) -> None:
     ca_path = tmp_path / "adaos-ca.pem"
     ca_path.write_text("test-ca", encoding="utf-8")

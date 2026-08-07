@@ -1654,6 +1654,8 @@ def build_sidecar_lifecycle_report(
     source_epoch: str,
     revision: int,
     reported_at: float | None = None,
+    runtime_listener_unavailable_for_s: float = 0.0,
+    runtime_crash_grace_s: float = 6.0,
     shutdown_kind: str | None = None,
     shutdown_reason: str | None = None,
 ) -> dict[str, Any]:
@@ -1665,11 +1667,36 @@ def build_sidecar_lifecycle_report(
     compact_runtime = _compact_lifecycle_fields(runtime, _LIFECYCLE_RUNTIME_FIELDS)
     desired_running = compact_runtime.get("desired_running") is not False
     managed_alive = compact_runtime.get("managed_alive") is not False
+    runtime_was_ready = bool(
+        compact_runtime.get("runtime_api_ready") is True
+        or str(compact_runtime.get("runtime_state") or "").strip().lower() == "ready"
+    )
+    update_state = str(status.get("state") or attempt.get("state") or "").strip().lower()
+    update_active = update_state not in {"", "idle", "succeeded", "success", "failed", "cancelled", "canceled"}
+    stopping = compact_runtime.get("stopping") is True or not desired_running
+    listener_unavailable_for_s = max(0.0, float(runtime_listener_unavailable_for_s or 0.0))
+    crash_grace_s = max(2.0, float(runtime_crash_grace_s or 6.0))
+    listener_proves_runtime_crash = bool(
+        not runtime_listener_ready
+        and desired_running
+        and managed_alive
+        and runtime_was_ready
+        and not stopping
+        and not update_active
+        and listener_unavailable_for_s >= crash_grace_s
+    )
+    if listener_proves_runtime_crash:
+        managed_alive = False
+        compact_runtime["managed_alive"] = False
+        compact_runtime["runtime_state"] = "crashed"
+        compact_runtime["listener_evidence"] = "unreachable_after_grace"
     listener_ready = bool(runtime_listener_ready and desired_running and managed_alive)
     compact_runtime["listener_running"] = listener_ready
     if not listener_ready:
         compact_runtime["runtime_api_ready"] = False
-        if not desired_running or not managed_alive:
+        if listener_proves_runtime_crash:
+            compact_runtime["runtime_state"] = "crashed"
+        elif not desired_running or not managed_alive:
             compact_runtime["runtime_state"] = "stopped"
         elif str(compact_runtime.get("runtime_state") or "").strip().lower() == "ready":
             compact_runtime["runtime_state"] = "unavailable"
@@ -1957,13 +1984,30 @@ class RealtimeSidecarServer:
             heartbeat_s = max(5.0, float(os.getenv("ADAOS_SIDECAR_LIFECYCLE_HEARTBEAT_S", "15") or "15"))
         except Exception:
             heartbeat_s = 15.0
+        try:
+            runtime_crash_grace_s = max(
+                2.0,
+                float(os.getenv("ADAOS_SIDECAR_RUNTIME_CRASH_GRACE_S", "6") or "6"),
+            )
+        except Exception:
+            runtime_crash_grace_s = 6.0
         last_success_at = 0.0
         next_attempt_at = 0.0
         failure_total = 0
         last_error = ""
+        runtime_listener_missing_since: float | None = None
         while not self._stopped.is_set():
             now = time.time()
             runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle()
+            if runtime_listener_ready:
+                runtime_listener_missing_since = None
+            elif runtime_listener_missing_since is None:
+                runtime_listener_missing_since = now
+            runtime_listener_unavailable_for_s = (
+                max(0.0, now - runtime_listener_missing_since)
+                if runtime_listener_missing_since is not None
+                else 0.0
+            )
             payload = build_sidecar_lifecycle_report(
                 base_dir=current_base_dir(),
                 transport_snapshot=self._diag_snapshot(),
@@ -1971,6 +2015,8 @@ class RealtimeSidecarServer:
                 source_epoch=self._lifecycle_source_epoch,
                 revision=self._lifecycle_revision,
                 reported_at=now,
+                runtime_listener_unavailable_for_s=runtime_listener_unavailable_for_s,
+                runtime_crash_grace_s=runtime_crash_grace_s,
             )
             fingerprint = _sidecar_lifecycle_semantic_fingerprint(payload)
             changed = fingerprint != self._lifecycle_fingerprint
