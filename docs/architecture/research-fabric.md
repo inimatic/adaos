@@ -1,12 +1,12 @@
 # AdaOS Research Fabric
 
-Status: target architecture with ARF0.5 and the ARF2/ARF3 core foundations
-validated locally. The research-manager package and a read-only TLP Desktop
-surface are implemented, but the ARF1 single-experiment operator vertical is
-not complete. MLflow/ARF4 is blocked until that vertical exercises storage,
-execution, results, and evidence end to end.
+Status: target architecture with ARF0.5 through ARF3 validated locally by the
+TLP single-experiment vertical. A real CPU runner, tracker contract
+`1.0-rc1`, and supervised MLflow provider are implemented. MLflow/ARF4 remains
+a candidate until its full conformance, outage, identity-mapping, and remote
+binding gates pass.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-08-08.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -217,22 +217,31 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The locally validated packages are `research_manager_skill` `0.4.0` and
-`tlp_research` `0.1.3`. They were published, installed, validated, tested, and
-executed through the normal AdaOS managers and CLI. The TLP package is a
-Desktop scenario with a declarative read-only study/workflow surface; its
-Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
-gates. Scenario calls are routed only to skill tools declared in package
-dependencies; the workflow does not gain ambient access to unrelated skills.
+The locally validated packages are `research_manager_skill` `0.5.0`,
+`mlflow_tracker_skill` `0.1.1`, and `tlp_research` `0.1.4`. They were
+published, reinstalled, validated, tested, and executed through the normal
+AdaOS managers and CLI. The TLP Desktop scenario provides a Single Experiment
+Workbench for immutable condition revision, review/lock, bounded start,
+cancel/retry/reconcile, paired results, artifacts, and result finalization.
+Its Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
+gates. Scenario calls are routed only to declared dependency tools.
 
-This package evidence is not an operator-complete research framework. The
-current TLP scenario cannot edit a versioned experiment plan, lock and launch
-one experiment, cancel/reconcile its attempts, inspect paired results, or
-finalize evidence from Desktop. The missing domain relation is explicitly
-`Study 1:N Experiment`: a study is the future series/research-question
-container, while each experiment owns its condition revisions, execution, and
-result fixation. ARF4 must not freeze a tracker contract before this vertical
-defines the observations and queries it actually needs.
+The accepted control aggregate is E002. It ran the real STL-10 binary dataset
+on CPU for three epochs over a bounded 300-train/100-validation subset with
+seed 17. Both arms completed on their first physical attempt with a shared
+initial-state digest. Best validation accuracy was 0.31 for MaxPool and 0.29
+for centered TLP, a diagnostic delta of -0.02. The result is explicitly
+`workflow_validation`, not a scientific conclusion: one seed, a bounded
+subset, and three epochs cannot support the TLP claim. E001 remains retained
+as rejected instrumentation-QC provenance because its original initialization
+digest was not stable across equivalent arms.
+
+The E002 result and normalized tracker export are immutable and independently
+verifiable; eight content-addressed artifacts passed verification after skill
+version migration and AdaOS restart. The Desktop application remained
+installed after rebuild/restart, and both MLflow attempt runs remained
+queryable. This closes the local ARF1 operator proof without claiming the
+larger ARF4 provider matrix or the ARF6 scientific reference proof.
 
 ## Responsibility Boundaries
 
@@ -397,11 +406,20 @@ provider limits are documented in [Durable Execution](../sdk/execution.md).
 
 ### Tracker provider
 
-The local tracker supports typed operations for run registration, parameters,
-metrics, tags, finalization, export, and provider identity. It is owned by the
-research framework package and persisted through the neutral relational SDK. It
-becomes a core candidate only if a second non-research domain needs the same
-contract.
+Tracker contract `1.0-rc1` binds every physical `ExecutionAttempt` to its own
+tracking session while retaining the logical AdaOS `Run` across retries. It
+normalizes metric namespace/name, value type, unit, direction, split role,
+dataset digest, structured step, aggregation, observation time, producer
+attempt/sequence, and evidence role. Sessions also carry immutable parameters,
+AdaOS identity tags, dataset inputs, artifact references, completeness, and a
+deterministic export.
+
+The reference provider persists that contract through the neutral relational
+SDK. The MLflow provider uses the same journal as a transactional outbox and
+projects accepted events through supported MLflow REST endpoints. AdaOS owns
+the replay/deduplication coordinate and evidence digest; the provider owns its
+native query indexes and UI. A tracker contract becomes a core candidate only
+if a second non-research domain needs the same semantics.
 
 ### Generic service UI surface
 
@@ -427,16 +445,19 @@ The target respects current AdaOS ownership:
   models/                            # promoted model registry/artifacts only
 ```
 
-An initial local MLflow service skill may therefore use:
+The local MLflow service skill uses:
 
 ```text
-.../.runtime/mlflow-tracker/vX.Y/data/db/mlflow.db
-.../.runtime/mlflow-tracker/vX.Y/data/files/artifacts/
+.../.runtime/mlflow_tracker_skill/vX.Y/data/db/mlflow.db
+.../.runtime/mlflow_tracker_skill/vX.Y/data/files/artifacts/
 ```
 
-This is a component-owned SQLite database file, not a separately installed
-database server. When PostgreSQL is available, a binding may instead point to
-one shared PostgreSQL cluster. Isolation remains logical and explicit:
+This is a local-development embedded SQLite file, not a separately installed
+database server. The override is confined to the provider skill; the research
+manager never receives or constructs the backend DSN. Production PostgreSQL
+admission still requires a service-facing relational binding that can give the
+MLflow process a secret-backed endpoint without weakening the opaque SQL SDK
+used by ordinary skills. Isolation remains logical and explicit:
 
 - separate database or schema per migration owner;
 - separate roles and least-privilege credentials;
@@ -461,19 +482,21 @@ artifacts. AdaOS should integrate it as a service skill and tracker adapter.
 
 | AdaOS | MLflow projection |
 | --- | --- |
-| Study or study version | Experiment plus AdaOS identity tags |
-| Trial group | Parent run or group identity tag |
-| Trial / logical run | Child run |
+| Study | Identity tag and experiment namespace |
+| AdaOS Experiment revision | MLflow Experiment plus immutable digest tags |
+| Trial group / Trial / logical Run | Identity tags on each provider run |
+| ExecutionAttempt | One MLflow Run and one tracker session |
 | Immutable configuration | Parameters and configuration artifact |
 | Observations | Metrics with split/unit/step conventions |
-| Evidence artifacts | Logged artifacts plus content digest tags |
+| Evidence artifacts | AdaOS content references and digest tags; binary ownership remains AdaOS |
 | Claim decision | AdaOS-only state; optional summary tag for discovery |
 
 MLflow owns query-optimized experiment telemetry during execution. AdaOS owns
-the protocol and decision record. At a quality-control or claim gate, the
-research manager exports the required MLflow run data into an immutable
-`EvidenceBundle`. That distinction is more precise than calling MLflow either
-the AdaOS database or merely a disposable UI projection.
+the protocol, outbox journal, normalized export, artifact bytes, and decision
+record. At a quality-control or claim gate, the research manager fixes the
+normalized tracker export into immutable evidence. MLflow is therefore a real
+tracker/query provider, but not the canonical research database or evidence
+authority.
 
 Integration rules:
 
@@ -497,11 +520,13 @@ The primary UI is a native AdaOS Research Workbench generated from canonical
 study and evidence state. It covers protocol review, trial matrix, progress,
 comparisons, evidence, and approvals.
 
-The full MLflow UI may be exposed as an advanced tool through the generic
-service UI surface. An iframe is acceptable only behind an AdaOS-controlled
-same-origin proxy or equivalently governed route with authentication,
-authorization, origin/CSP policy, health, and lifecycle handling. A plain
-iframe to an unauthenticated tracker port is not an integration design.
+The initial local integration opens the loopback MLflow UI in a separate
+top-level browser tab from the native Workbench. It deliberately does not use
+an iframe: current MLflow security headers, independent navigation, and the
+lack of an AdaOS same-origin authorization proxy make embedding the wrong
+boundary. An iframe becomes admissible only behind an AdaOS-controlled
+same-origin route with authentication, authorization, origin/CSP policy,
+health, and lifecycle handling.
 
 ## Ray Integration
 
