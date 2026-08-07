@@ -38,6 +38,15 @@ control/route report. Sidecar transport without runtime route evidence projects
 `connecting`; both fresh reports project the same `ready` state and semantic
 revision on owning and non-owning Root replicas.
 
+A fresh supervisor observation has veto priority for local runtime health. If
+it reports `runtime_api_ready=false`, a still-fresh runtime control report must
+not promote the Hub back to `ready`: that report may have been emitted by a
+partially live transport worker while the runtime HTTP/event loop is already
+unresponsive. Runtime control readiness is a fallback only while the supervisor
+observation is unavailable or stale. With a live sidecar/root route this state
+projects as `warming:runtime_not_ready`, keeps the SSE wait active, and denies
+commands and YWS until a new healthy supervisor observation arrives.
+
 During a core A/B cutover the outgoing supervisor leaves the sidecar process
 alive and persists the fingerprint of the code generation that process actually
 loaded. The incoming supervisor adopts both the listener and that fingerprint;
