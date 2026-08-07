@@ -10,7 +10,9 @@ def test_ci_embeds_patch_bump_after_matrix_tests() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert "bump_patch_version:" in workflow
-    assert "needs: tests" in workflow
+    assert "needs: [sdk_tests, skills_tests]" in workflow
+    assert "tools/ci_sdk_shard.py" in workflow
+    assert "--shard-count 6" in workflow
     assert "github.event_name == 'push'" in workflow
     assert "github.ref == 'refs/heads/rev2026'" in workflow
     assert "chore: bump adaos version" in workflow
