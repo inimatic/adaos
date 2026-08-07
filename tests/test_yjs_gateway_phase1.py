@@ -2384,6 +2384,44 @@ def test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker(capfd) -
         gc.collect()
 
 
+def test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread(monkeypatch) -> None:
+    inspected_on: list[int] = []
+
+    class _Room:
+        def __init__(self) -> None:
+            self.ydoc = y_py.YDoc()
+            self.ystore = None
+            self.clients = []
+
+        def _diag_snapshot(self) -> dict[str, object]:
+            inspected_on.append(threading.get_ident())
+            return {}
+
+    key = "gateway-owner-thread-snapshot"
+    room = _Room()
+    gateway_module.y_server.rooms[key] = room
+    gateway_module._mark_room_created(key, room)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_SNAPSHOT_OWNER_THREAD_ID", None)
+    monkeypatch.setattr(gateway_module, "_GATEWAY_SNAPSHOT_OWNER_LOOP", None)
+
+    async def _exercise() -> tuple[int, dict[str, object]]:
+        owner_thread_id = threading.get_ident()
+        gateway_module._GATEWAY_SNAPSHOT_OWNER_THREAD_ID = owner_thread_id
+        gateway_module._GATEWAY_SNAPSHOT_OWNER_LOOP = asyncio.get_running_loop()
+        snapshot = await asyncio.to_thread(gateway_module.gateway_transport_snapshot)
+        return owner_thread_id, snapshot
+
+    try:
+        owner_thread_id, snapshot = asyncio.run(_exercise())
+        assert inspected_on == [owner_thread_id]
+        assert snapshot["rooms"][key]["ydoc_object_id"] is not None
+    finally:
+        room.ydoc = None
+        gateway_module.y_server.rooms.pop(key, None)
+        gateway_module._YROOM_LIFECYCLE.pop(key, None)
+        gc.collect()
+
+
 def test_apply_materialized_payload_reports_gateway_phase_timings(monkeypatch) -> None:
     key = "gateway-phase-timings"
     update = b"phase-update"

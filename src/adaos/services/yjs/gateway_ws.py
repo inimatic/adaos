@@ -156,6 +156,10 @@ _YWS_ATTEMPT_DIAG: dict[str, Any] = {
 _YROOM_LIFECYCLE_LOCK = threading.RLock()
 _YROOM_BOOTSTRAP_ATTEMPT_SEQ = 0
 _YROOM_LIFECYCLE: dict[str, dict[str, Any]] = {}
+_GATEWAY_SNAPSHOT_OWNER_LOCK = threading.RLock()
+_GATEWAY_SNAPSHOT_OWNER_THREAD_ID: int | None = None
+_GATEWAY_SNAPSHOT_OWNER_LOOP: asyncio.AbstractEventLoop | None = None
+_GATEWAY_SNAPSHOT_CACHE: dict[str, Any] = {}
 _WS_EVENT_SUBSCRIPTIONS_LOCK = threading.RLock()
 _WS_EVENT_SUBSCRIBERS: dict[int, dict[str, Any]] = {}
 _WS_EVENT_FORWARDER_INSTALLED = False
@@ -5975,7 +5979,7 @@ def _gateway_transport_ownership_snapshot() -> dict[str, dict[str, Any]]:
     }
 
 
-def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+def _build_gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
     now = time.time() if now_ts is None else float(now_ts)
     with _TRANSPORT_LOCK:
         state = json.loads(json.dumps(_TRANSPORT_STATE))
@@ -6003,7 +6007,7 @@ def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]
     room_details, room_aggregates = _room_debug_snapshot_all(now)
     if yws_state is not None:
         yws_state.update(room_aggregates)
-    return {
+    snapshot = {
         "transports": state,
         "servers": {
             "yws": _y_server_runtime_snapshot(),
@@ -6014,6 +6018,49 @@ def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]
         "webio_snapshot_demand": snapshot_demand_snapshot(),
         "updated_at": now,
     }
+    # This snapshot crosses worker boundaries in reliability and root-control
+    # reporting. Serializing it on the Yjs owner thread guarantees that no
+    # bound room method, task, YDoc, transaction, or other y_py wrapper can be
+    # retained by the receiving worker through an otherwise innocent-looking
+    # diagnostics value.
+    plain_snapshot = json.loads(json.dumps(snapshot))
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        _GATEWAY_SNAPSHOT_CACHE.clear()
+        _GATEWAY_SNAPSHOT_CACHE.update(plain_snapshot)
+    return plain_snapshot
+
+
+async def _build_gateway_transport_snapshot_on_owner(now_ts: float | None) -> dict[str, Any]:
+    return _build_gateway_transport_snapshot(now_ts=now_ts)
+
+
+def gateway_transport_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+    """Return plain gateway diagnostics without moving live Yjs objects across threads."""
+
+    current_thread_id = threading.get_ident()
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        owner_thread_id = _GATEWAY_SNAPSHOT_OWNER_THREAD_ID
+        owner_loop = _GATEWAY_SNAPSHOT_OWNER_LOOP
+
+    if owner_thread_id is None or current_thread_id == owner_thread_id:
+        return _build_gateway_transport_snapshot(now_ts=now_ts)
+
+    if owner_loop is not None and owner_loop.is_running() and not owner_loop.is_closed():
+        future = asyncio.run_coroutine_threadsafe(
+            _build_gateway_transport_snapshot_on_owner(now_ts),
+            owner_loop,
+        )
+        try:
+            return future.result(timeout=2.0)
+        except Exception:
+            future.cancel()
+            _ylog.debug("gateway diagnostics owner-thread handoff failed", exc_info=True)
+
+    # During shutdown the owner loop can disappear before a final reliability
+    # read. Only return the last JSON-normalized snapshot; walking rooms from
+    # this worker would reintroduce cross-thread y_py finalization.
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        return json.loads(json.dumps(_GATEWAY_SNAPSHOT_CACHE)) if _GATEWAY_SNAPSHOT_CACHE else {}
 
 
 def _ws_trace_enabled() -> bool:
@@ -7847,6 +7894,12 @@ async def start_y_server() -> None:
     Ensure the shared Y websocket server background task is running.
     """
     global _y_server_started, _y_server_task
+    global _GATEWAY_SNAPSHOT_OWNER_LOOP, _GATEWAY_SNAPSHOT_OWNER_THREAD_ID
+    owner_loop = asyncio.get_running_loop()
+    owner_thread_id = threading.get_ident()
+    with _GATEWAY_SNAPSHOT_OWNER_LOCK:
+        _GATEWAY_SNAPSHOT_OWNER_LOOP = owner_loop
+        _GATEWAY_SNAPSHOT_OWNER_THREAD_ID = owner_thread_id
     if _y_server_started:
         task = _y_server_task
         if task is not None and task.done():
