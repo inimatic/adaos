@@ -1,0 +1,392 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "apps": [
+    {
+      "id": "weather_app",
+      "title": "Weather",
+      "icon": "cloud-outline",
+      "launchModal": "weather_modal"
+    }
+  ],
+  "widgets": [
+    {
+      "id": "weather",
+      "title": "Weather",
+      "type": "visual.metricTile",
+      "icon": "cloud-outline",
+      "dataSource": {
+        "kind": "y",
+        "path": "data/weather/current",
+        "observeRoot": true
+      },
+      "loading": {
+        "loadingText": "Loading weather...",
+        "emptyText": "--"
+      },
+      "inputs": {
+        "valuePath": "temp_c",
+        "format": "number",
+        "decimals": 1,
+        "emptyText": "--",
+        "labelPath": "city",
+        "subtitlePath": "condition",
+        "descriptionPath": "summary",
+        "noticePath": "error",
+        "loadingText": "Loading weather..."
+      },
+      "actions": [
+        {
+          "on": "click",
+          "type": "openModal",
+          "params": {
+            "modalId": "weather_modal"
+          }
+        }
+      ]
+    }
+  ],
+  "registry": {
+    "modals": {
+      "weather_modal": {
+        "title": "Weather",
+        "schema": {
+          "id": "weather_modal",
+          "title": "Weather",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "interaction": {
+            "initialFocus": "widget:weather-city-input",
+            "submit": {
+              "defaultAction": "weather.update_city"
+            }
+          },
+          "widgets": [
+            {
+              "id": "weather-summary",
+              "type": "visual.metricTile",
+              "area": "main",
+              "title": "Current weather",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/weather/current",
+                "observeRoot": true
+              },
+              "loading": {
+                "loadingText": "Loading weather...",
+                "emptyText": "--"
+              },
+              "inputs": {
+                "valuePath": "temp_c",
+                "format": "number",
+                "decimals": 1,
+                "emptyText": "--",
+                "labelPath": "city",
+                "subtitlePath": "condition",
+                "descriptionPath": "summary",
+                "noticePath": "error",
+                "loadingText": "Loading weather..."
+              }
+            },
+            {
+              "id": "weather-location-actions",
+              "type": "input.commandBar",
+              "area": "main",
+              "inputs": {
+                "variant": "stack",
+                "size": "small",
+                "buttons": [
+                  {
+                    "id": "browser-location",
+                    "label": "Use current location"
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "id": "weather.use_current_location",
+                  "on": "click:browser-location",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "feedback": {
+                    "pending": {
+                      "label": "Locating..."
+                    },
+                    "observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  },
+                  "params": {
+                    "event_type": "weather.location.requested",
+                    "payload": {
+                      "location": "$browser.geolocation",
+                      "request_id": "$client.requestId"
+                    },
+                    "_observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "weather-city-input",
+              "type": "input.text",
+              "area": "main",
+              "title": "City",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/weather/current",
+                "observeRoot": true
+              },
+              "inputs": {
+                "bindField": "city",
+                "placeholder": "City name",
+                "commitMode": "manual",
+                "saveLabel": "Update"
+              },
+              "interaction": {
+                "submit": {
+                  "defaultAction": "weather.update_city"
+                }
+              },
+              "actions": [
+                {
+                  "id": "weather.update_city",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "feedback": {
+                    "pending": {
+                      "label": "Updating..."
+                    },
+                    "observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  },
+                  "params": {
+                    "event_type": "weather.location.requested",
+                    "payload": {
+                      "city": "$event.value",
+                      "request_id": "$client.requestId"
+                    },
+                    "_observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "weather-city-selector",
+              "type": "input.selector",
+              "area": "main",
+              "title": "Popular city",
+              "inputs": {
+                "bindField": "city",
+                "options": [
+                  "Moscow",
+                  "Berlin",
+                  "Paris",
+                  "New York",
+                  "Tokyo"
+                ]
+              },
+              "dataSource": {
+                "kind": "y",
+                "path": "data/weather/current",
+                "observeRoot": true
+              },
+              "actions": [
+                {
+                  "id": "weather.select_city",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "feedback": {
+                    "pending": {
+                      "label": "Updating..."
+                    },
+                    "observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  },
+                  "params": {
+                    "event_type": "weather.location.requested",
+                    "payload": {
+                      "city": "$event.value",
+                      "request_id": "$client.requestId"
+                    },
+                    "_observe": {
+                      "kind": "y",
+                      "path": "data/weather/current",
+                      "scope": "node",
+                      "timeout_ms": 9000,
+                      "match": {
+                        "request_id": "$client.requestId",
+                        "pending": false
+                      },
+                      "advanceFields": ["request_id", "updated_at", "pending"]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "weather-hourly-chart",
+              "type": "visual.metricChart",
+              "area": "main",
+              "title": "Temperature",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/weather/hourly_chart",
+                "observeRoot": true
+              },
+              "inputs": {
+                "emptyText": "No hourly forecast yet"
+              }
+            },
+            {
+              "id": "weather-daily",
+              "type": "ui.table",
+              "area": "main",
+              "title": "Forecast",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/weather/daily",
+                "observeRoot": true
+              },
+              "inputs": {
+                "emptyText": "No forecast yet",
+                "columns": [
+                  {
+                    "key": "day",
+                    "label": "Day"
+                  },
+                  {
+                    "key": "condition",
+                    "label": "Condition"
+                  },
+                  {
+                    "key": "temp_min_c",
+                    "label": "Min"
+                  },
+                  {
+                    "key": "temp_max_c",
+                    "label": "Max"
+                  },
+                  {
+                    "key": "precip_pct",
+                    "label": "Rain %"
+                  },
+                  {
+                    "key": "wind_ms",
+                    "label": "Wind"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "widgets": {}
+  },
+  "ydoc_defaults": {
+    "data/weather/current": {
+      "city": "Moscow",
+      "label": "Moscow",
+      "temp_c": null,
+      "condition": "",
+      "description": "",
+      "summary": "",
+      "wind_ms": null,
+      "pending": true,
+      "source": "pending",
+      "updated_at": ""
+    },
+    "data/weather/hourly_chart": {
+      "title": "Next hours",
+      "unit": "C",
+      "points": []
+    },
+    "data/weather/daily": [],
+    "data/weather/locations": [
+      {
+        "id": "Moscow",
+        "label": "Moscow"
+      },
+      {
+        "id": "Berlin",
+        "label": "Berlin"
+      },
+      {
+        "id": "Paris",
+        "label": "Paris"
+      },
+      {
+        "id": "New York",
+        "label": "New York"
+      },
+      {
+        "id": "Tokyo",
+        "label": "Tokyo"
+      }
+    ]
+  },
+  "contributions": [
+    {
+      "extensionPoint": "desktop.widgets",
+      "type": "widget",
+      "id": "weather",
+      "autoInstall": true
+    }
+  ]
+}

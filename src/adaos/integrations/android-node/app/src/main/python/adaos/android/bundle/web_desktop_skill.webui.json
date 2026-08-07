@@ -1,0 +1,334 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "apps": [
+    {
+      "id": "nlu_teacher_app",
+      "title": "NLU Teacher",
+      "icon": "school-outline",
+      "launchModal": "nlu_teacher_modal"
+    }
+  ],
+  "widgets": [],
+  "registry": {
+    "modals": {
+      "apps_catalog": {
+        "title": "Available Apps",
+        "schema": {
+          "id": "apps_catalog",
+					"layout": {
+						"type": "single",
+						"pattern": "stack",
+						"areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "widgets": [
+            {
+              "id": "apps-list",
+              "type": "collection.grid",
+              "area": "main",
+              "title": "Apps",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/catalog/apps"
+              },
+              "actions": [
+                {
+                  "on": "select",
+                  "type": "callHost",
+                  "target": "desktop.toggleInstall",
+                  "params": {
+                    "type": "app",
+                    "id": "$event.id"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "widgets_catalog": {
+        "title": "Available Widgets",
+        "schema": {
+          "id": "widgets_catalog",
+					"layout": {
+						"type": "single",
+						"pattern": "stack",
+						"areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "widgets": [
+            {
+              "id": "widgets-list",
+              "type": "collection.grid",
+              "area": "main",
+              "title": "Widgets",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/catalog/widgets"
+              },
+              "actions": [
+                {
+                  "on": "select",
+                  "type": "callHost",
+                  "target": "desktop.toggleInstall",
+                  "params": {
+                    "type": "widget",
+                    "id": "$event.id"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "nlu_teacher_modal": {
+        "title": "NLU Teacher",
+        "schema": {
+          "id": "nlu_teacher_modal",
+          "title": "NLU Teacher",
+					"layout": {
+						"type": "single",
+						"pattern": "stack",
+						"areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "initialState": {
+            "nluTeacherTab": "requests"
+          },
+          "widgets": [
+            {
+              "id": "nlu-tabs",
+              "type": "input.commandBar",
+              "area": "main",
+              "inputs": {
+                "buttons": [
+                  {
+                    "id": "requests",
+                    "label": "User requests"
+                  },
+                  {
+                    "id": "candidates",
+                    "label": "Candidates"
+                  },
+                  {
+                    "id": "signals",
+                    "label": "Signals"
+                  },
+                  {
+                    "id": "check",
+                    "label": "Check"
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "on": "click:requests",
+                  "type": "updateState",
+                  "params": {
+                    "nluTeacherTab": "requests"
+                  }
+                },
+                {
+                  "on": "click:candidates",
+                  "type": "updateState",
+                  "params": {
+                    "nluTeacherTab": "candidates"
+                  }
+                },
+                {
+                  "on": "click:signals",
+                  "type": "updateState",
+                  "params": {
+                    "nluTeacherTab": "signals"
+                  }
+                },
+                {
+                  "on": "click:check",
+                  "type": "updateState",
+                  "params": {
+                    "nluTeacherTab": "check"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "nlu-check-form",
+              "type": "ui.form",
+              "area": "main",
+              "title": "Check phrase",
+              "inputs": {
+                "submitLabel": "Check",
+                "fields": [
+                  {
+                    "id": "phrase",
+                    "type": "text",
+                    "label": "Phrase",
+                    "placeholder": "Покажи переменные окружения подсети"
+                  }
+                ]
+              },
+              "visibleIf": "$state.nluTeacherTab === 'check'",
+              "actions": [
+                {
+                  "on": "submit",
+                  "type": "callHost",
+                  "target": "nlu.teacher.probe",
+                  "params": {
+                    "text": "$event.values.phrase",
+                    "result_state_key": "nluTeacherProbeResult",
+                    "use_rasa": true,
+                    "emit_trace": true
+                  }
+                }
+              ]
+            },
+            {
+              "id": "nlu-check-result",
+              "type": "ui.jsonViewer",
+              "area": "main",
+              "title": "Probe result",
+              "inputs": {
+                "stateKey": "nluTeacherProbeResult",
+                "emptyText": "No phrase checked yet"
+              },
+              "visibleIf": "$state.nluTeacherTab === 'check'",
+              "actions": []
+            },
+            {
+              "id": "nlu-events",
+              "type": "ui.list",
+              "area": "main",
+              "title": "User requests",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/nlu_teacher/events",
+                "scope": "shared"
+              },
+              "inputs": {
+                "inset": true,
+                "emptyText": "No teacher events yet",
+                "groupBy": "request_id",
+                "groupTitleKey": "request_text",
+                "titleKey": "title",
+                "subtitleKey": "subtitle",
+                "itemAccordion": false,
+                "showDetails": false,
+                "detailsPath": "raw",
+                "detailsModal": false,
+                "detailsModalTitleKey": "title",
+                "buttons": [
+                  {
+                    "id": "apply",
+                    "label": "Apply",
+                    "icon": "checkmark-outline",
+                    "whenKey": "kind",
+                    "whenEquals": "revision.suggested"
+                  }
+                ]
+              },
+              "visibleIf": "$state.nluTeacherTab === 'requests'",
+              "actions": [
+                {
+                  "on": "click:apply",
+                  "type": "callHost",
+                  "target": "nlp.teacher.revision.apply",
+                  "params": {
+                    "revision_id": "$event.raw.id",
+                    "intent": "$event.raw.proposal.intent",
+                    "examples": "$event.raw.proposal.examples",
+                    "slots": "$event.raw.proposal.slots"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "nlu-candidates",
+              "type": "ui.list",
+              "area": "main",
+              "title": "Candidates",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/nlu_teacher/events_by_candidate",
+                "scope": "shared"
+              },
+              "inputs": {
+                "inset": true,
+                "emptyText": "No candidates yet",
+                "groupBy": "candidate_name",
+                "groupTitleKey": "candidate_name",
+                "groupSubtitleKey": "candidate_description",
+                "subGroupBy": "request_id",
+                "subGroupTitleKey": "request_text",
+                "titleKey": "title",
+                "subtitleKey": "subtitle",
+                "itemAccordion": false,
+                "showDetails": false,
+                "detailsPath": "raw",
+                "detailsModal": false,
+                "detailsModalTitleKey": "title",
+                "buttons": [
+                  {
+                    "id": "apply",
+                    "label": "Apply",
+                    "icon": "checkmark-outline",
+                    "whenKey": "kind",
+                    "whenEquals": "candidate.proposed"
+                  }
+                ]
+              },
+              "visibleIf": "$state.nluTeacherTab === 'candidates'",
+              "actions": [
+                {
+                  "on": "click:apply",
+                  "type": "callHost",
+                  "target": "nlp.teacher.candidate.apply",
+                  "params": {
+                    "candidate_id": "$event.raw.id",
+                    "target": "$event.raw.target"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "nlu-signals",
+              "type": "ui.list",
+              "area": "main",
+              "title": "Signals",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/nlu_teacher/workbench_signals",
+                "scope": "shared"
+              },
+              "inputs": {
+                "inset": true,
+                "emptyText": "No teacher signals yet",
+                "titleKey": "title",
+                "subtitleKey": "subtitle",
+                "itemAccordion": true,
+                "detailsPath": "details",
+                "detailsModal": false,
+                "detailsModalTitleKey": "title"
+              },
+              "visibleIf": "$state.nluTeacherTab === 'signals'",
+              "actions": []
+            }
+          ]
+        }
+      }
+    },
+    "widgets": {}
+  },
+  "ydoc_defaults": {}
+}

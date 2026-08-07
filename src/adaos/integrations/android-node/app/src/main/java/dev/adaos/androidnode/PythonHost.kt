@@ -35,7 +35,7 @@ class PythonHost(context: Context) {
                     Result.success(
                         NodeStatus(
                             phase = NodePhase.READY,
-                            detail = "Loopback sentinel is ready",
+                            detail = "Packaged web_desktop Yjs seed and journal are ready",
                             pythonVersion = parsed.optString("python_version"),
                             dataRoot = parsed.optString("data_root"),
                             port = parsed.optInt("port", 8777),

@@ -1,8 +1,9 @@
 # AdaOS Android Full Node Roadmap
 
 Status: active domain roadmap for an experimental proof of concept. The first
-A0/A2 sentinel APK is buildable; physical-device acceptance and the real Yjs
-runtime remain open.
+A0/A2/A4 vertical slice is running on a physical Android 16 arm64 phone and
+renders `web_desktop` from a packaged Yjs update. Native Android `y-py`, skill
+execution, member connectivity, and the 2 GB device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -56,7 +57,7 @@ toolchain works on one physical arm64 phone.
   interface.
 - [x] `[must]` Start Python from a visible Activity action and return a
   structured version/result payload to Kotlin.
-- [ ] `[must]` give Python an explicit app-private data directory and prove a
+- [x] `[must]` give Python an explicit app-private data directory and prove a
   write/read/restart round trip there.
 - [x] `[must]` Produce an installable debug APK from CI or a documented local
   build command.
@@ -110,7 +111,7 @@ status endpoint. This is the first runnable AdaOS-on-phone draft.
 
 - [ ] `[must]` Add `ADAOS_RUNTIME_PROFILE=android_poc` and a typed runtime
   capability description.
-- [ ] `[must]` Create a non-exported foreground `NodeService` with explicit
+- [x] `[must]` Create a non-exported foreground `NodeService` with explicit
   `Start node` and `Stop node` actions and a persistent notification.
 - [ ] `[must]` Run one Python asyncio loop owned by the service.
 - [ ] `[must]` initialize `AgentContext`, the local event bus, SQLite paths,
@@ -185,20 +186,20 @@ Gate A3:
 Outcome: the normal hosted AdaOS client becomes the phone's UI and renders real
 local Yjs state.
 
-- [ ] `[must]` expose the existing browser-required HTTP, `/ws`, and
+- [x] `[must]` expose the existing browser-required HTTP, `/ws`, and
   `/yws/<webspace>` routes from the Android runtime.
-- [ ] `[must]` keep the listener on `127.0.0.1` and restrict HTTP CORS and
+- [x] `[must]` keep the listener on `127.0.0.1` and restrict HTTP CORS and
   WebSocket Origin admission to `https://inimatic.com` plus explicit debug
   origins.
-- [ ] `[must]` add `Open AdaOS` to launch
+- [x] `[must]` add `Open AdaOS` to launch
   `https://inimatic.com/?zone=lo&try_local_hub=1`.
 - [ ] `[must]` treat the Chrome Local Network Access prompt as the only
   first-use browser approval, not as AdaOS login or pairing.
-- [ ] `[must]` make explicit LO intent override a remembered remote owner
+- [x] `[must]` make explicit LO intent override a remembered remote owner
   session without deleting the remote session.
-- [ ] `[must]` retain `dev-local-token` only as transparent protocol
-  compatibility; display no local login or pairing UI.
-- [ ] `[must]` connect to `/yws/desktop`, complete first sync, and render
+- [x] `[must]` advertise the no-auth local listener and omit
+  `dev-local-token`; display no local login or pairing UI.
+- [x] `[must]` connect to `/yws/desktop`, complete first sync, and render
   `web_desktop` from the local document.
 - [ ] `[must]` connect `/ws` and prove one browser action and one live stream
   event.

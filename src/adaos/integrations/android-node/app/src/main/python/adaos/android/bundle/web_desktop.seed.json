@@ -1,0 +1,101 @@
+{
+  "schema": "adaos.android.web_desktop.seed.v1",
+  "scenario_id": "web_desktop",
+  "application": {
+    "version": "0.2",
+    "resources": [],
+    "desktop": {
+      "topbar": [],
+      "iconTemplate": {
+        "icon": "apps-outline"
+      },
+      "widgetTemplate": {
+        "style": {
+          "minWidth": 240
+        }
+      },
+      "pinnedWidgets": [],
+      "iconOrder": [
+        "weather_app",
+        "adaos_connect_app",
+        "notebook_skill_app",
+        "scenario:taiga_ui_demo_scenario"
+      ],
+      "widgetOrder": [
+        "weather",
+        "notebook_skill_last_note"
+      ],
+      "hiddenSections": [],
+      "pageSchema": {
+        "id": "desktop",
+        "title": "AdaOS Android",
+        "layout": {
+          "type": "single",
+          "pattern": "stack",
+          "areas": [
+            {
+              "id": "main",
+              "role": "main"
+            }
+          ]
+        },
+        "widgets": [
+          {
+            "id": "desktop-icons",
+            "type": "collection.grid",
+            "area": "main",
+            "title": "Apps",
+            "inputs": {
+              "columns": 4
+            },
+            "dataSource": {
+              "kind": "y",
+              "transform": "desktop.icons"
+            },
+            "actions": [
+              {
+                "on": "select",
+                "type": "openModal",
+                "params": {
+                  "modalId": "$event.action.openModal"
+                }
+              }
+            ]
+          },
+          {
+            "id": "desktop-widgets",
+            "type": "desktop.widgets",
+            "area": "main",
+            "title": "Widgets",
+            "dataSource": {
+              "kind": "y",
+              "transform": "desktop.widgets"
+            }
+          }
+        ]
+      }
+    },
+    "modals": {}
+  },
+  "catalog": {
+    "apps": [],
+    "widgets": [],
+    "resources": {}
+  },
+  "installed": {
+    "apps": [
+      "weather_app",
+      "adaos_connect_app",
+      "notebook_skill_app",
+      "scenario:taiga_ui_demo_scenario"
+    ],
+    "widgets": [
+      "weather",
+      "notebook_skill_last_note"
+    ]
+  },
+  "registry": {
+    "modals": [],
+    "widgets": []
+  }
+}

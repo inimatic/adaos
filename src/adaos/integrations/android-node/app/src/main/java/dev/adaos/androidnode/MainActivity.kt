@@ -53,7 +53,7 @@ class MainActivity : Activity() {
         content.addView(label("AdaOS Node", 32f, Color.WHITE, true))
         content.addView(
             label(
-                "Experimental arm64 full-node host",
+                "Experimental arm64 AdaOS host",
                 16f,
                 Color.rgb(156, 163, 175),
                 false,
@@ -71,8 +71,8 @@ class MainActivity : Activity() {
         content.addView(openButton)
         content.addView(
             label(
-                "This first APK proves Android lifecycle, CPython 3.11 and the " +
-                    "loopback LO discovery endpoint. Yjs and bundled skills are the next gate.",
+                "This APK serves a packaged web_desktop Yjs seed and a persistent update " +
+                    "journal to the hosted client. Skill execution remains experimental.",
                 14f,
                 Color.rgb(156, 163, 175),
                 false,

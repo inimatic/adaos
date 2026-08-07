@@ -1,0 +1,891 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "webio": {
+    "receivers": {
+      "notebook_skill.notes": {
+        "mode": "replace",
+        "transport": "hub",
+        "snapshotPolicy": "on_subscribe",
+        "initialState": {
+          "ok": true,
+          "status": "loading",
+          "message": "Loading notes",
+          "selected_note_id": "",
+          "display_note_id": "",
+          "editing_note_id": "",
+          "items": [],
+          "updated_at": null
+        },
+        "budget": {
+          "maxPayloadBytes": 32768,
+          "maxPublishHz": 2,
+          "maxSnapshotHz": 1,
+          "maxItems": 64
+        },
+        "guardVisibility": {
+          "degradedState": "Keep the last notebook list snapshot.",
+          "log": "skill:notebook_skill.runtime",
+          "quarantine": false,
+          "metric": "webio_stream_guard.notebook_skill.notes"
+        },
+        "route": {
+          "kind": "stream",
+          "surface": "modal:notebook_modal",
+          "owner": "skill:notebook_skill",
+          "firstPaint": "default note cards",
+          "recovery": "snapshot requested on stream subscribe",
+          "updateSource": [
+            "webio.stream.snapshot.requested",
+            "notebook_skill.action"
+          ]
+        }
+      }
+    }
+  },
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "defaultView": "notebook.notes.list",
+    "views": {
+      "notebook.latest": {
+        "title": "Latest note",
+        "surfaces": [
+          "widget"
+        ],
+        "params": {},
+        "data": {
+          "note": {
+            "source": "notebook_skill.notes",
+            "path": "widget.items.0"
+          }
+        },
+        "title_i18n": {
+          "key": "notebook.view.latest_note"
+        }
+      },
+      "notebook.notes.list": {
+        "title": "Notes",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {},
+        "data": {
+          "notes": {
+            "source": "notebook_skill.notes",
+            "path": "items"
+          }
+        },
+        "title_i18n": {
+          "key": "notebook.notes"
+        }
+      },
+      "notebook.note.edit": {
+        "title": "Edit note",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {
+          "note_id": {
+            "type": "string",
+            "required": true
+          }
+        },
+        "data": {
+          "note": {
+            "source": "notebook_skill.notes",
+            "path": "editor"
+          }
+        },
+        "title_i18n": {
+          "key": "notebook.view.edit_note"
+        }
+      },
+      "notebook.note.new": {
+        "title": "New note",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {},
+        "title_i18n": {
+          "key": "notebook.new_note"
+        }
+      }
+    },
+    "transitions": [
+      {
+        "from": "notebook.latest",
+        "on": "select",
+        "to": "notebook.note.edit",
+        "surface": "modal",
+        "params": {
+          "note_id": "$event.id"
+        }
+      },
+      {
+        "from": "notebook.notes.list",
+        "on": "select",
+        "to": "notebook.note.edit",
+        "surface": "modal",
+        "params": {
+          "note_id": "$event.id"
+        }
+      },
+      {
+        "from": "notebook.note.edit",
+        "on": "back",
+        "to": "notebook.notes.list",
+        "surface": "modal"
+      }
+    ]
+  },
+  "apps": [
+    {
+      "id": "notebook_skill_app",
+      "title": "Notebook",
+      "subtitle": "Notes and attachments",
+      "icon": "document-text-outline",
+      "aliases": [
+        "notebook",
+        "notes",
+        "gnotes"
+      ],
+      "launchModal": "notebook_modal",
+      "action": {
+        "openModal": "notebook_modal"
+      },
+      "title_i18n": {
+        "key": "notebook.title"
+      },
+      "subtitle_i18n": {
+        "key": "notebook.subtitle"
+      }
+    }
+  ],
+  "widgets": [
+    {
+      "id": "notebook_skill_last_note",
+      "title": "Notebook",
+      "type": "ui.list",
+      "icon": "document-text-outline",
+      "dataSource": {
+        "kind": "stream",
+        "receiver": "notebook_skill.notes",
+        "path": "widget"
+      },
+      "inputs": {
+        "collectionKey": "items",
+        "titleKey": "title",
+        "subtitleKey": "updated_at",
+        "detailsPath": "text",
+        "showDetails": true,
+        "detailsPresentation": "body",
+        "cardShell": true,
+        "itemAccordion": false,
+        "emptyText": "No note yet",
+        "emptyText_i18n": {
+          "key": "notebook.empty.no_note"
+        }
+      },
+      "actions": [
+        {
+          "on": "select",
+          "type": "navigate",
+          "params": {
+            "to": "notebook.note.edit",
+            "surface": "modal",
+            "params": {
+              "note_id": "$event.id"
+            }
+          }
+        },
+        {
+          "on": "select",
+          "type": "callSkill",
+          "target": "notebook_skill.select_note",
+          "params": {
+            "note_id": "$event.id",
+            "edit": true
+          }
+        }
+      ],
+      "title_i18n": {
+        "key": "notebook.title"
+      }
+    }
+  ],
+  "registry": {
+    "modals": {
+      "notebook_modal": {
+        "title": "Notebook",
+        "implements": [
+          "notebook.notes.list",
+          "notebook.note.edit",
+          "notebook.note.new"
+        ],
+        "presentation": {
+          "kind": "fullscreen"
+        },
+        "schema": {
+          "id": "notebook_modal",
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "defaultRoute": "notes.list",
+            "history": {
+              "url": true,
+              "mode": "push"
+            },
+            "domain": {
+              "schema": "adaos.ui.modal_domain.v1",
+              "defaultState": "notes.list",
+              "stateKey": "notebookRoute",
+              "states": {
+                "notes.list": {
+                  "kind": "collection",
+                  "route": "notes.list",
+                  "view": "notebook.notes.list",
+                  "state": {
+                    "notebookViewMode": "list"
+                  }
+                },
+                "note.edit": {
+                  "kind": "entity",
+                  "route": "note.edit",
+                  "view": "notebook.note.edit",
+                  "entity": {
+                    "type": "note",
+                    "idParam": "note_id",
+                    "idStateKey": "notebookSelectedNoteId"
+                  },
+                  "state": {
+                    "notebookViewMode": "edit"
+                  }
+                },
+                "note.new": {
+                  "kind": "draft",
+                  "route": "note.new",
+                  "view": "notebook.note.new",
+                  "entity": {
+                    "type": "note",
+                    "draft": true
+                  },
+                  "state": {
+                    "notebookViewMode": "edit"
+                  }
+                }
+              }
+            },
+            "ownership": {
+              "schema": "adaos.ui.state_ownership.v1",
+              "domainState": {
+                "owner": "skill:notebook_skill",
+                "store": "skill_memory",
+                "projection": "webio:notebook_skill.notes"
+              },
+              "routeState": {
+                "owner": "browser",
+                "scope": "modal",
+                "keys": [
+                  "notebookViewMode",
+                  "notebookSelectedNoteId",
+                  "notebookEditorContent"
+                ]
+              },
+              "viewState": {
+                "owner": "browser",
+                "scope": "modal"
+              },
+              "persistence": {
+                "owner": "skill:notebook_skill",
+                "ack": "tool:notebook_skill.save_note",
+                "durability": "skill_local_memory"
+              }
+            },
+            "routes": {
+              "notes.list": {
+                "view": "notebook.notes.list",
+                "params": {},
+                "state": {
+                  "notebookViewMode": "list",
+                  "notebookSelectedNoteId": ""
+                }
+              },
+              "note.edit": {
+                "view": "notebook.note.edit",
+                "params": {
+                  "note_id": {
+                    "type": "string",
+                    "required": true
+                  }
+                },
+                "state": {
+                  "notebookViewMode": "edit",
+                  "notebookSelectedNoteId": "$params.note_id"
+                }
+              },
+              "note.new": {
+                "view": "notebook.note.new",
+                "params": {},
+                "state": {
+                  "notebookViewMode": "edit",
+                  "notebookSelectedNoteId": "",
+                  "notebookEditorContent": ""
+                }
+              }
+            }
+          },
+          "initialState": {
+            "notebookViewMode": "list",
+            "notebookSelectedNoteId": ""
+          },
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [
+              {
+                "id": "list",
+                "role": "main"
+              },
+              {
+                "id": "edit",
+                "role": "main"
+              }
+            ]
+          },
+          "interaction": {
+            "initialFocus": "widget:notebook-notes"
+          },
+          "widgets": [
+            {
+              "id": "notebook-notes",
+              "type": "ui.list",
+              "area": "list",
+              "title": "Notes",
+              "visibleIf": "$state.notebookViewMode === 'list'",
+              "dataSource": {
+                "kind": "stream",
+                "receiver": "notebook_skill.notes"
+              },
+              "inputs": {
+                "collectionKey": "items",
+                "variant": "cards",
+                "search": true,
+                "searchPlaceholder": "Search notes",
+                "addFirstCard": true,
+                "addButton": true,
+                "addButtonLabel": "Add",
+                "addCardLabel": "Add note",
+                "emptyCardTitle": "New note",
+                "titleKey": "title",
+                "subtitleKey": "updated_at",
+                "descriptionKey": "preview",
+                "previewKey": "preview",
+                "imageKey": "image",
+                "badgeKey": "attachment_count",
+                "emptyText": "Create a note to start.",
+                "loadingText": "Loading notes...",
+                "loadingUntilUpdatedAt": true,
+                "itemAccordion": false,
+                "searchPlaceholder_i18n": {
+                  "key": "notebook.search_notes"
+                },
+                "addButtonLabel_i18n": {
+                  "key": "notebook.add"
+                },
+                "addCardLabel_i18n": {
+                  "key": "notebook.add_note"
+                },
+                "emptyCardTitle_i18n": {
+                  "key": "notebook.new_note"
+                },
+                "emptyText_i18n": {
+                  "key": "notebook.empty.create_note"
+                },
+                "loadingText_i18n": {
+                  "key": "notebook.loading.notes"
+                }
+              },
+              "actions": [
+                {
+                  "on": "select",
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "note.edit",
+                    "params": {
+                      "note_id": "$event.id"
+                    }
+                  }
+                },
+                {
+                  "on": "select",
+                  "type": "callSkill",
+                  "target": "notebook_skill.select_note",
+                  "params": {
+                    "note_id": "$event.id",
+                    "edit": true
+                  }
+                },
+                {
+                  "on": "add",
+                  "type": "callSkill",
+                  "target": "notebook_skill.create_note",
+                  "params": {
+                    "content": ""
+                  }
+                },
+                {
+                  "on": "add",
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "note.new"
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.notes"
+              }
+            },
+            {
+              "id": "notebook-back",
+              "type": "input.commandBar",
+              "area": "edit",
+              "title": "Navigation",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "inputs": {
+                "size": "small",
+                "buttons": [
+                  {
+                    "id": "back",
+                    "label": "Back",
+                    "icon": "arrow-back-outline",
+                    "label_i18n": {
+                      "key": "notebook.back"
+                    }
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "on": "click:back",
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "notes.list"
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.navigation"
+              }
+            },
+            {
+              "id": "notebook-editor",
+              "type": "item.textEditor",
+              "area": "edit",
+              "title": "Editor",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "dataSource": {
+                "kind": "stream",
+                "receiver": "notebook_skill.notes",
+                "path": "editor"
+              },
+              "inputs": {
+                "bindField": "content",
+                "placeholder": "Write a note",
+                "autoSave": true,
+                "autoSaveMs": 250,
+                "stateKey": "notebookEditorContent",
+                "loadingText": "Loading note...",
+                "loadingUntilUpdatedAt": true,
+                "placeholder_i18n": {
+                  "key": "notebook.write_note"
+                },
+                "loadingText_i18n": {
+                  "key": "notebook.loading.note"
+                }
+              },
+              "actions": [
+                {
+                  "on": "change",
+                  "type": "callSkill",
+                  "target": "notebook_skill.save_note",
+                  "params": {
+                    "note_id": "$state.notebookSelectedNoteId",
+                    "content": "$event.content",
+                    "source": "editor_change",
+                    "side_effect_class": "local_write"
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.editor"
+              }
+            },
+            {
+              "id": "notebook-attachments",
+              "type": "ui.list",
+              "area": "edit",
+              "title": "Attachments",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "dataSource": {
+                "kind": "stream",
+                "receiver": "notebook_skill.notes",
+                "path": "editor"
+              },
+              "inputs": {
+                "collectionKey": "attachments",
+                "titleKey": "name",
+                "subtitleKey": "summary",
+                "detailsPath": "url",
+                "buttons": [
+                  {
+                    "id": "open",
+                    "label": "Open",
+                    "icon": "open-outline",
+                    "whenKey": "url"
+                  },
+                  {
+                    "id": "download",
+                    "label": "Download",
+                    "icon": "download-outline",
+                    "whenKey": "download_url"
+                  }
+                ],
+                "emptyText": "No attachments",
+                "emptyText_i18n": {
+                  "key": "notebook.empty.attachments"
+                }
+              },
+              "actions": [
+                {
+                  "on": "click:open",
+                  "type": "openUrl",
+                  "params": {
+                    "url": "$event.url",
+                    "target": "_blank"
+                  }
+                },
+                {
+                  "on": "click:download",
+                  "type": "openUrl",
+                  "params": {
+                    "url": "$event.download_url",
+                    "target": "_blank",
+                    "download": true
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.attachments"
+              }
+            },
+            {
+              "id": "notebook-photo-upload",
+              "type": "input.fileUpload",
+              "area": "edit",
+              "title": "Photo",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "inputs": {
+                "skill": "notebook_skill",
+                "purpose": "photos",
+                "accept": "image/*",
+                "label": "Attach photo",
+                "maxBytes": 52428800,
+                "label_i18n": {
+                  "key": "notebook.attach_photo"
+                }
+              },
+              "actions": [
+                {
+                  "on": "uploaded",
+                  "type": "callSkill",
+                  "target": "notebook_skill.attach_note_upload",
+                  "params": {
+                    "note_id": "$state.notebookSelectedNoteId",
+                    "kind": "photo",
+                    "side_effect_class": "local_write",
+                    "artifact_ref": "$event.artifact_ref",
+                    "upload": {
+                      "name": "$event.file.name",
+                      "mime": "$event.file.mime",
+                      "size_bytes": "$event.file.size_bytes",
+                      "sha256": "$event.artifact_ref.sha256",
+                      "purpose": "photos"
+                    }
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.photo"
+              }
+            },
+            {
+              "id": "notebook-file-upload",
+              "type": "input.fileUpload",
+              "area": "edit",
+              "title": "File",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "inputs": {
+                "skill": "notebook_skill",
+                "purpose": "attachments",
+                "accept": "*/*",
+                "label": "Attach file",
+                "maxBytes": 134217728,
+                "label_i18n": {
+                  "key": "notebook.attach_file"
+                }
+              },
+              "actions": [
+                {
+                  "on": "uploaded",
+                  "type": "callSkill",
+                  "target": "notebook_skill.attach_note_upload",
+                  "params": {
+                    "note_id": "$state.notebookSelectedNoteId",
+                    "kind": "attachment",
+                    "side_effect_class": "local_write",
+                    "artifact_ref": "$event.artifact_ref",
+                    "upload": {
+                      "name": "$event.file.name",
+                      "mime": "$event.file.mime",
+                      "size_bytes": "$event.file.size_bytes",
+                      "sha256": "$event.artifact_ref.sha256",
+                      "purpose": "attachments"
+                    }
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.file"
+              }
+            },
+            {
+              "id": "notebook-actions",
+              "type": "input.commandBar",
+              "area": "edit",
+              "title": "Edit",
+              "visibleIf": "$state.notebookViewMode === 'edit'",
+              "inputs": {
+                "variant": "stack",
+                "size": "small",
+                "buttons": [
+                  {
+                    "id": "new",
+                    "label": "New",
+                    "icon": "add-outline",
+                    "label_i18n": {
+                      "key": "notebook.new"
+                    }
+                  },
+                  {
+                    "id": "refresh",
+                    "label": "Refresh",
+                    "icon": "refresh-outline",
+                    "label_i18n": {
+                      "key": "notebook.refresh"
+                    }
+                  },
+                  {
+                    "id": "telegram",
+                    "label": "Telegram",
+                    "icon": "send-outline",
+                    "label_i18n": {
+                      "key": "notebook.telegram"
+                    }
+                  },
+                  {
+                    "id": "delete",
+                    "label": "Delete",
+                    "icon": "trash-outline",
+                    "kind": "danger",
+                    "label_i18n": {
+                      "key": "notebook.delete"
+                    }
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "on": "click:new",
+                  "type": "callSkill",
+                  "target": "notebook_skill.create_note",
+                  "params": {
+                    "content": ""
+                  }
+                },
+                {
+                  "on": "click:new",
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "note.new"
+                  }
+                },
+                {
+                  "on": "click:refresh",
+                  "type": "callSkill",
+                  "target": "notebook_skill.get_notebook_snapshot"
+                },
+                {
+                  "on": "click:telegram",
+                  "type": "callSkill",
+                  "target": "notebook_skill.send_note_to_telegram",
+                  "params": {
+                    "note_id": "$state.notebookSelectedNoteId"
+                  }
+                },
+                {
+                  "on": "click:delete",
+                  "type": "callSkill",
+                  "target": "notebook_skill.delete_note",
+                  "params": {
+                    "note_id": "$state.notebookSelectedNoteId"
+                  }
+                },
+                {
+                  "on": "click:delete",
+                  "type": "navigateModal",
+                  "params": {
+                    "route": "notes.list"
+                  }
+                }
+              ],
+              "title_i18n": {
+                "key": "notebook.edit"
+              }
+            }
+          ]
+        },
+        "title_i18n": {
+          "key": "notebook.title"
+        }
+      }
+    }
+  },
+  "ydoc_defaults": {
+    "data/desktop/notebook": {
+      "selected_note_id": "note-1",
+      "display_note_id": "note-1",
+      "editing_note_id": "",
+      "display": {
+        "id": "note-1",
+        "content": "",
+        "attachments": [],
+        "updated_at": null,
+        "version": 0
+      },
+      "editor": {
+        "id": "note-1",
+        "content": "",
+        "attachments": [],
+        "updated_at": null,
+        "version": 0,
+        "editing": false
+      },
+      "widget": {
+        "items": [
+          {
+            "id": "note-1",
+            "title": "New note",
+            "subtitle": "",
+            "content": "",
+            "text": "",
+            "preview": "",
+            "description": "",
+            "attachments": [],
+            "updated_at": null,
+            "title_i18n": {
+              "key": "notebook.new_note"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "contributions": [
+    {
+      "extensionPoint": "desktop.apps",
+      "type": "app",
+      "id": "notebook_skill_app",
+      "autoInstall": true
+    },
+    {
+      "extensionPoint": "desktop.widgets",
+      "type": "widget",
+      "id": "notebook_skill_last_note",
+      "autoInstall": true
+    }
+  ],
+  "resources": {
+    "notebook.i18n.en": {
+      "id": "notebook.i18n.en",
+      "kind": "data",
+      "role": "i18n",
+      "locale": "en",
+      "owner": "skill:notebook_skill",
+      "dictionary": {
+        "notebook.title": "Notebook",
+        "notebook.subtitle": "Notes and attachments",
+        "notebook.empty.no_note": "No note yet",
+        "notebook.notes": "Notes",
+        "notebook.search_notes": "Search notes",
+        "notebook.add": "Add",
+        "notebook.add_note": "Add note",
+        "notebook.new_note": "New note",
+        "notebook.empty.create_note": "Create a note to start.",
+        "notebook.loading.notes": "Loading notes...",
+        "notebook.navigation": "Navigation",
+        "notebook.back": "Back",
+        "notebook.editor": "Editor",
+        "notebook.write_note": "Write a note",
+        "notebook.loading.note": "Loading note...",
+        "notebook.attachments": "Attachments",
+        "notebook.empty.attachments": "No attachments",
+        "notebook.photo": "Photo",
+        "notebook.attach_photo": "Attach photo",
+        "notebook.file": "File",
+        "notebook.attach_file": "Attach file",
+        "notebook.edit": "Edit",
+        "notebook.new": "New",
+        "notebook.refresh": "Refresh",
+        "notebook.telegram": "Telegram",
+        "notebook.delete": "Delete",
+        "notebook.view.latest_note": "Latest note",
+        "notebook.view.edit_note": "Edit note"
+      }
+    },
+    "notebook.i18n.ru": {
+      "id": "notebook.i18n.ru",
+      "kind": "data",
+      "role": "i18n",
+      "locale": "ru",
+      "owner": "skill:notebook_skill",
+      "dictionary": {
+        "notebook.title": "\u0411\u043b\u043e\u043a\u043d\u043e\u0442",
+        "notebook.subtitle": "\u0417\u0430\u043c\u0435\u0442\u043a\u0438 \u0438 \u0432\u043b\u043e\u0436\u0435\u043d\u0438\u044f",
+        "notebook.empty.no_note": "\u0417\u0430\u043c\u0435\u0442\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442",
+        "notebook.notes": "\u0417\u0430\u043c\u0435\u0442\u043a\u0438",
+        "notebook.search_notes": "\u041f\u043e\u0438\u0441\u043a \u0437\u0430\u043c\u0435\u0442\u043e\u043a",
+        "notebook.add": "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c",
+        "notebook.add_note": "\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0437\u0430\u043c\u0435\u0442\u043a\u0443",
+        "notebook.new_note": "\u041d\u043e\u0432\u0430\u044f \u0437\u0430\u043c\u0435\u0442\u043a\u0430",
+        "notebook.empty.create_note": "\u0421\u043e\u0437\u0434\u0430\u0439\u0442\u0435 \u0437\u0430\u043c\u0435\u0442\u043a\u0443, \u0447\u0442\u043e\u0431\u044b \u043d\u0430\u0447\u0430\u0442\u044c.",
+        "notebook.loading.notes": "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0437\u0430\u043c\u0435\u0442\u043e\u043a...",
+        "notebook.navigation": "\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u044f",
+        "notebook.back": "\u041d\u0430\u0437\u0430\u0434",
+        "notebook.editor": "\u0420\u0435\u0434\u0430\u043a\u0442\u043e\u0440",
+        "notebook.write_note": "\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0437\u0430\u043c\u0435\u0442\u043a\u0443",
+        "notebook.loading.note": "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0437\u0430\u043c\u0435\u0442\u043a\u0438...",
+        "notebook.attachments": "\u0412\u043b\u043e\u0436\u0435\u043d\u0438\u044f",
+        "notebook.empty.attachments": "\u0412\u043b\u043e\u0436\u0435\u043d\u0438\u0439 \u043d\u0435\u0442",
+        "notebook.photo": "\u0424\u043e\u0442\u043e",
+        "notebook.attach_photo": "\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0444\u043e\u0442\u043e",
+        "notebook.file": "\u0424\u0430\u0439\u043b",
+        "notebook.attach_file": "\u041f\u0440\u0438\u043a\u0440\u0435\u043f\u0438\u0442\u044c \u0444\u0430\u0439\u043b",
+        "notebook.edit": "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c",
+        "notebook.new": "\u041d\u043e\u0432\u0430\u044f",
+        "notebook.refresh": "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c",
+        "notebook.telegram": "Telegram",
+        "notebook.delete": "\u0423\u0434\u0430\u043b\u0438\u0442\u044c",
+        "notebook.view.latest_note": "\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0437\u0430\u043c\u0435\u0442\u043a\u0430",
+        "notebook.view.edit_note": "\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u0437\u0430\u043c\u0435\u0442\u043a\u0443"
+      }
+    }
+  }
+}

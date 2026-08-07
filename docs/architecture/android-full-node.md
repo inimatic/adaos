@@ -2,10 +2,13 @@
 
 Status: target architecture for an experimental proof of concept.
 
-Implementation status: the first A0/A2 sentinel APK is implemented under
-`src/adaos/integrations/android-node`. It proves the Android lifecycle,
-embedded CPython 3.11, app-private identity, and loopback discovery boundary.
-Android `y-py`, YWS, skills, and member connectivity remain owned by the
+Implementation status: the first A0/A2/A4 vertical-slice APK is implemented
+under `src/adaos/integrations/android-node` and has been exercised on an
+Android 16 Samsung SM-F721N. It proves the Android lifecycle, embedded CPython
+3.11, app-private identity, loopback discovery, hosted-client LO connection,
+browser control channel, and `web_desktop` rendering from a packaged Yjs
+update. Native Android `y-py`/YStore, skill execution, member connectivity,
+and the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
 ## Purpose
@@ -372,11 +375,10 @@ as local-runtime discovery because the endpoint can be either a hub or member.
 Local connection does not require user authentication or pairing. The product
 assumption is that a person with direct access to the device is its owner.
 
-The first build may retain the existing `dev-local-token` and `require_token`
-path as a transparent protocol compatibility mechanism. It is not a security
-boundary and must not be presented as user authorization. Keeping it avoids
-unrelated changes to existing REST and WebSocket call paths while the Android
-runtime is being proven.
+The Android listener disables `require_token` and advertises
+`local_auth_required=false` during discovery. The hosted client therefore does
+not send `dev-local-token` to this listener. Older local runtimes which do not
+advertise the capability retain their compatibility behavior.
 
 The actual local boundaries are:
 
@@ -435,7 +437,7 @@ is required for hub membership.
 The Android profile requires:
 
 - membership persistence in app-private storage;
-- credentials separate from the local `dev-local-token`;
+- credentials separate from the unauthenticated loopback listener;
 - bounded reconnect with backoff;
 - semantic `offline`, `connecting`, `connected`, and expected-transition
   states;

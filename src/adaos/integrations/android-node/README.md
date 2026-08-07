@@ -10,11 +10,19 @@ Current scope:
 - embedded CPython 3.11 through Chaquopy;
 - stable app-private node identity and runtime marker;
 - unauthenticated loopback discovery on `127.0.0.1:8777`;
+- restricted CORS/private-network admission for the hosted client;
+- browser control `/ws` and Yjs `/yws/desktop` endpoints;
+- a generated, packaged Yjs `web_desktop` seed plus a bounded persistent
+  browser-update journal;
+- fixed UI descriptors for Weather, AdaOS Connect, Notebook, and the Taiga UI
+  demo scenario;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the A0/A2 sentinel artifact. It intentionally reports
-`yjs_ready=false` and `skills_ready=false`; Android `y-py`, YWS, the immutable
-skill bundle, and member connectivity remain later roadmap gates.
+This is the A0/A2/A4 vertical-slice artifact. It reports `yjs_ready=true` and
+renders the packaged desktop through the normal hosted client. It does not yet
+embed the native Android `y-py` wheel: the immutable seed is generated with
+host `y-py`, and Android replays it plus opaque Yjs updates. Skill execution,
+native YStore semantics, and member connectivity remain later roadmap gates.
 
 ## Build
 
@@ -27,8 +35,14 @@ Python 3.11 must be available as `py -3.11` on Windows. Then run:
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+If a bundled `webui.json` changes, regenerate the immutable Yjs seed first:
+
+```powershell
+py -3.11 generate_yjs_seed.py
+```
+
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc1-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc2-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -36,11 +50,11 @@ debug-signed development artifact, not a Play Store release package.
 Connect an arm64 Android 8+ phone with USB debugging enabled, then run:
 
 ```powershell
-adb install -r artifacts/android-node/adaos-android-node-0.1.0-poc1-debug.apk
+adb install -r artifacts/android-node/adaos-android-node-0.1.0-poc2-debug.apk
 adb shell am start -n dev.adaos.androidnode/.MainActivity
 ```
 
 Tap `Start node`, wait for `READY`, and check the loopback endpoint from the
 phone at `http://127.0.0.1:8777/api/node/status`. `Open AdaOS` launches the
-hosted client with explicit LO intent. The current sentinel is discoverable by
-the client, but does not yet provide `/ws` or `/yws/desktop`.
+hosted client with explicit LO intent. The browser should show the four fixed
+apps, two widgets, and a green YJS status without login or a development token.
