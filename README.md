@@ -166,10 +166,10 @@ See [Browser and Member Connection](docs/onboarding/browser-and-member.md) and
 
 ## Versions and health
 
-Core version is stored in `pyproject.toml`. On `rev2026`, `AdaOS CI` runs the
-complete SDK suite in balanced parallel shards plus a parallel skill-test job,
-then bumps the patch version. A sequential full-suite run remains available as
-a nightly or manually requested control run.
+Core version is stored in `pyproject.toml`. On `rev2026`, `AdaOS CI` runs a
+small mandatory SDK/smoke set plus a parallel skill-test job, then bumps the
+patch version. The complete SDK suite runs sequentially only on the nightly
+schedule or when `full_validation` is requested manually.
 
 Check deployed backend and client versions:
 

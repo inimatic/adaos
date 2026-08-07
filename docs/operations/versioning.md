@@ -55,13 +55,13 @@ versions:
 
 The core base version lives in `pyproject.toml` under `[project].version`.
 
-On pushes to `rev2026`, the `AdaOS CI` workflow runs the complete Linux SDK
-suite as six deterministic, test-count-balanced shards and runs skill tests as
-a separate parallel job. After every shard and the skill job succeed, the
+On pushes to `rev2026`, the `AdaOS CI` workflow runs a bounded Linux SDK/smoke
+set and skill tests as separate parallel jobs. After both jobs succeed, the
 workflow bumps the patch version and pushes a commit named
-`chore: bump adaos version to <version>`. The sequential full-suite run remains
-available through the nightly or manually requested Windows job; it is not on
-the normal development critical path.
+`chore: bump adaos version to <version>`. The complete SDK suite runs
+sequentially on the nightly schedule or when `full_validation` is requested
+manually. The Windows full-suite control run remains nightly or opt-in through
+`include_windows`; neither full run is on the normal development critical path.
 
 Runtime slots record the human-readable build version in their slot manifest.
 Use these commands on a node:
