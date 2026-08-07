@@ -86,6 +86,45 @@ from adaos.services.runtime_identity import runtime_connect_name, runtime_identi
 from adaos.services.subnet_alias import save_subnet_alias
 
 
+def _sidecar_tail_log_each_enabled() -> bool:
+    return str(os.getenv("ADAOS_SIDECAR_TAIL_LOG_EACH") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _sidecar_tail_summary(lines: list[str], *, max_chars: int = 480) -> str:
+    nonempty = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    if not nonempty:
+        return "empty"
+    last = nonempty[-1]
+    try:
+        payload = _json.loads(last)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        fields = []
+        for name in (
+            "session_id",
+            "active_session",
+            "remote_connect_retrying",
+            "last_error",
+            "last_remote_connect_error",
+        ):
+            value = payload.get(name)
+            if value is None or value == "":
+                continue
+            fields.append(f"{name}={value}")
+        if fields:
+            last = " ".join(fields)
+    limit = max(120, int(max_chars or 480))
+    if len(last) > limit:
+        last = f"{last[:limit]}..."
+    return last
+
+
 async def _run_nats_root_transport(
     service: Any,
     *,
@@ -3456,45 +3495,49 @@ async def _run_nats_root_transport(
                                     try:
                                         log_path, log_tail = await asyncio.to_thread(_tail, realtime_sidecar_log_path(), 40)
                                         if log_tail:
-                                            print(f"[hub-io] adaos-realtime log tail file={log_path} lines={len(log_tail)}")
                                             try:
                                                 sidecar_log = logging.getLogger("adaos.hub-io.sidecar")
                                                 sidecar_log.warning(
-                                                    "adaos-realtime log tail file=%s lines=%s",
+                                                    "adaos-realtime log tail file=%s lines=%s last=%s",
                                                     log_path,
                                                     len(log_tail),
+                                                    _sidecar_tail_summary(log_tail),
                                                 )
-                                                for line in log_tail:
-                                                    sidecar_log.warning(
-                                                        "adaos-realtime log line file=%s line=%s",
-                                                        log_path,
-                                                        line,
-                                                    )
+                                                if _sidecar_tail_log_each_enabled():
+                                                    for line in log_tail:
+                                                        sidecar_log.debug(
+                                                            "adaos-realtime log line file=%s line=%s",
+                                                            log_path,
+                                                            line,
+                                                        )
                                             except Exception:
                                                 pass
-                                            print("\n".join(log_tail))
+                                            if _sidecar_tail_log_each_enabled():
+                                                print("\n".join(log_tail))
                                     except Exception:
                                         pass
                                     try:
                                         diag_path, diag_tail = await asyncio.to_thread(_tail, realtime_sidecar_diag_path(), 10)
                                         if diag_tail:
-                                            print(f"[hub-io] adaos-realtime diag tail file={diag_path} lines={len(diag_tail)}")
                                             try:
                                                 sidecar_log = logging.getLogger("adaos.hub-io.sidecar")
                                                 sidecar_log.warning(
-                                                    "adaos-realtime diag tail file=%s lines=%s",
+                                                    "adaos-realtime diag tail file=%s lines=%s last=%s",
                                                     diag_path,
                                                     len(diag_tail),
+                                                    _sidecar_tail_summary(diag_tail),
                                                 )
-                                                for line in diag_tail:
-                                                    sidecar_log.warning(
-                                                        "adaos-realtime diag line file=%s line=%s",
-                                                        diag_path,
-                                                        line,
-                                                    )
+                                                if _sidecar_tail_log_each_enabled():
+                                                    for line in diag_tail:
+                                                        sidecar_log.debug(
+                                                            "adaos-realtime diag line file=%s line=%s",
+                                                            diag_path,
+                                                            line,
+                                                        )
                                             except Exception:
                                                 pass
-                                            print("\n".join(diag_tail))
+                                            if _sidecar_tail_log_each_enabled():
+                                                print("\n".join(diag_tail))
                                     except Exception:
                                         pass
 

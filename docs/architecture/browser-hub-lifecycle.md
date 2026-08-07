@@ -101,6 +101,12 @@ temporarily enabled with `ADAOS_ROOT_HTTP_ROUTINE_LOG_EACH=1` for focused
 transport debugging. `ADAOS_ROOT_HTTP_ROUTINE_SUMMARY_INTERVAL_S` controls the
 summary window.
 
+A transient Hub-to-sidecar transport failure records one bounded summary for
+the sidecar log tail and one for its structured diagnostic tail. Runtime logs
+do not replay every captured tail line as a warning or duplicate the tail on
+stdout. Operators can temporarily restore per-line DEBUG tail output with
+`ADAOS_SIDECAR_TAIL_LOG_EACH=1`.
+
 On an orderly service stop, sidecar first stops its heartbeat loop and sends
 one final `shutdown.kind=planned` report. If the process or host disappears
 without that marker, Root changes the diagnosis to `unexpected_shutdown` when

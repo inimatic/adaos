@@ -10,6 +10,7 @@ import pytest
 
 from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
+from adaos.services.bootstrap_runtime.nats_transport_runtime import _sidecar_tail_summary
 from adaos.services.system_model import service as system_model_service
 
 
@@ -378,6 +379,27 @@ def test_sidecar_error_tail_is_byte_bounded_for_large_diag_file(monkeypatch: pyt
     lines = bootstrap_mod._read_sidecar_tail_lines(diag_path, lines=2)
 
     assert lines == ['{"ts": 2, "line": "middle"}', '{"ts": 3, "line": "tail"}']
+
+
+def test_sidecar_error_tail_summary_compacts_structured_diagnostics() -> None:
+    summary = _sidecar_tail_summary(
+        [
+            '{"session_id":"rt-a","active_session":false,'
+            '"remote_connect_retrying":true,"last_error":"connection reset",'
+            '"large":"' + ("x" * 2_000) + '"}'
+        ]
+    )
+
+    assert summary == (
+        "session_id=rt-a active_session=False remote_connect_retrying=True "
+        "last_error=connection reset"
+    )
+
+
+def test_sidecar_error_tail_summary_bounds_plain_text() -> None:
+    summary = _sidecar_tail_summary(["x" * 300], max_chars=120)
+
+    assert summary == ("x" * 120) + "..."
 
 
 def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
