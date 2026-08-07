@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
+from packaging.version import InvalidVersion, Version
 
 from adaos.domain import Event as DomainEvent
 from adaos.services.agent_context import get_ctx
@@ -759,6 +760,50 @@ def _member_snapshot_matches_core_target(snapshot: dict[str, Any], target_versio
     return False
 
 
+def _semantic_core_version(*values: Any) -> Version | None:
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        try:
+            parsed = Version(normalized)
+        except InvalidVersion:
+            continue
+        # Build metadata identifies a concrete artifact, but must not turn a
+        # same-release rebuild into an apparent upgrade.  Commit identity is
+        # still handled by _member_snapshot_matches_core_target().
+        return Version(parsed.public)
+    return None
+
+
+def _member_snapshot_is_ahead_of_core_target(
+    snapshot: dict[str, Any],
+    hub_status: dict[str, Any],
+) -> tuple[bool, str, str]:
+    if not isinstance(snapshot, dict) or not isinstance(hub_status, dict):
+        return False, "", ""
+    slots = snapshot.get("slots") if isinstance(snapshot.get("slots"), dict) else {}
+    active_manifest = slots.get("active_manifest") if isinstance(slots.get("active_manifest"), dict) else {}
+    build = snapshot.get("build") if isinstance(snapshot.get("build"), dict) else {}
+    hub_manifest = hub_status.get("manifest") if isinstance(hub_status.get("manifest"), dict) else {}
+    member_version = _semantic_core_version(
+        active_manifest.get("base_version"),
+        build.get("runtime_base_version"),
+        active_manifest.get("build_version"),
+        build.get("runtime_build_version"),
+        build.get("runtime_version"),
+    )
+    target_version = _semantic_core_version(
+        hub_manifest.get("base_version"),
+        hub_status.get("base_version"),
+        hub_manifest.get("build_version"),
+        hub_status.get("build_version"),
+    )
+    if member_version is None or target_version is None:
+        return False, str(member_version or ""), str(target_version or "")
+    return member_version > target_version, str(member_version), str(target_version)
+
+
 def _member_update_in_progress(snapshot: dict[str, Any], target_version: str) -> bool:
     if not isinstance(snapshot, dict):
         return False
@@ -929,6 +974,19 @@ class HubLinkManager:
         member_snapshot = snapshot if isinstance(snapshot, dict) else link.node_snapshot
         if _member_snapshot_matches_core_target(member_snapshot, target_version, build_version):
             return {"ok": True, "accepted": False, "reason": "member_already_current", "node_id": node_id}
+        member_ahead, member_version, target_base_version = _member_snapshot_is_ahead_of_core_target(
+            member_snapshot,
+            hub_status,
+        )
+        if member_ahead:
+            return {
+                "ok": True,
+                "accepted": False,
+                "reason": "member_ahead_of_hub",
+                "node_id": node_id,
+                "member_version": member_version,
+                "target_version": target_base_version,
+            }
         if _member_update_in_progress(member_snapshot, target_version):
             return {"ok": True, "accepted": False, "reason": "member_update_in_progress", "node_id": node_id}
         now = time.time()

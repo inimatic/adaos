@@ -86,6 +86,10 @@ As of the current implementation increment:
   activates member registration and the upstream link. The hub also closes a
   replaced member socket so a surviving runtime reconnects instead of keeping
   an orphaned session after short-lived duplicate overlap.
+- hub-driven member reconciliation is monotonic by semantic base version. A
+  member on a newer release is reported as `member_ahead_of_hub` and is not
+  sent an older update target; exact artifact identity still decides whether
+  two builds of the same base release need reconciliation.
 
 This closes the biggest developer-experience gap, but it is still not the final
 production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.

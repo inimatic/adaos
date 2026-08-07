@@ -1127,6 +1127,71 @@ def test_update_member_status_does_not_reconcile_current_core_version(monkeypatc
     assert [msg for msg in ws.messages if msg.get("t") == "core.update.request"] == []
 
 
+def test_update_member_status_does_not_downgrade_newer_member(monkeypatch) -> None:
+    manager = mod.HubLinkManager()
+    ws = _FakeWebSocket()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+    monkeypatch.setattr(manager, "_push_node_display_assignment", _noop_push)
+    monkeypatch.setattr(manager, "_publish_member_infrastate_projection", _noop_push)
+    monkeypatch.setattr(
+        "adaos.services.core_update.read_status",
+        lambda: {
+            "state": "succeeded",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "hub-target-abcdef0",
+            "manifest": {
+                "base_version": "0.1.703",
+                "build_version": "0.1.703+1.abcdef0",
+                "target_version": "hub-target-abcdef0",
+            },
+        },
+    )
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=ws)
+
+    asyncio.run(
+        manager.update_member_status(
+            "member-1",
+            status={
+                "node_id": "member-1",
+                "role": "member",
+                "slots": {
+                    "active_manifest": {
+                        "base_version": "0.1.704",
+                        "build_version": "0.1.704+1.2484e4d",
+                        "target_version": "member-target-2484e4d",
+                    }
+                },
+                "build": {
+                    "runtime_base_version": "0.1.704",
+                    "runtime_build_version": "0.1.704+1.2484e4d",
+                },
+                "update_status": {"state": "succeeded", "action": "update"},
+            },
+        )
+    )
+
+    assert [msg for msg in ws.messages if msg.get("t") == "core.update.request"] == []
+
+
+def test_member_ahead_comparison_ignores_same_release_build_metadata() -> None:
+    ahead, member_version, target_version = mod._member_snapshot_is_ahead_of_core_target(
+        {
+            "slots": {
+                "active_manifest": {
+                    "build_version": "0.1.704+2.member123",
+                }
+            }
+        },
+        {"manifest": {"build_version": "0.1.704+1.hub456"}},
+    )
+
+    assert ahead is False
+    assert member_version == "0.1.704"
+    assert target_version == "0.1.704"
+
+
 def test_update_member_status_retries_failed_member_control_request(monkeypatch) -> None:
     manager = mod.HubLinkManager()
     ws = _FakeWebSocket()
