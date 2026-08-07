@@ -24,6 +24,7 @@ class BootstrapBootOperations:
     register_chat_nlu_bridge: Any
     register_subscriptions: Any
     report_hub_control_lifecycle_state: Any
+    runtime_transition_role: Any
     should_emit_node_status: Any
     should_forward_node_status_to_members: Any
     should_forward_webio_control_to_members: Any
@@ -36,6 +37,15 @@ class BootstrapBootOperations:
 
 
 class BootstrapBootCoordinator:
+    @staticmethod
+    def _member_runtime_owns_upstream(operations: BootstrapBootOperations) -> bool:
+        resolver = getattr(operations, "runtime_transition_role", None)
+        try:
+            role = str(resolver() if callable(resolver) else "active").strip().lower()
+        except Exception:
+            role = "active"
+        return role != "candidate"
+
     async def run(
         self,
         service: Any,
@@ -703,18 +713,24 @@ class BootstrapBootCoordinator:
             service._status_watchdog.start_heartbeats(service._lifecycle)
         else:
             member_ready_announced = False
+            member_runtime_owns_upstream = self._member_runtime_owns_upstream(operations)
 
             async def _announce_member_ready() -> None:
                 nonlocal member_ready_announced
                 if member_ready_announced:
                     return
                 member_ready_announced = True
-                try:
-                    from adaos.services.subnet.link_client import get_member_link_client
+                if member_runtime_owns_upstream:
+                    try:
+                        from adaos.services.subnet.link_client import get_member_link_client
 
-                    await get_member_link_client().start()
-                except Exception:
-                    service._log.warning("failed to start member hub websocket link after registration", exc_info=True)
+                        await get_member_link_client().start()
+                    except Exception:
+                        service._log.warning("failed to start member hub websocket link after registration", exc_info=True)
+                else:
+                    service._log.info(
+                        "candidate member runtime keeps registration heartbeat and hub websocket passive until promotion"
+                    )
                 service._lifecycle.signal_ready()
                 _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
                 await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
@@ -736,9 +752,17 @@ class BootstrapBootCoordinator:
             # transition instead of leaving the otherwise connected node
             # permanently at ready=false.
             service._lifecycle.set_member_ready_callback(_announce_member_ready)
-            task = await service._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
-            if task:
-                service._lifecycle.track_task(task)
+            if member_runtime_owns_upstream:
+                task = await service._member_register_and_heartbeat(conf, on_registered=_announce_member_ready)
+                if task:
+                    service._lifecycle.track_task(task)
+                    service._lifecycle.mark_booted()
+            else:
+                # A passive candidate must become probe-ready without claiming
+                # the singleton member identity at Root or /ws/subnet.  If two
+                # runtimes connect with the same node_id, candidate cleanup can
+                # otherwise orphan the active runtime's hub-side link.
+                await _announce_member_ready()
                 service._lifecycle.mark_booted()
 
         # After IO bus is ready, wire outbound subscriber for Telegram if NATS/local

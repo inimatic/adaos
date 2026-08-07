@@ -193,7 +193,13 @@ from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
 
 from adaos.apps.bootstrap import init_ctx
-from adaos.services.bootstrap import run_boot_sequence, shutdown, is_ready, request_hub_root_reconnect
+from adaos.services.bootstrap import (
+    is_ready,
+    request_hub_root_reconnect,
+    request_member_hub_reconnect,
+    run_boot_sequence,
+    shutdown,
+)
 from adaos.services.observe import start_observer, stop_observer
 from adaos.services.agent_context import get_ctx
 from adaos.services.router import RouterService
@@ -2048,9 +2054,12 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             node_role = "hub"
         hub_root_authority_required = node_role == "hub"
         try:
-            reconnect_result = await request_hub_root_reconnect(
-                wait_for_authority=hub_root_authority_required
-            )
+            if node_role == "member":
+                reconnect_result = await request_member_hub_reconnect(force=True)
+            else:
+                reconnect_result = await request_hub_root_reconnect(
+                    wait_for_authority=hub_root_authority_required
+                )
         except Exception as exc:
             reconnect_result = {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
         authority = (

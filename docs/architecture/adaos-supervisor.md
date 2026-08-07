@@ -208,7 +208,7 @@ automatically repeated.
 
 ## Candidate passive mode
 
-Before cutover is explicitly committed, a prewarmed `candidate` runtime must stay passive on root-facing traffic subjects.
+Before cutover is explicitly committed, a prewarmed `candidate` runtime must stay passive on root-facing traffic subjects. The same singleton rule applies to a member candidate: it must not register the active node heartbeat or open a second member-hub WebSocket with the same `node_id` before promotion.
 
 Candidate API readiness does not require a root/NATS connection. Bootstrap
 registers the bridge factory but defers opening the local sidecar session until

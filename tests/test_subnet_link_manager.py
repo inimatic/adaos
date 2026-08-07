@@ -72,10 +72,14 @@ class _FakeDirectory:
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.messages: list[dict] = []
+        self.closed: list[tuple[int, str]] = []
 
     async def send_json(self, msg: dict) -> None:
         self.messages.append(msg)
         return None
+
+    async def close(self, *, code: int, reason: str) -> None:
+        self.closed.append((code, reason))
 
 
 def test_unregister_does_not_remove_replacement_link(monkeypatch) -> None:
@@ -90,6 +94,26 @@ def test_unregister_does_not_remove_replacement_link(monkeypatch) -> None:
 
     assert manager._links["member-1"] is replacement_link
     assert fake_bus.events == []
+
+
+def test_register_closes_replaced_member_session(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    manager = mod.HubLinkManager()
+    previous_ws = _FakeWebSocket()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=previous_ws)
+
+    replacement = asyncio.run(
+        manager.register(
+            "member-1",
+            _FakeWebSocket(),
+            hostname="member-host",
+            roles=["member"],
+        )
+    )
+
+    assert manager._links["member-1"] is replacement
+    assert previous_ws.closed == [(4001, "link_replaced")]
 
 
 async def _noop_push(*_args, **_kwargs) -> None:

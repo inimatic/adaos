@@ -124,3 +124,14 @@ async def test_boot_coordinator_uses_agent_context_bus() -> None:
 
     with pytest.raises(_StopAfterBusSelection):
         await BootstrapBootCoordinator().run(service, operations, SimpleNamespace())
+
+
+def test_candidate_member_runtime_does_not_own_upstream_link() -> None:
+    coordinator = BootstrapBootCoordinator()
+
+    assert coordinator._member_runtime_owns_upstream(
+        SimpleNamespace(runtime_transition_role=lambda: "active")
+    ) is True
+    assert coordinator._member_runtime_owns_upstream(
+        SimpleNamespace(runtime_transition_role=lambda: "candidate")
+    ) is False

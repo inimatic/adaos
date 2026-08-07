@@ -975,6 +975,16 @@ class HubLinkManager:
                         fut.set_exception(ConnectionError("link_replaced"))
             except Exception:
                 pass
+            # Do not leave the replaced client believing it is still the
+            # authority session.  Closing it makes the surviving active
+            # runtime reconnect after a short-lived duplicate (for example a
+            # passive update candidate) goes away.
+            try:
+                close = getattr(prev.websocket, "close", None)
+                if callable(close):
+                    await close(code=4001, reason="link_replaced")
+            except Exception:
+                _log.debug("failed to close replaced member link node_id=%s", node_id, exc_info=True)
         lifecycle_payload = {
             "node_id": node_id,
             "hostname": hostname,

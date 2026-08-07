@@ -706,6 +706,7 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
     from adaos.services import autostart
 
     wait_values: list[bool] = []
+    member_reconnect_forces: list[bool] = []
 
     async def _reconnect(*, wait_for_authority: bool, **_kwargs):
         wait_values.append(wait_for_authority)
@@ -718,6 +719,12 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
         lambda: {"ok": True, "changed": False, "kill_mode": "process"},
     )
     monkeypatch.setattr(api_server, "request_hub_root_reconnect", _reconnect)
+
+    async def _member_reconnect(*, force: bool = False):
+        member_reconnect_forces.append(force)
+        return {"ok": True, "accepted": True, "role": "member"}
+
+    monkeypatch.setattr(api_server, "request_member_hub_reconnect", _member_reconnect)
     monkeypatch.setattr(
         api_server,
         "_schedule_promoted_runtime_service_start",
@@ -731,8 +738,9 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
     )
 
     assert payload["ok"] is True
-    assert payload["reconnect"]["authority"]["required"] is False
-    assert wait_values == [False]
+    assert payload["reconnect"]["role"] == "member"
+    assert member_reconnect_forces == [True]
+    assert wait_values == []
 
 
 def test_admin_root_mcp_logs_returns_local_logs_by_default(monkeypatch) -> None:

@@ -628,6 +628,7 @@ class BootstrapService:
             register_chat_nlu_bridge=register_chat_nlu_bridge,
             register_subscriptions=register_subscriptions,
             report_hub_control_lifecycle_state=report_hub_control_lifecycle_state,
+            runtime_transition_role=runtime_transition_role,
             should_emit_node_status=_should_emit_node_status,
             should_forward_node_status_to_members=_should_forward_node_status_to_members,
             should_forward_webio_control_to_members=_should_forward_webio_control_to_members,

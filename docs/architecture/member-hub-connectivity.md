@@ -81,6 +81,11 @@ As of the current implementation increment:
   `hub_open_ack_timeout` remain disconnected evidence so the supervisor
   watchdog can recover the member-hub session instead of treating the node as
   healthy.
+- a passive member update candidate does not register a second heartbeat or
+  open `/ws/subnet` under the active node identity. On promotion it explicitly
+  activates member registration and the upstream link. The hub also closes a
+  replaced member socket so a surviving runtime reconnects instead of keeping
+  an orphaned session after short-lived duplicate overlap.
 
 This closes the biggest developer-experience gap, but it is still not the final
 production model because sidecar-aware ownership and deeper recovery policy are not implemented yet.
