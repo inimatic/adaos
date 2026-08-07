@@ -153,8 +153,11 @@ new route-owned runtime instance, the browser first rotates any surviving
 control session, waits for the replacement session to open, skips ICE restart
 of the obsolete peer, and then performs a full renegotiation. A stale persisted
 supervisor runtime id cannot override the live route instance id. A failed
-WebRTC attempt while lifecycle denies commands is not counted as peer-health
-evidence and cannot postpone recovery after the Hub returns.
+WebRTC attempt whose control session closes or is replaced in flight is likewise
+not peer-health evidence: the replacement control-session `open` schedules one
+new debounced attempt without carrying the obsolete route's backoff. A failed
+attempt while lifecycle denies commands also cannot postpone recovery after the
+Hub returns.
 
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
