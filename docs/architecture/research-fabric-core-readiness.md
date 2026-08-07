@@ -12,6 +12,10 @@ Research Fabric skill. It is subordinate to the
 [roadmap](research-fabric-roadmap.md). It does not introduce research-domain
 entities into core.
 
+Core readiness is intentionally not Research Fabric readiness. Passing the
+storage and execution conformance suites does not close ARF1 until an operator
+can manage one complete experiment through the packaged Desktop scenario.
+
 ## Decisions
 
 1. Relational storage is acquired as `storage.relational`, using a typed

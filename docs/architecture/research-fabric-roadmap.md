@@ -86,17 +86,17 @@ scientific conclusion. A local demo is not production acceptance.
 | Capability | Repository baseline | Assessment |
 | --- | --- | --- |
 | Skill/scenario lifecycle | Package, install, activate, service-skill supervision, A/B runtime buckets | useful implemented foundation |
-| Workflow governance | Versioned governed workflow plus package-bound research lifecycle | TLP workflow compiled and executed through declared skill routes |
+| Workflow governance | Versioned governed workflow plus package-bound research lifecycle | TLP package reaches `protocol_review`; the operator cannot yet drive one experiment end to end |
 | Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | deliberately unchanged; legacy core repositories are outside ARF0.5 |
 | Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | research-manager migrations and restart rehydration validated locally |
 | Database capability | Negotiated `storage.relational` requirement/binding, owner migrations, backup/restore, retention, lifecycle SDK, and SQLite provider; legacy `SQL` remains | ARF2 local contract validated; legacy repositories deliberately unchanged |
 | PostgreSQL | Isolated database and no-login owner role per skill, bounded pools, health, credential refresh, backup/restore | ARF2 conformance validated locally on `postgres:16-alpine` |
-| Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | ARF1/ARF3 evidence slice validated locally |
-| Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 validated locally; local process remains non-hostile isolation |
-| Tracking | Provider-neutral local tracker inside research-manager; no MLflow service skill | ARF1 local provider validated; MLflow remains ARF4 |
+| Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | foundation validated; evidence is not yet finalized through the Desktop scenario |
+| Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 core foundation validated; scenario launch/cancel/reconcile/results integration remains open |
+| Tracking | Provider-neutral local tracker inside research-manager; no MLflow service skill | local implementation exists; its operator contract is not stable enough for MLflow conformance |
 | Distributed execution | No Ray provider | open |
-| Research domain | Versioned skill-owned Study/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts and governed workflow | ARF1 validated locally; core promotion remains gated by a second domain |
-| TLP | Published governed scenario, clean protocol/analysis/trial fixtures, sanitized exploratory provenance | ARF1 conformance case validated locally; no confirmatory TLP claim |
+| Research domain | Versioned skill-owned Study/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts and governed workflow | missing an explicit `Study 1:N Experiment` aggregate and operator-complete experiment lifecycle |
+| TLP | Published Desktop scenario, clean protocol/analysis/trial fixtures, sanitized exploratory provenance | read-only status surface; no condition editor, experiment launch, progress, or result finalization |
 
 ## Milestone Sequence
 
@@ -104,10 +104,10 @@ scientific conclusion. A local demo is not production acceptance.
 | --- | --- | --- | --- |
 | ARF0 | Architecture, ownership, exclusions, and reference case are discoverable | `specified` | now |
 | ARF0.5 | Generic storage/binding/content/execution seams exist before research code | `validated-local` | now |
-| ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `validated-local` | complete |
-| ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `validated-local` | complete |
-| ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local` | complete |
-| ARF4 | MLflow is a conforming optional tracker service skill | `hypothesis` | later |
+| ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `implemented`; vertical integration open | now |
+| ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `validated-local` foundation; ARF integration open | now |
+| ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local` foundation; ARF integration open | now |
+| ARF4 | MLflow is a conforming optional tracker service skill | `hypothesis`; blocked by ARF1/ARF3 integration | not admitted |
 | ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
 | ARF6 | TLP passes the scientific and operational reference proof | `hypothesis` | later |
 | ARF7 | A second domain and operational hardening prove generality | `deferred` | long-term |
@@ -127,6 +127,12 @@ local package evidence.
 The focused core SDK run through `adaos tests run` also passed, with only the
 two PostgreSQL cases skipped when no live test URL was supplied; those cases
 passed separately in the 35-test live PostgreSQL run described below.
+
+Readiness correction (2026-08-07): this evidence proves package, storage, and
+execution foundations, but not the ARF1 operator exit. The current Desktop
+surface is read-only and the scenario itself stops at `protocol_review`.
+Consequently ARF1 remains open, ARF2/ARF3 retain only their foundation-level
+acceptance, and ARF4 is blocked.
 
 ## ARF0. Architecture and Decision Baseline
 
@@ -235,9 +241,12 @@ end to end using only local providers.
 PostgreSQL conformance, or an explicit local-only exception is recorded for an
 ARF1 development slice that makes no PostgreSQL support claim.
 
-**Exit proof:** contract and workflow tests create a TLP study, lock a protocol,
-materialize paired trial specs, execute a no-training fixture, ingest typed
-observations, enforce test access, and export an evidence bundle after restart.
+**Exit proof:** from the TLP Desktop scenario, without using CLI as the normal
+operator path, a user creates one experiment within a study, edits and reloads
+its versioned conditions, locks them, starts bounded execution, observes and
+cancels/reconciles attempts, inspects typed results, and finalizes an immutable
+result/evidence record that survives AdaOS and browser restart. Contract tests
+remain necessary but are not sufficient for this exit.
 
 - [x] `[must]` `ARF1-01` Define versioned schemas for `Study`, `Hypothesis`,
   `Protocol`, `AnalysisPlan`, `TrialGroup`, `Trial`, `Run`,
@@ -276,17 +285,36 @@ observations, enforce test access, and export an evidence bundle after restart.
   finalization.
 - [x] `[could]` `ARF1-14` Import selected notebook cells as explicitly marked
   exploratory provenance artifacts after sanitization and digesting.
+- [ ] `[must]` `ARF1-15` Define `Study 1:N Experiment` explicitly. An
+  experiment owns versioned conditions, lifecycle, trials, runs, attempts,
+  results, and fixation state; a study remains the research-question/series
+  container.
+- [ ] `[must]` `ARF1-16` Provide a Desktop editor for one experiment's typed
+  dataset/split, operator, seed, determinism, resource, budget, and analysis
+  conditions with optimistic revision checks and immutable history.
+- [ ] `[must]` `ARF1-17` Provide review/lock, start, cancel, retry, and
+  reconcile actions through declared skill tools and the execution provider;
+  do not bypass protocol, sealed-test, or evidence gates.
+- [ ] `[must]` `ARF1-18` Show durable experiment state, trial/run/attempt
+  progress, failures, logs/artifact references, paired metrics, and result
+  summaries in the scenario.
+- [ ] `[must]` `ARF1-19` Finalize an immutable, verifiable experiment result
+  and evidence reference from the scenario, then prove reload after skill,
+  AdaOS, and browser restart.
+- [ ] `[must]` `ARF1-20` Execute at least one bounded non-mocked TLP smoke
+  experiment from a clean package. The deterministic no-training fixture may
+  remain a conformance test but cannot be the sole operator acceptance run.
 
-Implementation evidence (2026-08-07): `research_manager_skill` owns the
+Foundation evidence (2026-08-07): `research_manager_skill` owns the
 versioned research schemas, checksum-pinned migrations, local tracker,
 event-derived lifecycle, sealed split/unblind audit, deterministic fixture,
 and content-addressed evidence verifier. `tlp_research` supplies a
 package-bound governed workflow plus protocol, analysis, trial, evidence, and
 sanitized exploratory-provenance fixtures. Strict tool probing, workflow
 compilation, six isolated skill tests, five scenario tests, restart
-rehydration, and the native package lifecycle are the acceptance path. No
-notebook code or output is
-executed or promoted as confirmatory evidence.
+rehydration, and the native package lifecycle validate the implemented
+components. They do not close `ARF1-15` through `ARF1-20`. No notebook code or
+output is executed or promoted as confirmatory evidence.
 
 ## ARF2. Relational Storage Capability
 
@@ -413,8 +441,10 @@ secret handling; the process provider remains explicitly non-hostile.
 **Outcome:** MLflow can be installed and activated as an ordinary service skill
 and swapped with the local tracker without changing study semantics.
 
-**Admission gate:** ARF1 tracker semantics and ARF2 binding semantics are
-stable enough for provider conformance.
+**Admission gate:** ARF1-15 through ARF1-20 are complete; the Single Experiment
+Workbench has exercised ARF2 storage and ARF3 execution across restart; and
+the resulting local-tracker contract is stable enough for an independent
+provider conformance suite. Until then ARF4 is blocked.
 
 **Exit proof:** one paired fixture produces equivalent normalized observations
 and evidence exports with the local tracker and MLflow. MLflow may be stopped,

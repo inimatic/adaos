@@ -1,9 +1,10 @@
 # AdaOS Research Fabric
 
-Status: target architecture with ARF1-ARF3 validated locally. The
-provider-neutral storage/execution foundations, research-manager skill, local
-tracker, and TLP governed scenario are implemented; MLflow, Ray, and the full
-TLP scientific proof remain later milestones.
+Status: target architecture with ARF0.5 and the ARF2/ARF3 core foundations
+validated locally. The research-manager package and a read-only TLP Desktop
+surface are implemented, but the ARF1 single-experiment operator vertical is
+not complete. MLflow/ARF4 is blocked until that vertical exercises storage,
+execution, results, and evidence end to end.
 
 Last reviewed: 2026-08-07.
 
@@ -191,7 +192,7 @@ The first package slice uses `research_manager_skill` and `tlp_research` as
 AdaOS identifiers. `research-manager`, `mlflow-tracker`, and `ray-executor`
 otherwise describe roles, not a requirement to hard-code one provider.
 
-### Implemented ARF1-ARF3 slice
+### Implemented foundation slice
 
 The implementation intentionally follows existing AdaOS extension points:
 
@@ -223,6 +224,15 @@ Desktop scenario with a declarative read-only study/workflow surface; its
 Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
 gates. Scenario calls are routed only to skill tools declared in package
 dependencies; the workflow does not gain ambient access to unrelated skills.
+
+This package evidence is not an operator-complete research framework. The
+current TLP scenario cannot edit a versioned experiment plan, lock and launch
+one experiment, cancel/reconcile its attempts, inspect paired results, or
+finalize evidence from Desktop. The missing domain relation is explicitly
+`Study 1:N Experiment`: a study is the future series/research-question
+container, while each experiment owns its condition revisions, execution, and
+result fixation. ARF4 must not freeze a tracker contract before this vertical
+defines the observations and queries it actually needs.
 
 ## Responsibility Boundaries
 
