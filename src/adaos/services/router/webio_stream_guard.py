@@ -58,6 +58,9 @@ def _as_dict(value: Any) -> dict[str, Any]:
             decoded = to_json()
             if isinstance(decoded, dict):
                 return dict(decoded)
+            if isinstance(decoded, str):
+                parsed = json.loads(decoded)
+                return dict(parsed) if isinstance(parsed, dict) else {}
         except Exception:
             return {}
     return {}
@@ -269,17 +272,23 @@ def _webio_stream_admit(
     if declared_max_payload:
         block_bytes = min(block_bytes, declared_max_payload)
         warn_bytes = min(warn_bytes, max(1, int(declared_max_payload * 0.8)))
-    effective_bytes = max(0, int(payload_bytes or 0)) * max(1, int(fanout_total or 1))
+    # maxPayloadBytes is an envelope budget.  A single logical stream payload
+    # can be published to several routing topics, but that fan-out does not
+    # make the envelope itself oversized.  Keep aggregate bytes as telemetry;
+    # using it for admission caused ordinary shared snapshots to be classified
+    # as pressure solely because the router exposed hub and node aliases.
+    envelope_bytes = max(0, int(payload_bytes or 0))
+    effective_bytes = envelope_bytes * max(1, int(fanout_total or 1))
     policy_state = "ok"
     reason = "healthy"
-    if effective_bytes >= block_bytes:
+    if envelope_bytes >= block_bytes:
         policy_state = "block"
         reason = (
             "browser_stream_declared_payload_budget_exceeded"
-            if declared_max_payload and effective_bytes >= declared_max_payload
+            if declared_max_payload and envelope_bytes >= declared_max_payload
             else "browser_stream_payload_blocked"
         )
-    elif effective_bytes >= warn_bytes:
+    elif envelope_bytes >= warn_bytes:
         policy_state = "throttle"
         reason = (
             "browser_stream_declared_payload_budget_pressure"

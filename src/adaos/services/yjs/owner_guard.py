@@ -37,6 +37,8 @@ _QUARANTINE_TTL_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_TTL_S", 300.0, 1.0)
 _QUARANTINE_MAX_TTL_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_MAX_TTL_S", 1800.0, 1.0)
 _QUARANTINE_ESCALATION_WINDOW_S = _float_env("ADAOS_YJS_OWNER_QUARANTINE_ESCALATION_WINDOW_S", 3600.0, 1.0)
 _THROTTLE_STREAK_LIMIT = _int_env("ADAOS_YJS_OWNER_QUARANTINE_THROTTLE_STREAK", 8, 1)
+_BLOCK_STREAK_LIMIT = _int_env("ADAOS_YJS_OWNER_QUARANTINE_BLOCK_STREAK", 3, 1)
+_PRESSURE_STREAK_WINDOW_S = _float_env("ADAOS_YJS_OWNER_PRESSURE_STREAK_WINDOW_S", 15.0, 0.1)
 _PRESSURE_QUARANTINE_WORK_KINDS = {
     token.strip()
     for token in str(
@@ -121,6 +123,18 @@ def _pressure_quarantines(work_kind: str) -> bool:
     if "*" in _PRESSURE_QUARANTINE_WORK_KINDS:
         return True
     return token in _PRESSURE_QUARANTINE_WORK_KINDS
+
+
+def _policy_allows_quarantine(policy: Mapping[str, Any]) -> bool:
+    visibility = policy.get("guard_visibility")
+    if not isinstance(visibility, Mapping):
+        visibility = policy.get("guardVisibility")
+    if not isinstance(visibility, Mapping) or "quarantine" not in visibility:
+        return True
+    value = visibility.get("quarantine")
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def skill_owner(skill_name: Any) -> str:
@@ -292,6 +306,20 @@ def _record_decision_locked(
     now: float,
 ) -> dict[str, Any]:
     current = dict(_DECISIONS.get(key) or {})
+    previous_at = float(current.get("last_at") or 0.0)
+    previous_pressure_key = str(current.get("last_pressure_key") or "")
+    pressure_key = "\0".join(
+        [
+            str(work_kind or "").strip().lower(),
+            str(path or "").strip(),
+        ]
+    )
+    pressure_contiguous = (
+        bool(previous_pressure_key)
+        and previous_pressure_key == pressure_key
+        and previous_at > 0.0
+        and now - previous_at <= _PRESSURE_STREAK_WINDOW_S
+    )
     current["webspace_id"] = webspace_id
     current["owner"] = owner
     current["attempted_total"] = int(current.get("attempted_total") or 0) + 1
@@ -318,16 +346,21 @@ def _record_decision_locked(
         current["denied_total"] = int(current.get("denied_total") or 0) + 1
     elif decision == "block":
         current["block_seen_total"] = int(current.get("block_seen_total") or 0) + 1
-        current["block_streak"] = int(current.get("block_streak") or 0) + 1
+        current["block_streak"] = (int(current.get("block_streak") or 0) + 1) if pressure_contiguous else 1
         current["throttle_streak"] = 0
+        current["last_pressure_key"] = pressure_key
     elif decision == "throttle":
         current["throttle_seen_total"] = int(current.get("throttle_seen_total") or 0) + 1
-        current["throttle_streak"] = int(current.get("throttle_streak") or 0) + 1
+        current["throttle_streak"] = (
+            int(current.get("throttle_streak") or 0) + 1
+        ) if pressure_contiguous else 1
         current["block_streak"] = 0
+        current["last_pressure_key"] = pressure_key
     else:
         current["allowed_total"] = int(current.get("allowed_total") or 0) + 1
         current["throttle_streak"] = 0
         current["block_streak"] = 0
+        current["last_pressure_key"] = None
     _DECISIONS[key] = current
     return dict(current)
 
@@ -531,7 +564,13 @@ def admit_owner_work(
                 decision="block",
                 now=now,
             )
-            if _QUARANTINE_ENABLE and _pressure_quarantines(work_kind):
+            quarantine_allowed = _policy_allows_quarantine(payload)
+            if (
+                _QUARANTINE_ENABLE
+                and quarantine_allowed
+                and _pressure_quarantines(work_kind)
+                and int(stats.get("block_streak") or 0) >= _BLOCK_STREAK_LIMIT
+            ):
                 row = _activate_quarantine_locked(
                     key=key,
                     webspace_id=token_ws,
@@ -559,7 +598,7 @@ def admit_owner_work(
                     "retry_after_s": row.get("retry_after_s") or _QUARANTINE_TTL_S,
                     "quarantine": row,
                 }
-            elif str(work_kind or "").strip().lower() == "yjs_write":
+            elif str(work_kind or "").strip().lower() == "yjs_write" or _pressure_quarantines(work_kind):
                 _DENIED_TOTAL += 1
                 result = {
                     "allowed": False,
@@ -570,6 +609,8 @@ def admit_owner_work(
                     "reason": stats.get("last_reason") or "write_amplification_blocked",
                     "policy_state": policy_state,
                     "retry_after_s": 0.0,
+                    "quarantine_eligible": quarantine_allowed,
+                    "pressure_streak": int(stats.get("block_streak") or 0),
                 }
             else:
                 result = {
@@ -601,6 +642,7 @@ def admit_owner_work(
             observed_state = str(payload.get("observed_state") or "").strip().lower()
             if (
                 _QUARANTINE_ENABLE
+                and _policy_allows_quarantine(payload)
                 and _pressure_quarantines(work_kind)
                 and int(stats.get("throttle_streak") or 0) >= _THROTTLE_STREAK_LIMIT
                 and observed_state in {"high", "critical"}

@@ -26,18 +26,17 @@ async def test_webio_receiver_metadata_prefers_live_room(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _Doc:
-        def get_map(self, name: str) -> dict[str, object]:
+        class _Map:
+            def to_json(self) -> str:
+                return (
+                    '{"webio":{"receivers":{"telemetry_feed":'
+                    '{"budget":{"maxPayloadBytes":1024},'
+                    '"route":{"owner":"skill:telemetry_skill"}}}}}'
+                )
+
+        def get_map(self, name: str) -> object:
             assert name == "data"
-            return {
-                "webio": {
-                    "receivers": {
-                        "telemetry_feed": {
-                            "budget": {"maxPayloadBytes": 1024},
-                            "route": {"owner": "skill:telemetry_skill"},
-                        }
-                    }
-                }
-            }
+            return self._Map()
 
     class _Session:
         async def __aenter__(self) -> _Doc:
@@ -375,6 +374,36 @@ async def test_webio_stream_guard_uses_declared_receiver_budget(monkeypatch) -> 
     assert row["suppressed_total"] == 1
     assert row["declared_max_payload_bytes"] == 1024
     assert row["surface"] == "widget:telemetry"
+
+
+async def test_webio_stream_guard_does_not_multiply_envelope_budget_by_route_fanout(monkeypatch) -> None:
+    import adaos.services.yjs.owner_guard as owner_guard
+
+    with router_service_module._WEBIO_STREAM_GUARD_STATS_LOCK:
+        router_service_module._WEBIO_STREAM_GUARD_STATS.clear()
+
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_WARN_BYTES", "65536")
+    monkeypatch.setenv("ADAOS_WEBIO_STREAM_BLOCK_BYTES", "262144")
+    monkeypatch.setattr(
+        owner_guard,
+        "admit_owner_work",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("healthy envelope must bypass owner guard")),
+    )
+
+    result = router_service_module._webio_stream_admit(
+        webspace_id="desktop",
+        receiver="notebook_skill.notes",
+        owner="skill:notebook_skill",
+        payload_bytes=28753,
+        fanout_total=3,
+    )
+
+    assert result is True
+    snapshot = router_service_module.webio_stream_guard_snapshot(receiver="notebook_skill.notes")
+    row = snapshot["items"][0]
+    assert row["last_policy_state"] == "ok"
+    assert row["last_payload_bytes"] == 28753
+    assert row["last_effective_bytes"] == 86259
 
 
 async def test_router_stream_publish_uses_materialized_receiver_owner(monkeypatch) -> None:

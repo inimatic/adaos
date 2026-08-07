@@ -193,6 +193,16 @@ The target split is:
 - `SyncYDocSessionGuard` caps and times out synchronous `get_ydoc()` sessions
   so skill-owned worker threads cannot pin Yjs storage sessions indefinitely.
 
+For WebIO streams, `maxPayloadBytes` is the size of one logical envelope, not
+the envelope size multiplied by the number of routing aliases. Aggregate
+fanout bytes remain diagnostic evidence, but cannot by themselves turn a valid
+snapshot into an oversized one. Owner quarantine also requires contiguous
+pressure inside a bounded window; isolated hard-limit violations may be
+dropped without quarantining the whole owner. A receiver declaration with
+`guardVisibility.quarantine=false` is authoritative: warning/throttle and
+per-envelope blocking remain available, but the receiver cannot escalate into
+owner quarantine.
+
 `InboundYwsUpdateGuard` should be observable before it is clever:
 
 - log `webspace_id`, `update_bytes`, `block_bytes`, and reset decision
@@ -451,6 +461,8 @@ instead of embedded into Yjs.
   `inbound_yws_update_payload_blocked`.
 - [x] Throttle/drop oversized browser stream fanout before it amplifies into
   route or Yjs pressure.
+- [x] Separate per-envelope WebIO size admission from aggregate route fanout,
+  decay pressure streaks, and honor receiver-level quarantine opt-out.
 - [x] Skip redundant infrastate snapshot projection when browser/tool polling
   asks for `project=true` but the cached projection fingerprint is already
   current.
