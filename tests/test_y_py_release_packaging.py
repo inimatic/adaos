@@ -16,6 +16,18 @@ def test_packaged_runtime_resolves_patched_y_py_release_wheels() -> None:
     assert any("sys_platform == 'win32' and platform_machine == 'AMD64'" in item for item in requirements)
     assert any("sys_platform == 'darwin' and platform_machine == 'arm64'" in item for item in requirements)
     assert any("sys_platform == 'darwin' and platform_machine == 'x86_64'" in item for item in requirements)
+    assert any("macosx_10_15_x86_64.whl" in item for item in requirements)
+
+
+def test_catalina_intel_uses_legacy_compatible_webrtc_stack() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    requirements = [str(item) for item in project["dependencies"] if str(item).startswith("aiortc")]
+
+    assert requirements == [
+        "aiortc>=1.9.0,<1.11.0 ; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+        "aiortc>=1.9.0 ; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    ]
 
 
 def test_repository_development_keeps_vendored_y_py_override() -> None:
