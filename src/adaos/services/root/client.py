@@ -10,6 +10,7 @@ import logging
 import time
 import json
 import hashlib
+import threading
 import uuid
 from urllib.parse import quote
 
@@ -27,6 +28,18 @@ class RootHttpError(RuntimeError):
 
 
 _ROOT_HTTP_LOG = logging.getLogger("adaos.root-http")
+
+
+@dataclass(slots=True)
+class _RoutineRootHttpLogWindow:
+    started_at: float
+    count: int = 0
+    duration_total_s: float = 0.0
+    duration_max_s: float = 0.0
+
+
+_ROUTINE_ROOT_HTTP_LOG_WINDOWS: dict[tuple[str, str, str, int], _RoutineRootHttpLogWindow] = {}
+_ROUTINE_ROOT_HTTP_LOG_LOCK = threading.Lock()
 
 
 def _is_routine_control_report(method: str, path: str) -> bool:
@@ -52,15 +65,85 @@ def _log_root_http_success(
     *,
     base_url: str | None = None,
 ) -> None:
-    log = _ROOT_HTTP_LOG.debug if _is_routine_control_report(method, path) else _ROOT_HTTP_LOG.info
-    log(
-        "root http response method=%s base_url=%s path=%s duration_s=%.3f status=%s",
-        method,
-        str(base_url or ""),
-        path,
-        duration_s,
-        status_code,
+    if not _is_routine_control_report(method, path):
+        _ROOT_HTTP_LOG.info(
+            "root http response method=%s base_url=%s path=%s duration_s=%.3f status=%s",
+            method,
+            str(base_url or ""),
+            path,
+            duration_s,
+            status_code,
+        )
+        return
+
+    slow_s = _env_timeout_s(
+        "ADAOS_ROOT_HTTP_SLOW_RESPONSE_S",
+        1.0,
+        minimum=0.05,
+        maximum=30.0,
     )
+    if duration_s >= slow_s:
+        _ROOT_HTTP_LOG.warning(
+            "root http slow response method=%s base_url=%s path=%s duration_s=%.3f status=%s threshold_s=%.3f",
+            method,
+            str(base_url or ""),
+            path,
+            duration_s,
+            status_code,
+            slow_s,
+        )
+        return
+
+    if str(os.getenv("ADAOS_ROOT_HTTP_ROUTINE_LOG_EACH") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        _ROOT_HTTP_LOG.debug(
+            "root http response method=%s base_url=%s path=%s duration_s=%.3f status=%s",
+            method,
+            str(base_url or ""),
+            path,
+            duration_s,
+            status_code,
+        )
+        return
+
+    now = time.monotonic()
+    interval_s = _env_timeout_s(
+        "ADAOS_ROOT_HTTP_ROUTINE_SUMMARY_INTERVAL_S",
+        300.0,
+        minimum=1.0,
+        maximum=3600.0,
+    )
+    key = (method.upper(), str(base_url or ""), str(path or ""), int(status_code))
+    summary: tuple[int, float, float, float] | None = None
+    with _ROUTINE_ROOT_HTTP_LOG_LOCK:
+        window = _ROUTINE_ROOT_HTTP_LOG_WINDOWS.get(key)
+        if window is None or now < window.started_at:
+            window = _RoutineRootHttpLogWindow(started_at=now)
+            _ROUTINE_ROOT_HTTP_LOG_WINDOWS[key] = window
+        window.count += 1
+        window.duration_total_s += max(0.0, float(duration_s))
+        window.duration_max_s = max(window.duration_max_s, max(0.0, float(duration_s)))
+        elapsed_s = max(0.0, now - window.started_at)
+        if elapsed_s >= interval_s:
+            summary = (
+                window.count,
+                elapsed_s,
+                window.duration_total_s / max(1, window.count),
+                window.duration_max_s,
+            )
+            _ROUTINE_ROOT_HTTP_LOG_WINDOWS[key] = _RoutineRootHttpLogWindow(started_at=now)
+    if summary is not None:
+        count, elapsed_s, average_s, maximum_s = summary
+        _ROOT_HTTP_LOG.debug(
+            "root http routine summary method=%s base_url=%s path=%s count=%s window_s=%.1f avg_duration_s=%.3f max_duration_s=%.3f status=%s",
+            method,
+            str(base_url or ""),
+            path,
+            count,
+            elapsed_s,
+            average_s,
+            maximum_s,
+            status_code,
+        )
 
 
 def _env_timeout_s(name: str, default: float, *, minimum: float = 0.25, maximum: float = 120.0) -> float:

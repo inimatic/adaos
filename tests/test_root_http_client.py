@@ -20,7 +20,7 @@ class _FakeRootHttpLogger:
         self.calls.append(("warning", args))
 
 
-def test_routine_control_report_success_logs_debug(monkeypatch) -> None:
+def test_routine_control_report_success_is_aggregated(monkeypatch) -> None:
     class _Response:
         status_code = 202
         content = b'{"ok": true}'
@@ -45,12 +45,61 @@ def test_routine_control_report_success_logs_debug(monkeypatch) -> None:
     monkeypatch.setattr(root_client_module.httpx, "Client", _Client)
     fake_logger = _FakeRootHttpLogger()
     monkeypatch.setattr(root_client_module, "_ROOT_HTTP_LOG", fake_logger)
+    monotonic = {"now": 100.0}
+    monkeypatch.setattr(root_client_module.time, "monotonic", lambda: monotonic["now"])
+    root_client_module._ROUTINE_ROOT_HTTP_LOG_WINDOWS.clear()
     client = RootHttpClient(base_url="https://api.example.test")
 
+    assert client.request("POST", "/v1/hub/control/report") == {"ok": True}
+    assert client.request("POST", "/v1/hub/control/report") == {"ok": True}
+
+    assert fake_logger.calls == []
+
+    monotonic["now"] += 300.0
     assert client.request("POST", "/v1/hub/control/report") == {"ok": True}
 
     assert fake_logger.calls
     assert fake_logger.calls[-1][0] == "debug"
+    assert fake_logger.calls[-1][1][0].startswith("root http routine summary")
+    assert fake_logger.calls[-1][1][4] == 3
+
+
+def test_slow_routine_control_report_success_remains_visible(monkeypatch) -> None:
+    class _Response:
+        status_code = 202
+        content = b'{"ok": true}'
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def request(self, *args, **kwargs):  # noqa: ARG002
+            return _Response()
+
+    perf_counter = iter((10.0, 11.25))
+    monkeypatch.setattr(root_client_module.time, "perf_counter", lambda: next(perf_counter))
+    monkeypatch.setattr(root_client_module.httpx, "Client", _Client)
+    fake_logger = _FakeRootHttpLogger()
+    monkeypatch.setattr(root_client_module, "_ROOT_HTTP_LOG", fake_logger)
+    root_client_module._ROUTINE_ROOT_HTTP_LOG_WINDOWS.clear()
+
+    assert RootHttpClient(base_url="https://api.example.test").request(
+        "POST",
+        "/v1/hub/control/report",
+    ) == {"ok": True}
+
+    assert fake_logger.calls[-1][0] == "warning"
+    assert fake_logger.calls[-1][1][0].startswith("root http slow response")
 
 
 def test_non_report_control_success_keeps_info(monkeypatch) -> None:

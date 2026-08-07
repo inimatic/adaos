@@ -93,6 +93,14 @@ change, and otherwise sends a 15-second heartbeat. Report failures use bounded
 exponential backoff in the sidecar only. Browser clients never multiply that
 recovery loop.
 
+Successful periodic `POST /v1/hub/control/report` calls are operational
+heartbeats, not per-request diagnostic events. The Hub aggregates their count
+and latency into a five-minute debug summary. Slow successful calls and all
+failed responses remain immediately visible; per-heartbeat DEBUG output can be
+temporarily enabled with `ADAOS_ROOT_HTTP_ROUTINE_LOG_EACH=1` for focused
+transport debugging. `ADAOS_ROOT_HTTP_ROUTINE_SUMMARY_INTERVAL_S` controls the
+summary window.
+
 On an orderly service stop, sidecar first stops its heartbeat loop and sends
 one final `shutdown.kind=planned` report. If the process or host disappears
 without that marker, Root changes the diagnosis to `unexpected_shutdown` when
@@ -119,11 +127,20 @@ to open a socket. This route condition does not disable an already established
 direct `webrtc_data:yjs` channel.
 
 If an active routed control or YWS socket fails while the last Root lease still
-says `ready`, the browser locally latches that exact lifecycle revision as
-failed. It closes both routed transports and waits for a newer revision instead
-of reconnecting against stale authority. Repeated heartbeats with the failed
-revision cannot unlock the gate; only a newer `ready` event can produce one
-new connection edge.
+says `ready`, the failure belongs to that browser transport session. It must not
+invalidate or latch the Hub lifecycle revision: an expired upstream session or
+a sidecar handoff can require a new socket while the semantic Hub revision
+legitimately remains unchanged. Control and YWS each use one single-flight,
+bounded-backoff session recovery loop. A later authoritative lifecycle event
+can still close both gates; no transport-local observation may keep retrying
+through `offline`, `draining`, `updating`, or `restarting`.
+
+On the edge from an unavailable/waiting lifecycle epoch to a fresh `ready`
+epoch, the browser clears outage-derived WebRTC retry and link-upgrade cooldown.
+It first reopens the allowed routed sessions and then makes one debounced direct
+upgrade attempt. A failed WebRTC attempt while lifecycle denies commands is not
+counted as peer-health evidence and cannot postpone recovery after the Hub
+returns.
 
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
@@ -154,6 +171,14 @@ Components may use `canRunCommands`, `canTrustStateSync`,
 `disablePrimaryActions`, and `disableStateDependentActions`. Local browser
 transport evidence remains useful detail, but cannot override an expired or
 denied server capability.
+
+Cached/materialized Yjs data is continuity evidence, not a live transport. If
+runtime-owned YWS is disconnected and lifecycle denies `open_yws`, the UI says
+that live sync is offline or paused and may separately say that cached state is
+available. It must not display `ready via YWS relay` in that state. A pending
+assistant switch is cleared when the selected Hub produces a fresh `ready`
+lifecycle with command capability, so the header cannot remain `Connecting...`
+after the transport is already usable.
 
 ## Direct WebRTC and Root load
 
