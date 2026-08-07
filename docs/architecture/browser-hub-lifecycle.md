@@ -112,9 +112,18 @@ The browser lifecycle coordinator is created before control WS and YWS:
 
 Transport actions are edge-triggered. Renewing a lease or receiving an SSE
 heartbeat with unchanged capabilities must not call `connect()` or
-`disconnect()` again. A routed YWS URL additionally requires
-`transport.route_ready`; this route condition does not disable an already
-established direct `webrtc_data:yjs` channel.
+`disconnect()` again. Routed control and YWS additionally require the complete
+`ready` state and `transport.route_ready`; an intermediate capability in
+`connecting`, `warming`, or `degraded` is diagnostic evidence, not permission
+to open a socket. This route condition does not disable an already established
+direct `webrtc_data:yjs` channel.
+
+If an active routed control or YWS socket fails while the last Root lease still
+says `ready`, the browser locally latches that exact lifecycle revision as
+failed. It closes both routed transports and waits for a newer revision instead
+of reconnecting against stale authority. Repeated heartbeats with the failed
+revision cannot unlock the gate; only a newer `ready` event can produce one
+new connection edge.
 
 The channel layer itself starts denied, before Angular finishes constructing
 eager subscribers. Only the lifecycle coordinator may install a remote lease
