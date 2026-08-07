@@ -93,3 +93,80 @@ async def test_root_transport_owns_route_reset_timeout_and_result() -> None:
 
     assert result == {"ok": True, "generation": 2}
     assert calls == [("reconnect", True)]
+
+
+async def test_root_transport_watchdog_rearms_live_task_with_closed_nats_client(monkeypatch) -> None:
+    lifecycle = BootstrapLifecycleCoordinator()
+    reconnect_calls: list[dict] = []
+
+    async def _reconnect(**kwargs):
+        reconnect_calls.append(dict(kwargs))
+        return {"bridge": {"started": True, "state": "rearmed"}}
+
+    async def _bridge() -> None:
+        await asyncio.Event().wait()
+
+    transport = RootTransportService(
+        lifecycle=lifecycle,
+        role=lambda: "hub",
+        candidate_passive=lambda: False,
+        reconnect=_reconnect,
+        watchdog_interval=lambda: 1.0,
+        record_event=lambda *args, **kwargs: None,
+        logger=logging.getLogger("test.bootstrap.root_transport"),
+    )
+    transport.bridge_factory = _bridge
+    transport.start_bridge_task(_bridge)
+    transport.authority_ready_at = 50.0
+    transport.nats_client = type(
+        "ClosedNatsClient",
+        (),
+        {"is_closed": True, "is_connected": False},
+    )()
+    monkeypatch.setenv("HUB_ROOT_BRIDGE_TRANSPORT_GRACE_S", "1")
+
+    first = await transport.repair_unhealthy_bridge(reason="test", observed_at=100.0)
+    second = await transport.repair_unhealthy_bridge(reason="test", observed_at=101.1)
+
+    assert first["state"] == "observing_unhealthy"
+    assert second["state"] == "rearmed"
+    assert reconnect_calls == [
+        {
+            "_reason": "bridge_transport_watchdog:nats_client_closed",
+            "_force_bridge_rearm": True,
+        }
+    ]
+    assert transport.bridge_watchdog_transport_rearm_total == 1
+
+    await lifecycle.stop()
+
+
+async def test_root_transport_watchdog_allows_initial_connect_without_authority() -> None:
+    lifecycle = BootstrapLifecycleCoordinator()
+    reconnect_called = False
+
+    async def _reconnect(**kwargs):
+        nonlocal reconnect_called
+        reconnect_called = True
+        return {}
+
+    async def _bridge() -> None:
+        await asyncio.Event().wait()
+
+    transport = RootTransportService(
+        lifecycle=lifecycle,
+        role=lambda: "hub",
+        candidate_passive=lambda: False,
+        reconnect=_reconnect,
+        watchdog_interval=lambda: 1.0,
+        record_event=lambda *args, **kwargs: None,
+        logger=logging.getLogger("test.bootstrap.root_transport"),
+    )
+    transport.start_bridge_task(_bridge)
+
+    result = await transport.repair_unhealthy_bridge(reason="startup", observed_at=100.0)
+
+    assert result["state"] == "starting"
+    assert reconnect_called is False
+
+    await lifecycle.stop()

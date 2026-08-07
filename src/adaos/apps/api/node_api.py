@@ -1149,6 +1149,7 @@ def _thin_runtime_reliability_payload(
     sidecar_enabled = bool(sidecar_enablement.get("enabled"))
     ws_handoff_ready = bool(sidecar_fields.get("browserWsHandoffReady"))
     yws_handoff_ready = bool(sidecar_fields.get("browserYwsHandoffReady"))
+    sidecar_transport_ready = bool(sidecar_fields.get("sidecarTransportReady"))
     ws_handoff_state = str(sidecar_fields.get("browserWsHandoffState") or "unknown").strip().lower()
     if not sidecar_enabled:
         browser_transport = "ready"
@@ -1170,13 +1171,15 @@ def _thin_runtime_reliability_payload(
         browser_transition = "degraded"
         browser_reason = "browser_events_ws_handoff_not_ready"
         browser_blockers = ["browser_events_ws_handoff_not_ready"]
-    required_ready = (not sidecar_enabled) or (ws_handoff_ready and yws_handoff_ready)
+    required_ready = (not sidecar_enabled) or (
+        ws_handoff_ready and yws_handoff_ready and sidecar_transport_ready
+    )
     required_reason = (
         "runtime_browser_route_sidecar_disabled"
         if not sidecar_enabled
         else "sidecar_browser_route_ready"
         if required_ready
-        else "sidecar_browser_route_starting"
+        else str(sidecar_fields.get("sidecarStatusReason") or "sidecar_browser_route_starting")
     )
     required_served_by = "runtime" if not sidecar_enabled else "supervisor_sidecar"
     connectivity = {
@@ -1187,7 +1190,15 @@ def _thin_runtime_reliability_payload(
             "transitionState": "ready" if required_ready else "link_starting",
             "plannedTransition": {"active": False, "reason": None},
             "reason": required_reason,
-            "blockers": [] if required_ready else ["browser_yjs_ws_handoff_not_ready"],
+            "blockers": (
+                []
+                if required_ready
+                else [
+                    "sidecar_transport_not_ready"
+                    if ws_handoff_ready and yws_handoff_ready and not sidecar_transport_ready
+                    else "browser_yjs_ws_handoff_not_ready"
+                ]
+            ),
             "servedBy": required_served_by,
         },
         "browserControlRoute": {
@@ -1905,6 +1916,10 @@ def _compact_sidecar_runtime_fields(sidecar_runtime: dict[str, Any]) -> dict[str
             "currentMilestone": str(progress.get("current_milestone") or "").strip() or None,
             "nextBlocker": str(progress.get("next_blocker") or "").strip() or None,
         },
+        "sidecarTransportReady": bool(sidecar.get("transport_ready")),
+        "sidecarRemoteSessionState": str(sidecar.get("remote_session_state") or "unknown").strip() or "unknown",
+        "sidecarSessionState": str(sidecar.get("session_state") or "unknown").strip() or "unknown",
+        "sidecarStatusReason": str(sidecar.get("status_reason") or "").strip() or None,
         "routeTunnel": {
             "currentSupport": str(route_tunnel.get("current_support") or "unknown").strip() or "unknown",
             "ownershipBoundary": str(route_tunnel.get("ownership_boundary") or "unknown").strip() or "unknown",

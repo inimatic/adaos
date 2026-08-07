@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from adaos.services.realtime_sidecar import classify_realtime_sidecar_transport
+
 
 @dataclass(frozen=True, slots=True)
 class SupervisorStatusOperations:
@@ -78,34 +80,15 @@ class SupervisorStatusService:
             )
             remote_session_state = "unknown"
             if isinstance(last_diag, dict):
-                last_error = str(last_diag.get("last_error") or "").strip()
-                remote_connected_ago_s = last_diag.get("remote_connected_ago_s")
+                classification = classify_realtime_sidecar_transport(last_diag, diag_fresh=diag_fresh)
+                status_text = str(classification.get("status") or "unknown")
+                summary = str(classification.get("summary") or summary)
+                session_state = str(classification.get("session_state") or "starting")
+                status_reason = str(classification.get("status_reason") or summary)
+                remote_session_state = str(classification.get("remote_session_state") or "unknown")
+                transport_ready = bool(classification.get("transport_ready"))
                 if not diag_fresh:
-                    status_text = "degraded"
-                    summary = "sidecar diagnostics are stale"
-                    session_state = "stale_diag"
-                    status_reason = summary
                     local_listener_state = "stale" if listener_running else "down"
-                    remote_session_state = "stale"
-                elif last_error:
-                    status_text = "degraded"
-                    summary = f"sidecar reports transport error: {last_error}"
-                    session_state = "remote_connect_failed"
-                    status_reason = last_error
-                    remote_session_state = "down"
-                elif isinstance(remote_connected_ago_s, (int, float)):
-                    status_text = "ready"
-                    summary = "sidecar remote session is connected"
-                    session_state = "remote_ready"
-                    status_reason = "remote session is connected"
-                    remote_session_state = "ready"
-                    transport_ready = True
-                else:
-                    status_text = "unknown"
-                    summary = "sidecar diagnostics do not show an active session"
-                    session_state = "starting"
-                    status_reason = summary
-                    remote_session_state = "unknown"
 
         def _route_state(kind: str) -> str:
             entry = route_tunnel_contract.get(kind) if isinstance(route_tunnel_contract.get(kind), dict) else {}

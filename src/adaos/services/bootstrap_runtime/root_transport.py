@@ -44,6 +44,8 @@ class RootTransportService:
         self.bridge_watchdog_task_name = "adaos-nats-io-bridge-watchdog"
         self.bridge_factory: Callable[[], Awaitable[Any]] | None = None
         self.bridge_watchdog_rearm_total = 0
+        self.bridge_watchdog_transport_rearm_total = 0
+        self._bridge_transport_unhealthy_since: float | None = None
         self.authority_waiters: set[asyncio.Event] = set()
         self.authority_ready_at: float | None = None
 
@@ -156,12 +158,122 @@ class RootTransportService:
             "result": result,
         }
 
+    def bridge_transport_health(self) -> dict[str, Any]:
+        """Inspect the NATS client owned by a live bridge task.
+
+        The outer supervisor task can stay alive while nats-py's reader or
+        connection has already stopped. Existence of the task alone is not a
+        transport health signal.
+        """
+
+        if not self.bridge_required():
+            return {"state": "not_required", "healthy": None, "reason": "bridge_not_required"}
+        live = self.lifecycle.find_live_task(self.bridge_task_name)
+        if live is None:
+            return {"state": "missing", "healthy": False, "reason": "bridge_task_missing"}
+        nc = self.nats_client
+        if nc is None:
+            if self.authority_ready_at is None:
+                return {"state": "starting", "healthy": None, "reason": "nats_client_not_ready"}
+            return {"state": "down", "healthy": False, "reason": "nats_client_missing_after_ready"}
+        try:
+            value = getattr(nc, "is_closed", None)
+            closed = bool(value() if callable(value) else value)
+        except Exception:
+            closed = False
+        if closed:
+            return {"state": "down", "healthy": False, "reason": "nats_client_closed"}
+        try:
+            value = getattr(nc, "is_connected", None)
+            connected = bool(value() if callable(value) else value)
+        except Exception:
+            connected = True
+        if not connected:
+            return {"state": "down", "healthy": False, "reason": "nats_client_disconnected"}
+        for task_name in ("_reading_task", "_flusher_task"):
+            task = getattr(nc, task_name, None)
+            if isinstance(task, asyncio.Task) and task.done():
+                return {
+                    "state": "down",
+                    "healthy": False,
+                    "reason": f"nats_core_task_stopped:{task_name}",
+                }
+        return {"state": "ready", "healthy": True, "reason": "nats_client_connected"}
+
+    def _transport_watchdog_grace_s(self) -> float:
+        try:
+            value = float(os.getenv("HUB_ROOT_BRIDGE_TRANSPORT_GRACE_S", "6") or "6")
+        except Exception:
+            value = 6.0
+        return max(1.0, min(value, 60.0))
+
+    async def repair_unhealthy_bridge(
+        self,
+        *,
+        reason: str,
+        observed_at: float | None = None,
+    ) -> dict[str, Any]:
+        health = self.bridge_transport_health()
+        if health.get("healthy") is not False:
+            self._bridge_transport_unhealthy_since = None
+            return {"attempted": False, "state": str(health.get("state") or "unknown"), "health": health}
+        now = time.monotonic() if observed_at is None else float(observed_at)
+        if self._bridge_transport_unhealthy_since is None:
+            self._bridge_transport_unhealthy_since = now
+        unhealthy_for_s = max(0.0, now - float(self._bridge_transport_unhealthy_since))
+        grace_s = self._transport_watchdog_grace_s()
+        if unhealthy_for_s < grace_s:
+            return {
+                "attempted": False,
+                "state": "observing_unhealthy",
+                "health": health,
+                "unhealthy_for_s": unhealthy_for_s,
+                "grace_s": grace_s,
+            }
+
+        repair_reason = f"bridge_transport_watchdog:{str(health.get('reason') or reason or 'unhealthy')}"
+        result = await self._reconnect(
+            _reason=repair_reason,
+            _force_bridge_rearm=True,
+        )
+        bridge = result.get("bridge") if isinstance(result, dict) else None
+        started = bool(isinstance(bridge, dict) and bridge.get("started"))
+        self._bridge_transport_unhealthy_since = None
+        if started:
+            self.bridge_watchdog_transport_rearm_total += 1
+            self._log.warning(
+                "hub-root bridge watchdog rearmed unhealthy transport reason=%s total=%s",
+                str(health.get("reason") or reason),
+                self.bridge_watchdog_transport_rearm_total,
+            )
+            try:
+                self._record_event(
+                    "bridge_watchdog_transport_rearmed",
+                    summary="runtime watchdog rearmed unhealthy hub-root transport",
+                    details={
+                        "reason": str(health.get("reason") or reason),
+                        "rearm_total": self.bridge_watchdog_transport_rearm_total,
+                        "unhealthy_for_s": unhealthy_for_s,
+                    },
+                )
+            except Exception:
+                pass
+        return {
+            "attempted": True,
+            "state": "rearmed" if started else "rearm_failed",
+            "health": health,
+            "unhealthy_for_s": unhealthy_for_s,
+            "result": result,
+        }
+
     async def watchdog(self) -> None:
         interval_s = self._watchdog_interval()
         while True:
             await asyncio.sleep(interval_s)
             try:
-                await self.repair_missing_bridge(reason="periodic_watchdog")
+                missing = await self.repair_missing_bridge(reason="periodic_watchdog")
+                if str(missing.get("state") or "") == "running":
+                    await self.repair_unhealthy_bridge(reason="periodic_watchdog")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -236,6 +348,7 @@ class RootTransportService:
         url_override: str | None = None,
         wait_for_authority: bool = False,
         _reason: str = "manual_reconnect",
+        _force_bridge_rearm: bool = False,
     ) -> dict[str, Any]:
         """
         Force hub-root transport reconnect.
@@ -274,6 +387,7 @@ class RootTransportService:
                 return {}
 
         try:
+            self.authority_ready_at = None
             if tr is not None:
                 os.environ["HUB_NATS_TRANSPORT"] = tr
             if override is not None:
@@ -375,7 +489,7 @@ class RootTransportService:
                 except Exception:
                     pass
             try:
-                force_bridge_rearm = nc is None or bool(close_diag.get("timeout"))
+                force_bridge_rearm = bool(_force_bridge_rearm) or nc is None or bool(close_diag.get("timeout"))
                 bridge_diag = self.ensure_bridge_task(
                     force_rearm=force_bridge_rearm,
                     reason=(

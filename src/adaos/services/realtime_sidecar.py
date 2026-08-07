@@ -1746,6 +1746,85 @@ def build_sidecar_lifecycle_report(
     return payload
 
 
+def classify_realtime_sidecar_transport(
+    record: dict[str, Any] | None,
+    *,
+    diag_fresh: bool,
+) -> dict[str, Any]:
+    """Classify live transport state from one sidecar diagnostics record.
+
+    ``remote_connected_ago_s`` is historical evidence and keeps increasing
+    after a relay closes. Readiness therefore also requires an active session.
+    This shared classifier keeps runtime and supervisor status consistent.
+    """
+
+    item = record if isinstance(record, dict) else {}
+    active_session = bool(item.get("active_session")) or int(item.get("active_session_total") or 0) > 0
+    remote_connected = isinstance(item.get("remote_connected_ago_s"), (int, float))
+    retrying = bool(item.get("remote_connect_retrying"))
+    last_error = str(item.get("last_error") or "").strip() or None
+
+    if not item:
+        return {
+            "status": "unknown",
+            "summary": "sidecar diagnostics do not show an active session",
+            "session_state": "starting",
+            "status_reason": "sidecar diagnostics do not show an active session yet",
+            "remote_session_state": "unknown",
+            "transport_ready": False,
+            "active_session": False,
+        }
+    if not diag_fresh:
+        return {
+            "status": "degraded",
+            "summary": "sidecar diagnostics are stale",
+            "session_state": "stale_diag",
+            "status_reason": "sidecar diagnostics are stale",
+            "remote_session_state": "stale",
+            "transport_ready": False,
+            "active_session": active_session,
+        }
+    if last_error:
+        return {
+            "status": "degraded",
+            "summary": f"sidecar reports transport error: {last_error}",
+            "session_state": "remote_connect_failed",
+            "status_reason": last_error,
+            "remote_session_state": "down",
+            "transport_ready": False,
+            "active_session": active_session,
+        }
+    if active_session and remote_connected:
+        return {
+            "status": "ready",
+            "summary": "sidecar remote session is connected",
+            "session_state": "remote_ready",
+            "status_reason": "remote session is connected",
+            "remote_session_state": "ready",
+            "transport_ready": True,
+            "active_session": True,
+        }
+    if active_session or retrying:
+        return {
+            "status": "degraded",
+            "summary": "sidecar transport is reconnecting",
+            "session_state": "remote_connecting",
+            "status_reason": "sidecar relay session has not established a live remote transport yet",
+            "remote_session_state": "reconnecting",
+            "transport_ready": False,
+            "active_session": active_session,
+        }
+    return {
+        "status": "degraded",
+        "summary": "sidecar local listener is active but remote session is not connected",
+        "session_state": "local_only",
+        "status_reason": "local listener is active but remote session is not connected",
+        "remote_session_state": "down",
+        "transport_ready": False,
+        "active_session": False,
+    }
+
+
 def _sidecar_lifecycle_report_target() -> tuple[str, Path | None, Path, Path] | None:
     try:
         from adaos.services.node_config import load_config

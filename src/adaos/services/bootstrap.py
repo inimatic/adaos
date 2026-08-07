@@ -807,6 +807,7 @@ class BootstrapService:
         url_override: str | None = None,
         wait_for_authority: bool = False,
         _reason: str = "manual_reconnect",
+        _force_bridge_rearm: bool = False,
     ) -> dict[str, Any]:
         return await self._root_transport.request_reconnect(
             self._root_transport_reconnect_operations(),
@@ -814,6 +815,7 @@ class BootstrapService:
             url_override=url_override,
             wait_for_authority=wait_for_authority,
             _reason=_reason,
+            _force_bridge_rearm=_force_bridge_rearm,
         )
 
     def _member_hub_transition_snapshot(self) -> dict[str, Any]:

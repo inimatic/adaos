@@ -12,6 +12,7 @@ from adaos.services import realtime_sidecar as realtime_sidecar_mod
 from adaos.services.realtime_sidecar import (
     RealtimeSidecarServer,
     build_sidecar_lifecycle_report,
+    classify_realtime_sidecar_transport,
     realtime_sidecar_enablement_policy,
     realtime_sidecar_enabled,
     realtime_sidecar_local_url,
@@ -71,6 +72,38 @@ def test_sidecar_lifecycle_report_compacts_durable_state_and_transport(tmp_path:
     assert "secret" not in payload["supervisor"]["runtime"]
     assert "private" not in payload["supervisor"]["status"]
     assert "private" not in payload["supervisor"]["attempt"]
+
+
+def test_sidecar_transport_requires_a_current_active_session() -> None:
+    classification = classify_realtime_sidecar_transport(
+        {
+            "active_session": False,
+            "active_session_total": 0,
+            "remote_connected_ago_s": 52.0,
+            "last_error": None,
+        },
+        diag_fresh=True,
+    )
+
+    assert classification["transport_ready"] is False
+    assert classification["remote_session_state"] == "down"
+    assert classification["session_state"] == "local_only"
+
+
+def test_sidecar_transport_accepts_fresh_active_remote_session() -> None:
+    classification = classify_realtime_sidecar_transport(
+        {
+            "active_session": True,
+            "active_session_total": 1,
+            "remote_connected_ago_s": 0.2,
+            "last_error": None,
+        },
+        diag_fresh=True,
+    )
+
+    assert classification["transport_ready"] is True
+    assert classification["remote_session_state"] == "ready"
+    assert classification["session_state"] == "remote_ready"
 
 
 def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: Path) -> None:

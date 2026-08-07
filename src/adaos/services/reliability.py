@@ -30,6 +30,7 @@ from adaos.services.node_display import node_display_from_config, node_display_p
 from adaos.services.registry.subnet_runtime_projection import (
     subnet_runtime_projection_freshness,
 )
+from adaos.services.realtime_sidecar import classify_realtime_sidecar_transport
 from adaos.services.runtime_topology import is_loopback_http_url, supervisor_base_candidates_from_env
 from adaos.services.zone_hosts import canonical_zone_id
 
@@ -4526,6 +4527,7 @@ def sidecar_runtime_snapshot(
     realtime_sidecar_enabled = _realtime_sidecar_mod.realtime_sidecar_enabled
     realtime_sidecar_listener_snapshot = _realtime_sidecar_mod.realtime_sidecar_listener_snapshot
     realtime_sidecar_local_url = _realtime_sidecar_mod.realtime_sidecar_local_url
+    classify_transport_fn = getattr(_realtime_sidecar_mod, "classify_realtime_sidecar_transport", None)
     route_tunnel_contract_fn = getattr(_realtime_sidecar_mod, "realtime_sidecar_route_tunnel_contract", None)
     enablement_policy_fn = getattr(_realtime_sidecar_mod, "realtime_sidecar_enablement_policy", None)
 
@@ -4651,52 +4653,19 @@ def sidecar_runtime_snapshot(
         last_connect_error_message = str(record.get("last_remote_connect_error") or last_error or "").strip() or None
         if last_connect_error_message:
             last_connect_error_class = last_connect_error_message.split(":", 1)[0].strip() or None
-        remote_connected_ago_s = record.get("remote_connected_ago_s")
-        local_connected_ago_s = record.get("local_connected_ago_s")
         ts = record.get("ts")
         if isinstance(ts, (int, float)):
             diag_age_s = round(max(0.0, now_ts - float(ts)), 3)
         diag_fresh = not isinstance(diag_age_s, (int, float)) or float(diag_age_s) <= 10.0
         local_listener_state = "ready" if diag_fresh else "stale"
-        if isinstance(remote_connected_ago_s, (int, float)) and diag_fresh and not last_error:
-            remote_session_state = "ready"
-        elif isinstance(remote_connected_ago_s, (int, float)) and not diag_fresh:
-            remote_session_state = "stale"
-        else:
-            remote_session_state = "down"
-        if last_error:
-            status = "degraded"
-            summary = f"sidecar reports transport error: {last_error}"
-            session_state = "remote_connect_failed"
-            status_reason = last_error
-        elif not diag_fresh:
-            status = "degraded"
-            summary = "sidecar diagnostics are stale"
-            session_state = "stale_diag"
-            status_reason = "sidecar diagnostics are stale"
-        elif isinstance(remote_connected_ago_s, (int, float)):
-            status = "ready"
-            summary = "sidecar remote session is connected"
-            session_state = "remote_ready"
-            status_reason = "remote session is connected"
-        elif isinstance(local_connected_ago_s, (int, float)):
-            status = "degraded"
-            summary = "sidecar local listener is active but remote session is not connected"
-            session_state = "local_only"
-            status_reason = "local listener is active but remote session is not connected"
-        else:
-            status = "unknown" if enabled else "disabled"
-            summary = "sidecar diagnostics do not show an active session"
-            if int(record.get("remote_connect_fail_total") or 0) > 0 and last_connect_error_message:
-                session_state = "remote_connect_failed"
-                status_reason = last_connect_error_message
-            elif bool(record.get("active_session")) or int(record.get("session_open_total") or 0) > int(record.get("session_close_total") or 0):
-                session_state = "remote_connecting"
-                status_reason = "sidecar session is opening but no remote readiness has been observed yet"
-            else:
-                session_state = "starting"
-                status_reason = "sidecar diagnostics do not show an active session yet"
-        transport_ready = bool(status == "ready")
+        classifier = classify_transport_fn if callable(classify_transport_fn) else classify_realtime_sidecar_transport
+        classification = classifier(record, diag_fresh=diag_fresh)
+        status = str(classification.get("status") or "unknown")
+        summary = str(classification.get("summary") or "sidecar diagnostics do not show an active session")
+        session_state = str(classification.get("session_state") or "starting")
+        status_reason = str(classification.get("status_reason") or summary)
+        remote_session_state = str(classification.get("remote_session_state") or "unknown")
+        transport_ready = bool(classification.get("transport_ready"))
         control_authority = hub_root_protocol.get("control_authority") if isinstance(hub_root_protocol.get("control_authority"), dict) else {}
         control_authority_state = str(control_authority.get("state") or "").strip().lower()
         if not transport_ready:
@@ -5852,6 +5821,8 @@ def _supervisor_sidecar_browser_route_ready(supervisor: dict[str, Any]) -> bool:
         return False
     if not bool(sidecar.get("listener_running")):
         return False
+    if sidecar.get("enabled") is not False and not bool(sidecar.get("transport_ready")):
+        return False
     if not bool(required_link.get("handoff_ready")):
         return False
     if list(required_link.get("blockers") or []):
@@ -5863,9 +5834,7 @@ def _sidecar_runtime_browser_route_ready(sidecar_runtime: dict[str, Any] | None)
     sidecar = sidecar_runtime if isinstance(sidecar_runtime, dict) else {}
     if not bool(sidecar.get("enabled")):
         return False
-    sidecar_status = str(sidecar.get("status") or "").strip().lower()
-    remote_state = str(sidecar.get("remote_session_state") or "").strip().lower()
-    if sidecar_status != "ready" and remote_state != "ready" and not bool(sidecar.get("transport_ready")):
+    if not bool(sidecar.get("transport_ready")):
         return False
     route_tunnel = (
         sidecar.get("route_tunnel_contract")

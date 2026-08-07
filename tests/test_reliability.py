@@ -481,7 +481,11 @@ def test_connectivity_snapshot_recovers_stale_browser_route_degradation_when_sid
             "runtime": {
                 "runtime_api_ready": True,
                 "listener_running": True,
-                "sidecar": {"listener_running": True},
+                "sidecar": {
+                    "enabled": True,
+                    "listener_running": True,
+                    "transport_ready": True,
+                },
             },
             "status": {},
         },
@@ -1369,6 +1373,54 @@ def test_sidecar_runtime_snapshot_reports_local_only_and_connect_error_details(m
     assert snapshot["progress"]["state"] == "in_progress"
     assert snapshot["progress"]["completed_milestones"] == 2
     assert snapshot["progress"]["current_milestone"] == "browser_events_ws_handoff"
+
+
+def test_sidecar_runtime_snapshot_does_not_reuse_historical_remote_connect_as_readiness(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    diag_path.write_text(
+        json.dumps(
+            {
+                "ts": 100.0,
+                "active_session": False,
+                "active_session_total": 0,
+                "remote_connected_ago_s": 52.0,
+                "last_error": None,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("adaos.services.reliability.time.time", lambda: 101.0)
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.realtime_sidecar",
+        SimpleNamespace(
+            realtime_sidecar_diag_path=lambda: diag_path,
+            realtime_sidecar_enabled=lambda **kwargs: True,
+            realtime_sidecar_listener_snapshot=lambda proc=None: {
+                "listener_running": True,
+                "listener_pid": 77,
+            },
+            realtime_sidecar_local_url=lambda: "nats://127.0.0.1:7422",
+            realtime_sidecar_route_tunnel_contract=lambda: {},
+        ),
+    )
+
+    snapshot = sidecar_runtime_snapshot(
+        role="hub",
+        readiness_tree={},
+        hub_root_protocol={},
+        transport_strategy={},
+        media_runtime={},
+    )
+
+    assert snapshot["status"] == "degraded"
+    assert snapshot["transport_ready"] is False
+    assert snapshot["remote_session_state"] == "down"
+    assert snapshot["session_state"] == "local_only"
 
 
 def test_sidecar_runtime_snapshot_marks_websocket_handoffs_ready_after_cutover(
