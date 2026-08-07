@@ -84,6 +84,9 @@ __all__ = [
     "relational_database",
     "RelationalDatabase",
     "RelationalStorageBinding",
+    "RelationalBackup",
+    "RelationalMigration",
+    "RelationalMigrationResult",
     "RelationalStorageRequirements",
 ]
 
@@ -99,6 +102,9 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "relational_database": ("adaos.sdk.data.relational", "database"),
     "RelationalDatabase": ("adaos.sdk.data.relational", "RelationalDatabase"),
     "RelationalStorageBinding": ("adaos.sdk.data.relational", "RelationalStorageBinding"),
+    "RelationalBackup": ("adaos.sdk.data.relational", "RelationalBackup"),
+    "RelationalMigration": ("adaos.sdk.data.relational", "RelationalMigration"),
+    "RelationalMigrationResult": ("adaos.sdk.data.relational", "RelationalMigrationResult"),
     "RelationalStorageRequirements": ("adaos.sdk.data.relational", "RelationalStorageRequirements"),
     "get_stt_backend": ("adaos.sdk.data.env", "get_stt_backend"),
     "get_tts_backend": ("adaos.sdk.data.env", "get_tts_backend"),

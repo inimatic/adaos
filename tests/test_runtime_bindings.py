@@ -104,6 +104,7 @@ def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None
         "storage.relational_binding.v1.schema.json",
         "execution.spec.v1.schema.json",
         "execution.attempt.v1.schema.json",
+        "execution.checkpoint.v1.schema.json",
     )
     schemas = {
         name: json.loads((abi_root / name).read_text(encoding="utf-8"))

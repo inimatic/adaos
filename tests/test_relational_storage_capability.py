@@ -12,6 +12,7 @@ from adaos.adapters.db.relational import (
     SQLiteRelationalStorageProvider,
 )
 from adaos.domain.relational_storage import (
+    RelationalMigration,
     RelationalStorageCapabilityError,
     RelationalStorageIsolationError,
     RelationalStorageRequirements,
@@ -157,6 +158,116 @@ def test_transaction_rolls_back_and_named_parameters_are_portable(_autocontext) 
     assert db.scalar("SELECT COUNT(*) FROM values_table") == 0
 
 
+def test_owner_migrations_are_versioned_idempotent_and_rollback_on_failure(_autocontext) -> None:
+    ctx = _autocontext
+    _activate_skill(ctx, "migration_skill")
+    db = database("research")
+    plan = (
+        RelationalMigration(
+            version=1,
+            name="create studies",
+            statements=("CREATE TABLE studies (id TEXT PRIMARY KEY, title TEXT NOT NULL)",),
+            idempotent=True,
+        ),
+        RelationalMigration(
+            version=2,
+            name="add state",
+            statements=("ALTER TABLE studies ADD COLUMN state TEXT NOT NULL DEFAULT 'draft'",),
+        ),
+    )
+    first = db.migrate(plan, staged=True)
+    second = db.migrate(plan, staged=True)
+    assert first.applied_versions == (1, 2)
+    assert first.current_version == 2
+    assert second.applied_versions == ()
+
+    changed = RelationalMigration(
+        version=2,
+        name="rewritten history",
+        statements=("SELECT 1",),
+    )
+    with pytest.raises(ValueError, match="checksum differs"):
+        db.migrate((changed,), staged=True)
+
+    failing = RelationalMigration(
+        version=3,
+        name="atomic failure",
+        statements=(
+            "CREATE TABLE rolled_back (id INTEGER PRIMARY KEY)",
+            "INSERT INTO missing_table(id) VALUES (1)",
+        ),
+    )
+    with pytest.raises(Exception):
+        db.migrate((failing,), staged=True)
+    assert db.scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rolled_back'"
+    ) == 0
+
+
+def test_sqlite_backup_restore_and_capacity_contract(_autocontext) -> None:
+    ctx = _autocontext
+    _activate_skill(ctx, "backup_skill")
+    db = database(
+        "durable",
+        requirements=RelationalStorageRequirements(
+            backup_required=True,
+            restore_required=True,
+            capacity_bytes=1024 * 1024,
+            rollback_policy="restore",
+        ),
+    )
+    db.execute("CREATE TABLE values_table (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+    db.execute("INSERT INTO values_table(id, value) VALUES (1, 'before')")
+    backup = db.backup()
+    db.execute("UPDATE values_table SET value = 'after' WHERE id = 1")
+    db.restore(backup)
+    assert db.scalar("SELECT value FROM values_table WHERE id = 1") == "before"
+
+
+def test_sqlite_capacity_exhaustion_and_binding_deletion_fail_closed(_autocontext) -> None:
+    ctx = _autocontext
+    _activate_skill(ctx, "capacity_skill")
+    db = database(
+        "bounded",
+        requirements=RelationalStorageRequirements(
+            capacity_bytes=512 * 1024,
+            retention_policy="delete_on_uninstall",
+        ),
+    )
+    db.execute("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)")
+    with pytest.raises(Exception, match="(?i)(full|space|capacity)"):
+        db.execute(
+            "INSERT INTO blobs(id, payload) VALUES (:id, :payload)",
+            {"id": 1, "payload": bytes(2 * 1024 * 1024)},
+        )
+    provider = ctx.relational_storage.provider_for(db.binding)
+    provider.delete(db.binding, owner_ref="skill:capacity_skill", reason="conformance cleanup")
+    with pytest.raises(RelationalStorageIsolationError, match="not registered"):
+        db.scalar("SELECT 1")
+
+
+def test_retention_is_negotiated_and_deletion_fails_closed(_autocontext) -> None:
+    ctx = _autocontext
+    _activate_skill(ctx, "retained_skill")
+    retained = database("retained")
+    assert retained.binding.requirements["retention_policy"] == "retain"
+    provider = ctx.relational_storage.provider_for(retained.binding)
+    with pytest.raises(RelationalStorageCapabilityError, match="retention policy is retain"):
+        provider.delete(
+            retained.binding,
+            owner_ref="skill:retained_skill",
+            reason="must not override negotiated retention",
+        )
+    with pytest.raises(RelationalStorageCapabilityError, match="retention:ttl"):
+        database(
+            "ttl",
+            requirements=RelationalStorageRequirements(
+                retention_policy="ttl",
+                retention_days=7,
+            ),
+        )
+
+
 def test_broker_rejects_requirements_instead_of_silently_weakening_them(_autocontext) -> None:
     ctx = _autocontext
     _activate_skill(ctx, "parallel_skill")
@@ -207,6 +318,9 @@ def test_postgresql_provider_conformance_when_server_is_configured(_autocontext)
         requirements=RelationalStorageRequirements(
             concurrent_writers=2,
             json_required=True,
+            backup_required=True,
+            restore_required=True,
+            rollback_policy="restore",
             locality="network",
             preferred_providers=("postgresql",),
         ),
@@ -220,11 +334,21 @@ def test_postgresql_provider_conformance_when_server_is_configured(_autocontext)
         assert db.fetch_all("SELECT id, value FROM contract_values") == [
             {"id": 1, "value": "postgres"}
         ]
+        backup = db.backup()
+        db.execute("UPDATE contract_values SET value = 'changed' WHERE id = 1")
+        db.restore(backup)
+        assert db.scalar("SELECT value FROM contract_values WHERE id = 1") == "postgres"
         assert db.health()["ok"] is True
         assert db.binding.provider_id == "postgresql"
         assert db.binding.isolation == "database"
+        assert db.binding.requirements["backup_required"] is True
         encoded = json.dumps(db.binding.to_dict()).lower()
         assert "://" not in encoded
         assert "password" not in encoded
+        rotation = provider.rotate_admin_credentials(admin_url)
+        assert rotation["ok"] is True
+        assert rotation["bindings_rebound"] == 1
+        assert rotation["secret_ref"] == "test:storage/postgresql"
+        assert db.health()["ok"] is True
     finally:
         provider.destroy_for_testing(db.binding, owner_ref="skill:postgres_contract_skill")

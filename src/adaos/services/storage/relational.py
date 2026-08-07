@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -15,6 +16,9 @@ from adaos.adapters.db.relational import (
     SQLiteRelationalStorageProvider,
 )
 from adaos.domain.relational_storage import (
+    RelationalBackup,
+    RelationalMigration,
+    RelationalMigrationResult,
     RelationalProviderCapabilities,
     RelationalStorageBinding,
     RelationalStorageCapabilityError,
@@ -238,6 +242,104 @@ class RelationalStorageService:
         provider = self._broker.provider_for(binding)
         return provider.health(binding, owner_ref=owner_ref)
 
+    def backup(self, binding: RelationalStorageBinding) -> RelationalBackup:
+        owner_ref = self.assert_current_owner(binding)
+        return self._broker.provider_for(binding).backup(binding, owner_ref=owner_ref)
+
+    def restore(self, binding: RelationalStorageBinding, backup: RelationalBackup) -> None:
+        owner_ref = self.assert_current_owner(binding)
+        self._broker.provider_for(binding).restore(
+            binding,
+            backup,
+            owner_ref=owner_ref,
+        )
+
+    def migrate(
+        self,
+        binding: RelationalStorageBinding,
+        migrations: Sequence[RelationalMigration],
+        *,
+        staged: bool,
+    ) -> RelationalMigrationResult:
+        owner_ref = self.assert_current_owner(binding)
+        if binding.migration_owner != owner_ref:
+            raise RelationalStorageIsolationError("current skill is not the migration owner")
+        ordered = tuple(sorted(migrations, key=lambda item: item.version))
+        if len({item.version for item in ordered}) != len(ordered):
+            raise ValueError("migration versions must be unique")
+        provider = self._broker.provider_for(binding)
+        dialect = "postgresql" if binding.provider_id == "postgresql" else "sqlite"
+        with provider.transaction(binding, owner_ref=owner_ref) as connection:
+            session = RelationalSession(connection)
+            session.execute(
+                "CREATE TABLE IF NOT EXISTS adaos_schema_migrations ("
+                "version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, "
+                "applied_at TEXT NOT NULL, staged INTEGER NOT NULL)"
+            )
+            existing = {
+                int(row["version"]): row
+                for row in session.fetch_all(
+                    "SELECT version, name, checksum FROM adaos_schema_migrations ORDER BY version"
+                )
+            }
+        pending: list[RelationalMigration] = []
+        for migration in ordered:
+            previous = existing.get(migration.version)
+            if previous is not None:
+                if str(previous["checksum"]) != migration.checksum:
+                    raise ValueError(
+                        f"migration {migration.version} checksum differs from applied history"
+                    )
+                continue
+            if dialect not in migration.dialects:
+                raise ValueError(f"migration {migration.version} does not support {dialect}")
+            pending.append(migration)
+        if not pending:
+            return RelationalMigrationResult(
+                binding_id=binding.binding_id,
+                owner_ref=owner_ref,
+                applied_versions=(),
+                current_version=max(existing.keys(), default=0),
+                staged=bool(staged),
+            )
+        applied: list[int] = []
+        safety_backup = (
+            provider.backup(binding, owner_ref=owner_ref)
+            if binding.provider_id == "sqlite"
+            else None
+        )
+        try:
+            with provider.transaction(binding, owner_ref=owner_ref) as connection:
+                session = RelationalSession(connection)
+                for migration in pending:
+                    for statement in migration.statements:
+                        session.execute(statement)
+                    session.execute(
+                        "INSERT INTO adaos_schema_migrations"
+                        "(version, name, checksum, applied_at, staged) "
+                        "VALUES (:version, :name, :checksum, :applied_at, :staged)",
+                        {
+                            "version": migration.version,
+                            "name": migration.name,
+                            "checksum": migration.checksum,
+                            "applied_at": datetime.now(timezone.utc).isoformat(),
+                            "staged": int(bool(staged)),
+                        },
+                    )
+                    applied.append(migration.version)
+                current = max((*existing.keys(), *applied), default=0)
+        except Exception:
+            if safety_backup is not None:
+                provider.restore(binding, safety_backup, owner_ref=owner_ref)
+            raise
+        return RelationalMigrationResult(
+            binding_id=binding.binding_id,
+            owner_ref=owner_ref,
+            applied_versions=tuple(applied),
+            current_version=current,
+            staged=bool(staged),
+        )
+
 
 class RelationalDatabase:
     """Owner-guarded SDK-facing handle; it never exposes a DSN or engine."""
@@ -289,6 +391,20 @@ class RelationalDatabase:
 
     def health(self) -> Mapping[str, Any]:
         return self._service.health(self._binding)
+
+    def migrate(
+        self,
+        migrations: Sequence[RelationalMigration],
+        *,
+        staged: bool = False,
+    ) -> RelationalMigrationResult:
+        return self._service.migrate(self._binding, migrations, staged=staged)
+
+    def backup(self) -> RelationalBackup:
+        return self._service.backup(self._binding)
+
+    def restore(self, backup: RelationalBackup) -> None:
+        self._service.restore(self._binding, backup)
 
 
 __all__ = [

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from adaos.domain.relational_storage import (
+    RelationalBackup,
     RelationalProviderCapabilities,
     RelationalStorageBinding,
     RelationalStorageRequirements,
@@ -39,6 +40,29 @@ class RelationalStorageProvider(Protocol):
         *,
         owner_ref: str,
     ) -> Mapping[str, Any]: ...
+
+    def backup(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+    ) -> RelationalBackup: ...
+
+    def restore(
+        self,
+        binding: RelationalStorageBinding,
+        backup: RelationalBackup,
+        *,
+        owner_ref: str,
+    ) -> None: ...
+
+    def delete(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+        reason: str,
+    ) -> None: ...
 
 
 class RelationalStorageBrokerPort(Protocol):

@@ -15,6 +15,7 @@ from adaos.services.eventbus import LocalEventBus
 from adaos.services.settings import Settings
 from adaos.services.storage import build_default_relational_storage_broker
 from adaos.services.provider_status import build_provider_status_registry
+from adaos.services.execution.local import LocalProcessExecutor
 
 __all__ = [
     "MockSecrets",
@@ -283,6 +284,10 @@ def bootstrap_test_ctx(
     noop = _Noop()
 
     relational_storage = build_default_relational_storage_broker()
+    execution_provider = LocalProcessExecutor(
+        state_root=paths.state_dir(),
+        allowed_roots=(paths.base_dir(), paths.skills_dir(), paths.state_dir(), paths.models_dir()),
+    )
     ctx = AgentContext(
         settings=settings,
         paths=paths,
@@ -299,8 +304,10 @@ def bootstrap_test_ctx(
         fs=noop,
         sandbox=noop,
         relational_storage=relational_storage,
+        execution_provider=execution_provider,
         provider_status=build_provider_status_registry(
             relational_broker=relational_storage,
+            executors=(execution_provider,),
         ),
     )
 

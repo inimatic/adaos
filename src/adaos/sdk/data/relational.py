@@ -8,6 +8,9 @@ SQL uses SQLAlchemy-style named parameters (``:name``) across providers.
 from __future__ import annotations
 
 from adaos.domain.relational_storage import (
+    RelationalBackup,
+    RelationalMigration,
+    RelationalMigrationResult,
     RelationalStorageBinding,
     RelationalStorageCapabilityError,
     RelationalStorageContractError,
@@ -38,8 +41,11 @@ def database(
 
 
 __all__ = [
+    "RelationalBackup",
     "RelationalDatabase",
     "RelationalResult",
+    "RelationalMigration",
+    "RelationalMigrationResult",
     "RelationalSession",
     "RelationalStorageBinding",
     "RelationalStorageCapabilityError",

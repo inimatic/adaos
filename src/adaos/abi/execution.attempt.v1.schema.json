@@ -14,6 +14,12 @@
     "provider_attempt_id",
     "idempotency_key",
     "status",
+    "trial_id",
+    "run_id",
+    "sample_generation",
+    "attempt_number",
+    "provider_binding",
+    "status_history",
     "created_at",
     "updated_at",
     "started_at",
@@ -21,9 +27,16 @@
     "pid",
     "process_create_time",
     "exit_code",
+    "last_heartbeat_at",
+    "lease_expires_at",
+    "cancellation",
+    "resource_observations",
     "failure",
     "stdout",
     "stderr",
+    "outputs",
+    "checkpoint",
+    "accelerator_allocation",
     "metadata"
   ],
   "properties": {
@@ -36,6 +49,12 @@
     "provider_attempt_id": { "type": "string", "minLength": 1 },
     "idempotency_key": { "type": "string", "minLength": 1 },
     "status": { "enum": ["accepted", "submitting", "running", "cancelling", "unknown", "succeeded", "failed", "cancelled", "lost"] },
+    "trial_id": { "type": ["string", "null"] },
+    "run_id": { "type": ["string", "null"] },
+    "sample_generation": { "type": "integer", "minimum": 0 },
+    "attempt_number": { "type": "integer", "minimum": 1 },
+    "provider_binding": { "type": "object" },
+    "status_history": { "type": "array", "items": { "type": "object" } },
     "created_at": { "type": "string", "minLength": 1 },
     "updated_at": { "type": "string", "minLength": 1 },
     "started_at": { "type": ["string", "null"] },
@@ -43,9 +62,35 @@
     "pid": { "type": ["integer", "null"], "minimum": 1 },
     "process_create_time": { "type": ["number", "null"] },
     "exit_code": { "type": ["integer", "null"] },
+    "last_heartbeat_at": { "type": ["string", "null"] },
+    "lease_expires_at": { "type": ["string", "null"] },
+    "cancellation": { "type": ["object", "null"] },
+    "resource_observations": { "type": "array", "items": { "type": "object" } },
     "failure": { "type": ["object", "null"] },
     "stdout": { "oneOf": [{ "$ref": "content.ref.v1.schema.json" }, { "type": "null" }] },
     "stderr": { "oneOf": [{ "$ref": "content.ref.v1.schema.json" }, { "type": "null" }] },
+    "outputs": { "type": "array", "items": { "$ref": "content.ref.v1.schema.json" } },
+    "checkpoint": { "oneOf": [{ "$ref": "execution.checkpoint.v1.schema.json" }, { "type": "null" }] },
+    "accelerator_allocation": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allocation_id", "provider_id", "attempt_id", "accelerator_ids", "exclusive", "status", "allocated_at", "released_at"],
+          "properties": {
+            "allocation_id": {"type": "string", "minLength": 1},
+            "provider_id": {"type": "string", "minLength": 1},
+            "attempt_id": {"type": "string", "minLength": 1},
+            "accelerator_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+            "exclusive": {"type": "boolean"},
+            "status": {"enum": ["allocated", "released"]},
+            "allocated_at": {"type": "string", "minLength": 1},
+            "released_at": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    },
     "metadata": { "type": "object" }
   }
 }

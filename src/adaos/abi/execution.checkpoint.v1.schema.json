@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.execution.checkpoint.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "checkpoint_id", "content", "producer_attempt_id", "code_digest", "environment_digest", "rng_state_digest", "parent_digest", "resume_policy"],
+  "properties": {
+    "schema": {"const": "adaos.execution.checkpoint.v1"},
+    "checkpoint_id": {"type": "string", "minLength": 1},
+    "content": {"$ref": "content.ref.v1.schema.json"},
+    "producer_attempt_id": {"type": "string", "minLength": 1},
+    "code_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "environment_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "rng_state_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "parent_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "resume_policy": {"enum": ["compatible_only", "operator_override", "never"]}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.storage.blob.requirement.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "durability", "locality", "capacity_bytes", "content_addressed", "retention_policy"],
+  "properties": {
+    "schema": {"const": "adaos.storage.blob.requirement.v1"},
+    "durability": {"enum": ["durable", "ephemeral"]},
+    "locality": {"enum": ["node", "network", "any"]},
+    "capacity_bytes": {"type": ["integer", "null"], "minimum": 1},
+    "content_addressed": {"type": "boolean"},
+    "retention_policy": {"enum": ["retain", "delete_on_uninstall", "ttl"]}
+  }
+}

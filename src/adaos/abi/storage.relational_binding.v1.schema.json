@@ -16,7 +16,8 @@
     "migration_owner",
     "protocol_version",
     "capabilities",
-    "secret_ref"
+    "secret_ref",
+    "requirements"
   ],
   "properties": {
     "schema": { "const": "adaos.storage.relational.binding.v1" },
@@ -41,6 +42,7 @@
           "pattern": "^[a-z][a-z0-9_.-]*:[a-z0-9_./-]+$"
         }
       ]
-    }
+    },
+    "requirements": { "$ref": "storage.relational_requirement.v1.schema.json" }
   }
 }

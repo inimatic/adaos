@@ -10,12 +10,22 @@
     "owner_ref",
     "command",
     "working_directory",
+    "trial_id",
+    "run_id",
+    "sample_generation",
+    "package_ref",
+    "code_digest",
+    "environment_digest",
     "environment",
     "secret_refs",
     "resources",
+    "network",
+    "determinism",
+    "budget",
     "inputs",
     "expected_outputs",
     "checkpoint",
+    "preemption",
     "metadata"
   ],
   "properties": {
@@ -24,22 +34,70 @@
     "owner_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
     "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "working_directory": { "type": "string", "minLength": 1 },
+    "trial_id": { "type": ["string", "null"] },
+    "run_id": { "type": ["string", "null"] },
+    "sample_generation": { "type": "integer", "minimum": 0 },
+    "package_ref": { "oneOf": [{ "$ref": "content.ref.v1.schema.json" }, { "type": "null" }] },
+    "code_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "environment_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
     "environment": { "type": "object", "additionalProperties": { "type": "string" } },
     "secret_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
     "resources": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cpu_cores", "memory_mb", "gpu_count", "wall_time_s"],
+      "required": ["cpu_cores", "memory_mb", "gpu_count", "gpu_type", "gpu_memory_mb", "gpu_exclusive", "wall_time_s", "max_log_bytes"],
       "properties": {
         "cpu_cores": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "memory_mb": { "type": ["integer", "null"], "minimum": 1 },
         "gpu_count": { "type": "integer", "minimum": 0 },
-        "wall_time_s": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+        "gpu_type": { "type": ["string", "null"] },
+        "gpu_memory_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "gpu_exclusive": { "type": "boolean" },
+        "wall_time_s": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "max_log_bytes": { "type": "integer", "minimum": 1024 }
+      }
+    },
+    "network": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "allow_hosts"],
+      "properties": {
+        "mode": {"enum": ["offline", "allowlist", "unrestricted"]},
+        "allow_hosts": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "determinism": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "rng_streams", "deterministic_algorithms"],
+      "properties": {
+        "mode": {"enum": ["exploratory", "confirmatory"]},
+        "rng_streams": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "deterministic_algorithms": {"type": "boolean"}
+      }
+    },
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_attempts", "max_compute_seconds", "max_storage_bytes", "max_cost", "currency"],
+      "properties": {
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "max_compute_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "max_storage_bytes": {"type": ["integer", "null"], "minimum": 1},
+        "max_cost": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "currency": {"type": ["string", "null"]}
       }
     },
     "inputs": { "type": "array", "items": { "$ref": "content.ref.v1.schema.json" } },
     "expected_outputs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-    "checkpoint": { "oneOf": [{ "$ref": "content.ref.v1.schema.json" }, { "type": "null" }] },
+    "checkpoint": { "oneOf": [{ "$ref": "execution.checkpoint.v1.schema.json" }, { "type": "null" }] },
+    "preemption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "require_checkpoint", "max_preemptions"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "require_checkpoint": {"type": "boolean"},
+        "max_preemptions": {"type": "integer", "minimum": 0}
+      }
+    },
     "metadata": { "type": "object" }
   }
 }

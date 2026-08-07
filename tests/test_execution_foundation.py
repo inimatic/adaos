@@ -2,17 +2,28 @@ from __future__ import annotations
 
 import sys
 import time
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from adaos.domain.execution import (
+    AcceleratorAllocation,
+    AcceleratorInventory,
+    CheckpointManifest,
+    ExecutionBudget,
+    ExecutionDeterminism,
+    ExecutionNetworkPolicy,
     ExecutionContractError,
     ExecutionResourceRequest,
     ExecutionSpec,
+    PreemptionPolicy,
 )
 from adaos.domain.ownership import OwnershipIsolationError
+from adaos.domain.runtime_bindings import ContentRef
 from adaos.services.execution.local import LocalProcessExecutor
+from adaos.services.execution.oci import OCIExecutor
 
 
 def _wait_terminal(
@@ -133,3 +144,274 @@ def test_local_provider_rejects_unenforced_resources_and_unsafe_cwd(tmp_path) ->
     )
     with pytest.raises(ExecutionContractError, match="does not allocate GPUs"):
         executor.submit(gpu, idempotency_key="gpu")
+
+    offline = ExecutionSpec(
+        spec_id="fixture.offline.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", "print('offline')"),
+        working_directory=str(tmp_path / "allowed"),
+        network=ExecutionNetworkPolicy(mode="offline"),
+    )
+    with pytest.raises(ExecutionContractError, match="cannot enforce"):
+        executor.submit(offline, idempotency_key="offline")
+
+
+def test_confirmatory_execution_requires_named_rng_and_immutable_digests(tmp_path) -> None:
+    with pytest.raises(ExecutionContractError, match="missing RNG streams"):
+        ExecutionDeterminism(mode="confirmatory", rng_streams={"analysis": 1})
+
+    streams = {name: index for index, name in enumerate(ExecutionDeterminism.REQUIRED_STREAMS)}
+    with pytest.raises(ExecutionContractError, match="immutable code"):
+        ExecutionSpec(
+            spec_id="confirmatory.v1",
+            owner_ref="skill:research_manager",
+            command=(sys.executable, "-c", "print('x')"),
+            working_directory=str(tmp_path),
+            determinism=ExecutionDeterminism(mode="confirmatory", rng_streams=streams),
+        )
+
+
+def test_declared_outputs_logs_heartbeats_and_resources_are_persisted(tmp_path) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    script = "from pathlib import Path; print('x' * 5000); Path('result.bin').write_bytes(b'ok')"
+    spec = ExecutionSpec(
+        spec_id="fixture.output.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", script),
+        working_directory=str(tmp_path),
+        run_id="run-1",
+        trial_id="trial-1",
+        resources=ExecutionResourceRequest(max_log_bytes=1024),
+        expected_outputs=("result.bin",),
+        budget=ExecutionBudget(max_attempts=2, max_storage_bytes=4096),
+    )
+    attempt = executor.submit(spec, idempotency_key="output-1")
+    terminal = _wait_terminal(executor, attempt.attempt_id, owner_ref=spec.owner_ref)
+    assert terminal.status == "succeeded"
+    assert terminal.run_id == "run-1"
+    assert terminal.trial_id == "trial-1"
+    assert terminal.last_heartbeat_at
+    assert terminal.resource_observations
+    assert terminal.outputs[0].metadata["path"] == "result.bin"
+    assert terminal.stdout is not None and terminal.stdout.size_bytes == 1024
+    assert [item["status"] for item in terminal.status_history][-1] == "succeeded"
+
+
+def test_missing_declared_output_and_memory_budget_fail_closed(tmp_path) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    missing = ExecutionSpec(
+        spec_id="fixture.missing-output.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", "print('done')"),
+        working_directory=str(tmp_path),
+        expected_outputs=("absent.bin",),
+    )
+    result = _wait_terminal(
+        executor,
+        executor.submit(missing, idempotency_key="missing-output").attempt_id,
+        owner_ref=missing.owner_ref,
+    )
+    assert result.failure and result.failure["reason"] == "declared_output_missing"
+
+    memory = ExecutionSpec(
+        spec_id="fixture.memory.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", "import time; x=bytearray(80*1024*1024); time.sleep(2)"),
+        working_directory=str(tmp_path),
+        resources=ExecutionResourceRequest(memory_mb=32),
+    )
+    limited = _wait_terminal(
+        executor,
+        executor.submit(memory, idempotency_key="memory-limit").attempt_id,
+        owner_ref=memory.owner_ref,
+    )
+    assert limited.failure and limited.failure["reason"] == "memory_limit_exceeded"
+
+
+def test_unknown_outcome_must_be_reconciled_before_same_run_retry(tmp_path) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    spec = ExecutionSpec(
+        spec_id="fixture.unknown.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", "import time; time.sleep(30)"),
+        working_directory=str(tmp_path),
+        run_id="run-unknown",
+        budget=ExecutionBudget(max_attempts=2),
+    )
+    attempt = executor.submit(spec, idempotency_key="unknown-1")
+    ps = __import__("psutil").Process(attempt.pid)
+    for child in ps.children(recursive=True):
+        child.kill()
+    ps.kill()
+    ps.wait(timeout=5)
+    attempt_dir = tmp_path / "state" / "executions" / "local" / attempt.attempt_id
+    (attempt_dir / "receipt.json").unlink(missing_ok=True)
+    unknown = executor.reconcile(attempt.attempt_id, owner_ref=spec.owner_ref)
+    assert unknown.status == "unknown"
+    with pytest.raises(ExecutionContractError, match="unknown provider outcome"):
+        executor.submit(spec, idempotency_key="unknown-2")
+    lost = executor.reconcile(attempt.attempt_id, owner_ref=spec.owner_ref)
+    assert lost.status == "lost"
+    retry = executor.submit(spec, idempotency_key="unknown-2")
+    try:
+        assert retry.run_id == attempt.run_id
+        assert retry.attempt_number == 2
+        assert retry.sample_generation == attempt.sample_generation
+    finally:
+        executor.cancel(retry.attempt_id, owner_ref=spec.owner_ref)
+
+
+def test_lost_heartbeat_enters_unknown_until_provider_recovers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_EXECUTION_HEARTBEAT_TIMEOUT_S", "0.2")
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    spec = _spec(tmp_path, sys.executable, "-c", "import time; time.sleep(30)")
+    attempt = executor.submit(spec, idempotency_key="stale-heartbeat")
+    heartbeat = (
+        tmp_path / "state" / "executions" / "local" / attempt.attempt_id / "heartbeat.json"
+    )
+    deadline = time.monotonic() + 3
+    while not heartbeat.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    worker = __import__("psutil").Process(attempt.pid)
+    worker.suspend()
+    try:
+        heartbeat.write_text(
+            json.dumps({"at": "2000-01-01T00:00:00+00:00", "resource_observations": []}),
+            encoding="utf-8",
+        )
+        unknown = executor.reconcile(attempt.attempt_id, owner_ref=spec.owner_ref)
+        assert unknown.status == "unknown"
+        assert unknown.failure == {"reason": "heartbeat_lease_expired"}
+    finally:
+        worker.resume()
+        executor.cancel(attempt.attempt_id, owner_ref=spec.owner_ref)
+
+
+def test_duplicate_terminal_callback_is_idempotent_and_cancellation_race_is_a_noop(tmp_path) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    spec = _spec(tmp_path, sys.executable, "-c", "print('fast')")
+    terminal = _wait_terminal(
+        executor,
+        executor.submit(spec, idempotency_key="terminal-once").attempt_id,
+        owner_ref=spec.owner_ref,
+    )
+    duplicate = executor.reconcile(terminal.attempt_id, owner_ref=spec.owner_ref)
+    raced = executor.cancel(terminal.attempt_id, owner_ref=spec.owner_ref)
+    assert duplicate.to_dict() == terminal.to_dict()
+    assert raced.status == "succeeded"
+    assert len(raced.status_history) == len(terminal.status_history)
+
+
+def test_accelerator_inventory_and_allocation_contracts_are_provider_neutral() -> None:
+    inventory = AcceleratorInventory(
+        accelerator_id="gpu-0",
+        kind="cuda",
+        model="A100",
+        memory_mb=40_960,
+        exclusive=True,
+        ready=True,
+        provider_id="oci",
+    )
+    assert inventory.can_satisfy(
+        ExecutionResourceRequest(
+            gpu_count=1,
+            gpu_type="A100",
+            gpu_memory_mb=20_000,
+            gpu_exclusive=True,
+        )
+    )
+    allocation = AcceleratorAllocation(
+        allocation_id="allocation-1",
+        provider_id="oci",
+        attempt_id="attempt-1",
+        accelerator_ids=("gpu-0",),
+        exclusive=True,
+    )
+    assert allocation.to_dict()["accelerator_ids"] == ["gpu-0"]
+
+
+def test_preempted_run_requires_compatible_checkpoint_and_bounded_policy(tmp_path) -> None:
+    executor = LocalProcessExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    digest = "sha256:" + "a" * 64
+    base = ExecutionSpec(
+        spec_id="fixture.preemption.v1",
+        owner_ref="skill:research_manager",
+        command=(sys.executable, "-c", "print('checkpointed')"),
+        working_directory=str(tmp_path),
+        run_id="run-preempted",
+        code_digest=digest,
+        environment_digest=digest,
+        budget=ExecutionBudget(max_attempts=3),
+    )
+    first = _wait_terminal(
+        executor,
+        executor.submit(base, idempotency_key="preemption-1").attempt_id,
+        owner_ref=base.owner_ref,
+    )
+    preempted = replace(first, status="failed", failure={"reason": "provider_preempted"})
+    executor._write_attempt(preempted)
+
+    no_checkpoint = replace(
+        base,
+        preemption=PreemptionPolicy(enabled=True, max_preemptions=1),
+    )
+    with pytest.raises(ExecutionContractError, match="requires a proven checkpoint"):
+        executor.submit(no_checkpoint, idempotency_key="preemption-2")
+
+    content = ContentRef(
+        uri="adaos-checkpoint:run-preempted/checkpoint-1",
+        digest="sha256:" + "b" * 64,
+        size_bytes=16,
+        media_type="application/octet-stream",
+        owner_ref=base.owner_ref,
+        kind="execution-checkpoint",
+    )
+    checkpoint = CheckpointManifest(
+        checkpoint_id="checkpoint-1",
+        content=content,
+        producer_attempt_id=first.attempt_id,
+        code_digest=digest,
+        environment_digest=digest,
+        rng_state_digest="sha256:" + "c" * 64,
+    )
+    resumed_spec = replace(no_checkpoint, checkpoint=checkpoint)
+    resumed = _wait_terminal(
+        executor,
+        executor.submit(resumed_spec, idempotency_key="preemption-2").attempt_id,
+        owner_ref=base.owner_ref,
+    )
+    assert resumed.status == "succeeded"
+    assert resumed.attempt_number == 2
+    assert resumed.run_id == first.run_id
+
+
+def test_oci_provider_requires_digest_pin_and_builds_hostile_isolation_boundary(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("adaos.services.execution.oci.shutil.which", lambda _: "docker")
+    executor = OCIExecutor(state_root=tmp_path / "state", allowed_roots=(tmp_path,))
+    unpinned = ExecutionSpec(
+        spec_id="oci.unpinned.v1",
+        owner_ref="skill:research_manager",
+        command=("python", "fixture.py"),
+        working_directory=str(tmp_path),
+        metadata={"container_image": "example/research:latest"},
+    )
+    with pytest.raises(ExecutionContractError, match="digest-pinned"):
+        executor._container_spec(unpinned, idempotency_key="oci-unpinned")
+
+    isolated = replace(
+        unpinned,
+        resources=ExecutionResourceRequest(cpu_cores=2, memory_mb=512, gpu_count=1),
+        network=ExecutionNetworkPolicy(mode="offline"),
+        metadata={"container_image": "example/research@sha256:" + "d" * 64},
+    )
+    container_spec = executor._container_spec(isolated, idempotency_key="oci-pinned")
+    assert executor.capabilities.hostile_isolation is True
+    assert "--network" in container_spec.command
+    assert "none" in container_spec.command
+    assert "--cpus" in container_spec.command
+    assert "--memory" in container_spec.command
+    assert "--gpus" in container_spec.command
+    assert container_spec.metadata["oci_original_spec_digest"] == isolated.digest

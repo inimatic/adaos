@@ -58,6 +58,7 @@ def use_ctx(ctx: AgentContext):
 
 
 if TYPE_CHECKING:
+    from adaos.ports.execution import ExecutorProvider
     from adaos.ports.relational_storage import RelationalStorageBrokerPort
     from adaos.services.provider_status import ProviderStatusRegistry
     from adaos.services.i18n.service import I18nService
@@ -82,6 +83,7 @@ class AgentContext:
     sandbox: Sandbox
     relational_storage: Optional["RelationalStorageBrokerPort"] = field(default=None, repr=False)
     provider_status: Optional["ProviderStatusRegistry"] = field(default=None, repr=False)
+    execution_provider: Optional["ExecutorProvider"] = field(default=None, repr=False)
     # Node configuration (loaded once during bootstrap and reused to avoid expensive reloads)
     config: Any = field(default=None, init=False, repr=False)
     _i18n: Optional[I18nService] = field(default=None, init=False, repr=False)

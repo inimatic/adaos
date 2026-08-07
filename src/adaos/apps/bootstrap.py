@@ -7,6 +7,7 @@ from adaos.services.settings import Settings
 from adaos.services.agent_context import AgentContext
 from adaos.adapters.fs.path_provider import PathProvider
 from adaos.services.eventbus import LocalEventBus
+from adaos.services.execution.local import LocalProcessExecutor
 from adaos.services.logging import setup_logging, attach_event_logger
 from adaos.adapters.git.cli_git import CliGitClient
 from adaos.adapters.db import SQLite, SQLiteKV
@@ -155,6 +156,10 @@ class _CtxHolder:
             secrets_backend.fs = fs
 
         relational_storage = build_default_relational_storage_broker()
+        execution_provider = LocalProcessExecutor(
+            state_root=paths.state_dir(),
+            allowed_roots=(paths.base_dir(), paths.skills_dir(), paths.state_dir(), paths.models_dir()),
+        )
         ctx = AgentContext(
             settings=settings,
             paths=paths,
@@ -171,8 +176,10 @@ class _CtxHolder:
             fs=fs,
             sandbox=SandboxService(runner=ProcSandbox(fs_base=paths.base), caps=caps, bus=bus),
             relational_storage=relational_storage,
+            execution_provider=execution_provider,
             provider_status=build_provider_status_registry(
                 relational_broker=relational_storage,
+                executors=(execution_provider,),
             ),
         )
 

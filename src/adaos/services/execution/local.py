@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,6 +28,31 @@ from adaos.domain.runtime_bindings import ContentRef
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _heartbeat_timeout_s() -> float:
+    try:
+        return max(0.2, float(os.getenv("ADAOS_EXECUTION_HEARTBEAT_TIMEOUT_S", "5") or "5"))
+    except (TypeError, ValueError):
+        return 5.0
+
+
+def _lease_after(value: str) -> str:
+    try:
+        base = datetime.fromisoformat(value)
+    except ValueError:
+        base = datetime.now(timezone.utc)
+    return (base + timedelta(seconds=_heartbeat_timeout_s())).isoformat()
+
+
+def _heartbeat_stale(value: str) -> bool:
+    try:
+        observed = datetime.fromisoformat(value)
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True
+    return datetime.now(timezone.utc) - observed > timedelta(seconds=_heartbeat_timeout_s())
 
 
 def _attempt_id(owner_ref: str, idempotency_key: str) -> str:
@@ -63,12 +88,32 @@ def _content_ref(path: Path, *, attempt: ExecutionAttempt, stream: str) -> Conte
     )
 
 
+def _output_ref(record: Mapping[str, Any], *, attempt: ExecutionAttempt) -> ContentRef:
+    return ContentRef(
+        uri=f"adaos-execution:{attempt.attempt_id}/outputs/{record['path']}",
+        digest=str(record["digest"]),
+        size_bytes=int(record["size_bytes"]),
+        media_type="application/octet-stream",
+        owner_ref=attempt.owner_ref,
+        kind="execution-output",
+        metadata={"attempt_id": attempt.attempt_id, "path": str(record["path"])},
+    )
+
+
+def _history(status: str, *, reason: str | None = None) -> dict[str, Any]:
+    item: dict[str, Any] = {"status": status, "at": _now()}
+    if reason:
+        item["reason"] = reason
+    return item
+
+
 class LocalProcessExecutor:
     """Local reference adapter with durable attempt identity and receipts.
 
     It is an operational process boundary, not a hostile-code sandbox. CPU,
-    memory, GPU, secret injection, and container isolation are rejected until
-    dedicated adapters can enforce them.
+    memory, wall time, logs and output size are bounded by the detached worker;
+    GPU, secrets, network isolation and hostile-code containment remain outside
+    this adapter and fail closed when requested.
     """
 
     provider_id = "local-process"
@@ -84,6 +129,13 @@ class LocalProcessExecutor:
                 "stdout",
                 "stderr",
                 "wall_time",
+                "cpu_affinity",
+                "memory_limit",
+                "bounded_logs",
+                "declared_outputs",
+                "heartbeat",
+                "resource_observations",
+                "preemption_resume_admission",
             ),
             hostile_isolation=False,
         )
@@ -108,18 +160,37 @@ class LocalProcessExecutor:
             raise ExecutionContractError("attempt path escaped execution state root") from exc
         return target
 
+    def _run_attempts(self, spec: ExecutionSpec) -> list[ExecutionAttempt]:
+        if not spec.run_id:
+            return []
+        matches: list[ExecutionAttempt] = []
+        for path in self._root.glob("attempt.*/attempt.json"):
+            try:
+                candidate = ExecutionAttempt.from_dict(_load_json(path))
+            except Exception:
+                continue
+            if (
+                candidate.owner_ref == spec.owner_ref
+                and candidate.run_id == spec.run_id
+                and candidate.sample_generation == spec.sample_generation
+            ):
+                matches.append(candidate)
+        return matches
+
     def _validate_spec(self, spec: ExecutionSpec) -> Path:
         cwd = Path(spec.working_directory).expanduser().resolve()
         if not any(self._is_under(cwd, root) for root in self._allowed_roots):
             raise PermissionError(f"execution working directory is outside allowed roots: {cwd}")
         if spec.secret_refs:
             raise ExecutionContractError("local-process provider does not resolve secret_refs")
-        if spec.resources.cpu_cores is not None:
-            raise ExecutionContractError("local-process provider does not enforce cpu_cores")
-        if spec.resources.memory_mb is not None:
-            raise ExecutionContractError("local-process provider does not enforce memory_mb")
         if spec.resources.gpu_count:
             raise ExecutionContractError("local-process provider does not allocate GPUs")
+        if spec.network.mode != "unrestricted":
+            raise ExecutionContractError(
+                "local-process provider cannot enforce offline or allowlist network policy"
+            )
+        if spec.budget.max_cost is not None:
+            raise ExecutionContractError("local-process provider has no monetary cost meter")
         return cwd
 
     @staticmethod
@@ -153,6 +224,26 @@ class LocalProcessExecutor:
                     )
                 return self.reconcile(attempt_id, owner_ref=owner_ref)
 
+            predecessors = self._run_attempts(spec)
+            if any(item.status == "unknown" for item in predecessors):
+                raise ExecutionContractError(
+                    "run has an unknown provider outcome; reconcile it before retry"
+                )
+            preemptions = tuple(
+                item
+                for item in predecessors
+                if str((item.failure or {}).get("reason") or "")
+                in {"preempted", "provider_preempted"}
+            )
+            if preemptions:
+                spec.preemption.admit(
+                    checkpoint=spec.checkpoint,
+                    prior_preemptions=len(preemptions),
+                )
+            attempt_number = max((item.attempt_number for item in predecessors), default=0) + 1
+            if attempt_number > spec.budget.max_attempts:
+                raise ExecutionContractError("execution attempt budget exhausted")
+
             attempt_dir.mkdir(parents=True, exist_ok=False)
             _atomic_json(spec_path, {"digest": spec.digest, "spec": spec.to_dict()})
             attempt = ExecutionAttempt(
@@ -164,6 +255,16 @@ class LocalProcessExecutor:
                 provider_attempt_id=attempt_id,
                 idempotency_key=key,
                 status="submitting",
+                trial_id=spec.trial_id,
+                run_id=spec.run_id,
+                sample_generation=spec.sample_generation,
+                attempt_number=attempt_number,
+                provider_binding={
+                    "provider_id": self.provider_id,
+                    "protocol_version": self.capabilities.protocol_version,
+                    "hostile_isolation": False,
+                },
+                status_history=(_history("accepted"), _history("submitting")),
             )
             self._write_attempt(attempt)
 
@@ -187,6 +288,7 @@ class LocalProcessExecutor:
                     updated_at=_now(),
                     finished_at=_now(),
                     failure={"reason": "provider_submit_failed", "type": type(exc).__name__, "message": str(exc)},
+                    status_history=(*attempt.status_history, _history("failed", reason="provider_submit_failed")),
                 )
                 self._write_attempt(failed)
                 return failed
@@ -198,6 +300,9 @@ class LocalProcessExecutor:
                 started_at=_now(),
                 pid=process.pid,
                 process_create_time=process_create_time,
+                last_heartbeat_at=_now(),
+                lease_expires_at=_lease_after(_now()),
+                status_history=(*attempt.status_history, _history("running")),
             )
             self._write_attempt(running)
             return running
@@ -260,14 +365,82 @@ class LocalProcessExecutor:
                     failure=dict(receipt.get("failure") or {}) if receipt.get("failure") is not None else None,
                     stdout=_content_ref(attempt_dir / "stdout.log", attempt=attempt, stream="stdout"),
                     stderr=_content_ref(attempt_dir / "stderr.log", attempt=attempt, stream="stderr"),
+                    last_heartbeat_at=str(receipt.get("last_heartbeat_at") or attempt.last_heartbeat_at or _now()),
+                    resource_observations=tuple(
+                        dict(item) for item in receipt.get("resource_observations") or ()
+                    ),
+                    outputs=tuple(
+                        _output_ref(item, attempt=attempt)
+                        for item in receipt.get("outputs") or ()
+                    ),
+                    cancellation=(
+                        {
+                            **dict(attempt.cancellation or {}),
+                            "acknowledged_at": str(receipt.get("finished_at") or _now()),
+                        }
+                        if status == "cancelled"
+                        else attempt.cancellation
+                    ),
+                    status_history=(
+                        *attempt.status_history,
+                        *(
+                            (_history(status, reason=str((receipt.get("failure") or {}).get("reason") or "") or None),)
+                            if not attempt.status_history or attempt.status_history[-1].get("status") != status
+                            else ()
+                        ),
+                    ),
                 )
                 self._write_attempt(terminal)
                 return terminal
             if self._process_alive(attempt):
+                heartbeat_path = attempt_dir / "heartbeat.json"
+                if heartbeat_path.exists():
+                    heartbeat = _load_json(heartbeat_path)
+                    heartbeat_at = str(heartbeat.get("at") or attempt.last_heartbeat_at or _now())
+                    attempt = replace(
+                        attempt,
+                        last_heartbeat_at=heartbeat_at,
+                        lease_expires_at=_lease_after(heartbeat_at),
+                        resource_observations=tuple(
+                            dict(item) for item in heartbeat.get("resource_observations") or ()
+                        ),
+                    )
+                    if _heartbeat_stale(heartbeat_at):
+                        if attempt.status != "unknown":
+                            attempt = replace(
+                                attempt,
+                                status="unknown",
+                                updated_at=_now(),
+                                failure={"reason": "heartbeat_lease_expired"},
+                                status_history=(
+                                    *attempt.status_history,
+                                    _history("unknown", reason="heartbeat_lease_expired"),
+                                ),
+                            )
+                        self._write_attempt(attempt)
+                        return attempt
                 if attempt.status != "running":
-                    attempt = replace(attempt, status="running", updated_at=_now())
-                    self._write_attempt(attempt)
+                    attempt = replace(
+                        attempt,
+                        status="running",
+                        updated_at=_now(),
+                        status_history=(*attempt.status_history, _history("running")),
+                    )
+                self._write_attempt(attempt)
                 return attempt
+            if attempt.status != "unknown":
+                unknown = replace(
+                    attempt,
+                    status="unknown",
+                    updated_at=_now(),
+                    failure={"reason": "provider_outcome_requires_reconciliation"},
+                    status_history=(
+                        *attempt.status_history,
+                        _history("unknown", reason="provider_outcome_requires_reconciliation"),
+                    ),
+                )
+                self._write_attempt(unknown)
+                return unknown
             lost = replace(
                 attempt,
                 status="lost",
@@ -276,6 +449,10 @@ class LocalProcessExecutor:
                 failure={"reason": "provider_process_missing_without_receipt"},
                 stdout=_content_ref(attempt_dir / "stdout.log", attempt=attempt, stream="stdout"),
                 stderr=_content_ref(attempt_dir / "stderr.log", attempt=attempt, stream="stderr"),
+                status_history=(
+                    *attempt.status_history,
+                    _history("lost", reason="provider_process_missing_without_receipt"),
+                ),
             )
             self._write_attempt(lost)
             return lost
@@ -285,7 +462,14 @@ class LocalProcessExecutor:
             attempt = self.reconcile(attempt_id, owner_ref=owner_ref)
             if attempt.terminal:
                 return attempt
-            cancelling = replace(attempt, status="cancelling", updated_at=_now())
+            requested_at = _now()
+            cancelling = replace(
+                attempt,
+                status="cancelling",
+                updated_at=requested_at,
+                cancellation={"requested_at": requested_at, "acknowledged_at": None},
+                status_history=(*attempt.status_history, _history("cancelling")),
+            )
             self._write_attempt(cancelling)
             if attempt.pid is not None and self._process_alive(attempt):
                 try:
@@ -312,6 +496,9 @@ class LocalProcessExecutor:
                 "finished_at": _now(),
                 "exit_code": None,
                 "failure": {"reason": "cancelled_by_owner"},
+                "last_heartbeat_at": attempt.last_heartbeat_at,
+                "resource_observations": list(attempt.resource_observations),
+                "outputs": [],
             }
             _atomic_json(attempt_dir / "receipt.json", receipt)
             return self.reconcile(attempt_id, owner_ref=owner_ref)
