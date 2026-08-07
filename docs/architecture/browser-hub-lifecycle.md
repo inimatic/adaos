@@ -79,6 +79,8 @@ Semantic revisions do not change for ordinary report heartbeats. Root still
 renews the SSE lease when source freshness extends or at least every 25
 seconds. A browser fails closed when `valid_until` expires and waits for the
 next lifecycle event; it does not start a fallback polling loop.
+Root accepts up to 10 seconds of positive Hub clock skew when judging source
+freshness; a small NTP offset must not alternate semantic revisions.
 
 The sidecar-to-Root report is an mTLS-only internal call:
 
@@ -128,9 +130,10 @@ requests.
 
 UI diagnostics use the same lifecycle gate. While a routed Root path is
 unavailable, events remain in a bounded local queue and no diagnostics POST is
-started. After recovery, flushes are rate-limited and the reliability probe has
-a 15-second retrigger cooldown so the lifecycle, control, and sync edges of one
-restart cannot each produce a request.
+started. After recovery, diagnostics are coalesced behind a 30-second network
+window, and the reliability probe has a 15-second retrigger cooldown so the
+lifecycle, control, and sync edges of one restart cannot each produce a
+request.
 
 Local bootstrap probing also has exactly one request owner. A CORS `fetch`
 includes its preflight in the same completion path; the client never aborts it
