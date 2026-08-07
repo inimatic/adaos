@@ -4248,6 +4248,7 @@ class SupervisorManager:
     @staticmethod
     def _member_hub_channel_state(runtime: dict[str, Any]) -> dict[str, Any]:
         runtime = runtime if isinstance(runtime, dict) else {}
+        node = runtime.get("node") if isinstance(runtime.get("node"), dict) else {}
         readiness_tree = runtime.get("readiness_tree") if isinstance(runtime.get("readiness_tree"), dict) else {}
         route = readiness_tree.get("route") if isinstance(readiness_tree.get("route"), dict) else {}
         hub_member = readiness_tree.get("hub_member") if isinstance(readiness_tree.get("hub_member"), dict) else {}
@@ -4271,7 +4272,11 @@ class SupervisorManager:
                 if isinstance(member_state.get("assessment"), dict)
                 else None
             ),
-            "connected": bool(hub.get("connected")),
+            "connected": (
+                bool(hub.get("connected"))
+                or bool(node.get("connected_to_hub"))
+                or bool(node.get("connected_to_subnet"))
+            ),
             "transition_state": str(hub.get("transition_state") or "").strip().lower() or None,
             "transition_reason": str(hub.get("transition_reason") or "").strip() or None,
             "hub_url": str(hub.get("hub_url") or "").strip() or None,
@@ -4771,7 +4776,9 @@ class SupervisorManager:
         ):
             return
         self._required_upstream_watchdog_last_poll_at = now
-        role = str(self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        sidecar_role = str(self._sidecar_role() or "").strip().lower()
+        transition_role = str(self._managed_transition_role or "").strip().lower()
+        role = transition_role if transition_role in {"hub", "member"} else sidecar_role
         if role == "member":
             await self._maybe_reconnect_member_hub_from_watchdog()
         else:

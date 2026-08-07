@@ -87,7 +87,11 @@ jobs:
             --junitxml=reports/sdk-fast-junit.xml \
             tests/sdk \
             tests/smoke \
-            tests/test_ci_core_version_bump.py
+            tests/test_ci_core_version_bump.py \
+            tests/test_realtime_sidecar.py \
+            tests/test_supervisor.py \
+            tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_does_not_retain_live_ydoc_on_worker \
+            tests/test_yjs_gateway_phase1.py::test_gateway_transport_snapshot_hands_room_introspection_to_owner_thread
 
       - name: Upload test reports
         if: always()

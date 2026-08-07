@@ -980,10 +980,10 @@ def test_realtime_sidecar_loop_defaults_to_proactor(monkeypatch: pytest.MonkeyPa
     assert realtime_sidecar_mod._sidecar_loop_mode() == "proactor"
 
 
-def test_realtime_sidecar_ws_heartbeat_defaults_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_realtime_sidecar_ws_heartbeat_defaults_to_transport_keepalive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_WS_HEARTBEAT_S", raising=False)
 
-    assert realtime_sidecar_mod._realtime_ws_heartbeat_s() is None
+    assert realtime_sidecar_mod._realtime_ws_heartbeat_s() == 20.0
 
 
 @pytest.mark.asyncio
@@ -1381,7 +1381,7 @@ async def test_realtime_sidecar_remote_connect_uses_ws_ping_and_tcp_keepalive(
 
 
 @pytest.mark.asyncio
-async def test_realtime_sidecar_remote_connect_does_not_inherit_global_ws_heartbeat(
+async def test_realtime_sidecar_remote_connect_uses_own_default_instead_of_global_ws_heartbeat(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     recorded: dict[str, object] = {}
@@ -1405,7 +1405,7 @@ async def test_realtime_sidecar_remote_connect_does_not_inherit_global_ws_heartb
     ws, _target = await server._connect_remote(session_id="rt-test")
     try:
         kwargs = dict(recorded["kwargs"])
-        assert kwargs["ping_interval"] is None
+        assert kwargs["ping_interval"] == 20.0
         assert kwargs["ping_timeout"] is None
     finally:
         await ws.close()
@@ -1934,6 +1934,16 @@ def test_realtime_sidecar_orders_all_quarantined_candidates_by_oldest_quarantine
     monkeypatch.setattr(realtime_sidecar_mod, "resolve_realtime_remote_candidates", lambda: [api, dedicated])
 
     assert realtime_sidecar_mod._available_realtime_remote_candidates() == [dedicated, api]
+
+
+def test_realtime_sidecar_does_not_quarantine_one_close_after_stable_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_STABLE_SESSION_S", "30")
+    details = "ConnectionClosedError: no close frame received or sent code=1006"
+
+    assert realtime_sidecar_mod._should_quarantine_realtime_remote(details, connected_for_s=2.0) is True
+    assert realtime_sidecar_mod._should_quarantine_realtime_remote(details, connected_for_s=337.0) is False
 
 
 def test_realtime_cli_applies_loop_policy_before_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:

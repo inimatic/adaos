@@ -1599,6 +1599,31 @@ def test_member_hub_watchdog_requests_reconnect_when_member_link_is_down(monkeyp
     assert decision["handoff_state"] == "unknown"
 
 
+def test_member_hub_watchdog_accepts_node_connectivity_when_channel_detail_lags(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
+
+    decision = manager._member_hub_watchdog_decision(
+        {
+            "node": {
+                "role": "member",
+                "connected_to_hub": True,
+                "connected_to_subnet": True,
+            },
+            "hub_member_connection_state": {
+                "state": "connected",
+                "hub": {"connected": False},
+            },
+        },
+        now=100.0,
+    )
+
+    assert decision is None
+    assert manager._member_hub_watchdog_last_state == "ready"
+    assert manager._member_hub_watchdog_last_reason == "member-hub link is connected"
+
+
 def test_member_hub_watchdog_uses_runtime_required_upstream_link_context(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -1735,6 +1760,26 @@ def test_required_upstream_link_maintenance_dispatches_to_member_watchdog(monkey
     async def _hub() -> None:
         calls.append("hub")
 
+    monkeypatch.setattr(manager, "_maybe_reconnect_member_hub_from_watchdog", _member)
+    monkeypatch.setattr(manager, "_maybe_reconnect_hub_root_from_watchdog", _hub)
+
+    asyncio.run(manager._maybe_maintain_required_upstream_link())
+
+    assert calls == ["member"]
+
+
+def test_required_upstream_link_maintenance_ignores_active_transition_marker_for_member(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._managed_transition_role = "active"
+    calls: list[str] = []
+
+    async def _member() -> None:
+        calls.append("member")
+
+    async def _hub() -> None:
+        calls.append("hub")
+
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "member")
     monkeypatch.setattr(manager, "_maybe_reconnect_member_hub_from_watchdog", _member)
     monkeypatch.setattr(manager, "_maybe_reconnect_hub_root_from_watchdog", _hub)
 
@@ -4773,9 +4818,10 @@ def test_supervisor_sidecar_status_does_not_query_runtime_reliability(monkeypatc
     diag_path.parent.mkdir(parents=True, exist_ok=True)
     diag_path.write_text(
         json.dumps(
-            {
-                "ts": time.time(),
-                "remote_connected_ago_s": 0.2,
+                {
+                    "ts": time.time(),
+                    "active_session": True,
+                    "remote_connected_ago_s": 0.2,
                 "session_id": "test-session",
                 "remote_url": "ws://root.test/ws",
                 "enablement_policy": {

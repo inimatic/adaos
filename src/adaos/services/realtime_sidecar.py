@@ -139,6 +139,15 @@ def _realtime_remote_quarantine_s() -> float:
     return value
 
 
+def _realtime_remote_stable_session_s() -> float:
+    raw = os.getenv("ADAOS_REALTIME_REMOTE_STABLE_SESSION_S")
+    try:
+        value = float(str(raw or "30").strip() or "30")
+    except Exception:
+        value = 30.0
+    return max(5.0, value)
+
+
 def _realtime_remote_connect_retry_initial_s() -> float:
     raw = os.getenv("ADAOS_REALTIME_REMOTE_CONNECT_RETRY_INITIAL_S")
     try:
@@ -180,9 +189,22 @@ def _realtime_remote_quarantine_key(url: str) -> str:
     return str(normalized or base or "").strip()
 
 
-def _should_quarantine_realtime_remote(details: str) -> bool:
+def _should_quarantine_realtime_remote(
+    details: str,
+    *,
+    connected_for_s: float | None = None,
+) -> bool:
     text = str(details or "").strip().lower()
     if not text:
+        return False
+    # A route that carried a live session for long enough is known-good. One
+    # abnormal close is a recoverable transport interruption, not evidence that
+    # the endpoint itself should be quarantined. An immediate repeat on the new
+    # session remains eligible for quarantine and candidate failover.
+    if (
+        connected_for_s is not None
+        and float(connected_for_s) >= _realtime_remote_stable_session_s()
+    ):
         return False
     return any(
         token in text
@@ -1113,7 +1135,7 @@ def _replace_existing_realtime_listener(host: str, port: int) -> bool:
 def _realtime_ws_heartbeat_s() -> float | None:
     raw = os.getenv("ADAOS_REALTIME_WS_HEARTBEAT_S")
     if raw is None:
-        return None
+        raw = "20"
     try:
         value = float(str(raw).strip() or "0")
     except Exception:
@@ -3129,12 +3151,28 @@ class RealtimeSidecarServer:
             except Exception:
                 pass
             self._stats.last_error = details
-            if remote_url and _should_quarantine_realtime_remote(details):
+            connected_for_s = (
+                max(0.0, time.monotonic() - float(self._stats.remote_connected_at))
+                if self._stats.remote_connected_at is not None
+                else None
+            )
+            quarantine_candidate = _should_quarantine_realtime_remote(details)
+            should_quarantine = _should_quarantine_realtime_remote(
+                details,
+                connected_for_s=connected_for_s,
+            )
+            if remote_url and should_quarantine:
                 _quarantine_realtime_remote(remote_url, details=details)
                 self._stats.remote_quarantine_total = int(self._stats.remote_quarantine_total or 0) + 1
                 self._log(
                     f"remote quarantined url={_realtime_remote_quarantine_key(remote_url)} "
                     f"for={_realtime_remote_quarantine_s():.0f}s err={details}"
+                )
+            elif remote_url and quarantine_candidate:
+                self._log(
+                    f"remote stable session interrupted url={_realtime_remote_quarantine_key(remote_url)} "
+                    f"connected_for={float(connected_for_s or 0.0):.1f}s; reconnecting without quarantine "
+                    f"err={details}"
                 )
             self._log(f"session error id={session_id} err={details}")
         finally:
