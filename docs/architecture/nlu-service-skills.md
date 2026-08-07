@@ -1,7 +1,12 @@
 # NLU as Service Skills
 
+Status: current provider boundary and target lifecycle contract.
+
+Last reviewed: 2026-08-07.
+
 AdaOS treats some NLU components as long-running **service skills** instead of in-process Python modules.
-General service-skill docs: `docs/concepts/service-skills.md`.
+The shared lifecycle and isolation contract is documented in
+[Service Skills](service-skills.md).
 
 ## Why service skills for NLU?
 

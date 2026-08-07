@@ -281,8 +281,8 @@ pretending the action exists.
 
 Relevant documents:
 
-- [NLU Teacher LLM](../concepts/nlu-teacher-llm.md)
-- [NLU Roadmap](../concepts/nlu-roadmap.md)
+- [NLU Teacher LLM](nlu-teacher-llm.md)
+- [NLU Roadmap](nlu-roadmap.md)
 - [Named Entities and Canonical Naming](named-entities.md)
 
 The handoff boundary is:

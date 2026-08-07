@@ -19,8 +19,8 @@ Related documents:
 - [Conversation and Channel Architecture](conversation-and-channel-architecture.md):
   durable conversations, channels, presentation negotiation, reply routing, and
   delivery attempts
-- [NLU Roadmap Checklist](../concepts/nlu-roadmap.md) and
-  [NLU Teacher Evolution Roadmap](../concepts/nlu-evolution-roadmap.md):
+- [NLU Roadmap Checklist](nlu-roadmap.md) and
+  [NLU Teacher Evolution Roadmap](nlu-evolution-roadmap.md):
   NLU runtime, Teacher candidates, promotion, and regression gates
 - [Builder Roadmap](builder-roadmap.md) and
   [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md):

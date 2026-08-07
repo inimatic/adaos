@@ -1,5 +1,9 @@
 # Routing: IO and Skills
 
+Status: current routing baseline and target route-administration contract.
+
+Last reviewed: 2026-08-07.
+
 This document describes how AdaOS routes outgoing UI notifications (IO routing) and how a hub proxies tool calls to members (Skills routing).
 
 ## Router role
@@ -216,7 +220,7 @@ subscription lifecycle, policy checks, and backpressure state. Bulk bytes or
 high-frequency frames should use a dedicated transport, content reference,
 WebRTC/media path, or low-rate legacy polling fallback.
 
-See [Endpoint Infrastructure](../architecture/endpoint-infrastructure.md) for
+See [Endpoint Infrastructure](endpoint-infrastructure.md) for
 the target registry, assignment, command, event, stream, and content contracts.
 
 ## Capacity Reporting

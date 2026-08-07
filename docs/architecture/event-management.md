@@ -1,5 +1,9 @@
 # Event Management
 
+Status: current primer subordinate to the operational event target architecture.
+
+Last reviewed: 2026-08-07.
+
 This document is the high-level event-management primer for AdaOS.
 
 It describes how services, skills, scenarios, browser runtimes, projection
@@ -8,17 +12,17 @@ not duplicate the full projection/Yjs architecture or its delivery roadmap.
 
 Authoritative companion documents:
 
-- [Operational Event Model](../architecture/operational-event-model.md):
+- [Operational Event Model](operational-event-model.md):
   target event taxonomy, projection demand, lifecycle, node scope, platform
   emitters, and Yjs materialization rules.
-- [Operational Event Model Roadmap](../architecture/operational-event-model-roadmap.md):
+- [Operational Event Model Roadmap](operational-event-model-roadmap.md):
   master implementation order for event, projection, browser/runtime, and
   platform-emitter work.
-- [Operational Event Model Reference Plan](../architecture/operational-event-model-reference-plan.md):
+- [Operational Event Model Reference Plan](operational-event-model-reference-plan.md):
   coverage gates and review checklist for implementation slices.
-- [Projection Subscription Roadmap](../architecture/projection-subscription-roadmap.md):
+- [Projection Subscription Roadmap](projection-subscription-roadmap.md):
   detailed client subscription and projection ABI checklist.
-- [Realtime Reliability Roadmap](../architecture/realtime-reliability-roadmap.md):
+- [Realtime Reliability Roadmap](realtime-reliability-roadmap.md):
   transport and ordering prerequisites.
 
 ## Current Implementation Baseline
@@ -483,7 +487,7 @@ When adding a new event:
 ## Roadmap Summary
 
 This file does not own the implementation roadmap. The authoritative ordering
-is in [Operational Event Model Roadmap](../architecture/operational-event-model-roadmap.md).
+is in [Operational Event Model Roadmap](operational-event-model-roadmap.md).
 
 From the current code baseline, the near-term event-management priorities are:
 

@@ -6,7 +6,7 @@
 
 Последняя проверка: 2026-08-07.
 
-Авторитетный источник: [AdaOS Solution Directions](../../product/solution-directions.md).
+Авторитетный источник: [AdaOS Solution Directions](https://inimatic.github.io/adaos/product/solution-directions/).
 
 Сначала прочитайте [Продуктовую модель AdaOS](index.md). Она определяет разницу
 между профилем развёртывания, пакетом решения, агентом решения, endpoint и
@@ -128,7 +128,7 @@ service.
 - manuscript, review и кандидат публикации.
 
 Нормативные исследовательские контракты принадлежат
-[AdaOS Research Fabric](../../architecture/research-fabric.md). aResearcher —
+[AdaOS Research Fabric](https://inimatic.github.io/adaos/architecture/research-fabric/). aResearcher —
 разговорная и визуальная поверхность управления над этими контрактами; он не
 владеет второй базой исследований или отдельной истиной workflow.
 
@@ -347,7 +347,7 @@ capability discovery, commands, events, media, health и revocation. Предм�
 определять контракты, порядок реализации и приёмочные свидетельства внутри
 своих областей.
 
-См. [Roadmap Inventory and Authority Map](../../architecture/roadmap-inventory.md)
+См. [Roadmap Inventory and Authority Map](https://inimatic.github.io/adaos/architecture/roadmap-inventory/)
 для иерархии планирования и
 [Политику языков и перевода документации](../documentation-language-policy.md)
 для правил авторитетности перевода.

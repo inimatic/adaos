@@ -15,7 +15,6 @@ and currently have different maturity levels.
 
 [Documentation](https://inimatic.github.io/adaos/) |
 [Product model](docs/product/index.md) |
-[Russian overview](docs/ru/index.md) |
 [Quickstart](docs/quickstart.md) |
 [Deployment](docs/deployment.md) |
 [Versioning](docs/operations/versioning.md)
@@ -262,10 +261,10 @@ runtime foundation for building, testing, and operating skills, scenarios, and
 node services. Hosted infrastructure, publication workflows, and broader
 operator tooling may evolve in adjacent integration repositories.
 
-English documentation is authoritative. The maintained Russian layer is a
-faithful translation of a small, stable public-facing subset; detailed
-architecture, roadmaps, evidence, CLI, and SDK documentation remain
-English-first. See the
+English documentation is authoritative. Maintained translations cover a
+small, stable public-facing subset; detailed architecture, roadmaps, evidence,
+CLI, and SDK documentation remain English-only and are linked directly from
+translated navigation. See the
 [Documentation Language and Translation Policy](docs/documentation-language-policy.md).
 
 ## License

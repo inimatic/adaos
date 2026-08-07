@@ -1,5 +1,9 @@
 # Context Compression Layer
 
+Status: target architecture with an explicit current implementation baseline.
+
+Last reviewed: 2026-08-07.
+
 This document defines the target AdaOS context compression architecture for
 LLM-facing development, Builder, NLU Teacher, Root MCP, SDK, ABI, and future
 resource-catalog workflows.

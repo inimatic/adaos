@@ -1,5 +1,9 @@
 # NLU Human Verification
 
+Status: current operator checklist with target UI items labeled separately.
+
+Last reviewed: 2026-08-07.
+
 This checklist is the operator-facing control loop for the current AdaOS NLU implementation. It separates what can be verified today from the target Teacher UI that still needs product work.
 
 ## Scope

@@ -329,8 +329,8 @@ Related docs:
 - [Pending Actions](architecture/pending-actions.md)
 - [AdaOS Builder](architecture/builder.md)
 - [Builder Roadmap](architecture/builder-roadmap.md)
-- [NLU in AdaOS](concepts/nlu.md)
-- [NLU Teacher MVP](concepts/nlu-teacher-llm.md)
+- [NLU in AdaOS](architecture/nlu.md)
+- [NLU Teacher MVP](architecture/nlu-teacher-llm.md)
 - [Root MCP Roadmap](architecture/root-mcp-roadmap.md)
 - [SDK IO](sdk/io.md)
 - [LLM Skill Development](guides/llm-skill-development.md)
@@ -429,9 +429,9 @@ Related docs:
 
 - [Model Runtime and Registry](architecture/model-runtime-and-registry.md)
 - [Model Runtime Roadmap](architecture/model-runtime-roadmap.md)
-- [NLU Target Architecture](concepts/nlu-target-architecture.md)
-- [NLU Roadmap Checklist](concepts/nlu-roadmap.md)
-- [NLU Service Skills](concepts/nlu-service-skills.md)
+- [NLU Target Architecture](architecture/nlu-target-architecture.md)
+- [NLU Roadmap Checklist](architecture/nlu-roadmap.md)
+- [NLU Service Skills](architecture/nlu-service-skills.md)
 
 ## Milestone M8: Root Governance And Builder Tooling
 

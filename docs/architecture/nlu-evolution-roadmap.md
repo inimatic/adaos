@@ -1,5 +1,9 @@
 # NLU Teacher Evolution Roadmap
 
+Status: active use-case-gated roadmap.
+
+Last reviewed: 2026-08-07.
+
 This document is the use-case-gated roadmap for controlled AdaOS NLU
 evolution. It does not replace the detailed technical checklist in
 [nlu-roadmap.md](./nlu-roadmap.md) or the runtime contract notes in
@@ -20,17 +24,17 @@ replayable and auditable.
 
 ## Reading Order
 
-- [Governed Evolution](../architecture/governed-evolution.md): cross-domain
+- [Governed Evolution](governed-evolution.md): cross-domain
   boundary between NLU, Support intake, AdaOS Issues, Builder, and runtime
   evidence.
 - This document: vertical use-case gates and acceptance criteria.
 - [nlu-roadmap.md](./nlu-roadmap.md): detailed backlog by architecture lane.
 - [nlu-teacher-llm.md](./nlu-teacher-llm.md): current Teacher implementation
   contract, APIs, prompt boundaries, and apply flow.
-- [Builder](../architecture/builder.md) and
-  [Builder Roadmap](../architecture/builder-roadmap.md): handoff when a
+- [Builder](builder.md) and
+  [Builder Roadmap](builder-roadmap.md): handoff when a
   descriptor or capability is missing.
-- [Conversational Control Interface](../architecture/conversational-interface.md):
+- [Conversational Control Interface](conversational-interface.md):
   shared input/output contract, NLU data lifecycle, Builder promotion boundary,
   and conversation-story tests.
 

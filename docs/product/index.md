@@ -5,8 +5,6 @@ not claim that every named solution is implemented or commercially available.
 
 Last reviewed: 2026-08-07.
 
-Russian translation: [Продуктовая модель AdaOS](/ru/product/).
-
 ## Purpose
 
 AdaOS is a local-first platform for building and operating distributed
@@ -158,7 +156,7 @@ managed deployment, channel, and network boundaries are also governed by
 
 ## Documentation Authority
 
-English documentation is authoritative. The maintained Russian product pages
-are faithful translations of this stable public-facing layer; architecture,
-roadmaps, evidence, and implementation references remain English-first. See
+English documentation is authoritative. Maintained translations of this
+stable public-facing layer preserve the same product meaning; architecture,
+roadmaps, evidence, and implementation references remain English-only. See
 [Documentation Language and Translation Policy](../documentation-language-policy.md).

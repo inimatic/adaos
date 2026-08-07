@@ -17,7 +17,7 @@ the authority map when scopes overlap.
 | Conversations, channels, pending actions | [Conversation and Channel Architecture](conversation-and-channel-architecture.md), [Pending Actions](pending-actions.md), [Channel Semantics](channel-semantics.md) | routing, context, approval, reconnect, and ownership tests |
 | Devices, browsers, identity, access, onboarding | [Device Access and Browsers](device-access-and-browsers.md), [Personalization, Identity, and Access](personalization-identity-access.md), [Security](security.md) | access-policy, pairing/join, revocation, and browser-session tests |
 | Realtime sidecar, supervisor, routing, media | [AdaOS Realtime Sidecar](adaos-realtime-sidecar.md), [AdaOS Supervisor](adaos-supervisor.md), [Realtime Reliability Roadmap](realtime-reliability-roadmap.md) | reliability tests, bounded soak, recovery and stand evidence |
-| NLU, named entities, model runtime | [NLU Target Architecture](../concepts/nlu-target-architecture.md), [Named Entities](named-entities.md), [Model Runtime and Registry](model-runtime-and-registry.md) | resolver/evaluation, artifact-contract, privacy, and fallback tests |
+| NLU, named entities, model runtime | [NLU Target Architecture](nlu-target-architecture.md), [Named Entities](named-entities.md), [Model Runtime and Registry](model-runtime-and-registry.md) | resolver/evaluation, artifact-contract, privacy, and fallback tests |
 
 ## Change Discipline
 

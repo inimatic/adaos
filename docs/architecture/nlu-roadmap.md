@@ -1,5 +1,9 @@
 # NLU Roadmap Checklist
 
+Status: active domain roadmap and technical checklist.
+
+Last reviewed: 2026-08-07.
+
 Current runtime implementation estimate: **97%** for the practical AdaOS NLU
 pipeline and provider boundary. The target NLU Teacher architecture is tracked
 separately below because it adds candidate state, correction threads, MCP
@@ -22,7 +26,7 @@ is the master-detail entry point for controlled evolution: each implementation
 slice should close a replayable user loop before broadening the surface. This
 document remains the detailed technical checklist behind those gates.
 
-[Conversational Control Interface](../architecture/conversational-interface.md)
+[Conversational Control Interface](conversational-interface.md)
 owns the cross-domain conversational input/output contract, NLU data boundary,
 Teacher-to-Builder promotion path, and conversation-story test model. This NLU
 roadmap owns provider/runtime and Teacher implementation work inside that
@@ -263,7 +267,7 @@ below remain useful for tracking existing implementation work.
 ### A. Contracts and State Model
 
 - [ ] `[must]` Align NLU proposal records with the
-  [Conversational Control Interface](../architecture/conversational-interface.md):
+  [Conversational Control Interface](conversational-interface.md):
   NLU outputs `IntentProposal` evidence, not protected effects or direct source
   mutations. Pure proposal/invocation builders exist, but the legacy event
   pipeline still emits `nlp.intent.detected` directly and must be migrated.
@@ -826,7 +830,7 @@ below remain useful for tracking existing implementation work.
   candidates when a skill/scenario capability exists but is invisible or
   underspecified for NLU/MCP.
 - [ ] `[must]` Represent missing capabilities as `development_task`
-  candidates for the future [Builder](../architecture/builder.md) workflow, with requested behavior,
+  candidates for the future [Builder](builder.md) workflow, with requested behavior,
   likely owner, missing surface, evidence, and replay phrase.
 - [ ] `[should]` Link completed skill/scenario development tasks back to the
   original NLU request and rerun the phrase through the normal pipeline.
@@ -953,7 +957,7 @@ below remain useful for tracking existing implementation work.
 
 ## Cross-Lane Human Verification Gates
 
-- [x] `[must]` Current implemented behavior has a manual checklist: [nlu-human-verification.md](./nlu-human-verification.md).
+- [x] `[must]` Current implemented behavior has a manual checklist: [NLU Human Verification](../guides/nlu-human-verification.md).
 - [x] `[must]` Documentation marks which NLU Teacher behaviors are current UI, backend/API only, or target architecture.
 - [x] `[must]` NLU Teacher UI has a Signals tab backed by `data.nlu_teacher.workbench_signals` for queue, quarantine, LLM error, skip, and acquired-understanding monitoring.
 - [x] `[must]` NLU Teacher Signals accordion opens details inline without also opening
@@ -1013,7 +1017,7 @@ below remain useful for tracking existing implementation work.
 - [x] `[must]` Add regression tests proving alias and device-name changes do not require
   Rasa/neural retraining.
 - [x] `[must]` Track the full target design in
-  [Named Entities and Canonical Naming](../architecture/named-entities.md).
+  [Named Entities and Canonical Naming](named-entities.md).
 - [x] `[must]` Feed canonicalized text and entity evidence into the neural provider
   contract.
 - [ ] `[could]` Ensure Rasa and neural training fingerprints exclude runtime aliases by

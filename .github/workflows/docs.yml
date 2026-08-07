@@ -2,9 +2,20 @@
 name: docs
 
 on:
-  schedule:
-    - cron: "37 3 */5 * *"
+  push:
+    branches: [rev2026]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: true
+        default: "rev2026"
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +34,7 @@ jobs:
       - name: Checkout (full history for git dates)
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
 
       - name: Install Graphviz (dot)

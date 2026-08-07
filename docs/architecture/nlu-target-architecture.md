@@ -1,9 +1,13 @@
 # NLU Target Architecture (Neural Intent Detector)
 
+Status: target provider architecture subordinate to conversational control.
+
+Last reviewed: 2026-08-07.
+
 This document defines the provider architecture for integrating a neural intent
 detector (reference: `Fla1lx/neural-network-module-for-determining-user-intent`)
 into AdaOS. It is subordinate to the
-[Conversational Control Interface](../architecture/conversational-interface.md):
+[Conversational Control Interface](conversational-interface.md):
 providers contribute interpretation evidence, while `IntentProposal`, workflow
 admission, and `ConversationOutput` remain the end-to-end authority contracts.
 

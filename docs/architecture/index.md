@@ -13,6 +13,12 @@ solution packs, and deployment profiles are defined by the
 [AdaOS Product Model](../product/index.md), not by individual architecture
 pages.
 
+The [Documentation Structure and Authority](../documentation-structure.md)
+policy defines the boundary between architecture, roadmaps, guides, reference,
+and dated evidence. The former generic `concepts` category is retired: current
+material belongs to an owning context and obsolete drafts remain only in Git
+history.
+
 ## Main runtime building blocks
 
 - `src/adaos/apps`: CLI, API server, launchers, and process entry points
@@ -45,6 +51,10 @@ Current target-state control-plane extensions are documented in:
 - [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md): MoSCoW implementation sequence from the metamodel and TransitionDescriptor through LLM authoring admission, package-bound definitions, negotiated interactions, Builder/Project proof, async recovery, and only then evidence-gated persistence choices
 - [Governed Workflow Runtime Inventory](governed-workflow-runtime-inventory.md): owner and migration disposition for durable/ad-hoc workflow state, pending responses, retry loops, background task registries, state files, and transport surfaces that must stay distinct from workflow truth
 - [Conversational Control Interface](conversational-interface.md): target contract for conversational input, semantic output, NLU data boundaries, Teacher-to-Builder promotion, conversational artifact packaging, and conversation-story tests
+- [NLU Runtime](nlu.md): current production direction, provider boundaries, event flow, trace, data ownership, and Teacher fallback
+- [NLU Target Architecture](nlu-target-architecture.md): provider architecture and target decision policy for neural intent detection
+- [NLU Teacher](nlu-teacher-llm.md): governed clarification, authoring, validation, persistence, and promotion contract
+- [NLU Teacher Evolution Roadmap](nlu-evolution-roadmap.md) and [NLU Roadmap Checklist](nlu-roadmap.md): use-case gates and detailed sequencing owned by the NLU architecture
 - [AdaOS Product Terminology](product-terminology.md): product-facing terms and compatibility rules for Assistant, Webspace, Application, Device, Agent, Skill, Widget/Panel, Interface, and Catalog
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
@@ -61,6 +71,7 @@ Current target-state control-plane extensions are documented in:
 - [Operational Event Model](operational-event-model.md): target event, demand, lifecycle, and Yjs materialization contract for browser-facing projections
 - [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md): master implementation order across communication, runtime contracts, Yjs shape, client adapters, platform emitters, and skill pilots
+- [Event Management](event-management.md): current event envelope and local-bus primer subordinate to the operational event model
 - [Roadmap Inventory and Authority Map](roadmap-inventory.md): ownership rules and index for cross-domain, MVP, domain, and execution planning
 - [Model Runtime and Registry](model-runtime-and-registry.md): target model execution, artifact registry, local/remote backend, session, and job architecture for neural and external model-backed skills
 - [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots
@@ -72,6 +83,7 @@ Current target-state control-plane extensions are documented in:
 - [Skill Projection Runtime SDK](skill-projection-runtime-sdk.md): target SDK/core rails for projection slots, stream receivers, dirty routing, fingerprinted Yjs writes, and skill migration checklists
 - [Root MCP Foundation](root-mcp-foundation.md): root-hosted agent-facing foundation for future MCP development and operations surfaces
 - [Root MCP Roadmap](root-mcp-roadmap.md): sequencing for planes, descriptor cache, session leases, and companion slices such as `ProfileOps`
+- [Context Compression Layer](context-compression.md): lossless machine contracts, compact model views, drill-down, token budgets, and validation for LLM-facing surfaces
 - [AdaOS Supervisor](adaos-supervisor.md): local always-on process and update supervision authority above the restartable runtime
 - [Runtime Guarding](runtime-guarding.md): target shared guard architecture and roadmap for memory, CPU, Yjs pressure, HTTP health, skill overload, quarantine, supervisor hard safety, and diagnostic snapshots
 - [Realtime Rebuild Lag Hardening](realtime-rebuild-lag-hardening.md): implemented coalescing, deferral, activation-admission, YStore, and event-loop lag diagnostics for rebuild and stream snapshot storms
@@ -89,6 +101,8 @@ Current target-state control-plane extensions are documented in:
 - [Personalization Phase 4 Current-User Settings API and Browser UI](personalization-identity-access-phase4-current-user-ui.md): implemented runtime API and browser header/settings panel for current-user profile/preferences with role/membership read-only
 - [Personalization Phase 5 AdaOS Connect Join UX and Link Management](personalization-identity-access-phase5-connect-join-ux.md): implemented browser/API vertical slice for guest links, targeted invites, public preview/claim, link listing, and access-link revocation
 - [Endpoint Infrastructure](endpoint-infrastructure.md): target architecture for ReDevice/browser endpoints, endpoint registry, assignments, router-owned commands, events, streams, and the Yjs boundary
+- [Routing](routing.md): semantic route administration for IO, browser delivery, endpoint capacity, and member-hosted skills
+- [Service Skills](service-skills.md): lifecycle, isolation, health, and self-management contract for managed external processes
 - [Endpoint Audio Service](endpoint-audio-service.md): target architecture for endpoint audio sessions, activation, STT routing, Bluetooth audio, dialog/dictation modes, and audio transport policy
 - [Device Access Roadmap](device-access-roadmap.md): recommended migration order from bootstrap-only links and ad hoc UI actions to a shared access-link control plane
 - [Post-Deploy E2E Testing](post-deploy-e2e-testing.md): target post-deploy browser E2E architecture, evidence bundle model, runtime-contract checks, and roadmap toward rollout gates

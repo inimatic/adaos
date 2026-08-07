@@ -8,7 +8,7 @@ AdaOS — local-first платформа для создания и эксплу
 webspaces, контракты интеграции устройств и браузеров, а также управляемый
 жизненный цикл артефактов, на которых строятся решения AdaOS.
 
-Авторитетный источник: [AdaOS documentation home](../index.md).
+Авторитетный источник: [AdaOS documentation home](https://inimatic.github.io/adaos/).
 
 ## Одна платформа, несколько направлений решений
 
@@ -69,29 +69,30 @@ AdaOS Core
 
 Подробное соответствие продуктовой и технической терминологии находится в
 английском документе
-[AdaOS Product Terminology](../architecture/product-terminology.md).
+[AdaOS Product Terminology](https://inimatic.github.io/adaos/architecture/product-terminology/).
 
 ## Выберите путь
 
 | Цель | С чего начать |
 | --- | --- |
 | Понять AdaOS и области применения | [Продуктовая модель](product/index.md) и [Направления решений](product/solution-directions.md) |
-| Установить и запустить локальную среду разработки | [Quickstart](../quickstart.md) |
-| Развернуть или эксплуатировать узел | [Deployment](../deployment.md) и [Runtime and Operations](../cli/runtime.md) |
-| Создать skill или scenario | [Skills](../skills.md), [Scenarios](../scenarios.md) и [SDK](../sdk/index.md) |
-| Понять реализованный runtime | [Architecture Overview](../architecture/index.md) |
-| Понять долгосрочную модель управляемого развития | [Governed Evolution](../architecture/governed-evolution.md) |
-| Найти текущий источник планирования | [Roadmap Inventory](../architecture/roadmap-inventory.md) и [Issue Tracker](../issue-tracker.md) |
-| Проверить Builder end to end | [Builder Verification Guide](../guides/builder-verification.md) |
+| Установить и запустить локальную среду разработки | [Quickstart](https://inimatic.github.io/adaos/quickstart/) |
+| Развернуть или эксплуатировать узел | [Deployment](https://inimatic.github.io/adaos/deployment/) и [Runtime and Operations](https://inimatic.github.io/adaos/cli/runtime/) |
+| Создать skill или scenario | [Skills](https://inimatic.github.io/adaos/skills/), [Scenarios](https://inimatic.github.io/adaos/scenarios/) и [SDK](https://inimatic.github.io/adaos/sdk/) |
+| Понять реализованный runtime | [Architecture Overview](https://inimatic.github.io/adaos/architecture/) |
+| Понять долгосрочную модель управляемого развития | [Governed Evolution](https://inimatic.github.io/adaos/architecture/governed-evolution/) |
+| Найти текущий источник планирования | [Roadmap Inventory](https://inimatic.github.io/adaos/architecture/roadmap-inventory/) и [Issue Tracker](https://inimatic.github.io/adaos/issue-tracker/) |
+| Проверить Builder end to end | [Builder Verification Guide](https://inimatic.github.io/adaos/guides/builder-verification/) |
 
 ## Статус и язык документации
 
 Текущее поведение, целевая архитектура, пункты дорожных карт и записи
 свидетельств намеренно разделены. Прежде чем считать проект или чеклист
 реализованным поведением, проверьте статус страницы и
-[Roadmap Inventory](../architecture/roadmap-inventory.md).
+[Roadmap Inventory](https://inimatic.github.io/adaos/architecture/roadmap-inventory/).
 
-Авторитетна английская документация. Русская документация — поддерживаемый
-перевод небольшого стабильного публичного слоя; подробные технические страницы
-остаются англоязычными и могут показываться в русской локали как fallback. См.
+Авторитетна английская документация. Поддерживаемые переводы охватывают
+небольшой стабильный публичный слой. Русская навигация ведёт прямо в
+англоязычные технические разделы, не публикуя fallback-копии под русскими URL.
+См.
 [Политику языков и перевода документации](documentation-language-policy.md).

@@ -4,8 +4,6 @@ Status: normative documentation policy.
 
 Last reviewed: 2026-08-07.
 
-Russian translation: [Политика языков и перевода](/ru/documentation-language-policy/).
-
 ## Decision
 
 English is the authoritative language for AdaOS documentation. Product
@@ -21,20 +19,21 @@ If English and Russian text disagree, the English source is authoritative.
 
 ## Russian Coverage Boundary
 
-The maintained Russian translation contains only:
+The maintained Russian translation contains only these paths:
 
-| English authority | Russian translation |
+| English authority | Translation path |
 | --- | --- |
-| [Documentation home](index.md) | [Главная](/ru/) |
-| [Product Model](product/index.md) | [Продуктовая модель](/ru/product/) |
-| [Solution Directions](product/solution-directions.md) | [Направления решений](/ru/product/solution-directions/) |
-| [This policy](documentation-language-policy.md) | [Эта политика](/ru/documentation-language-policy/) |
+| [Documentation home](index.md) | `ru/index.md` |
+| [Product Model](product/index.md) | `ru/product/index.md` |
+| [Solution Directions](product/solution-directions.md) | `ru/product/solution-directions.md` |
+| [This policy](documentation-language-policy.md) | `ru/documentation-language-policy.md` |
 
 Architecture, roadmaps, evidence records, CLI and SDK references, detailed
-guides, and implementation notes remain English-only. The documentation site
-may show those English pages while the Russian locale is active. That fallback
-is intentional: an authoritative English page is safer than an incomplete or
-stale parallel translation.
+guides, and implementation notes remain English-only. The Russian navigation
+links directly to those canonical English sections; it does not generate
+English fallback copies under Russian URLs. This keeps language boundaries
+visible and prevents an English page from masquerading as a maintained
+translation.
 
 The boundary is owned here, in the English source tree. Russian pages must not
 define their own coverage rules.
@@ -57,7 +56,12 @@ A maintained Russian page must:
 A Russian page may adapt sentence structure and terminology for natural
 Russian, but it must not become a summary with a different scope. If a source
 page changes too frequently to support a faithful low-maintenance translation,
-the Russian file should be removed and the site should fall back to English.
+the Russian file should be removed and the Russian navigation should link
+directly to the English page.
+
+Translation discovery belongs to the language selector in the site header.
+Pages must not add recurring inline translation notices or maintain
+language-by-language link lists in their content.
 
 ## Promoting Useful Russian Material
 

@@ -41,7 +41,7 @@ This note covers:
 
 For current implementation details see also:
 
-- [Scenarios and Target State](../concepts/scenarios-target-state.md)
+- [Governed Data-Driven Workflow Model](governed-workflow-runtime.md)
 - the repository note `docs/interfaces/webio.md`
 - [UI Addressing](ui-addressing.md)
 - [Web UI Architecture](web-ui-architecture.md)

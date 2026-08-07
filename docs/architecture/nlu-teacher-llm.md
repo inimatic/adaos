@@ -1,5 +1,9 @@
 # NLU Teacher (LLM) MVP
 
+Status: current MVP contract plus explicitly labeled target evolution.
+
+Last reviewed: 2026-08-07.
+
 This document describes the minimal teacher-in-the-loop implementation for AdaOS NLU.
 Use [nlu-evolution-roadmap.md](./nlu-evolution-roadmap.md) as the delivery
 sequence: every Teacher implementation slice should close a replayable
@@ -617,7 +621,7 @@ deferred entries. These are read-only diagnostics.
 ## Human verification contract
 
 The current implementation is considered verifiable only when the operator can reproduce the result through tests/API and, where available,
-the current UI. The checklist lives in [nlu-human-verification.md](./nlu-human-verification.md).
+the current UI. The checklist lives in [NLU Human Verification](../guides/nlu-human-verification.md).
 
 Minimum acceptance for every NLU slice:
 
@@ -771,7 +775,7 @@ The teacher should classify every actionable phrase into one of these classes be
   It should produce a named-entity patch, not a new intent.
 - `nlu_correction`: the phrase corrects a previous NLU miss or false positive. It must be linked to the previous request/candidate and should
   prefer patching an existing template.
-- `development_task`: the user asks for behavior that does not exist yet. The teacher should create a task/candidate for the [Builder](../architecture/builder.md)
+- `development_task`: the user asks for behavior that does not exist yet. The teacher should create a task/candidate for the [Builder](builder.md)
   to modify an existing skill/scenario or create a new one. It should not pretend the capability exists.
 - `non_actionable`: the utterance is chat/noise/out of scope. The teacher should not mutate training data.
 

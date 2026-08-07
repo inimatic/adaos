@@ -98,8 +98,8 @@ NLU identifies the meaning and target of an utterance. NLU Teacher improves
 recognition and distinguishes a descriptor correction from a missing
 capability. It may propose `descriptor_fix`, `development_task`, or other typed
 candidates, but it does not own development execution. Its current contracts
-remain defined by [NLU Teacher LLM](../concepts/nlu-teacher-llm.md) and the
-[NLU Roadmap](../concepts/nlu-roadmap.md).
+remain defined by [NLU Teacher LLM](nlu-teacher-llm.md) and the
+[NLU Roadmap](nlu-roadmap.md).
 
 ### Support Agent
 
@@ -387,7 +387,7 @@ Authoritative execution detail remains in:
 - [Roadmap Inventory](roadmap-inventory.md) for roadmap ownership and status;
 - [Builder Roadmap](builder-roadmap.md) for Builder readiness and gates;
 - [Skill Factory](skill-factory.md) for isolated autonomous realization;
-- [NLU Roadmap](../concepts/nlu-roadmap.md) for understanding and Teacher
+- [NLU Roadmap](nlu-roadmap.md) for understanding and Teacher
   handoffs;
 - [Incident Registry](incident-registry.md) and
   [Operational Event Model Roadmap](operational-event-model-roadmap.md) for

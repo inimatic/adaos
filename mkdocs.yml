@@ -40,77 +40,41 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/inimatic/adaos
-  alternate:
-    - name: English
-      link: /
-      lang: en
-    - name: Русский
-      link: /ru/
-      lang: ru
 
 plugins:
   - search:
       lang: [en, ru]
   - i18n:
       docs_structure: folder
+      fallback_to_default: false
       languages:
         - locale: en
           name: English
           default: true
         - locale: ru
           name: Русский
-          nav_translations:
-            Home: Главная
-            Product: Продукт
-            Product Model: Продуктовая модель
-            Solution Directions: Направления решений
-            Documentation Language Policy: Язык и перевод документации
-            Quickstart: Быстрый старт
-            Architecture: Архитектура
-            Overview: Обзор
-            Runtime Overview: Обзор runtime
-            Layers: Слои
-            Agent Context: Agent Context
-            Security: Безопасность
-            CLI: CLI
-            API Service: API-сервис
-            Runtime And Operations: Runtime и операции
-            SDK: SDK
-            Bus: Bus
-            Context: Context
-            Decorators: Decorators
-            Adapters: Adapters
-            Control Plane: Control Plane
-            Skills: Навыки
-            Scenarios: Сценарии
-            DevPortal: DevPortal
-            Roadmap: Дорожная карта
-            Concepts: Концепции
-            Codebase: Кодовая база
-            Web Client: Веб клиент
-            User Interface: Интерфейс пользователя
-            Personalization: Профиль пользователя
-            LLM DevOps Stages: Этапы LLM DevOps
-            LLM DevOps Preparation: Этапы LLM DevOps - подготовка
-            Root MCP Foundation: Root MCP Foundation
-            NLU: Интерпретация намерений
-            NLU Target Architecture: Целевая архитектура NLU
-            NLU Teacher: NLU Teacher
-            Device Initialization: Инициализация устройства
-            Event Management: Управление событиями
-            Data Management: Управление данными
-            AdaOS Resource Locator: AdaOS Resource Locator
-            Context Compression: Компрессия контекста
-            Scenario Concepts: Сценарии
-            Skills And Scenarios: Навыки и сценарии
-            Dev Scenarios: Dev-сценарии
-            Scenario Start: Старт сценария
-            Scenario Runtime: Runtime сценария
-            First Launch Scenario: Первый запуск сценария
-            Scenario Target State: Сценарии и целевое состояние
-            Guides: Руководства
-            Builder Scenario Development: Разработка сценариев через Builder
-            Builder Verification: Проверка Builder
+          nav:
+            - Главная: index.md
+            - Продукт:
+                - Продуктовая модель: product/index.md
+                - Направления решений: product/solution-directions.md
+                - Язык и перевод документации: documentation-language-policy.md
+            - Английская документация:
+                - Home: https://inimatic.github.io/adaos/
+                - Documentation Structure: https://inimatic.github.io/adaos/documentation-structure/
+                - Issue Tracker: https://inimatic.github.io/adaos/issue-tracker/
+                - Quickstart: https://inimatic.github.io/adaos/quickstart/
+                - Deployment: https://inimatic.github.io/adaos/deployment/
+                - Operations: https://inimatic.github.io/adaos/cli/runtime/
+                - Architecture: https://inimatic.github.io/adaos/architecture/
+                - CLI: https://inimatic.github.io/adaos/cli/
+                - SDK: https://inimatic.github.io/adaos/sdk/
+                - IO: https://inimatic.github.io/adaos/interfaces/overview/
+                - Skills: https://inimatic.github.io/adaos/skills/
+                - Scenarios: https://inimatic.github.io/adaos/scenarios/
+                - DevPortal: https://inimatic.github.io/adaos/devportal/
+                - Guides: https://inimatic.github.io/adaos/guides/testing/
+                - Roadmaps: https://inimatic.github.io/adaos/architecture/roadmap-inventory/
   - git-revision-date-localized:
       enable_creation_date: true
       enable_git_follow: false
@@ -130,6 +94,7 @@ extra_css:
 
 extra_javascript:
   - https://cdn.jsdelivr.net/gh/rod2ik/cdn@main/mkjavascripts/mkdocs-graphviz.js
+  - https://unpkg.com/mermaid@11.4.1/dist/mermaid.min.js
 
 markdown_extensions:
   - admonition
@@ -148,7 +113,13 @@ markdown_extensions:
       emoji_generator: !!python/name:materialx.emoji.to_svg
   - pymdownx.arithmatex:
       generic: true
-  - pymdownx.superfences
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
 
 nav:
   - Home: index.md
@@ -156,6 +127,7 @@ nav:
       - Product Model: product/index.md
       - Solution Directions: product/solution-directions.md
       - Documentation Language Policy: documentation-language-policy.md
+      - Documentation Structure and Authority: documentation-structure.md
   - Issue Tracker: issue-tracker.md
   - Quickstart: quickstart.md
   - Deployment: deployment.md
@@ -173,6 +145,12 @@ nav:
       - Governed Data-Driven Workflow Model and Interaction Architecture: architecture/governed-workflow-runtime.md
       - Governed Data-Driven Workflow Model Roadmap: architecture/governed-workflow-runtime-roadmap.md
       - Conversational Control Interface: architecture/conversational-interface.md
+      - NLU Runtime: architecture/nlu.md
+      - NLU Target Architecture: architecture/nlu-target-architecture.md
+      - NLU Teacher: architecture/nlu-teacher-llm.md
+      - NLU Service Skills: architecture/nlu-service-skills.md
+      - NLU Teacher Evolution Roadmap: architecture/nlu-evolution-roadmap.md
+      - NLU Roadmap: architecture/nlu-roadmap.md
       - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
       - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
       - Artifact Pipeline Local Evidence 2026-07-24: architecture/artifact-pipeline-local-evidence-2026-07-24.md
@@ -200,6 +178,7 @@ nav:
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
+      - Context Compression: architecture/context-compression.md
       - Skill Factory: architecture/skill-factory.md
       - Builder: architecture/builder.md
       - Builder Conversational Development: architecture/builder-conversational-development.md
@@ -212,6 +191,9 @@ nav:
       - Registry Marketplace And Operations: architecture/registry-marketplace-operations-roadmap.md
       - Device Access and Browsers: architecture/device-access-and-browsers.md
       - Device Access Roadmap: architecture/device-access-roadmap.md
+      - Routing: architecture/routing.md
+      - Service Skills: architecture/service-skills.md
+      - Event Management: architecture/event-management.md
       - Personalization Identity Access: architecture/personalization-identity-access.md
       - Personalization Identity Access Roadmap: architecture/personalization-identity-access-roadmap.md
       - Personalization Phase 0 Contracts: architecture/personalization-identity-access-phase0-contracts.md
@@ -246,6 +228,7 @@ nav:
   - Guides:
       - Builder Scenario Development: guides/builder-scenario-development.md
       - Builder Verification: guides/builder-verification.md
+      - NLU Human Verification: guides/nlu-human-verification.md
       - Testing: guides/testing.md
   - Roadmap:
       - Planning Authority: architecture/roadmap-inventory.md
@@ -254,28 +237,5 @@ nav:
       - MVP Roadmap: mvp_roadmap.md
       - Historical Roadmap (2025): roadmap.md
       - Historical LLM Skill Creation: llm-skill-creation-roadmap.md
-  - Changelog: changelog.md
-  - Concepts:
-      - Codebase: concepts/codeflow.md
-      - Web Client: concepts/web-client.md
-      - User Interface: concepts/ui.md
-      - Personalization: concepts/personalization.md
-      - LLM DevOps Stages: concepts/dev_stages.md
-      - LLM DevOps Preparation: concepts/dev_stage_prepare.md
-      - NLU: concepts/nlu.md
-      - NLU Target Architecture: concepts/nlu-target-architecture.md
-      - NLU Teacher: concepts/nlu-teacher-llm.md
-      - Device Initialization: concepts/init_device.md
-      - Event Management: concepts/event_mgmnt.md
-      - AdaOS Resource Locator: concepts/arl.md
-      - Context Compression: concepts/context_compression.md
-      - Scenario Concepts:
-          - Skills And Scenarios: concepts/skills-and-scenarios.md
-          - Dev Scenarios: concepts/dev-scenarios.md
-          - Scenario Start: concepts/start_scenario.md
-          - Scenario Runtime: concepts/scenario-procedural-runtime.md
-          - First Launch Scenario: concepts/scenario-first-launch.md
-          - Scenario Target State: concepts/scenarios-target-state.md
-
 copyright: |
   &copy; 2026 AdaOS

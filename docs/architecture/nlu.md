@@ -1,5 +1,9 @@
 # NLU in AdaOS
 
+Status: current runtime direction with explicitly labeled future work.
+
+Last reviewed: 2026-08-07.
+
 This document describes the current production MVP direction for intent detection in AdaOS.
 
 For the controlled-evolution sequence of NLU Teacher, voice capabilities,
@@ -242,7 +246,7 @@ AdaOS records NLU decisions as a stage trace so the UI can explain why a phrase 
   - response: `intent`, `confidence`, `slots`, `entities`, `intent_ranking`, `stages`
 
 The implementation checklist is tracked in [nlu-roadmap.md](./nlu-roadmap.md).
-Human verification steps are tracked in [nlu-human-verification.md](./nlu-human-verification.md).
+Human verification steps are tracked in [NLU Human Verification](../guides/nlu-human-verification.md).
 
 ## Dynamic lookup tables
 
@@ -288,7 +292,7 @@ Target behavior:
   than display strings.
 
 The target architecture and roadmap are documented in
-[Named Entities and Canonical Naming](../architecture/named-entities.md).
+[Named Entities and Canonical Naming](named-entities.md).
 
 ## NLU data ownership
 
@@ -437,7 +441,7 @@ Required UI expansion:
 - Current-template view with stable ids so the operator can correct existing templates instead of creating duplicates.
 
 Until this UI expansion lands, the current implementation is human-verifiable through API/CLI using
-[nlu-human-verification.md](./nlu-human-verification.md).
+[NLU Human Verification](../guides/nlu-human-verification.md).
 
 ## Deterministic matcher storage (current contract)
 

@@ -5,8 +5,6 @@ hypotheses at different maturity levels, not a single delivery commitment.
 
 Last reviewed: 2026-08-07.
 
-Russian translation: [Направления решений AdaOS](/ru/product/solution-directions/).
-
 Read [AdaOS Product Model](index.md) first. It defines the difference between a
 deployment profile, solution pack, solution agent, endpoint, and channel.
 

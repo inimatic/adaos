@@ -181,7 +181,7 @@ Primary references:
 - [Root MCP Foundation](root-mcp-foundation.md)
 - [Root MCP Roadmap](root-mcp-roadmap.md)
 - [Conversation and Channel Architecture](conversation-and-channel-architecture.md)
-- [NLU Roadmap](../concepts/nlu-roadmap.md)
+- [NLU Roadmap](nlu-roadmap.md)
 - [Roadmap Inventory](roadmap-inventory.md)
 
 ## Phase 2. Task And Candidate Model
@@ -218,8 +218,8 @@ Open work:
 
 Primary references:
 
-- [NLU Teacher LLM](../concepts/nlu-teacher-llm.md)
-- [NLU Roadmap](../concepts/nlu-roadmap.md)
+- [NLU Teacher LLM](nlu-teacher-llm.md)
+- [NLU Roadmap](nlu-roadmap.md)
 - [Operational Event Model](operational-event-model.md)
 
 ## Phase 3. Draft Generation Rails
@@ -1851,7 +1851,7 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Roadmap Inventory](roadmap-inventory.md): current cross-roadmap status
 - [Root MCP Roadmap](root-mcp-roadmap.md): descriptor, plane, session, and MCP
   readiness
-- [NLU Roadmap](../concepts/nlu-roadmap.md): Teacher, clarification,
+- [NLU Roadmap](nlu-roadmap.md): Teacher, clarification,
   descriptor fix, development task, and NLU authoring gates
 - [Skill Runtime Lifecycle](../skill_runtime.md): skill prepare/test/activate
   lifecycle

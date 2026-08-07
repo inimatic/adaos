@@ -9,8 +9,6 @@ provides the CLI, local control API, SDK, node services, skills, scenarios,
 webspaces, device and browser integration contracts, and governed artifact
 lifecycle used to build AdaOS solutions.
 
-Russian translation: [Обзор AdaOS](/ru/).
-
 ## One Platform, Several Solution Directions
 
 AdaOS uses one runtime and package lifecycle across different deployment and
@@ -91,8 +89,8 @@ kept deliberately distinct. Start with the page status and the
 [Roadmap Inventory](architecture/roadmap-inventory.md) before treating a design
 or checklist as implemented behavior.
 
-English documentation is authoritative. Russian documentation is a maintained
-translation of a small, stable public-facing layer; detailed technical pages
-remain English-first and may appear as English fallback pages in the Russian
-locale. See the
+English documentation is authoritative. Maintained translations cover a
+small, stable public-facing layer. Translated navigation links directly to
+English-only technical sections instead of publishing fallback copies under a
+translated URL. See the
 [Documentation Language and Translation Policy](documentation-language-policy.md).

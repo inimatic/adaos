@@ -6,7 +6,7 @@ work.
 This document defines how AdaOS should model ReDevice agents, browser surfaces,
 and future device agents as managed endpoints. It complements
 [Device Access and Browsers](device-access-and-browsers.md), which describes
-access policy for browsers and members, and [Routing](../concepts/routing.md),
+access policy for browsers and members, and [Routing](routing.md),
 which describes current IO and skill routing. Endpoint audio sessions,
 activation, STT routing, Bluetooth audio, dialog mode, and dictation are
 defined separately in [Endpoint Audio Service](endpoint-audio-service.md).

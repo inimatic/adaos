@@ -1,5 +1,9 @@
 # Service Skills (managed processes)
 
+Status: current runtime and lifecycle contract.
+
+Last reviewed: 2026-08-07.
+
 AdaOS supports **service skills**: skills that run as **external long-running processes** managed by the hub (instead of in-process Python handlers).
 
 This is the main tool for integrating components with:
