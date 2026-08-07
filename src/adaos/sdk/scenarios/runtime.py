@@ -21,6 +21,7 @@ from adaos.sdk.data import memory
 
 
 ActionHandler = Callable[[Mapping[str, Any]], Any]
+DependencyRunner = Callable[[str, str, Mapping[str, Any]], Any]
 
 
 class ActionRegistry:
@@ -78,6 +79,7 @@ class ScenarioModel:
     id: str
     version: Optional[str]
     trigger: Optional[str]
+    depends: List[str]
     vars: Dict[str, Any]
     steps: List[ScenarioStep]
 
@@ -86,10 +88,16 @@ class ScenarioModel:
         vars_section = payload.get("vars") or {}
         steps_section = payload.get("steps") or []
         steps = [ScenarioStep.from_mapping(step) for step in steps_section if isinstance(step, Mapping)]
+        dependency_values: List[Any] = list(payload.get("depends") or [])
+        runtime_section = payload.get("runtime") if isinstance(payload.get("runtime"), Mapping) else {}
+        skills_section = runtime_section.get("skills") if isinstance(runtime_section.get("skills"), Mapping) else {}
+        dependency_values.extend(skills_section.get("required") or [])
+        depends = list(dict.fromkeys(str(value).strip() for value in dependency_values if str(value).strip()))
         return cls(
             id=str(payload.get("id") or fallback_id),
             version=payload.get("version"),
             trigger=payload.get("trigger"),
+            depends=depends,
             vars=dict(vars_section) if isinstance(vars_section, Mapping) else {},
             steps=steps,
         )
@@ -99,11 +107,66 @@ from adaos.services.agent_context import get_ctx, AgentContext
 
 
 class ScenarioRuntime:
-    def __init__(self, registry: Optional[ActionRegistry] = None) -> None:
+    def __init__(
+        self,
+        registry: Optional[ActionRegistry] = None,
+        *,
+        dependency_runner: Optional[DependencyRunner] = None,
+    ) -> None:
         self._registry = registry or default_registry()
+        self._dependency_runner = dependency_runner
         self._logger: Optional[logging.Logger] = None
         self._log_path: Optional[Path] = None
-        self.ctx: AgentContext = get_ctx()
+        try:
+            self.ctx: Optional[AgentContext] = get_ctx()
+        except RuntimeError:
+            self.ctx = None
+
+    def _run_dependency_tool(self, skill: str, tool: str, args: Mapping[str, Any]) -> Any:
+        if self._dependency_runner is not None:
+            return self._dependency_runner(skill, tool, args)
+
+        from adaos.services.skill.manager import SkillManager
+
+        ctx = self.ctx or get_ctx()
+        self.ctx = ctx
+        manager = SkillManager(
+            repo=ctx.skills_repo,
+            registry=None,
+            git=ctx.git,
+            paths=ctx.paths,
+            bus=ctx.bus,
+            caps=ctx.caps,
+            settings=ctx.settings,
+        )
+        return manager.run_tool(skill, tool, dict(args))
+
+    def _register_dependency_routes(self, scenario: ScenarioModel) -> None:
+        dependencies = set(scenario.depends)
+
+        def _visit(step: ScenarioStep) -> None:
+            route = str(step.call or "").strip()
+            for dependency in dependencies:
+                for separator in (".", ":"):
+                    prefix = f"{dependency}{separator}"
+                    if not route.startswith(prefix):
+                        continue
+                    tool = route[len(prefix) :].strip()
+                    if tool and not self._registry.has(route):
+                        self._registry.register(
+                            route,
+                            lambda args, skill=dependency, tool_name=tool: self._run_dependency_tool(
+                                skill,
+                                tool_name,
+                                args,
+                            ),
+                        )
+                    break
+            for child in step.children:
+                _visit(child)
+
+        for step in scenario.steps:
+            _visit(step)
 
     def _log(self, level: int, message: str, *, extra: Optional[Mapping[str, Any]] = None) -> None:
         if not self._logger:
@@ -112,6 +175,7 @@ class ScenarioRuntime:
         self._logger.log(level, message, extra=payload)
 
     def run(self, scenario: ScenarioModel, *, bag: Optional[MutableMapping[str, Any]] = None) -> Dict[str, Any]:
+        self._register_dependency_routes(scenario)
         state: Dict[str, Any] = bag if bag is not None else {}
         state.setdefault("vars", dict(scenario.vars))
         state.setdefault("steps", {})
@@ -185,8 +249,10 @@ class ScenarioRuntime:
 
     def run_from_file(self, path: str | Path) -> Dict[str, Any]:
         model = load_scenario(path)
-        base_dir = self.ctx.paths.base_dir()
+        ctx = self.ctx or get_ctx()
+        base_dir = ctx.paths.base_dir()
         ctx = ensure_runtime_context(base_dir)
+        self.ctx = ctx
         self._logger, self._log_path = setup_scenario_logger(model.id)
         self._log(
             logging.INFO,

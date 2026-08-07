@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import traceback
 import asyncio
 from pathlib import Path
@@ -670,7 +672,7 @@ def test_cmd(
         typer.secho(_("cli.scenario.test.none"), fg=typer.colors.YELLOW)
         raise typer.Exit(code=1)
 
-    args = ["pytest", "-q", *[str(p) for p in tests]]
+    args = [sys.executable, "-m", "pytest", "-q", *[str(p) for p in tests]]
     if extra:
         args.extend(extra.split())
 

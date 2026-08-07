@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import yaml
@@ -52,3 +53,28 @@ def test_cli_validate_resolves_declared_companion_skill(monkeypatch, tmp_path) -
     assert result.exit_code == 0, result.output
     assert '"ok": true' in result.output
     assert '"errors": []' in result.output
+
+
+def test_cli_test_runs_packaged_scenario_tests(monkeypatch, tmp_path) -> None:
+    tests_dir = tmp_path / "workspace" / "scenarios" / "dashboard" / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_dashboard.py").write_text("def test_dashboard():\n    assert True\n", encoding="utf-8")
+    monkeypatch.setattr(
+        scenario_cli,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            paths=SimpleNamespace(scenarios_workspace_dir=lambda: tmp_path / "workspace" / "scenarios")
+        ),
+    )
+    calls = []
+
+    def _run(args, text):
+        calls.append((args, text))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(scenario_cli.subprocess, "run", _run)
+
+    result = CliRunner().invoke(scenario_cli.app, ["test", "dashboard"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [([sys.executable, "-m", "pytest", "-q", str(tests_dir)], True)]
