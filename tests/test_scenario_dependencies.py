@@ -225,6 +225,70 @@ def test_bootstrap_dependencies_skips_deactivated_skill(monkeypatch) -> None:
     assert calls == ["runtime_status:new_face_vision_skill"]
 
 
+def test_bootstrap_dependencies_reuses_healthy_matching_runtime(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            calls.append(f"runtime_status:{name}")
+            return {
+                "version": "1.2.3",
+                "active_slot": "A",
+                "ready": True,
+                "deactivated": False,
+            }
+
+        def install(self, name: str):
+            calls.append(f"install:{name}")
+            return SimpleNamespace(version="1.2.3")
+
+        def prepare_runtime(self, *_args: Any, **_kwargs: Any):
+            raise AssertionError("matching healthy runtime must not be prepared again")
+
+        def activate_for_space(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("matching healthy runtime must not be activated again")
+
+    monkeypatch.setattr(
+        scenario_manager,
+        "get_ctx",
+        lambda: SimpleNamespace(sql=object(), skills_repo=object(), git=object(), paths=object(), caps=object()),
+    )
+    monkeypatch.setattr(scenario_manager, "read_manifest", lambda scenario_id: {"depends": ["ready_skill"]})
+    monkeypatch.setattr(scenario_manager, "SqliteSkillRegistry", lambda sql: object())
+    monkeypatch.setattr(scenario_manager, "SkillManager", _FakeSkillManager)
+
+    mgr = scenario_manager.ScenarioManager(
+        repo=object(),
+        registry=object(),
+        git=object(),
+        paths=object(),
+        bus=None,
+        caps=SimpleNamespace(require=lambda *args, **kwargs: None),
+    )
+
+    result = mgr.bootstrap_dependencies("demo_scene", webspace_id="desktop")
+
+    assert result["ok"] is True
+    assert result["succeeded"] == ["ready_skill"]
+    assert result["items"][0] == {
+        "name": "ready_skill",
+        "required": True,
+        "installed": True,
+        "prepared": True,
+        "activated": True,
+        "skipped": False,
+        "ok": True,
+        "reused": True,
+        "version": "1.2.3",
+        "slot": "A",
+        "phase": "done",
+    }
+    assert calls == ["runtime_status:ready_skill", "install:ready_skill", "runtime_status:ready_skill"]
+
+
 def test_install_with_deps_pulls_dependency_forward_before_projection(monkeypatch) -> None:
     calls: list[str] = []
     workspace_versions = {"media_skill": "1.0.0"}

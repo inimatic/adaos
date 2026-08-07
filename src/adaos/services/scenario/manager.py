@@ -610,7 +610,7 @@ class ScenarioManager:
                     dep,
                     target_webspace,
                 )
-                skill_mgr.install(dep)
+                install_result = skill_mgr.install(dep)
                 item["installed"] = True
                 _log.info(
                     "scenario dependency install completed scenario=%s skill=%s webspace_id=%s",
@@ -618,6 +618,36 @@ class ScenarioManager:
                     dep,
                     target_webspace,
                 )
+                installed_meta = install_result[0] if isinstance(install_result, tuple) else install_result
+                installed_version = str(getattr(installed_meta, "version", "") or "").strip()
+                try:
+                    installed_runtime = skill_mgr.runtime_status(dep)
+                except Exception:
+                    installed_runtime = {}
+                if (
+                    installed_version
+                    and bool(installed_runtime.get("ready"))
+                    and not bool(installed_runtime.get("deactivated"))
+                    and str(installed_runtime.get("version") or "").strip() == installed_version
+                ):
+                    item["prepared"] = True
+                    item["activated"] = True
+                    item["reused"] = True
+                    item["version"] = installed_version
+                    item["slot"] = installed_runtime.get("active_slot")
+                    item["ok"] = True
+                    item["phase"] = "done"
+                    result["succeeded"].append(dep)
+                    _log.info(
+                        "scenario dependency runtime reused scenario=%s skill=%s version=%s slot=%s webspace_id=%s",
+                        scenario_id,
+                        dep,
+                        installed_version,
+                        str(item.get("slot") or ""),
+                        target_webspace,
+                    )
+                    result["items"].append(item)
+                    continue
                 phase = "prepare_runtime"
                 item["phase"] = phase
                 _log.info(

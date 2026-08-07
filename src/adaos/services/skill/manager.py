@@ -3221,6 +3221,16 @@ class SkillManager:
         target = namespace_root / source.name
         if destination_root.exists():
             self._remove_tree(destination_root)
+        if destination_root.exists():
+            remaining_files = [
+                path
+                for path in destination_root.rglob("*")
+                if path.is_file() or path.is_symlink()
+            ]
+            if remaining_files:
+                raise RuntimeError(
+                    f"runtime slot source cleanup incomplete; retained file: {remaining_files[0]}"
+                )
         namespace_root.mkdir(parents=True, exist_ok=True)
         ignore = shutil.ignore_patterns(
             ".git",
@@ -3232,7 +3242,7 @@ class SkillManager:
             "*.bin",
             "*.safetensors",
         )
-        shutil.copytree(source, target, ignore=ignore)
+        shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
         self._verify_staged_declaration_artifacts(source, target)
         package_init = target / "__init__.py"
         if not package_init.exists():

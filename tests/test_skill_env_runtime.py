@@ -31,6 +31,23 @@ def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> Non
     assert SkillManager._tool_timeout_seconds({}, 30.0) == 30.0
 
 
+def test_stage_skill_sources_tolerates_empty_directory_residue(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source" / "residue_skill"
+    (source / "handlers").mkdir(parents=True)
+    (source / "handlers" / "main.py").write_text("def check():\n    return True\n", encoding="utf-8")
+    (source / "skill.yaml").write_text("name: residue_skill\nversion: 1.0.0\n", encoding="utf-8")
+    slot = SimpleNamespace(src_dir=tmp_path / "runtime" / "slots" / "B" / "src")
+    (slot.src_dir / "skills" / "residue_skill").mkdir(parents=True)
+    mgr = SkillManager(git=SimpleNamespace(), paths=SimpleNamespace(), caps=_Caps())
+    monkeypatch.setattr(mgr, "_remove_tree", lambda _path: None)
+
+    staged = mgr._stage_skill_sources(source, slot)
+
+    assert staged == slot.src_dir / "skills" / "residue_skill"
+    assert (staged / "skill.yaml").is_file()
+    assert (staged / "handlers" / "main.py").is_file()
+
+
 def test_slot_skill_env_uses_shared_runtime_store() -> None:
     ctx = get_ctx()
     skills_root = Path(ctx.paths.skills_dir())
