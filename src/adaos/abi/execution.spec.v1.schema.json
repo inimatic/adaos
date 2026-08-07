@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.execution.spec.v1",
+  "title": "AdaOS Execution Specification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "spec_id",
+    "owner_ref",
+    "command",
+    "working_directory",
+    "environment",
+    "secret_refs",
+    "resources",
+    "inputs",
+    "expected_outputs",
+    "checkpoint",
+    "metadata"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.execution.spec.v1" },
+    "spec_id": { "type": "string", "minLength": 1 },
+    "owner_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "working_directory": { "type": "string", "minLength": 1 },
+    "environment": { "type": "object", "additionalProperties": { "type": "string" } },
+    "secret_refs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_cores", "memory_mb", "gpu_count", "wall_time_s"],
+      "properties": {
+        "cpu_cores": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "memory_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "gpu_count": { "type": "integer", "minimum": 0 },
+        "wall_time_s": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      }
+    },
+    "inputs": { "type": "array", "items": { "$ref": "content.ref.v1.schema.json" } },
+    "expected_outputs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "checkpoint": { "oneOf": [{ "$ref": "content.ref.v1.schema.json" }, { "type": "null" }] },
+    "metadata": { "type": "object" }
+  }
+}

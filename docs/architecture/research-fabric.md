@@ -1,7 +1,8 @@
 # AdaOS Research Fabric
 
-Status: proposed target architecture. The current repository does not yet
-implement the framework described on this page.
+Status: target architecture. The ARF0.5 generic storage, binding, content-ref,
+and local-execution foundation is implemented; the research framework itself
+is not yet implemented.
 
 Last reviewed: 2026-08-07.
 
@@ -44,6 +45,9 @@ pack, and aResearcher as a solution agent or workbench are governed by the
 8. TLP is the first end-to-end conformance case. Its domain types and operator
    semantics remain outside core until at least one unrelated research case
    proves that an abstraction is general.
+9. A relational binding is private to its owning skill. Cross-skill data is
+   published by a specialized owner skill as typed APIs, projections, events,
+   or governed logical views; consumers do not receive its SQL binding.
 
 ## Why `Research Fabric`
 
@@ -275,11 +279,13 @@ Test-set access is a governed effect. A test credential or data binding is
 released only after the configured prerequisites are satisfied. This makes
 test leakage an auditable policy violation rather than a notebook convention.
 
-## Core Capability Gaps
+## Core Capability Foundation and Gaps
 
 The framework should not be implemented by expanding the current raw `SQL`
 protocol or by putting every research entity in core. The following narrow
-capabilities are the useful core seams.
+capabilities are the useful core seams. The implemented ARF0.5 subset and its
+remaining limitations are recorded in
+[Research Fabric Core Readiness](research-fabric-core-readiness.md).
 
 ### Relational storage provisioning
 
@@ -287,17 +293,18 @@ A component requests requirements and receives a scoped binding. A conceptual
 request contains:
 
 ```yaml
+schema: adaos.storage.relational.requirement.v1
 capability: storage.relational
-owner: skill://research-manager
-scope: private
+owner_ref: skill:research-manager
+logical_name: experiments
 requirements:
   durability: durable
-  transactions: required
-  concurrent_writers: 4
-  json: required
+  transactions_required: true
+  concurrent_writers: 1
+  json_required: true
   locality: node
-  backup: required
-  migration_owner: research-manager
+  backup_required: false
+  migration_owner: skill:research-manager
 ```
 
 The returned binding describes a provider, logical scope, secret reference,
@@ -317,6 +324,14 @@ Required semantics include:
 The current `ctx.sql.connect()`-style boundary remains a legacy SQLite path
 until repositories are separated from provider-specific behavior. Merely
 changing a DSN is not PostgreSQL support.
+
+The ARF0.5 SDK implementation derives `owner_ref` from the active skill
+context after checking the existing `storage.relational` capability, returns a
+redacted binding, and rechecks that owner for every transaction. A skill cannot
+request another skill's binding. When multiple
+skills need the same governed dataset, a specialized provider skill owns its
+database and publishes stable logical views through typed service APIs or
+projections. Direct cross-owner SQL remains out of scope.
 
 ### Execution provider
 

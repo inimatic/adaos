@@ -196,6 +196,7 @@ nav:
       - Model Runtime Roadmap: architecture/model-runtime-roadmap.md
       - AdaOS Research Fabric: architecture/research-fabric.md
       - Research Fabric Roadmap: architecture/research-fabric-roadmap.md
+      - Research Fabric Core Readiness: architecture/research-fabric-core-readiness.md
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
@@ -229,6 +230,7 @@ nav:
       - Codex Test-Hub MCP: cli/codex-test-hub-mcp.md
   - SDK:
       - Overview: sdk/index.md
+      - Relational Storage: sdk/relational-storage.md
       - Bus: sdk/bus.md
       - Context: sdk/context.md
       - Decorators: sdk/decorators.md

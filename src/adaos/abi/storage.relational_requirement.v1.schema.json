@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.storage.relational.requirement.v1",
+  "title": "AdaOS Relational Storage Requirement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "durability",
+    "transactions_required",
+    "concurrent_writers",
+    "json_required",
+    "backup_required",
+    "locality",
+    "migration_owner",
+    "preferred_providers"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.storage.relational.requirement.v1" },
+    "durability": { "enum": ["durable", "ephemeral"] },
+    "transactions_required": { "type": "boolean" },
+    "concurrent_writers": { "type": "integer", "minimum": 1 },
+    "json_required": { "type": "boolean" },
+    "backup_required": { "type": "boolean" },
+    "locality": { "enum": ["node", "network", "any"] },
+    "migration_owner": {
+      "type": ["string", "null"],
+      "pattern": "^(skill|service|core):[a-z0-9_.-]+$"
+    },
+    "preferred_providers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

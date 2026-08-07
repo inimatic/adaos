@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.content.ref.v1",
+  "title": "AdaOS Content Reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "uri", "digest", "size_bytes", "media_type", "owner_ref", "kind", "metadata"],
+  "properties": {
+    "schema": { "const": "adaos.content.ref.v1" },
+    "uri": { "type": "string", "minLength": 1 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "media_type": { "type": "string", "minLength": 1 },
+    "owner_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+    "metadata": { "type": "object" }
+  }
+}

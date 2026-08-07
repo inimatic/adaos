@@ -21,6 +21,7 @@ from adaos.services.crypto.secrets_service import SecretsService
 from adaos.services.crypto.vault import load_or_create_master  # noqa: F401 (если пока не используешь)
 from adaos.services.sandbox.runner import ProcSandbox
 from adaos.services.sandbox.service import SandboxService
+from adaos.services.storage import build_default_relational_storage_broker
 
 from adaos.services.agent_context import set_ctx
 from adaos.services.node_config import load_config
@@ -103,7 +104,17 @@ class _CtxHolder:
         _allow_host(settings.scenarios_monorepo_url)
 
         # базовые capabilities
-        caps.grant("core", "proc.run", "net.git", "git.write", "skills.manage", "scenarios.manage", "secrets.read", "secrets.write")
+        caps.grant(
+            "core",
+            "proc.run",
+            "net.git",
+            "git.write",
+            "skills.manage",
+            "scenarios.manage",
+            "secrets.read",
+            "secrets.write",
+            "storage.relational",
+        )
 
         # Git с защитой
         git_base = CliGitClient(depth=1)
@@ -158,6 +169,7 @@ class _CtxHolder:
             git=git,
             fs=fs,
             sandbox=SandboxService(runner=ProcSandbox(fs_base=paths.base), caps=caps, bus=bus),
+            relational_storage=build_default_relational_storage_broker(),
         )
 
         # чтобы в адаптерах было paths.ctx.fs (если Paths это позволяет)

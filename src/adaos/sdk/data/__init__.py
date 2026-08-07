@@ -81,6 +81,10 @@ __all__ = [
     "get_tts_backend",
     "get_stt_backend",
     "get_audio_out_backend",
+    "relational_database",
+    "RelationalDatabase",
+    "RelationalStorageBinding",
+    "RelationalStorageRequirements",
 ]
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -92,6 +96,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "set_current_skill": ("adaos.sdk.data.context", "set_current_skill"),
     "get_current_skill": ("adaos.sdk.data.context", "get_current_skill"),
     "get_audio_out_backend": ("adaos.sdk.data.env", "get_audio_out_backend"),
+    "relational_database": ("adaos.sdk.data.relational", "database"),
+    "RelationalDatabase": ("adaos.sdk.data.relational", "RelationalDatabase"),
+    "RelationalStorageBinding": ("adaos.sdk.data.relational", "RelationalStorageBinding"),
+    "RelationalStorageRequirements": ("adaos.sdk.data.relational", "RelationalStorageRequirements"),
     "get_stt_backend": ("adaos.sdk.data.env", "get_stt_backend"),
     "get_tts_backend": ("adaos.sdk.data.env", "get_tts_backend"),
     "publish": ("adaos.sdk.data.events", "publish"),

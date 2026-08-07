@@ -13,6 +13,7 @@ from adaos.adapters.fs.path_provider import PathProvider
 from adaos.services.agent_context import AgentContext, clear_ctx, get_ctx, set_ctx
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.settings import Settings
+from adaos.services.storage import build_default_relational_storage_broker
 
 __all__ = [
     "MockSecrets",
@@ -295,6 +296,7 @@ def bootstrap_test_ctx(
         git=noop,
         fs=noop,
         sandbox=noop,
+        relational_storage=build_default_relational_storage_broker(),
     )
 
     try:

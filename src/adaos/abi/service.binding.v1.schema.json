@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.service.binding.v1",
+  "title": "AdaOS Service Binding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "binding_id",
+    "capability",
+    "provider_ref",
+    "consumer_ref",
+    "endpoint",
+    "protocol",
+    "protocol_version",
+    "health_endpoint",
+    "ui_endpoint",
+    "secret_ref",
+    "metadata"
+  ],
+  "properties": {
+    "schema": { "const": "adaos.service.binding.v1" },
+    "binding_id": { "type": "string", "minLength": 1 },
+    "capability": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+    "provider_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "consumer_ref": { "type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$" },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^(https?|unix|npipe):",
+      "not": { "pattern": "^https?://[^/]*@" }
+    },
+    "protocol": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$" },
+    "protocol_version": { "type": "string", "minLength": 1 },
+    "health_endpoint": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^(https?|unix|npipe):",
+          "not": { "pattern": "^https?://[^/]*@" }
+        }
+      ]
+    },
+    "ui_endpoint": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^(https?|unix|npipe):",
+          "not": { "pattern": "^https?://[^/]*@" }
+        }
+      ]
+    },
+    "secret_ref": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]*:[a-z0-9_./-]+$"
+        }
+      ]
+    },
+    "metadata": { "type": "object" }
+  }
+}

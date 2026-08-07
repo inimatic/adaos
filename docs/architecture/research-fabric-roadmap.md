@@ -87,12 +87,12 @@ scientific conclusion. A local demo is not production acceptance.
 | --- | --- | --- |
 | Skill/scenario lifecycle | Package, install, activate, service-skill supervision, A/B runtime buckets | useful implemented foundation |
 | Workflow governance | Versioned governed workflow architecture and growing runtime | reusable authority; research workflow not defined |
-| Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | local foundation; not provider-neutral provisioning |
+| Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | deliberately unchanged; legacy core repositories are outside ARF0.5 |
 | Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | correct local placement for provider state |
-| Database capability | Low-level `SQL.connect()`-style port | insufficient requirements, isolation, migration, backup, and binding semantics |
-| PostgreSQL | Not integrated into the core persistence path | target provider, not an implicit current capability |
-| Artifacts/models | Governed artifact pipeline and partial model-artifact control | reusable references; portable research evidence bundle absent |
-| Execution | Process sandbox and specialized background/job fragments | no common durable run/attempt/executor contract for research |
+| Database capability | Typed `storage.relational` requirement/binding, SDK gate, per-skill isolation, and SQLite provider; legacy `SQL` remains | preparatory path validated locally; migrations and lifecycle operations remain |
+| PostgreSQL | Isolated-database provider passed its live local conformance test on `postgres:16-alpine` | preparatory path validated locally; roles, rotation, and backup remain ARF2 |
+| Artifacts/models | Governed artifact pipeline plus generic `ContentRef`; model promotion rules unchanged | reusable reference foundation; portable research evidence bundle absent |
+| Execution | Generic spec/attempt ABI and restart-reconcilable local provider beside existing process/job fragments | preparatory path validated locally; workflow integration, resources, and remote providers remain |
 | Tracking | No provider-neutral experiment tracker or MLflow service skill | open |
 | Distributed execution | No Ray provider | open |
 | Research domain | No canonical Study/Protocol/Trial/Evidence model | open |
@@ -103,6 +103,7 @@ scientific conclusion. A local demo is not production acceptance.
 | Milestone | Outcome | Current maturity | Horizon |
 | --- | --- | --- | --- |
 | ARF0 | Architecture, ownership, exclusions, and reference case are discoverable | `specified` | now |
+| ARF0.5 | Generic storage/binding/content/execution seams exist before research code | `validated-local` | now |
 | ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `hypothesis` | next |
 | ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `hypothesis` | next |
 | ARF3 | Logical runs and physical attempts are durable and provider-neutral | `hypothesis` | next |
@@ -146,12 +147,77 @@ ownership.
 - [x] `[deferred]` `ARF0-08` Do not select an autonomous research-agent design
   before the deterministic framework and evidence gates exist.
 
+## ARF0.5. Core Readiness
+
+**Outcome:** research code starts on narrow provider-neutral core seams rather
+than creating private database, job, endpoint, and artifact abstractions.
+
+**Admission gate:** ARF0 is complete.
+
+**Exit proof:** packaged ABI validates, two active skill contexts cannot see or
+reuse each other's relational bindings, the SQLite provider runs from the
+public SDK, a live PostgreSQL provider passes the same minimal data contract,
+and a local execution attempt is idempotent and reconcilable after provider
+object restart.
+
+The implementation and convergence inventory are recorded in
+[Research Fabric Core Readiness](research-fabric-core-readiness.md).
+
+- [x] `[must]` `ARF05-01` Inventory legacy `SQL`, skill data paths,
+  `ResourceTicket`, `Process`, `OperationManager`, workflow activities,
+  sandbox execution, artifact kinds, and ModelJob direction with an explicit
+  keep/converge disposition.
+- [x] `[must]` `ARF05-02` Publish versioned ABI and Python contracts for
+  relational requirements/bindings, `ContentRef`, `ServiceBinding`,
+  `ExecutionSpec`, and physical `ExecutionAttempt`.
+- [x] `[must]` `ARF05-03` Implement `storage.relational` as an SDK-accessible
+  requirement/binding capability that uses the existing capability gate,
+  derives the owner from the active skill context, and never accepts an owner
+  or physical path from skill code.
+- [x] `[must]` `ARF05-04` Enforce one private binding per skill/logical name,
+  migration-owner equality, stale-handle rejection after context switch,
+  redacted locators, and fail-closed provider negotiation.
+- [x] `[must]` `ARF05-05` Implement the SQLite provider under the owning
+  compatibility bucket's `data/db` and validate isolation, rollback, named
+  parameters, JSON probing, unsupported requirements, and path traversal on
+  this machine.
+- [x] `[must]` `ARF05-06` Implement the PostgreSQL provider behind a core-owned
+  administrator secret/URL with one isolated logical database per binding and
+  an environment-gated destructive-safe conformance test.
+- [x] `[must]` `ARF05-07` Run the PostgreSQL conformance test against a live
+  local/test server and retain the result as acceptance evidence. The
+  2026-08-07 local run passed against `postgres:16-alpine` with `psycopg` and
+  removed the exact isolated test database/container afterward.
+- [x] `[must]` `ARF05-08` Define cross-skill sharing through a specialized
+  provider skill and typed API/projection/logical-view contracts, never by
+  lending one skill's SQL binding to another.
+- [x] `[must]` `ARF05-09` Implement an owner-scoped local execution provider
+  with deterministic idempotency, atomic receipts, stdout/stderr content refs,
+  cancellation, wall timeout, lost-state semantics, and restart
+  reconciliation.
+- [x] `[must]` `ARF05-10` Reject CPU, memory, GPU, secret, and working-directory
+  requirements that the local provider cannot enforce; keep the process
+  adapter explicitly outside the hostile-code trust boundary.
+- [ ] `[should]` `ARF05-11` Bind governed workflow activity dispatch to the
+  executor port and generic operation reference without replacing or
+  duplicating `OperationManager`.
+- [ ] `[should]` `ARF05-12` Define provider health/status projections and
+  protocol-version negotiation for relational and execution bindings.
+- [x] `[deferred]` `ARF05-13` Do not migrate existing core SQLite repositories,
+  add cross-skill SQL grants, implement MLflow/Ray, or introduce research-domain
+  entities in this preparation milestone.
+- [ ] `[should]` `ARF05-14` Replace the current baseline `core` capability
+  fallback with authoritative manifest/profile-driven per-skill admission when
+  that policy path is ready; keep binding ownership independent of admission.
+
 ## ARF1. Local Research Kernel and TLP Skeleton
 
 **Outcome:** a minimal research-manager skill can describe and govern a study
 end to end using only local providers.
 
-**Admission gate:** ARF0 is complete.
+**Admission gate:** ARF0.5 `[must]` items are complete, including live
+PostgreSQL conformance, or an explicit local-only exception is recorded for an
+ARF1 development slice that makes no PostgreSQL support claim.
 
 **Exit proof:** contract and workflow tests create a TLP study, lock a protocol,
 materialize paired trial specs, execute a no-training fixture, ingest typed
@@ -201,28 +267,29 @@ observations, enforce test access, and export an evidence bundle after restart.
 receive isolated bindings; provider lifecycle and schema ownership are
 explicit.
 
-**Admission gate:** ARF1 has exposed concrete local persistence requirements.
+**Admission gate:** ARF0.5 has exposed concrete provider requirements and ARF1
+has supplied real research-manager migration/lifecycle pressure.
 
 **Exit proof:** the research-manager and tracker conformance fixtures run
 against provisioned SQLite bindings; the same binding contract provisions an
 isolated PostgreSQL test scope and passes migration plus backup/restore tests
 without cross-owner table access.
 
-- [ ] `[must]` `ARF2-01` Inventory current `SQL`, SQLite repository, path,
+- [x] `[must]` `ARF2-01` Inventory current `SQL`, SQLite repository, path,
   transaction, migration, and backup assumptions before changing the port.
-- [ ] `[must]` `ARF2-02` Write the provider-neutral storage decision record
+- [x] `[must]` `ARF2-02` Write the provider-neutral storage decision record
   for `RelationalStorageRequirement`, `RelationalBinding`, provider readiness,
   secret references, ownership, and lifecycle.
 - [ ] `[must]` `ARF2-03` Include durability, transaction, concurrent-writer,
   JSON, locality, capacity, backup/restore, retention, migration-owner,
   rollback, and role requirements in the binding contract.
-- [ ] `[must]` `ARF2-04` Implement a local SQLite provider that places
+- [x] `[must]` `ARF2-04` Implement a local SQLite provider that places
   component-owned files or binding metadata under the owning skill's
   `data/db`, with safe locking and atomic initialization.
 - [ ] `[must]` `ARF2-05` Make schema migrations owner-supplied, versioned,
   idempotent where required, staged before activation, and covered by rollback
   or restore policy.
-- [ ] `[must]` `ARF2-06` Keep credentials behind AdaOS secret references and
+- [x] `[must]` `ARF2-06` Keep credentials behind AdaOS secret references and
   expose only scoped bindings to the owning component.
 - [ ] `[must]` `ARF2-07` Add provider conformance tests for isolation,
   transactions, contention, migration failure, disk exhaustion, backup,
