@@ -319,13 +319,18 @@ def _yws_disabled_reject_hold_sec() -> float:
 def _yws_client_limit_key(
     dev_id: str | None,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> str:
     device_key = _clean_browser_metadata_value(dev_id, max_len=128) or "unknown"
+    page_key = _clean_browser_metadata_value(browser_page_id, max_len=128)
     session_key = _clean_browser_metadata_value(browser_session_id, max_len=128)
     attempt_key = _clean_browser_metadata_value(client_attempt_id, max_len=128)
-    scoped_key = session_key or attempt_key
+    # browser_session_id is persisted in sessionStorage and can be copied by a
+    # browser when a tab is duplicated. Prefer the non-persisted page id so two
+    # live tabs do not replace each other's reconnecting Yjs connection.
+    scoped_key = page_key or session_key or attempt_key
     return f"{device_key}::{scoped_key}" if scoped_key else device_key
 
 
@@ -347,6 +352,7 @@ def _websocket_yws_client_limit_key(websocket: WebSocket, *, fallback_device_id:
         dev_id = fallback_device_id or dev_id
     return _yws_client_limit_key(
         dev_id,
+        browser_page_id=params.get("browser_page_id") or params.get("browserPageId"),
         browser_session_id=(
             params.get("browser_session_id")
             or params.get("browserSessionId")
@@ -4010,6 +4016,7 @@ def _active_yws_connection_total_for_client(
     webspace_id: str,
     dev_id: str,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> int:
@@ -4017,13 +4024,14 @@ def _active_yws_connection_total_for_client(
     device_key = str(dev_id or "").strip() or "unknown"
     client_key = _yws_client_limit_key(
         device_key,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
     with _ACTIVE_YWS_LOCK:
         clients = _ACTIVE_YWS_CLIENTS.get(key)
         if isinstance(clients, dict):
-            if browser_session_id or client_attempt_id:
+            if browser_page_id or browser_session_id or client_attempt_id:
                 return max(0, int(clients.get(client_key) or 0))
             return sum(
                 max(0, int(count or 0))
@@ -4035,7 +4043,7 @@ def _active_yws_connection_total_for_client(
             for websocket in list(_ACTIVE_YWS_CONNECTIONS.get(key) or [])
             if (
                 _websocket_yws_client_limit_key(websocket, fallback_device_id=device_key) == client_key
-                if browser_session_id or client_attempt_id
+                if browser_page_id or browser_session_id or client_attempt_id
                 else _websocket_device_id(websocket) == device_key
             )
         )
@@ -4094,6 +4102,7 @@ async def _close_existing_yws_client_connections(
     webspace_id: str,
     dev_id: str,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> int:
@@ -4103,6 +4112,7 @@ async def _close_existing_yws_client_connections(
         return 0
     client_key = _yws_client_limit_key(
         device_key,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
@@ -4112,11 +4122,11 @@ async def _close_existing_yws_client_connections(
             for websocket in list(_ACTIVE_YWS_CONNECTIONS.get(key) or [])
             if (
                 _websocket_yws_client_limit_key(websocket, fallback_device_id=device_key) == client_key
-                if browser_session_id or client_attempt_id
+                if browser_page_id or browser_session_id or client_attempt_id
                 else _websocket_device_id(websocket) == device_key
             )
         ]
-    scoped_client = bool(browser_session_id or client_attempt_id)
+    scoped_client = bool(browser_page_id or browser_session_id or client_attempt_id)
     replace_existing = scoped_client and bool(_YWS_REPLACE_SCOPED_CLIENT_CONNECTIONS)
     overflow = len(sockets) if replace_existing else len(sockets) - _YWS_MAX_ACTIVE_PER_CLIENT + 1
     if overflow <= 0:
@@ -4249,6 +4259,7 @@ def _record_yws_guard_attempt(
     webspace_id: str,
     dev_id: str,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> None:
@@ -4256,6 +4267,7 @@ def _record_yws_guard_attempt(
     key = _yws_guard_client_history_key(
         webspace_id,
         dev_id,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
@@ -4279,6 +4291,7 @@ def _record_yws_short_session(
     dev_id: str,
     *,
     lifetime_s: float,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> None:
@@ -4290,6 +4303,7 @@ def _record_yws_short_session(
     key = _yws_guard_client_history_key(
         webspace_id,
         dev_id,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
@@ -4323,6 +4337,7 @@ def _yws_guard_client_history_key(
     webspace_id: str,
     dev_id: str,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> str:
@@ -4330,6 +4345,7 @@ def _yws_guard_client_history_key(
     device_key = str(dev_id or "").strip() or "unknown"
     client_key = _yws_client_limit_key(
         device_key,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
@@ -4836,6 +4852,7 @@ def _yws_guard_reject_reason(
     webspace_id: str,
     dev_id: str,
     *,
+    browser_page_id: str | None = None,
     browser_session_id: str | None = None,
     client_attempt_id: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
@@ -4851,6 +4868,7 @@ def _yws_guard_reject_reason(
     active_client_total = _active_yws_connection_total_for_client(
         webspace_key,
         dev_key,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id,
     )
@@ -4959,6 +4977,7 @@ def _yws_guard_reject_reason(
         client_key = _yws_guard_client_history_key(
             webspace_key,
             dev_key,
+            browser_page_id=browser_page_id,
             browser_session_id=browser_session_id,
             client_attempt_id=client_attempt_id,
         )
@@ -8272,6 +8291,10 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         or params.get("clientSessionId"),
         max_len=128,
     )
+    browser_page_id = _clean_browser_metadata_value(
+        params.get("browser_page_id") or params.get("browserPageId"),
+        max_len=128,
+    )
     browser_metadata = _browser_session_metadata(params)
 
     if _ws_trace_enabled():
@@ -8347,6 +8370,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     _record_yws_guard_attempt(
         webspace_id,
         dev_id,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id or None,
     )
@@ -8355,6 +8379,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     guard_reason, guard_diag = _yws_guard_reject_reason(
         webspace_id,
         dev_id,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id or None,
     )
@@ -8373,6 +8398,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     replaced_existing = await _close_existing_yws_client_connections(
         webspace_id,
         dev_id,
+        browser_page_id=browser_page_id,
         browser_session_id=browser_session_id,
         client_attempt_id=client_attempt_id or None,
     )
@@ -8382,6 +8408,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             _active_yws_connection_total_for_client(
                 webspace_id,
                 dev_id,
+                browser_page_id=browser_page_id,
                 browser_session_id=browser_session_id,
                 client_attempt_id=client_attempt_id or None,
             )
@@ -8485,6 +8512,7 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             webspace_id,
             dev_id,
             lifetime_s=yws_lifetime_s,
+            browser_page_id=browser_page_id,
             browser_session_id=browser_session_id,
             client_attempt_id=client_attempt_id or None,
         )

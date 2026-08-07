@@ -4267,6 +4267,54 @@ def test_yws_guard_limits_browser_session_not_whole_device(monkeypatch) -> None:
     gateway_module._untrack_yws_connection("ops", tab_a)
 
 
+def test_yws_guard_limits_duplicated_tabs_by_live_page_id(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_CLIENT", 1)
+
+    class _FakeWebSocket:
+        def __init__(self, browser_page_id: str) -> None:
+            self.query_params = {
+                "dev": "dev-2",
+                "browser_session_id": "bs-shared-duplicated-tab",
+                "browser_page_id": browser_page_id,
+            }
+            self.closed: list[tuple[int, str]] = []
+
+        async def close(self, code: int = 1000, reason: str | None = None) -> None:
+            self.closed.append((code, str(reason or "")))
+
+    page_a = _FakeWebSocket("page-a")
+    gateway_module._track_yws_connection("ops", page_a, device_id="dev-2")
+
+    closed = asyncio.run(
+        gateway_module._close_existing_yws_client_connections(
+            "ops",
+            "dev-2",
+            browser_page_id="page-b",
+            browser_session_id="bs-shared-duplicated-tab",
+        )
+    )
+
+    assert closed == 0
+    assert page_a.closed == []
+    assert gateway_module._active_yws_connection_total_for_client(
+        "ops",
+        "dev-2",
+        browser_page_id="page-a",
+        browser_session_id="bs-shared-duplicated-tab",
+    ) == 1
+    assert gateway_module._active_yws_connection_total_for_client(
+        "ops",
+        "dev-2",
+        browser_page_id="page-b",
+        browser_session_id="bs-shared-duplicated-tab",
+    ) == 0
+
+    gateway_module._untrack_yws_connection("ops", page_a)
+
+
 def test_yws_guard_default_replaces_scoped_client_sessions(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
