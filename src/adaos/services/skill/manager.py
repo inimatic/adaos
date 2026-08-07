@@ -143,6 +143,25 @@ def _is_runtime_migration_transient_deactivation(value: Mapping[str, Any] | None
     return bool(payload.get("deactivated")) and bool(payload.get("transient")) and reason == "runtime_migration_in_progress"
 
 
+def _is_newer_quarantine_recovery(
+    value: Mapping[str, Any] | None,
+    target_version: str,
+) -> bool:
+    """Admit preparation of a strictly newer version without clearing quarantine."""
+
+    payload = _mapping_or_empty(value)
+    if not bool(payload.get("deactivated")) or bool(payload.get("transient")):
+        return False
+    failed_version = str(payload.get("version") or "").strip()
+    candidate = str(target_version or "").strip()
+    if not failed_version or not candidate:
+        return False
+    try:
+        return Version(candidate) > Version(failed_version)
+    except InvalidVersion:
+        return False
+
+
 def _skill_tool_yjs_governance(tool_spec: Mapping[str, Any] | None) -> dict[str, Any]:
     spec = _mapping_or_empty(tool_spec)
     governance = dict(_mapping_or_empty(spec.get("yjs_governance") or spec.get("yjs")))
@@ -1901,7 +1920,8 @@ class SkillManager:
 
         env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=name)
         deactivation = env.read_deactivation()
-        if bool(deactivation.get("deactivated")) and not allow_deactivated:
+        newer_recovery = _is_newer_quarantine_recovery(deactivation, version)
+        if bool(deactivation.get("deactivated")) and not allow_deactivated and not newer_recovery:
             reason = str(deactivation.get("reason") or "deactivated").strip() or "deactivated"
             raise RuntimeError(f"skill '{name}' is deactivated; runtime prepare skipped ({reason})")
         env.prepare_version(version)

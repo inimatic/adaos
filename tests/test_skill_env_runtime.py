@@ -1240,7 +1240,13 @@ def test_prepare_runtime_skips_deactivated_skill_before_dependency_install(monke
     )
     env = SkillRuntimeEnvironment(skills_root=Path(ctx.paths.skills_dir()), skill_name=skill_name)
     env.deactivation_marker().parent.mkdir(parents=True, exist_ok=True)
-    env.write_deactivation({"deactivated": True, "reason": "post_commit_checks_failed"})
+    env.write_deactivation(
+        {
+            "deactivated": True,
+            "reason": "post_commit_checks_failed",
+            "version": "1.0.0",
+        }
+    )
 
     def _should_not_prepare(**_kwargs):
         raise AssertionError("dependency preparation must not run for deactivated skills")
@@ -1249,6 +1255,19 @@ def test_prepare_runtime_skips_deactivated_skill_before_dependency_install(monke
 
     with pytest.raises(RuntimeError, match="deactivated"):
         mgr.prepare_runtime(skill_name, run_tests=False)
+
+    (skill_dir / "skill.yaml").write_text(
+        "name: deactivated_prepare_skill\nversion: '1.0.1'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mgr,
+        "_prepare_runtime_environment",
+        lambda **_kwargs: (Path("python"), []),
+    )
+    recovered = mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="A")
+    assert recovered.version == "1.0.1"
+    assert env.read_deactivation()["deactivated"] is True
 
 
 def test_activate_runtime_does_not_switch_slot_before_smoke_import(monkeypatch) -> None:
