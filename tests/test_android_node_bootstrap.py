@@ -768,12 +768,19 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             for item in legacy_installed.get("apps") or []
             if item != "android_node_settings_app"
         ]
+        legacy_registry = json.loads(json.dumps(bootstrap._skills.desktop_registry))
+        legacy_registry["merged"]["modals"] = [
+            item
+            for item in legacy_registry.get("merged", {}).get("modals") or []
+            if item != "subnet_env_modal"
+        ]
         bootstrap._skills._set_paths(
             {
                 "ui/current_scenario": "taiga_ui_demo_scenario",
                 "ui/application": legacy_taiga_application,
                 "data/catalog": legacy_catalog,
                 "data/installed": legacy_installed,
+                "registry/merged": legacy_registry["merged"],
                 "runtime/environment/materialization/scenario_id": (
                     "taiga_ui_demo_scenario"
                 ),
@@ -802,6 +809,7 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         assert "android_node_settings_app" in repaired["snapshot"]["data"]["installed"][
             "apps"
         ]
+        assert "subnet_env_modal" in repaired["snapshot"]["registry"]["merged"]["modals"]
 
         code, notebook = _post_json(
             f"http://127.0.0.1:{restarted['port']}/api/tools/call",

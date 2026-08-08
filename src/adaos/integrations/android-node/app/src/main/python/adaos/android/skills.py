@@ -145,6 +145,7 @@ class AndroidSkillRuntime:
         desktop_application: dict[str, Any],
         desktop_catalog: dict[str, Any],
         desktop_installed: dict[str, Any],
+        desktop_registry: dict[str, Any],
         taiga_application: dict[str, Any],
         publish_yjs: Callable[[bytes], None],
         publish_event: Callable[[str, dict[str, Any], str], None],
@@ -155,6 +156,7 @@ class AndroidSkillRuntime:
         self.desktop_application = copy.deepcopy(desktop_application)
         self.desktop_catalog = copy.deepcopy(desktop_catalog)
         self.desktop_installed = copy.deepcopy(desktop_installed)
+        self.desktop_registry = copy.deepcopy(desktop_registry)
         self.taiga_application = _merge_scenario_application(
             self.desktop_application,
             taiga_application,
@@ -217,6 +219,7 @@ class AndroidSkillRuntime:
             "ui/application": current_application,
             "data/catalog": self.desktop_catalog,
             "data/installed": self.desktop_installed,
+            "registry/merged": self.desktop_registry.get("merged", {}),
             "data/desktop/notebook": self._notebook_snapshot(),
             "data/demo_metrics": self._demo_snapshot(),
             "data/subnet_env/current": self._subnet_snapshot(),

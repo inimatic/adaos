@@ -1266,6 +1266,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             desktop_application=copy.deepcopy(_desktop_snapshot["ui"]["application"]),
             desktop_catalog=copy.deepcopy(_desktop_snapshot["data"]["catalog"]),
             desktop_installed=copy.deepcopy(_desktop_snapshot["data"]["installed"]),
+            desktop_registry=copy.deepcopy(_desktop_snapshot["registry"]),
             taiga_application=copy.deepcopy(taiga_ui.get("application") or {}),
             publish_yjs=_publish_yjs_update,
             publish_event=_broadcast_control_event,
