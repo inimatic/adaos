@@ -680,6 +680,14 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
 
             ack, _ = _control_command(
                 websocket,
+                "demo-selection-proof",
+                "demo_metrics.selection.changed",
+                {"metric_id": "memory"},
+            )
+            assert ack["data"]["result"]["selection"]["metric_id"] == "memory"
+
+            ack, _ = _control_command(
+                websocket,
                 "desktop-proof",
                 "desktop.webspace.go_home",
                 {"webspace_id": "desktop", "wait_for_rebuild": True},

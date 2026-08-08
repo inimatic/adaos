@@ -612,7 +612,10 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
                     event_payload,
                 ),
             }
-        elif kind.startswith("adaos_connect.prepare") or kind == "demo_metrics.host_action":
+        elif kind.startswith("adaos_connect.prepare") or kind in {
+            "demo_metrics.host_action",
+            "demo_metrics.selection.changed",
+        }:
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
             data = {
