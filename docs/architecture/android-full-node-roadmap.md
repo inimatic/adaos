@@ -174,6 +174,9 @@ skill set without git, `pip`, venvs, or subprocess preparation.
 - [x] `[must]` reject activation of a skill not present in the descriptor.
 - [x] `[must]` seed `desktop`, rebuild its effective projection, and verify
   `ui.application`, `data.catalog`, and `data.installed` are present.
+- [x] `[must]` preserve desktop-wide required branches while activating an
+  alternate scenario and repair a persisted pre-fix materialization on APK
+  restart.
 - [ ] `[must]` add an Android dependency lock which excludes desktop-only
   packages and records the transitive native closure.
 - [ ] `[should]` make first-run bundle materialization transactional and
@@ -216,6 +219,9 @@ local Yjs state.
   `web_desktop` from the local document.
 - [x] `[must]` connect `/ws` and prove one browser action and one live stream
   event.
+- [x] `[must]` implement `desktop.webspace.go_home`, reject unsupported
+  control commands instead of acknowledging no-ops, and calculate HTTP
+  materialization readiness from the live YDoc.
 - [x] `[must]` distinguish local API, local Yjs, and remote member-link status
   in diagnostics.
 - [ ] `[should]` rename new client diagnostics from `local hub` to

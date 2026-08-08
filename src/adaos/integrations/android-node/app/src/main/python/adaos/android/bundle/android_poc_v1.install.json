@@ -87,6 +87,6 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "f5fdf8fae0de318a115e24bae700d24f83933f654e29772c5deffe957292d604"
+    "sha256": "5772dac62852ab352b0674855d1890035e96e3daa6ba1daff1fdb58c227596a5"
   }
 }

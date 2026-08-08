@@ -410,11 +410,22 @@ used on desktop seed and reconcile it:
 2. scenario projection writes `ui.application` and scenario metadata;
 3. active skill `webui.json` declarations contribute catalog, widget, modal,
    route, and receiver definitions;
-4. skill projections write bounded durable state under `data/...`;
-5. high-churn or append-oriented skill output uses WebIO streams;
-6. the browser receives the document through `/yws/desktop` and renders it;
-7. browser actions invoke local tools/events and observe the resulting Yjs or
+4. alternate scenario projection overlays its surface on the desktop-wide
+   application contract; it must not discard shared catalog modals or other
+   required branches;
+5. skill projections write bounded durable state under `data/...`;
+6. high-churn or append-oriented skill output uses WebIO streams;
+7. the browser receives the document through `/yws/desktop` and renders it;
+8. browser actions invoke local tools/events and observe the resulting Yjs or
    stream change.
+
+The control-channel acknowledgement is authoritative. A positive ACK means the
+named command was implemented and its mutation was accepted. Unsupported
+commands receive a negative ACK; they must never fall through as successful
+no-ops. In particular, `desktop.webspace.go_home` restores `web_desktop` and
+its complete materialization after an alternate scenario. HTTP materialization
+diagnostics are calculated from the same live YDoc and cannot claim `ready`
+while required branches are absent.
 
 The first vertical proof covers several paths rather than a synthetic page:
 
@@ -564,6 +575,8 @@ The implementation must preserve these invariants:
 8. Skills outside the descriptor cannot become active accidentally.
 9. Unsupported native capabilities degrade explicitly.
 10. ReDevice remains the path for devices below the Android/ABI/resource floor.
+11. Control ACKs and materialization diagnostics describe actual applied Yjs
+    state; alternate scenarios cannot leave the browser in false recovery.
 
 ## Non-Goals for the First PoC
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 import threading
@@ -59,6 +60,33 @@ def _plain_at_path(snapshot: dict[str, Any], path: str) -> Any:
             return None
         current = current.get(part)
     return current
+
+
+def _merge_scenario_application(
+    desktop_application: dict[str, Any],
+    scenario_application: dict[str, Any],
+) -> dict[str, Any]:
+    """Overlay a scenario surface without dropping desktop-wide contracts."""
+
+    merged = copy.deepcopy(desktop_application)
+    for key, value in scenario_application.items():
+        if key in {"modals", "interfaces"} and isinstance(value, dict):
+            target = merged.get(key)
+            if not isinstance(target, dict):
+                target = {}
+                merged[key] = target
+            target.update(copy.deepcopy(value))
+            continue
+        if key == "resources" and isinstance(value, list):
+            resources = merged.get("resources")
+            if not isinstance(resources, list):
+                resources = []
+            merged["resources"] = resources + [
+                copy.deepcopy(item) for item in value if item not in resources
+            ]
+            continue
+        merged[key] = copy.deepcopy(value)
+    return merged
 
 
 def _append_array_value(target: Y.YArray, transaction: Any, value: Any) -> None:
@@ -122,8 +150,11 @@ class AndroidSkillRuntime:
         self.store = store
         self.node_id = node_id
         self.subnet_id = subnet_id
-        self.desktop_application = desktop_application
-        self.taiga_application = taiga_application
+        self.desktop_application = copy.deepcopy(desktop_application)
+        self.taiga_application = _merge_scenario_application(
+            self.desktop_application,
+            taiga_application,
+        )
         self.publish_yjs = publish_yjs
         self.publish_event = publish_event
         self._lock = threading.RLock()
@@ -163,9 +194,20 @@ class AndroidSkillRuntime:
 
     def _initialize_projections(self) -> None:
         snapshot = self.store.snapshot_json()
+        current_scenario = str(
+            _plain_at_path(snapshot, "ui/current_scenario") or "web_desktop"
+        ).strip()
+        if current_scenario == "taiga_ui_demo_scenario":
+            current_application = self.taiga_application
+        else:
+            current_scenario = "web_desktop"
+            current_application = self.desktop_application
         updates: dict[str, Any] = {
+            "ui/current_scenario": current_scenario,
+            "ui/application": current_application,
             "data/desktop/notebook": self._notebook_snapshot(),
             "data/demo_metrics": self._demo_snapshot(),
+            "runtime/environment/materialization/scenario_id": current_scenario,
             "runtime/environment/install_profile": {
                 "id": "android_poc_v1",
                 "execution": "in_process",

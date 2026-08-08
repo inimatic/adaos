@@ -45,11 +45,15 @@ def _command(websocket, command_id: str, kind: str, payload: dict) -> tuple[dict
 
 
 def _snapshot(base_url: str) -> dict:
+    return _materialization(base_url)["snapshot"]
+
+
+def _materialization(base_url: str) -> dict:
     with urllib.request.urlopen(
         f"{base_url}/api/node/yjs/webspaces/desktop/materialization/snapshot",
         timeout=5,
     ) as response:
-        return json.load(response)["snapshot"]
+        return json.load(response)
 
 
 def _verify_note(base_url: str, marker: str) -> None:
@@ -171,6 +175,16 @@ def main() -> int:
         )
         if taiga.get("scenario_id") != "taiga_ui_demo_scenario":
             raise RuntimeError("Taiga UI scenario did not activate")
+        taiga_materialization = _materialization(arguments.base_url)
+        taiga_application = taiga_materialization.get("snapshot", {}).get("ui", {}).get(
+            "application", {}
+        )
+        if taiga_materialization.get("materialization", {}).get("ready") is not True:
+            raise RuntimeError(f"Taiga materialization is not ready: {taiga_materialization}")
+        if not {"apps_catalog", "widgets_catalog"}.issubset(
+            set((taiga_application.get("modals") or {}).keys())
+        ):
+            raise RuntimeError("Taiga materialization dropped desktop catalog modals")
 
         demo, demo_events = _command(
             websocket,
@@ -187,13 +201,18 @@ def main() -> int:
         desktop, _ = _command(
             websocket,
             "desktop-smoke",
-            "desktop.scenario.set",
-            {"webspace_id": "desktop", "scenario_id": "web_desktop"},
+            "desktop.webspace.go_home",
+            {"webspace_id": "desktop", "wait_for_rebuild": True},
         )
         if desktop.get("scenario_id") != "web_desktop":
-            raise RuntimeError("web_desktop did not reactivate")
+            raise RuntimeError("desktop.webspace.go_home did not reactivate web_desktop")
 
-    snapshot = _snapshot(arguments.base_url)
+    materialization = _materialization(arguments.base_url)
+    if materialization.get("materialization", {}).get("ready") is not True:
+        raise RuntimeError(f"web_desktop materialization is not ready: {materialization}")
+    if materialization.get("materialization", {}).get("current_scenario") != "web_desktop":
+        raise RuntimeError("web_desktop did not become the materialized home scenario")
+    snapshot = materialization["snapshot"]
     weather_state = snapshot["data"]["weather"]["current"]
     if weather_state.get("request_id") != request_id or weather_state.get("pending") is not False:
         raise RuntimeError("weather Yjs projection is incomplete")

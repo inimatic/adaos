@@ -419,6 +419,22 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             )
             assert ack["data"]["scenario_id"] == "taiga_ui_demo_scenario"
 
+            with urllib.request.urlopen(
+                f"{base_url}/api/node/yjs/webspaces/desktop/materialization/snapshot",
+                timeout=2,
+            ) as response:
+                taiga_materialization = json.load(response)
+            assert taiga_materialization["materialization"]["ready"] is True
+            assert taiga_materialization["materialization"]["missing_branches"] == []
+            assert (
+                taiga_materialization["materialization"]["current_scenario"]
+                == "taiga_ui_demo_scenario"
+            )
+            taiga_application = taiga_materialization["snapshot"]["ui"]["application"]
+            assert taiga_application["desktop"]["pageSchema"]["id"] == "taiga_ui_demo"
+            assert "apps_catalog" in taiga_application["modals"]
+            assert "widgets_catalog" in taiga_application["modals"]
+
             ack, events = _control_command(
                 websocket,
                 "demo-event-proof",
@@ -434,10 +450,41 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             ack, _ = _control_command(
                 websocket,
                 "desktop-proof",
-                "desktop.scenario.set",
-                {"webspace_id": "desktop", "scenario_id": "web_desktop"},
+                "desktop.webspace.go_home",
+                {"webspace_id": "desktop", "wait_for_rebuild": True},
             )
             assert ack["data"]["scenario_id"] == "web_desktop"
+
+            rejected, _ = _control_command(
+                websocket,
+                "unknown-control-proof",
+                "desktop.method.not_implemented",
+                {"webspace_id": "desktop"},
+            )
+            assert rejected["data"]["ok"] is False
+            assert rejected["data"]["accepted"] is False
+            assert rejected["data"]["error"].startswith(
+                "control_command_not_supported_android_poc:"
+            )
+
+            ack, _ = _control_command(
+                websocket,
+                "taiga-http-fallback-proof",
+                "desktop.scenario.set",
+                {"webspace_id": "desktop", "scenario_id": "taiga_ui_demo_scenario"},
+            )
+            assert ack["data"]["scenario_id"] == "taiga_ui_demo_scenario"
+
+        request = urllib.request.Request(
+            f"{base_url}/api/node/yjs/webspaces/desktop/go-home",
+            data=json.dumps({"wait_for_rebuild": True}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Origin": "https://inimatic.com"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            go_home = json.load(response)
+        assert go_home["accepted"] is True
+        assert go_home["scenario_id"] == "web_desktop"
 
         with urllib.request.urlopen(
             f"{base_url}/api/node/yjs/webspaces/desktop/materialization/snapshot",
@@ -458,11 +505,38 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         )
         assert code == 400
         assert rejected["error"].startswith("skill_not_in_android_descriptor")
+
+        legacy_taiga_application = json.loads(
+            json.dumps(bootstrap._skills.taiga_application)
+        )
+        legacy_taiga_application.pop("modals", None)
+        bootstrap._skills._set_paths(
+            {
+                "ui/current_scenario": "taiga_ui_demo_scenario",
+                "ui/application": legacy_taiga_application,
+                "runtime/environment/materialization/scenario_id": (
+                    "taiga_ui_demo_scenario"
+                ),
+            }
+        )
     finally:
         bootstrap.stop()
 
     restarted = json.loads(bootstrap.start(str(tmp_path), "test", 0))
     try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{restarted['port']}"
+            "/api/node/yjs/webspaces/desktop/materialization/snapshot",
+            timeout=2,
+        ) as response:
+            repaired = json.load(response)
+        assert repaired["materialization"]["ready"] is True
+        assert repaired["materialization"]["current_scenario"] == (
+            "taiga_ui_demo_scenario"
+        )
+        assert "apps_catalog" in repaired["snapshot"]["ui"]["application"]["modals"]
+        assert "widgets_catalog" in repaired["snapshot"]["ui"]["application"]["modals"]
+
         code, notebook = _post_json(
             f"http://127.0.0.1:{restarted['port']}/api/tools/call",
             {"tool": "notebook_skill:get_notebook_snapshot", "arguments": {}},

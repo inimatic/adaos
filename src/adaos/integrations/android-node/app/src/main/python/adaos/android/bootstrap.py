@@ -261,6 +261,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, {"ok": True, "result": result})
             return
+        if path == "/api/node/yjs/webspaces/desktop/go-home":
+            try:
+                if _skills is None:
+                    raise AndroidSkillError("android_skills_not_ready")
+                result = _skills.switch_scenario("web_desktop")
+            except AndroidSkillError as exc:
+                self._json(409, {"ok": False, "accepted": False, "error": str(exc)})
+                return
+            self._json(200, {"ok": True, "accepted": True, **result})
+            return
         self._json(404, {"ok": False, "error": "not_found", "path": path})
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib HTTP API
@@ -524,19 +534,25 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
         return
     kind = str(message.get("kind") or "")
     request_payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
-    data: dict[str, Any] = {"ok": True, "accepted": True}
+    data: dict[str, Any]
     try:
         if kind == "device.register":
-            data.update(
-                {
-                    "device_id": str(request_payload.get("device_id") or ""),
-                    "webspace_id": str(request_payload.get("webspace_id") or "desktop"),
-                }
-            )
+            data = {
+                "ok": True,
+                "accepted": True,
+                "device_id": str(request_payload.get("device_id") or ""),
+                "webspace_id": str(request_payload.get("webspace_id") or "desktop"),
+            }
         elif kind == "desktop.scenario.set":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
+            data = {"ok": True, "accepted": True}
             data.update(_skills.switch_scenario(str(request_payload.get("scenario_id") or "")))
+        elif kind == "desktop.webspace.go_home":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data = {"ok": True, "accepted": True}
+            data.update(_skills.switch_scenario("web_desktop"))
         elif kind == "skill.event.publish":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
@@ -545,25 +561,40 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
                 if isinstance(request_payload.get("payload"), dict)
                 else {}
             )
-            data["result"] = _skills.handle_event(
-                str(request_payload.get("event_type") or ""),
-                event_payload,
-            )
+            data = {
+                "ok": True,
+                "accepted": True,
+                "result": _skills.handle_event(
+                    str(request_payload.get("event_type") or ""),
+                    event_payload,
+                ),
+            }
         elif kind.startswith("adaos_connect.prepare") or kind == "demo_metrics.host_action":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
-            data["result"] = _skills.handle_event(kind, request_payload)
+            data = {
+                "ok": True,
+                "accepted": True,
+                "result": _skills.handle_event(kind, request_payload),
+            }
         elif kind in {"webio.stream.snapshot.requested", "webio.stream.subscription.changed"}:
             receiver = str(request_payload.get("receiver") or "")
+            data = {"ok": True, "accepted": True}
             if _skills is not None:
                 data["snapshot"] = _skills.stream_snapshot(receiver)
         elif kind == "desktop.toggleInstall":
-            data.update(
-                {
-                    "switch_skipped": True,
-                    "skip_reason": "android_poc_immutable_install",
-                }
-            )
+            data = {
+                "ok": True,
+                "accepted": True,
+                "switch_skipped": True,
+                "skip_reason": "android_poc_immutable_install",
+            }
+        else:
+            data = {
+                "ok": False,
+                "accepted": False,
+                "error": f"control_command_not_supported_android_poc:{kind or 'missing_kind'}",
+            }
     except AndroidSkillError as exc:
         data = {"ok": False, "accepted": False, "error": str(exc)}
     response = {
@@ -823,22 +854,105 @@ def _build_desktop_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def _materialization_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
+    ui = snapshot.get("ui") if isinstance(snapshot.get("ui"), dict) else {}
+    application = (
+        ui.get("application") if isinstance(ui.get("application"), dict) else {}
+    )
+    desktop = (
+        application.get("desktop")
+        if isinstance(application.get("desktop"), dict)
+        else {}
+    )
+    modals = (
+        application.get("modals")
+        if isinstance(application.get("modals"), dict)
+        else {}
+    )
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
+    catalog = data.get("catalog") if isinstance(data.get("catalog"), dict) else {}
+    installed = (
+        data.get("installed") if isinstance(data.get("installed"), dict) else {}
+    )
+    runtime = (
+        snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
+    )
+    environment = (
+        runtime.get("environment")
+        if isinstance(runtime.get("environment"), dict)
+        else {}
+    )
+    materialization = (
+        environment.get("materialization")
+        if isinstance(environment.get("materialization"), dict)
+        else {}
+    )
+    current_scenario = str(ui.get("current_scenario") or "web_desktop").strip()
+    projection_scenario = str(materialization.get("scenario_id") or "").strip()
+    scenario_consistent = not projection_scenario or current_scenario == projection_scenario
+    checks = (
+        ("ui.application", bool(application)),
+        ("ui.application.desktop", bool(desktop)),
+        ("ui.application.desktop.pageSchema", isinstance(desktop.get("pageSchema"), dict)),
+        ("ui.application.modals.apps_catalog", "apps_catalog" in modals),
+        ("ui.application.modals.widgets_catalog", "widgets_catalog" in modals),
+        ("data.catalog.apps", isinstance(catalog.get("apps"), list)),
+        ("data.catalog.widgets", isinstance(catalog.get("widgets"), list)),
+        ("data.desktop", isinstance(data.get("desktop"), dict)),
+        ("data.installed.apps", isinstance(installed.get("apps"), list)),
+        ("data.installed.widgets", isinstance(installed.get("widgets"), list)),
+        ("runtime.environment.materialization.scenario_id", scenario_consistent),
+    )
+    missing = [path for path, present in checks if not present]
+    ready = not missing
+    has_effective_data = all(
+        present
+        for path, present in checks
+        if path in {"data.desktop", "data.installed.apps", "data.installed.widgets"}
+    )
+    has_page = isinstance(desktop.get("pageSchema"), dict)
+    has_catalog = isinstance(catalog.get("apps"), list) and isinstance(
+        catalog.get("widgets"), list
+    )
+    if ready:
+        readiness_state = "ready"
+    elif not scenario_consistent and current_scenario and has_effective_data:
+        readiness_state = "hydrating"
+    elif has_page and has_catalog and has_effective_data:
+        readiness_state = "interactive"
+    elif has_page:
+        readiness_state = "hydrating"
+    elif current_scenario or application or desktop:
+        readiness_state = "pending_structure"
+    else:
+        readiness_state = "degraded"
+    return {
+        "ready": ready,
+        "readiness_state": readiness_state,
+        "missing_branches": missing,
+        "current_scenario": current_scenario,
+        "scenario_id": current_scenario,
+        "projection_scenario": projection_scenario or None,
+        "scenario_consistent": scenario_consistent,
+    }
+
+
 def _materialization_snapshot_payload() -> dict[str, Any]:
     with _yjs_lock:
         snapshot = (
             _ystore.snapshot_json() if _ystore is not None else copy.deepcopy(_desktop_snapshot)
         )
     now = time.time()
-    current_scenario = str(
-        ((snapshot.get("ui") or {}).get("current_scenario") if isinstance(snapshot.get("ui"), dict) else "")
-        or "web_desktop"
-    )
+    diagnostics = _materialization_diagnostics(snapshot)
+    ready = bool(diagnostics["ready"])
+    readiness_state = str(diagnostics["readiness_state"])
+    reason = "android_packaged_bundle" if ready else f"android_materialization_{readiness_state}"
     return {
         "ok": True,
         "accepted": True,
-        "degraded": False,
-        "state": "ready",
-        "reason": "android_packaged_bundle",
+        "degraded": not ready,
+        "state": readiness_state,
+        "reason": reason,
         "stale": False,
         "source": "android_packaged_bundle",
         "last_good_snapshot_at": now,
@@ -846,24 +960,20 @@ def _materialization_snapshot_payload() -> dict[str, Any]:
         "snapshot_scope": "essential",
         "snapshot": snapshot,
         "materialization": {
-            "ready": True,
-            "readiness_state": "ready",
-            "missing_branches": [],
-            "current_scenario": current_scenario,
-            "scenario_id": current_scenario,
+            **diagnostics,
             "source": "android_packaged_bundle",
             "observed_at": now,
         },
         "seed_health": {
-            "state": "ready",
-            "reason": "android_packaged_bundle",
+            "state": "ready" if ready else readiness_state,
+            "reason": reason,
             "source": "android_packaged_bundle",
             "stale": False,
             "last_good_snapshot_at": now,
         },
         "rebuild": {
-            "state": "ready",
-            "scenario_id": "web_desktop",
+            "state": "ready" if ready else readiness_state,
+            "scenario_id": diagnostics["current_scenario"],
             "bundle_id": "android_poc_v1",
         },
     }
@@ -885,9 +995,14 @@ def _reliability_payload(*, mode: str = "runtime") -> dict[str, Any]:
     selected_mode = str(mode or "runtime").strip().lower() or "runtime"
     with _yjs_lock:
         update_count = int(_ystore.stats()["update_count"]) if _ystore is not None else 0
+        document_snapshot = (
+            _ystore.snapshot_json() if _ystore is not None else copy.deepcopy(_desktop_snapshot)
+        )
         yjs_connection_count = sum(
             1 for peer in _websocket_peers if peer.kind == "yjs"
         )
+    materialization = _materialization_diagnostics(document_snapshot)
+    materialization_ready = bool(materialization["ready"])
     return {
         "ok": True,
         "available": True,
@@ -928,19 +1043,19 @@ def _reliability_payload(*, mode: str = "runtime") -> dict[str, Any]:
             "webspaceId": "desktop",
             "transportState": "attached",
             "firstSyncState": "complete",
-            "semanticState": "ready",
+            "semanticState": "ready" if materialization_ready else "recovering",
             "freshnessState": "fresh",
             "lastGoodSyncAt": now_ms,
             "lastMaterializationAt": now_ms,
             "replay": {"mode": "snapshot_plus_diff", "cursor": str(update_count)},
             "fallbackMode": "off",
             "materialization": {
-                "ready": True,
-                "readinessState": "ready",
-                "scenarioId": "web_desktop",
-                "transitionExpected": False,
+                "ready": materialization_ready,
+                "readinessState": materialization["readiness_state"],
+                "scenarioId": materialization["current_scenario"],
+                "transitionExpected": not materialization["scenario_consistent"],
             },
-            "blockers": [],
+            "blockers": list(materialization["missing_branches"]),
         },
         "webrtcYjs": {
             "state": "ready",

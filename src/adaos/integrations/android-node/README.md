@@ -19,6 +19,9 @@ Current scope:
   Taiga demo-metrics handlers, with no subprocess or runtime package install;
 - fixed UI descriptors for Weather, AdaOS Connect, Notebook, and the Taiga UI
   demo scenario;
+- browser-compatible home navigation: `desktop.webspace.go_home` restores the
+  complete `web_desktop` materialization, while unsupported control commands
+  receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
 This is the A0/A1/A2/A3/A4/A5 vertical-slice artifact. It reports `yjs_ready=true`,
@@ -54,7 +57,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc3-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc4-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
