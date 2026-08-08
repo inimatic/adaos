@@ -176,6 +176,18 @@ class RelationalStorageBroker:
             )
         return provider
 
+    def service_uri(self, binding: RelationalStorageBinding, *, owner_ref: str) -> str:
+        """Resolve a process-only URI for a service component owned by the binding.
+
+        This method deliberately lives below the skill SDK. The public binding
+        remains opaque; only the core supervisor may inject the URI into the
+        owning service process.
+        """
+
+        binding.assert_owner(owner_ref)
+        provider = self.provider_for(binding)
+        return provider.service_uri(binding, owner_ref=owner_ref)
+
 
 def build_default_relational_storage_broker() -> RelationalStorageBroker:
     providers: list[RelationalStorageProvider] = [SQLiteRelationalStorageProvider()]

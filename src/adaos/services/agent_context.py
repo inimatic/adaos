@@ -82,6 +82,7 @@ class AgentContext:
     fs: FSPolicy
     sandbox: Sandbox
     relational_storage: Optional["RelationalStorageBrokerPort"] = field(default=None, repr=False)
+    blob_storage: Optional[Any] = field(default=None, repr=False)
     provider_status: Optional["ProviderStatusRegistry"] = field(default=None, repr=False)
     execution_provider: Optional["ExecutorProvider"] = field(default=None, repr=False)
     # Node configuration (loaded once during bootstrap and reused to avoid expensive reloads)

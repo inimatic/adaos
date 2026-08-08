@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.storage.blob.binding.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "capability", "binding_id", "provider_id", "owner_ref", "locator", "secret_ref", "protocol_version"],
+  "properties": {
+    "schema": {"const": "adaos.storage.blob.binding.v1"},
+    "capability": {"const": "storage.blob"},
+    "binding_id": {"type": "string", "minLength": 1},
+    "provider_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*$"},
+    "owner_ref": {"type": "string", "pattern": "^(skill|service|core):[a-z0-9_.-]+$"},
+    "locator": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*:[A-Za-z0-9_./-]+$"},
+    "secret_ref": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[a-z][a-z0-9_.-]*:[a-z0-9_./-]+$"}
+      ]
+    },
+    "protocol_version": {"const": "1.0"}
+  }
+}

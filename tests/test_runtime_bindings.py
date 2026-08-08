@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
 from adaos.domain.execution import ExecutionAttempt, ExecutionResourceRequest, ExecutionSpec
+from adaos.domain.blob_storage import BlobStorageBinding
 from adaos.domain.relational_storage import RelationalStorageBinding, RelationalStorageRequirements
 from adaos.domain.runtime_bindings import (
     ContentRef,
@@ -102,6 +103,7 @@ def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None
         "service.binding.v1.schema.json",
         "storage.relational_requirement.v1.schema.json",
         "storage.relational_binding.v1.schema.json",
+        "storage.blob_binding.v1.schema.json",
         "execution.spec.v1.schema.json",
         "execution.attempt.v1.schema.json",
         "execution.checkpoint.v1.schema.json",
@@ -143,6 +145,12 @@ def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None
         migration_owner="skill:fixture",
         capabilities={},
     )
+    blob_binding = BlobStorageBinding(
+        binding_id="blobbind.fixture",
+        provider_id="filesystem",
+        owner_ref="skill:fixture",
+        locator="skill-data:files/artifacts",
+    )
     spec = ExecutionSpec(
         spec_id="fixture.v1",
         owner_ref="skill:fixture",
@@ -182,6 +190,7 @@ def test_arf05_contract_payloads_validate_against_packaged_abi(tmp_path) -> None
         "service.binding.v1.schema.json": service.to_dict(),
         "storage.relational_requirement.v1.schema.json": requirement.to_dict(),
         "storage.relational_binding.v1.schema.json": storage_binding.to_dict(),
+        "storage.blob_binding.v1.schema.json": blob_binding.to_dict(),
         "execution.spec.v1.schema.json": spec.to_dict(),
         "execution.attempt.v1.schema.json": attempt.to_dict(),
     }

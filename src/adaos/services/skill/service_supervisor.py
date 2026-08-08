@@ -27,6 +27,10 @@ from adaos.services.eventbus import emit
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.domain.blob_storage import BlobStorageRequirements
+from adaos.domain.relational_storage import RelationalStorageRequirements
+from adaos.services.storage.blob import get_blob_storage_broker
+from adaos.services.storage.relational import get_relational_storage_broker
 
 _log = logging.getLogger("adaos.skill.service")
 
@@ -90,6 +94,19 @@ class ServiceSpec:
     doctor_cooldown_s: int
     doctor_issue_types: list[str]
     doctor_include_log_tail_lines: int
+
+    ui_enabled: bool = False
+    ui_path: str = "/"
+    ui_access: str = "authenticated"
+    ui_origin_policy: str = "same-origin"
+    ui_embedding: str = "external"
+    ui_content_security_policy: str = (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+    )
+    ui_max_request_bytes: int = 1024 * 1024
+    storage_relational: Mapping[str, Any] | None = None
+    storage_blob: Mapping[str, Any] | None = None
 
     @property
     def base_url(self) -> str:
@@ -265,6 +282,68 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         doctor_issue_types = [str(x).strip() for x in doctor_issue_types_raw if isinstance(x, str) and x.strip()]
     doctor_include_log_tail_lines = int(doctor_cfg.get("include_log_tail_lines") or 50)
 
+    ui_cfg = service.get("ui") or {}
+    if not isinstance(ui_cfg, Mapping):
+        ui_cfg = {}
+    ui_enabled = bool(ui_cfg.get("enabled") is True)
+    ui_path = str(ui_cfg.get("path") or "/").strip()
+    if not ui_path.startswith("/") or "?" in ui_path or "#" in ui_path or ".." in ui_path.split("/"):
+        raise ValueError("service.ui.path must be an absolute path without traversal, query, or fragment")
+    ui_access = str(ui_cfg.get("access") or "authenticated").strip()
+    ui_origin_policy = str(ui_cfg.get("origin_policy") or "same-origin").strip()
+    ui_embedding = str(ui_cfg.get("embedding") or "external").strip()
+    if ui_access != "authenticated":
+        raise ValueError("service UI access must be authenticated")
+    if ui_origin_policy != "same-origin":
+        raise ValueError("service UI origin policy must be same-origin")
+    if ui_embedding not in {"external", "same-origin"}:
+        raise ValueError("service UI embedding policy is invalid")
+    ui_content_security_policy = str(
+        ui_cfg.get("content_security_policy")
+        or (
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        )
+    ).strip()
+    if not ui_content_security_policy or len(ui_content_security_policy) > 2048:
+        raise ValueError("service UI content security policy is invalid")
+    ui_max_request_bytes = int(ui_cfg.get("max_request_bytes") or 1024 * 1024)
+    if not 0 <= ui_max_request_bytes <= 16 * 1024 * 1024:
+        raise ValueError("service UI request limit is invalid")
+
+    capabilities = {
+        str(item).strip()
+        for item in (manifest.get("capabilities") or [])
+        if str(item).strip()
+    }
+    storage_cfg = service.get("storage") or {}
+    if not isinstance(storage_cfg, Mapping):
+        storage_cfg = {}
+
+    def storage_binding(kind: str, capability: str) -> dict[str, Any] | None:
+        value = storage_cfg.get(kind)
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise ValueError(f"service.storage.{kind} must be an object")
+        if capability not in capabilities:
+            raise ValueError(f"service.storage.{kind} requires capability {capability}")
+        logical_name = str(value.get("logical_name") or "").strip().lower()
+        environment = str(value.get("environment") or "").strip()
+        if not logical_name or not logical_name.replace("_", "").replace("-", "").isalnum():
+            raise ValueError(f"service.storage.{kind}.logical_name is invalid")
+        if not environment.startswith("ADAOS_") or not environment.replace("_", "").isalnum() or not environment.upper() == environment:
+            raise ValueError(f"service.storage.{kind}.environment is invalid")
+        return {
+            "logical_name": logical_name,
+            "environment": environment,
+            "prefer_provisioned": bool(value.get("prefer_provisioned") is True),
+            "requirements": dict(value.get("requirements") or {}),
+        }
+
+    storage_relational = storage_binding("relational", "storage.relational")
+    storage_blob = storage_binding("blob", "storage.blob")
+
     return ServiceSpec(
         skill=skill_name,
         skill_root=skill_root,
@@ -292,6 +371,15 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         doctor_cooldown_s=max(0, doctor_cooldown_s),
         doctor_issue_types=doctor_issue_types,
         doctor_include_log_tail_lines=max(0, doctor_include_log_tail_lines),
+        ui_enabled=ui_enabled,
+        ui_path=ui_path,
+        ui_access=ui_access,
+        ui_origin_policy=ui_origin_policy,
+        ui_embedding=ui_embedding,
+        ui_content_security_policy=ui_content_security_policy,
+        ui_max_request_bytes=ui_max_request_bytes,
+        storage_relational=storage_relational,
+        storage_blob=storage_blob,
     )
 
 
@@ -628,6 +716,72 @@ class ServiceSkillSupervisor:
         spec = self._specs.get(skill_name)
         return spec.base_url if spec else None
 
+    def ui_surface(self, skill_name: str, *, check_health: bool = False) -> dict[str, Any] | None:
+        """Return a redacted, same-origin UI surface; never expose the upstream URL."""
+
+        self.ensure_discovered()
+        spec = self._specs.get(skill_name)
+        if spec is None or not spec.ui_enabled:
+            return None
+        status = self.status(skill_name, check_health=check_health) or {}
+        return {
+            "schema": "adaos.service.ui_surface.v1",
+            "service": skill_name,
+            "access": spec.ui_access,
+            "origin_policy": spec.ui_origin_policy,
+            "embedding": spec.ui_embedding,
+            "proxy_path": f"/api/services/{skill_name}/ui/",
+            "bootstrap_path": f"/api/services/{skill_name}/ui-bootstrap",
+            "health": {
+                "running": bool(status.get("running") or status.get("external_ready")),
+                "ok": status.get("health_ok") if check_health else None,
+            },
+        }
+
+    def _service_storage_environment(self, spec: ServiceSpec, bucket_root: Path) -> dict[str, str]:
+        """Resolve opaque bindings to process-only locations for their owning service."""
+
+        values: dict[str, str] = {}
+        owner_ref = f"skill:{spec.skill}"
+        if spec.storage_relational:
+            config = dict(spec.storage_relational)
+            raw_requirements = dict(config.get("requirements") or {})
+            raw_requirements["migration_owner"] = owner_ref
+            if config.get("prefer_provisioned"):
+                profiles = get_relational_storage_broker(self._ctx).provider_profiles()
+                raw_requirements["preferred_providers"] = tuple(
+                    [item.provider_id for item in profiles if item.provider_id != "sqlite"]
+                    + [item.provider_id for item in profiles if item.provider_id == "sqlite"]
+                )
+            requirements = RelationalStorageRequirements(**raw_requirements)
+            broker = get_relational_storage_broker(self._ctx)
+            binding = broker.bind(
+                owner_ref=owner_ref,
+                logical_name=str(config["logical_name"]),
+                requirements=requirements,
+                scope_root=bucket_root / "data" / "db",
+            )
+            values[str(config["environment"])] = broker.service_uri(binding, owner_ref=owner_ref)
+            values["ADAOS_SERVICE_RELATIONAL_BINDING"] = json.dumps(
+                binding.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        if spec.storage_blob:
+            config = dict(spec.storage_blob)
+            requirements = BlobStorageRequirements(**dict(config.get("requirements") or {}))
+            broker = get_blob_storage_broker(self._ctx)
+            binding = broker.bind(
+                owner_ref=owner_ref,
+                logical_name=str(config["logical_name"]),
+                requirements=requirements,
+                scope_root=bucket_root / "data" / "files",
+                prefer_provisioned=bool(config.get("prefer_provisioned")),
+            )
+            values[str(config["environment"])] = broker.service_uri(binding, owner_ref=owner_ref)
+            values["ADAOS_SERVICE_BLOB_BINDING"] = json.dumps(
+                binding.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        return values
+
     def list(self) -> list[str]:
         self.ensure_discovered()
         return sorted(self._specs.keys())
@@ -945,6 +1099,7 @@ class ServiceSkillSupervisor:
             env["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(internal_data)
             env["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(internal_data)
             env["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(internal_data)
+            env.update(self._service_storage_environment(spec, bucket_root))
         env["ADAOS_SKILL_NAME"] = name
         env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"
         env["ADAOS_SKILL_ROOT"] = str(spec.skill_root)
@@ -1334,6 +1489,15 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             tuple(spec.command),
             str(spec.requirements_file.resolve()) if spec.requirements_file else "",
             tuple(spec.dependencies),
+            spec.ui_enabled,
+            spec.ui_path,
+            spec.ui_access,
+            spec.ui_origin_policy,
+            spec.ui_embedding,
+            spec.ui_content_security_policy,
+            spec.ui_max_request_bytes,
+            json.dumps(dict(spec.storage_relational or {}), sort_keys=True, default=str),
+            json.dumps(dict(spec.storage_blob or {}), sort_keys=True, default=str),
         )
 
     def _install_deps(self, python: Path, spec: ServiceSpec) -> None:

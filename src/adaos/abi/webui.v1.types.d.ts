@@ -124,6 +124,7 @@ export type WebUiWidgetType =
   | 'visual.taigaMetricChart'
   | 'visual.taigaTree'
   | 'visual.frameViewer'
+  | 'visual.serviceFrame'
   | 'visual.image'
   | 'visual.metricTile'
   | 'visual.metricChart'

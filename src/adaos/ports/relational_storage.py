@@ -64,6 +64,13 @@ class RelationalStorageProvider(Protocol):
         reason: str,
     ) -> None: ...
 
+    def service_uri(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+    ) -> str: ...
+
 
 class RelationalStorageBrokerPort(Protocol):
     def bind(
@@ -78,6 +85,8 @@ class RelationalStorageBrokerPort(Protocol):
     def provider_for(self, binding: RelationalStorageBinding) -> RelationalStorageProvider: ...
 
     def provider_profiles(self) -> Sequence[RelationalProviderCapabilities]: ...
+
+    def service_uri(self, binding: RelationalStorageBinding, *, owner_ref: str) -> str: ...
 
 
 __all__ = ["RelationalStorageBrokerPort", "RelationalStorageProvider"]

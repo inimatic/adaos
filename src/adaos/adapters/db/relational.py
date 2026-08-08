@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import secrets
 import threading
 import time
 from contextlib import contextmanager
@@ -287,6 +288,14 @@ class SQLiteRelationalStorageProvider:
         self._engine_for(binding, owner_ref)
         return self._targets[binding.binding_id]
 
+    def service_uri(self, binding: RelationalStorageBinding, *, owner_ref: str) -> str:
+        """Return the private SQLAlchemy URI to the core service supervisor only."""
+
+        self._engine_for(binding, owner_ref)
+        with self._lock:
+            target = self._targets[binding.binding_id]
+        return f"sqlite:///{target.as_posix()}"
+
 
 _POSTGRES_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
@@ -333,6 +342,7 @@ class PostgreSQLRelationalStorageProvider:
         self._targets: dict[str, URL] = {}
         self._engines: dict[str, Engine] = {}
         self._roles: dict[str, str] = {}
+        self._role_passwords: dict[str, str] = {}
         self._backups: dict[str, tuple[str, str]] = {}
         self._requirements: dict[str, RelationalStorageRequirements] = {}
         self._lock = threading.RLock()
@@ -373,7 +383,12 @@ class PostgreSQLRelationalStorageProvider:
         database_name = self._database_name(owner, logical)
         role_name = self._role_name(owner)
         binding_id = _binding_id(self.capabilities.provider_id, owner, logical)
-        self._ensure_database(database_name, role_name)
+        with self._lock:
+            role_password = self._role_passwords.setdefault(
+                role_name,
+                secrets.token_urlsafe(32),
+            )
+        self._ensure_database(database_name, role_name, role_password)
         target_url = self._admin_url.set(database=database_name)
         binding = RelationalStorageBinding(
             binding_id=binding_id,
@@ -414,7 +429,7 @@ class PostgreSQLRelationalStorageProvider:
 
         return engine
 
-    def _ensure_database(self, database_name: str, role_name: str) -> None:
+    def _ensure_database(self, database_name: str, role_name: str, role_password: str) -> None:
         admin_engine = create_engine(
             self._admin_url,
             future=True,
@@ -427,8 +442,15 @@ class PostgreSQLRelationalStorageProvider:
                     text("SELECT 1 FROM pg_roles WHERE rolname = :name"),
                     {"name": role_name},
                 ).scalar_one_or_none()
+                escaped_password = role_password.replace("'", "''")
                 if role_exists is None:
-                    connection.exec_driver_sql(f'CREATE ROLE "{role_name}" NOLOGIN')
+                    connection.exec_driver_sql(
+                        f'CREATE ROLE "{role_name}" LOGIN PASSWORD \'{escaped_password}\''
+                    )
+                else:
+                    connection.exec_driver_sql(
+                        f'ALTER ROLE "{role_name}" LOGIN PASSWORD \'{escaped_password}\''
+                    )
                 connection.execute(
                     text("SELECT pg_advisory_lock(hashtext(:name))"),
                     {"name": database_name},
@@ -570,6 +592,16 @@ class PostgreSQLRelationalStorageProvider:
             "bindings_rebound": len(database_names),
             "server_version_num": server_version,
         }
+
+    def service_uri(self, binding: RelationalStorageBinding, *, owner_ref: str) -> str:
+        """Return a least-privilege login URI to the core supervisor only."""
+
+        self._engine_for(binding, owner_ref)
+        with self._lock:
+            target = self._targets[binding.binding_id]
+            role = self._roles[binding.binding_id]
+            password = self._role_passwords[role]
+        return target.set(username=role, password=password).render_as_string(hide_password=False)
 
     def backup(self, binding: RelationalStorageBinding, *, owner_ref: str) -> RelationalBackup:
         self._engine_for(binding, owner_ref)

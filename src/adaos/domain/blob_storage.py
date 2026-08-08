@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import re
 from typing import Any, ClassVar
 
 from .ownership import validate_owner_ref
+
+
+_SECRET_REF_RE = re.compile(r"^[a-z][a-z0-9_.-]*:[a-z0-9_./-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +62,16 @@ class BlobStorageBinding:
             raise ValueError("blob binding locator must be opaque")
         if self.protocol_version != "1.0":
             raise ValueError("unsupported blob binding protocol")
+        secret_ref = str(self.secret_ref or "").strip() or None
+        if secret_ref is not None and (
+            any(token in secret_ref.lower() for token in ("://", "@", "password=", "token="))
+            or not _SECRET_REF_RE.fullmatch(secret_ref)
+        ):
+            raise ValueError("blob secret_ref must be an opaque reference")
+        object.__setattr__(self, "secret_ref", secret_ref)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"schema": self.SCHEMA, "capability": "storage.blob", **asdict(self)}
 
 
 __all__ = ["BlobStorageBinding", "BlobStorageRequirements"]

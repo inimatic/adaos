@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import time
 
+import pytest
+
 
 def _write_service_skill(root: Path, *, port: int) -> None:
     (root / "handlers").mkdir(parents=True, exist_ok=True)
@@ -309,6 +311,109 @@ def test_service_supervisor_prefers_service_dependencies_for_venv(tmp_path):
     assert spec.env_mode == "venv"
     assert spec.venv_dir == runtime_root / "venv"
     assert spec.dependencies == ["torch==2.10.0", "faiss-cpu==1.13.2"]
+
+
+def test_service_supervisor_registers_governed_ui_surface(tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "tracker_service"
+    skill_root.mkdir(parents=True)
+    spec = mod._resolve_service_spec(
+        "tracker_service",
+        skill_root,
+        {
+            "name": "tracker_service",
+            "runtime": {"kind": "service"},
+            "service": {
+                "host": "127.0.0.1",
+                "port": 18121,
+                "command": ["-m", "handlers.service"],
+                "ui": {
+                    "enabled": True,
+                    "path": "/adaos/service-ui",
+                    "access": "authenticated",
+                    "origin_policy": "same-origin",
+                    "embedding": "same-origin",
+                    "max_request_bytes": 4096,
+                },
+            },
+        },
+    )
+
+    assert spec is not None
+    assert spec.ui_enabled is True
+    assert spec.ui_path == "/adaos/service-ui"
+    assert spec.ui_embedding == "same-origin"
+    assert spec.ui_max_request_bytes == 4096
+
+
+def test_service_supervisor_rejects_ungoverned_ui_policy(tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "unsafe_service"
+    skill_root.mkdir(parents=True)
+    with pytest.raises(ValueError, match="origin policy"):
+        mod._resolve_service_spec(
+            "unsafe_service",
+            skill_root,
+            {
+                "runtime": {"kind": "service"},
+                "service": {
+                    "port": 18122,
+                    "command": ["-m", "handlers.service"],
+                    "ui": {"enabled": True, "origin_policy": "any"},
+                },
+            },
+        )
+
+
+def test_service_supervisor_injects_owner_scoped_storage_locations_only_into_process_env(tmp_path):
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.skill import service_supervisor as mod
+    from adaos.services.storage.blob import BlobStorageBroker, LocalBlobStorageProvider
+    from adaos.services.storage.relational import RelationalStorageBroker
+    from adaos.adapters.db.relational import SQLiteRelationalStorageProvider
+
+    runtime_root = tmp_path / ".runtime" / "storage_service" / "v1.0"
+    skill_root = runtime_root / "slots" / "A" / "src" / "skills" / "storage_service"
+    skill_root.mkdir(parents=True)
+    spec = mod._resolve_service_spec(
+        "storage_service",
+        skill_root,
+        {
+            "runtime": {"kind": "service"},
+            "capabilities": ["storage.relational", "storage.blob"],
+            "service": {
+                "port": 18123,
+                "command": ["-m", "handlers.service"],
+                "storage": {
+                    "relational": {
+                        "logical_name": "backend",
+                        "environment": "ADAOS_SERVICE_BACKEND_URI",
+                        "requirements": {"locality": "any"},
+                    },
+                    "blob": {
+                        "logical_name": "artifacts",
+                        "environment": "ADAOS_SERVICE_ARTIFACT_URI",
+                        "requirements": {"locality": "any"},
+                    },
+                },
+            },
+        },
+    )
+    assert spec is not None
+    ctx = get_ctx()
+    object.__setattr__(ctx, "relational_storage", RelationalStorageBroker((SQLiteRelationalStorageProvider(),)))
+    object.__setattr__(ctx, "blob_storage", BlobStorageBroker((LocalBlobStorageProvider(),)))
+    supervisor = mod.ServiceSkillSupervisor()
+
+    environment = supervisor._service_storage_environment(spec, runtime_root)
+
+    assert environment["ADAOS_SERVICE_BACKEND_URI"].startswith("sqlite:///")
+    assert environment["ADAOS_SERVICE_ARTIFACT_URI"].startswith("file:///")
+    assert "sqlite:///" not in environment["ADAOS_SERVICE_RELATIONAL_BINDING"]
+    assert "file:///" not in environment["ADAOS_SERVICE_BLOB_BINDING"]
+    assert '"owner_ref":"skill:storage_service"' in environment["ADAOS_SERVICE_RELATIONAL_BINDING"]
 
 
 def test_service_supervisor_pythonpath_includes_package_root(tmp_path):
