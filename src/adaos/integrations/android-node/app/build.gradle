@@ -37,6 +37,9 @@ chaquopy {
         } else {
             buildPython("python3.11")
         }
+        pip {
+            install("../wheels/y_py-0.6.2+adaos.1-cp311-cp311-android_26_arm64_v8a.whl")
+        }
         pyc {
             src = false
         }

@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import y_py as Y
+
+from .ystore import AndroidYStore
+
 _ALLOWED_ORIGINS = {
     "https://inimatic.com",
     "https://www.inimatic.com",
@@ -42,10 +46,8 @@ _thread: threading.Thread | None = None
 _runtime: dict[str, Any] = {}
 _desktop_snapshot: dict[str, Any] = {}
 _base_yjs_update = b""
-_yjs_updates: list[bytes] = []
-_yjs_update_hashes: set[str] = set()
+_ystore: AndroidYStore | None = None
 _websocket_peers: set["_WebSocketPeer"] = set()
-_journal_path: Path | None = None
 
 
 class _LoopbackServer(ThreadingHTTPServer):
@@ -232,7 +234,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "yjs": {
                         "ok": True,
                         "accepted": True,
-                        "mode": "packaged_seed_plus_update_journal",
+                        "mode": "native_y_py_sqlite_ystore",
                     },
                 },
             )
@@ -308,7 +310,9 @@ class _Handler(BaseHTTPRequestHandler):
             _websocket_peers.add(peer)
         try:
             if kind == "yjs":
-                peer.send(0x2, _encode_sync_message(0, b"\x00"))
+                with _yjs_lock:
+                    state_vector = _ystore.state_vector() if _ystore is not None else b"\x00"
+                peer.send(0x2, _encode_sync_message(0, state_vector))
             self._websocket_loop(peer)
         finally:
             with _yjs_lock:
@@ -469,14 +473,13 @@ def _handle_yjs_message(peer: _WebSocketPeer, payload: bytes) -> None:
             sync_type, offset = _read_var_uint(payload, offset)
             update, _ = _read_var_bytes(payload, offset)
             if sync_type == 0:
-                # The packaged seed completes the y-websocket sync handshake;
-                # persisted browser updates are replayed immediately after it.
-                seed = _base_yjs_update or b"\x00\x00"
-                peer.send(0x2, _encode_sync_message(1, seed))
                 with _yjs_lock:
-                    replay = list(_yjs_updates)
-                for stored in replay:
-                    peer.send(0x2, _encode_sync_message(2, stored))
+                    response = (
+                        _ystore.update_for_state_vector(update)
+                        if _ystore is not None
+                        else (_base_yjs_update or b"\x00\x00")
+                    )
+                peer.send(0x2, _encode_sync_message(1, response))
                 return
             if sync_type in {1, 2} and update not in {b"", b"\x00\x00"}:
                 if _remember_yjs_update(update):
@@ -537,21 +540,11 @@ def _broadcast_yjs(payload: bytes, *, exclude: _WebSocketPeer | None = None) -> 
 
 
 def _remember_yjs_update(update: bytes) -> bool:
-    digest = hashlib.sha256(update).hexdigest()
     with _yjs_lock:
-        if digest in _yjs_update_hashes:
-            return False
-        _yjs_updates.append(bytes(update))
-        _yjs_update_hashes.add(digest)
-        while len(_yjs_updates) > _MAX_YJS_UPDATES or sum(map(len, _yjs_updates)) > _MAX_YJS_JOURNAL_BYTES:
-            removed = _yjs_updates.pop(0)
-            _yjs_update_hashes.discard(hashlib.sha256(removed).hexdigest())
-        _persist_yjs_journal_locked()
-    return True
+        return _ystore.apply_update(update) if _ystore is not None else False
 
 
-def _load_yjs_journal(path: Path) -> None:
-    global _journal_path, _yjs_updates, _yjs_update_hashes
+def _load_legacy_yjs_updates(path: Path) -> list[bytes]:
     updates: list[bytes] = []
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -562,29 +555,7 @@ def _load_yjs_journal(path: Path) -> None:
                 updates.append(update)
     except (OSError, ValueError, TypeError):
         updates = []
-    with _yjs_lock:
-        _journal_path = path
-        _yjs_updates = updates[-_MAX_YJS_UPDATES:]
-        _yjs_update_hashes = {hashlib.sha256(item).hexdigest() for item in _yjs_updates}
-
-
-def _persist_yjs_journal_locked() -> None:
-    if _journal_path is None:
-        return
-    payload = {
-        "schema": "adaos.android.yjs-update-journal.v1",
-        "webspace_id": "desktop",
-        "updates": [base64.b64encode(item).decode("ascii") for item in _yjs_updates],
-    }
-    temporary = _journal_path.with_suffix(".tmp")
-    try:
-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(_journal_path)
-    except OSError:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+    return updates[-_MAX_YJS_UPDATES:]
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -750,7 +721,10 @@ def _build_desktop_snapshot() -> dict[str, Any]:
 
 
 def _materialization_snapshot_payload() -> dict[str, Any]:
-    snapshot = copy.deepcopy(_desktop_snapshot)
+    with _yjs_lock:
+        snapshot = (
+            _ystore.snapshot_json() if _ystore is not None else copy.deepcopy(_desktop_snapshot)
+        )
     now = time.time()
     return {
         "ok": True,
@@ -803,7 +777,7 @@ def _reliability_payload(*, mode: str = "runtime") -> dict[str, Any]:
     now_ms = int(time.time() * 1000)
     selected_mode = str(mode or "runtime").strip().lower() or "runtime"
     with _yjs_lock:
-        update_count = len(_yjs_updates)
+        update_count = int(_ystore.stats()["update_count"]) if _ystore is not None else 0
         yjs_connection_count = sum(
             1 for peer in _websocket_peers if peer.kind == "yjs"
         )
@@ -901,7 +875,7 @@ def _load_identity(data_root: Path) -> tuple[str, str]:
 def start(data_root: str, app_version: str, port: int = 8777) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
-    global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update
+    global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore
     root = Path(data_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with _lock:
@@ -910,7 +884,14 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
         node_id, subnet_id = _load_identity(root)
         _desktop_snapshot = _build_desktop_snapshot()
         _base_yjs_update = _load_base_yjs_update()
-        _load_yjs_journal(root / "android-yjs-updates.json")
+        legacy_updates = _load_legacy_yjs_updates(root / "android-yjs-updates.json")
+        _ystore = AndroidYStore(
+            root / "android-yjs.sqlite3",
+            _base_yjs_update,
+            legacy_updates=legacy_updates,
+            max_updates=_MAX_YJS_UPDATES,
+            max_update_bytes=_MAX_YJS_JOURNAL_BYTES,
+        )
         server = _LoopbackServer(("127.0.0.1", int(port)), _Handler)
         actual_port = int(server.server_address[1])
         started_at = time.time()
@@ -918,7 +899,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             "ok": True,
             "ready": True,
             "runtime_profile": "android_poc",
-            "implementation": "packaged_yjs_seed_journal",
+            "implementation": "native_y_py_sqlite_ystore",
             "python_version": platform.python_version(),
             "data_root": str(root),
             "host": "127.0.0.1",
@@ -945,7 +926,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
 def stop() -> str:
     """Stop the loopback runtime without terminating the embedded interpreter."""
 
-    global _server, _thread, _runtime
+    global _server, _thread, _runtime, _ystore
     with _lock:
         server = _server
         thread = _thread
@@ -960,6 +941,11 @@ def stop() -> str:
         server.server_close()
     if thread is not None and thread is not threading.current_thread():
         thread.join(timeout=5.0)
+    with _yjs_lock:
+        store = _ystore
+        _ystore = None
+        if store is not None:
+            store.close()
     with _lock:
         previous = dict(_runtime)
         _runtime = {}
@@ -980,7 +966,7 @@ def _node_status() -> dict[str, Any]:
     with _yjs_lock:
         yjs_clients = sum(1 for peer in _websocket_peers if peer.kind == "yjs")
         control_clients = sum(1 for peer in _websocket_peers if peer.kind == "control")
-        update_count = len(_yjs_updates)
+        store_stats = _ystore.stats() if _ystore is not None else {}
     return {
         "node_id": runtime["node_id"],
         "subnet_id": runtime["subnet_id"],
@@ -1002,10 +988,13 @@ def _node_status() -> dict[str, Any]:
             "app_version": runtime["app_version"],
             "transition_role": "active",
             "yjs_ready": True,
-            "yjs_mode": "packaged_seed_plus_update_journal",
+            "yjs_mode": "native_y_py_sqlite_ystore",
             "yjs_seed_ready": bool(_base_yjs_update),
             "yjs_clients": yjs_clients,
-            "yjs_update_count": update_count,
+            "yjs_update_count": int(store_stats.get("update_count") or 0),
+            "yjs_revision": int(store_stats.get("revision") or 0),
+            "ystore_backend": str(store_stats.get("backend") or "unavailable"),
+            "ystore_state_vector_bytes": int(store_stats.get("state_vector_bytes") or 0),
             "control_clients": control_clients,
             "skills_ready": False,
             "skill_descriptors_ready": True,

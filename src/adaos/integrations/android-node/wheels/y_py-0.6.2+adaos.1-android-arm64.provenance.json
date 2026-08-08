@@ -1,0 +1,22 @@
+{
+  "schema": "adaos.android-wheel-provenance.v1",
+  "package": "y-py",
+  "version": "0.6.2+adaos.1",
+  "wheel": "y_py-0.6.2+adaos.1-cp311-cp311-android_26_arm64_v8a.whl",
+  "sha256": "48730c726ee14411806ee29af8a727d2453b873815523ccfa51e512812597a95",
+  "source": "vendor/y-py",
+  "source_commit": "029acdb5bd4cf6d61baffe83c4343f129d5f011f",
+  "python": "Chaquopy CPython 3.11.14-0",
+  "android_abi": "arm64-v8a",
+  "android_api": 26,
+  "android_ndk": "27.2.12479018",
+  "rust": "1.72.1",
+  "maturin": "1.13.3",
+  "elf_machine": "AArch64",
+  "elf_max_page_size": 16384,
+  "needed": ["libpython3.11.so", "libdl.so", "libc.so"],
+  "verified_device": {
+    "model": "Samsung SM-F721N",
+    "android_api": 36
+  }
+}

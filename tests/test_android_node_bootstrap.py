@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sqlite3
+import sys
 import time
 import types
 import urllib.request
@@ -26,10 +29,18 @@ BOOTSTRAP_PATH = (
 
 
 def _load_bootstrap():
-    module = types.ModuleType("adaos_android_bootstrap_test")
-    module.__file__ = str(BOOTSTRAP_PATH)
-    source = BOOTSTRAP_PATH.read_text(encoding="utf-8")
-    exec(compile(source, str(BOOTSTRAP_PATH), "exec"), module.__dict__)
+    package_name = "_adaos_android_bootstrap_test"
+    package = sys.modules.get(package_name)
+    if package is None:
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(BOOTSTRAP_PATH.parent)]
+        sys.modules[package_name] = package
+    module_name = f"{package_name}.bootstrap_{time.time_ns()}"
+    spec = importlib.util.spec_from_file_location(module_name, BOOTSTRAP_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
     return module
 
 
@@ -49,8 +60,10 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["role"] == "member"
         assert status["environment"]["local_auth_required"] is False
         assert status["runtime"]["yjs_ready"] is True
-        assert status["runtime"]["yjs_mode"] == "packaged_seed_plus_update_journal"
+        assert status["runtime"]["yjs_mode"] == "native_y_py_sqlite_ystore"
         assert status["runtime"]["yjs_seed_ready"] is True
+        assert status["runtime"]["ystore_backend"] == "sqlite_snapshot_log"
+        assert status["runtime"]["yjs_revision"] >= 1
         assert status["runtime"]["skill_descriptors_ready"] is True
         with urllib.request.urlopen(
             f"http://127.0.0.1:{first['port']}/api/ping",
@@ -163,30 +176,38 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
         bootstrap.stop()
 
 
-def test_yws_journal_completes_sync_and_replays_persisted_yjs_update(tmp_path: Path) -> None:
+def test_native_yws_ystore_completes_diff_sync_and_persists_yjs_state(tmp_path: Path) -> None:
     import y_py as Y
 
     bootstrap = _load_bootstrap()
     runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
     uri = f"ws://127.0.0.1:{runtime['port']}/yws/desktop"
     document = Y.YDoc()
-    with document.begin_transaction() as transaction:
-        document.get_map("ui").set(transaction, "current_scenario", "web_desktop")
-    update = bytes(Y.encode_state_as_update(document))
     try:
         with connect(uri, origin="https://inimatic.com", open_timeout=2, close_timeout=2) as websocket:
-            assert websocket.recv(timeout=2) == bootstrap._encode_sync_message(0, b"\x00")
-            websocket.send(bootstrap._encode_sync_message(0, b"\x00"))
+            server_step_one = websocket.recv(timeout=2)
+            message_type, offset = bootstrap._read_var_uint(server_step_one)
+            sync_type, offset = bootstrap._read_var_uint(server_step_one, offset)
+            server_vector, _ = bootstrap._read_var_bytes(server_step_one, offset)
+            assert (message_type, sync_type) == (0, 0)
+            assert server_vector not in {b"", b"\x00"}
+
+            websocket.send(
+                bootstrap._encode_sync_message(0, bytes(Y.encode_state_vector(document)))
+            )
             seed_message = websocket.recv(timeout=2)
-            assert seed_message == bootstrap._encode_sync_message(1, bootstrap._base_yjs_update)
             message_type, offset = bootstrap._read_var_uint(seed_message)
             sync_type, offset = bootstrap._read_var_uint(seed_message, offset)
             seed_update, _ = bootstrap._read_var_bytes(seed_message, offset)
             assert (message_type, sync_type) == (0, 1)
-            seeded = Y.YDoc()
-            Y.apply_update(seeded, seed_update)
-            assert json.loads(seeded.get_map("ui").to_json())["current_scenario"] == "web_desktop"
-            assert json.loads(seeded.get_map("data").to_json())["nodes"] == {}
+            Y.apply_update(document, seed_update)
+            assert json.loads(document.get_map("ui").to_json())["current_scenario"] == "web_desktop"
+            assert json.loads(document.get_map("data").to_json())["nodes"] == {}
+
+            before = bytes(Y.encode_state_vector(document))
+            with document.begin_transaction() as transaction:
+                document.get_map("runtime").set(transaction, "restart_probe", "persisted")
+            update = bytes(Y.encode_state_as_update(document, before))
             websocket.send(bootstrap._encode_sync_message(2, update))
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
@@ -196,13 +217,23 @@ def test_yws_journal_completes_sync_and_replays_persisted_yjs_update(tmp_path: P
                         f"http://127.0.0.1:{runtime['port']}/api/node/status",
                         timeout=2,
                     ) as response:
-                        if json.load(response)["runtime"]["yjs_update_count"] == 1:
+                        status = json.load(response)["runtime"]
+                        if status["yjs_update_count"] == 1 and status["yjs_revision"] >= 2:
                             break
                 time.sleep(0.02)
             else:
                 raise AssertionError("Yjs update was not persisted")
     finally:
         bootstrap.stop()
+
+    database_path = tmp_path / "android-yjs.sqlite3"
+    assert database_path.is_file()
+    with sqlite3.connect(database_path) as connection:
+        revision, snapshot_size = connection.execute(
+            "SELECT revision, LENGTH(snapshot) FROM y_documents WHERE webspace_id = 'desktop'"
+        ).fetchone()
+    assert revision >= 2
+    assert snapshot_size > len(bootstrap._base_yjs_update)
 
     restarted = json.loads(bootstrap.start(str(tmp_path), "test", 0))
     try:
@@ -212,11 +243,17 @@ def test_yws_journal_completes_sync_and_replays_persisted_yjs_update(tmp_path: P
             open_timeout=2,
             close_timeout=2,
         ) as websocket:
-            assert websocket.recv(timeout=2) == bootstrap._encode_sync_message(0, b"\x00")
-            websocket.send(bootstrap._encode_sync_message(0, b"\x00"))
-            assert websocket.recv(timeout=2) == bootstrap._encode_sync_message(
-                1, bootstrap._base_yjs_update
+            websocket.recv(timeout=2)
+            restored = Y.YDoc()
+            websocket.send(
+                bootstrap._encode_sync_message(0, bytes(Y.encode_state_vector(restored)))
             )
-            assert websocket.recv(timeout=2) == bootstrap._encode_sync_message(2, update)
+            merged_message = websocket.recv(timeout=2)
+            _, offset = bootstrap._read_var_uint(merged_message)
+            sync_type, offset = bootstrap._read_var_uint(merged_message, offset)
+            merged_update, _ = bootstrap._read_var_bytes(merged_message, offset)
+            assert sync_type == 1
+            Y.apply_update(restored, merged_update)
+            assert json.loads(restored.get_map("runtime").to_json())["restart_probe"] == "persisted"
     finally:
         bootstrap.stop()

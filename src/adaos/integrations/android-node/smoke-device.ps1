@@ -3,7 +3,8 @@ param(
     [string]$ApkPath = "$PSScriptRoot\app\build\outputs\apk\debug\app-debug.apk",
     [int]$ForwardPort = 18777,
     [int]$TimeoutSeconds = 45,
-    [switch]$OpenBrowser
+    [switch]$OpenBrowser,
+    [switch]$VerifyYjsRestart
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +56,34 @@ if ($status.environment.local_auth_required) {
     throw "Android loopback runtime unexpectedly requires authentication."
 }
 
+if ($VerifyYjsRestart) {
+    $probeValue = "device-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+    & py -3.11 "$PSScriptRoot\verify_yjs_restart.py" write --uri "ws://127.0.0.1:$ForwardPort/yws/desktop" --value $probeValue
+    if ($LASTEXITCODE -ne 0) {
+        throw "Writing the Yjs restart marker failed."
+    }
+
+    & $AdbPath shell am force-stop $packageName
+    & $AdbPath shell am start -n $activityName --ez start_node true | Out-Null
+    $status = $null
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $status = Invoke-RestMethod -Uri "http://127.0.0.1:$ForwardPort/api/node/status" -TimeoutSec 2
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    } until ($status -or [DateTimeOffset]::UtcNow -ge $deadline)
+    if (-not $status) {
+        throw "Android node did not recover after force-stop."
+    }
+
+    & py -3.11 "$PSScriptRoot\verify_yjs_restart.py" verify --uri "ws://127.0.0.1:$ForwardPort/yws/desktop" --value $probeValue
+    if ($LASTEXITCODE -ne 0) {
+        throw "The Yjs marker did not survive the process restart."
+    }
+}
+
 if ($OpenBrowser) {
     & $AdbPath shell am start -a android.intent.action.VIEW -d "https://inimatic.com/?zone=lo&try_local_hub=1&runtime_debug=1" | Out-Null
 }
@@ -68,6 +97,7 @@ if ($OpenBrowser) {
     app_version = $status.runtime.app_version
     python_version = $status.runtime.python_version
     yjs_mode = $status.runtime.yjs_mode
+    yjs_restart_verified = [bool]$VerifyYjsRestart
     skills_ready = $status.runtime.skills_ready
     status_url = "http://127.0.0.1:$ForwardPort/api/node/status"
 } | ConvertTo-Json -Depth 4

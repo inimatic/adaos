@@ -1,9 +1,9 @@
 # AdaOS Android Full Node Roadmap
 
 Status: active domain roadmap for an experimental proof of concept. The first
-A0/A2/A4 vertical slice is running on a physical Android 16 arm64 phone and
-renders `web_desktop` from a packaged Yjs update. Native Android `y-py`, skill
-execution, member connectivity, and the 2 GB device gate remain open.
+A0/A1/A2/A4 vertical slice is running on a physical Android 16 arm64 phone and
+renders `web_desktop` from a native `y-py` document. Fixed skill execution,
+member connectivity, and the 2 GB device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -81,20 +81,20 @@ red.
 
 Outcome: the custom CRDT foundation works before the rest of AdaOS is packaged.
 
-- [ ] `[must]` Add an Android arm64 build target to the AdaOS `y-py` fork.
-- [ ] `[must]` Produce a CPython 3.11 wheel accepted by the Android embedder.
-- [ ] `[must]` Verify native libraries for Android linker compatibility and 16
+- [x] `[must]` Add an Android arm64 build target to the AdaOS `y-py` fork.
+- [x] `[must]` Produce a CPython 3.11 wheel accepted by the Android embedder.
+- [x] `[must]` Verify native libraries for Android linker compatibility and 16
   KB page-size alignment.
-- [ ] `[must]` Import `y_py` on the phone and create a YDoc.
-- [ ] `[must]` Write a deterministic map update, encode it, apply it to a
+- [x] `[must]` Import `y_py` on the phone and create a YDoc.
+- [x] `[must]` Write a deterministic map update, encode it, apply it to a
   second document, and compare state.
-- [ ] `[must]` persist encoded state under the app-private directory and reload
+- [x] `[must]` persist encoded state under the app-private directory and reload
   it after process restart.
-- [ ] `[must]` exercise the AdaOS YStore with the same document rather than
+- [x] `[must]` exercise the Android AdaOS YStore with the same document rather than
   stopping at a direct `y_py` unit test.
-- [ ] `[should]` publish the wheel with version, hash, source revision, Android
+- [x] `[should]` publish the wheel with version, hash, source revision, Android
   API floor, ABI, Python ABI, and native-page alignment metadata.
-- [ ] `[should]` add the Android wheel build to the existing patched-wheel
+- [x] `[should]` add the Android wheel build to the existing patched-wheel
   release workflow.
 
 Gate A1:
@@ -105,6 +105,12 @@ Gate A1:
 
 Stop condition: if this gate fails, keep work in the wheel/build layer. Do not
 replace Yjs with a mock or a second mobile-only state model.
+
+Physical evidence (2026-08-08): `y_py 0.6.2+adaos.1` loaded under Chaquopy
+CPython 3.11.14 on a Samsung SM-F721N (API 36, arm64-v8a). The device accepted
+a `/yws/desktop` update, was force-stopped, restarted, and returned the same
+marker from `android-yjs.sqlite3`. The wheel's AArch64 ELF depends only on
+`libpython3.11.so`, `libdl.so`, and `libc.so`, with 16 KB LOAD alignment.
 
 ## Phase A2: First Runnable AdaOS Kernel
 

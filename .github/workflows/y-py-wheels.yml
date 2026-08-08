@@ -119,10 +119,48 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  build-android:
+    name: Build wheel (Android arm64-v8a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust 1.72.1
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.72.1
+          targets: aarch64-linux-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and wheel tools
+        shell: bash
+        run: |
+          sdkmanager "ndk;27.2.12479018"
+          python -m pip install maturin==1.13.3
+
+      - name: Build and verify Android wheel
+        shell: bash
+        run: bash src/adaos/integrations/android-node/build-y-py-android.sh dist
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: y-py-wheel-android-arm64
+          path: dist/*.whl
+          if-no-files-found: error
+
   release:
     name: Publish wheel assets
     if: startsWith(github.ref, 'refs/tags/y-py-v') || inputs.release_tag != ''
-    needs: build
+    needs: [build, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
