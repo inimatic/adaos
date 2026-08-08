@@ -66,11 +66,16 @@ def _sync_document(uri: str) -> tuple[Any, Any]:
         websocket.close()
         raise RuntimeError(f"expected SyncStep1, got {sync_type}")
     websocket.send(_encode_sync(0, bytes(Y.encode_state_vector(document))))
-    sync_type, update = _read_sync(websocket.recv(timeout=5))
-    if sync_type != 1:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        sync_type, update = _read_sync(websocket.recv(timeout=5))
+        if sync_type in {1, 2}:
+            Y.apply_update(document, update)
+        if sync_type == 1:
+            break
+    else:
         websocket.close()
-        raise RuntimeError(f"expected SyncStep2, got {sync_type}")
-    Y.apply_update(document, update)
+        raise RuntimeError("SyncStep2 was not received")
     return document, websocket
 
 

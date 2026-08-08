@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 import y_py as Y
 
 from .ystore import AndroidYStore
+from .skills import AndroidSkillError, AndroidSkillRuntime
 
 _ALLOWED_ORIGINS = {
     "https://inimatic.com",
@@ -47,6 +48,8 @@ _runtime: dict[str, Any] = {}
 _desktop_snapshot: dict[str, Any] = {}
 _base_yjs_update = b""
 _ystore: AndroidYStore | None = None
+_skills: AndroidSkillRuntime | None = None
+_install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
 
 
@@ -241,6 +244,22 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/node/ui/diagnostics":
             self._json(202, {"ok": True, "accepted": True, "stored": False})
+            return
+        if path == "/api/tools/call":
+            tool = str(body.get("tool") or "")
+            arguments = body.get("arguments") if isinstance(body.get("arguments"), dict) else {}
+            try:
+                if _skills is None:
+                    raise AndroidSkillError("android_skills_not_ready")
+                result = _skills.call_tool(
+                    tool,
+                    arguments,
+                    idempotency_key=str(body.get("idempotency_key") or ""),
+                )
+            except AndroidSkillError as exc:
+                self._json(400, {"ok": False, "error": str(exc), "tool": tool})
+                return
+            self._json(200, {"ok": True, "result": result})
             return
         self._json(404, {"ok": False, "error": "not_found", "path": path})
 
@@ -506,22 +525,47 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
     kind = str(message.get("kind") or "")
     request_payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
     data: dict[str, Any] = {"ok": True, "accepted": True}
-    if kind == "device.register":
-        data.update(
-            {
-                "device_id": str(request_payload.get("device_id") or ""),
-                "webspace_id": str(request_payload.get("webspace_id") or "desktop"),
-            }
-        )
-    elif kind == "desktop.scenario.set":
-        data.update(
-            {
-                "webspace_id": "desktop",
-                "scenario_id": "web_desktop",
-                "switch_skipped": True,
-                "skip_reason": "android_poc_fixed_bundle",
-            }
-        )
+    try:
+        if kind == "device.register":
+            data.update(
+                {
+                    "device_id": str(request_payload.get("device_id") or ""),
+                    "webspace_id": str(request_payload.get("webspace_id") or "desktop"),
+                }
+            )
+        elif kind == "desktop.scenario.set":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data.update(_skills.switch_scenario(str(request_payload.get("scenario_id") or "")))
+        elif kind == "skill.event.publish":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            event_payload = (
+                request_payload.get("payload")
+                if isinstance(request_payload.get("payload"), dict)
+                else {}
+            )
+            data["result"] = _skills.handle_event(
+                str(request_payload.get("event_type") or ""),
+                event_payload,
+            )
+        elif kind.startswith("adaos_connect.prepare") or kind == "demo_metrics.host_action":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data["result"] = _skills.handle_event(kind, request_payload)
+        elif kind in {"webio.stream.snapshot.requested", "webio.stream.subscription.changed"}:
+            receiver = str(request_payload.get("receiver") or "")
+            if _skills is not None:
+                data["snapshot"] = _skills.stream_snapshot(receiver)
+        elif kind == "desktop.toggleInstall":
+            data.update(
+                {
+                    "switch_skipped": True,
+                    "skip_reason": "android_poc_immutable_install",
+                }
+            )
+    except AndroidSkillError as exc:
+        data = {"ok": False, "accepted": False, "error": str(exc)}
     response = {
         "ch": "events",
         "t": "ack",
@@ -537,6 +581,30 @@ def _broadcast_yjs(payload: bytes, *, exclude: _WebSocketPeer | None = None) -> 
         peers = [peer for peer in _websocket_peers if peer.kind == "yjs" and peer is not exclude]
     for peer in peers:
         peer.send(0x2, payload)
+
+
+def _publish_yjs_update(update: bytes) -> None:
+    if update:
+        _broadcast_yjs(_encode_sync_message(2, update))
+
+
+def _broadcast_control_event(kind: str, payload: dict[str, Any], source: str) -> None:
+    message = json.dumps(
+        {
+            "ch": "events",
+            "t": "evt",
+            "kind": kind,
+            "payload": payload,
+            "source": source,
+            "ts": time.time(),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    with _yjs_lock:
+        peers = [peer for peer in _websocket_peers if peer.kind == "control"]
+    for peer in peers:
+        peer.send(0x1, message)
 
 
 def _remember_yjs_update(update: bytes) -> bool:
@@ -563,6 +631,41 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"bundle entry must be an object: {path.name}")
     return payload
+
+
+def _load_verified_install_descriptor() -> dict[str, Any]:
+    path = _BUNDLE_ROOT / "android_poc_v1.install.json"
+    descriptor = _load_json(path)
+    if descriptor.get("id") != "android_poc_v1":
+        raise RuntimeError("android_install_descriptor_id_invalid")
+    files: list[dict[str, Any]] = []
+    for scenario in descriptor.get("scenarios") or []:
+        if isinstance(scenario, dict):
+            files.extend(item for item in scenario.get("files") or [] if isinstance(item, dict))
+    for skill in descriptor.get("skills") or []:
+        if isinstance(skill, dict) and skill.get("descriptor"):
+            files.append({"path": skill["descriptor"], "sha256": skill.get("sha256")})
+    # Chaquopy exposes non-Python bundle data as files, while Python modules
+    # remain in its import archive. The runtime module digest is still pinned
+    # for build provenance, but startup verifies the materialized data files.
+    for item in files:
+        relative = str(item.get("path") or "")
+        expected = str(item.get("sha256") or "").lower()
+        target = (_BUNDLE_ROOT / relative).resolve()
+        allowed_root = _BUNDLE_ROOT.parent.resolve()
+        if allowed_root not in target.parents and target != allowed_root:
+            raise RuntimeError(f"android_install_artifact_path_invalid:{relative}")
+        try:
+            # Descriptor digests use repository-canonical LF bytes so the
+            # same immutable bundle verifies on Windows and Linux builders.
+            canonical = target.read_bytes().replace(b"\r\n", b"\n")
+            actual = hashlib.sha256(canonical).hexdigest()
+        except OSError as exc:
+            raise RuntimeError(f"android_install_artifact_missing:{relative}") from exc
+        if actual != expected:
+            raise RuntimeError(f"android_install_artifact_hash_mismatch:{relative}")
+    descriptor["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return descriptor
 
 
 def _load_base_yjs_update() -> bytes:
@@ -726,6 +829,10 @@ def _materialization_snapshot_payload() -> dict[str, Any]:
             _ystore.snapshot_json() if _ystore is not None else copy.deepcopy(_desktop_snapshot)
         )
     now = time.time()
+    current_scenario = str(
+        ((snapshot.get("ui") or {}).get("current_scenario") if isinstance(snapshot.get("ui"), dict) else "")
+        or "web_desktop"
+    )
     return {
         "ok": True,
         "accepted": True,
@@ -742,8 +849,8 @@ def _materialization_snapshot_payload() -> dict[str, Any]:
             "ready": True,
             "readiness_state": "ready",
             "missing_branches": [],
-            "current_scenario": "web_desktop",
-            "scenario_id": "web_desktop",
+            "current_scenario": current_scenario,
+            "scenario_id": current_scenario,
             "source": "android_packaged_bundle",
             "observed_at": now,
         },
@@ -875,13 +982,15 @@ def _load_identity(data_root: Path) -> tuple[str, str]:
 def start(data_root: str, app_version: str, port: int = 8777) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
-    global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore
+    global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore, _skills
+    global _install_descriptor
     root = Path(data_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with _lock:
         if _server is not None:
             return json.dumps(_snapshot(), sort_keys=True)
         node_id, subnet_id = _load_identity(root)
+        _install_descriptor = _load_verified_install_descriptor()
         _desktop_snapshot = _build_desktop_snapshot()
         _base_yjs_update = _load_base_yjs_update()
         legacy_updates = _load_legacy_yjs_updates(root / "android-yjs-updates.json")
@@ -891,6 +1000,18 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             legacy_updates=legacy_updates,
             max_updates=_MAX_YJS_UPDATES,
             max_update_bytes=_MAX_YJS_JOURNAL_BYTES,
+        )
+        taiga = _load_json(_BUNDLE_ROOT / "taiga_ui_demo_scenario.scenario.json")
+        taiga_ui = taiga.get("ui") if isinstance(taiga.get("ui"), dict) else {}
+        _skills = AndroidSkillRuntime(
+            root,
+            _ystore,
+            node_id=node_id,
+            subnet_id=subnet_id,
+            desktop_application=copy.deepcopy(_desktop_snapshot["ui"]["application"]),
+            taiga_application=copy.deepcopy(taiga_ui.get("application") or {}),
+            publish_yjs=_publish_yjs_update,
+            publish_event=_broadcast_control_event,
         )
         server = _LoopbackServer(("127.0.0.1", int(port)), _Handler)
         actual_port = int(server.server_address[1])
@@ -926,7 +1047,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
 def stop() -> str:
     """Stop the loopback runtime without terminating the embedded interpreter."""
 
-    global _server, _thread, _runtime, _ystore
+    global _server, _thread, _runtime, _ystore, _skills
     with _lock:
         server = _server
         thread = _thread
@@ -941,6 +1062,10 @@ def stop() -> str:
         server.server_close()
     if thread is not None and thread is not threading.current_thread():
         thread.join(timeout=5.0)
+    skills = _skills
+    _skills = None
+    if skills is not None:
+        skills.close()
     with _yjs_lock:
         store = _ystore
         _ystore = None
@@ -967,6 +1092,7 @@ def _node_status() -> dict[str, Any]:
         yjs_clients = sum(1 for peer in _websocket_peers if peer.kind == "yjs")
         control_clients = sum(1 for peer in _websocket_peers if peer.kind == "control")
         store_stats = _ystore.stats() if _ystore is not None else {}
+    skill_status = _skills.status() if _skills is not None else {}
     return {
         "node_id": runtime["node_id"],
         "subnet_id": runtime["subnet_id"],
@@ -996,8 +1122,13 @@ def _node_status() -> dict[str, Any]:
             "ystore_backend": str(store_stats.get("backend") or "unavailable"),
             "ystore_state_vector_bytes": int(store_stats.get("state_vector_bytes") or 0),
             "control_clients": control_clients,
-            "skills_ready": False,
+            "skills_ready": bool(skill_status.get("ready")),
             "skill_descriptors_ready": True,
+            "skill_execution": str(skill_status.get("execution") or "unavailable"),
+            "install_profile": str(skill_status.get("profile") or "unavailable"),
+            "active_skills": list(skill_status.get("skills") or []),
+            "notebook_note_count": int(skill_status.get("note_count") or 0),
+            "install_descriptor_sha256": str(_install_descriptor.get("sha256") or ""),
             "bundle_id": runtime["bundle_id"],
         },
         "environment": {

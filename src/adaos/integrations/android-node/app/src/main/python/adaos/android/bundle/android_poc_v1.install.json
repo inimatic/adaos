@@ -1,0 +1,92 @@
+{
+  "schema": "adaos.android.install.v1",
+  "id": "android_poc_v1",
+  "version": "1.0.0",
+  "default_webspace": "desktop",
+  "home_scenario": "web_desktop",
+  "runtime": {
+    "execution": "in_process",
+    "service_skills": false,
+    "dynamic_install": false,
+    "subprocess": false,
+    "runtime_pip": false
+  },
+  "python": {
+    "implementation": "Chaquopy CPython",
+    "version": "3.11.14"
+  },
+  "native_wheels": [
+    {
+      "name": "y-py",
+      "version": "0.6.2+adaos.1",
+      "abi": "cp311-android_26_arm64_v8a",
+      "sha256": "48730c726ee14411806ee29af8a727d2453b873815523ccfa51e512812597a95"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "web_desktop",
+      "version": "0.2",
+      "files": [
+        {
+          "path": "web_desktop.seed.json",
+          "sha256": "00449a153d9b527f77ef83da70c7496ec5e370a1ed3339c91b1ff107948b4501"
+        },
+        {
+          "path": "web_desktop.seed.yjs.b64",
+          "sha256": "3f478fc9bd2679fc7b45f51129d508d5187c74352729eaa52316f1825c42dfbd"
+        }
+      ]
+    },
+    {
+      "id": "taiga_ui_demo_scenario",
+      "version": "0.1.0",
+      "files": [
+        {
+          "path": "taiga_ui_demo_scenario.scenario.json",
+          "sha256": "416e9d0e33a67c895b9f43338002b20c5b6d6f7bf3fba543c135158e9a7a6105"
+        }
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "web_desktop_skill",
+      "version": "android-poc.1",
+      "descriptor": "web_desktop_skill.webui.json",
+      "sha256": "db08ec9ad1149e8bcda325063f21b73a3c632f6d155c7fe05f01ae30af1ff258"
+    },
+    {
+      "id": "subnet_env",
+      "version": "android-poc.1",
+      "builtin": true
+    },
+    {
+      "id": "weather_skill",
+      "version": "android-poc.1",
+      "descriptor": "weather_skill.webui.json",
+      "sha256": "772f2bead0f8b28da5c4adf310c65412eaab945916046533324679826ee96871"
+    },
+    {
+      "id": "adaos_connect",
+      "version": "android-poc.1",
+      "descriptor": "adaos_connect.webui.json",
+      "sha256": "1eee81d4f1faef97dbb0430a8c54d324b24be17b6f589b107985e4182c577ca9"
+    },
+    {
+      "id": "notebook_skill",
+      "version": "android-poc.1",
+      "descriptor": "notebook_skill.webui.json",
+      "sha256": "3aa9b25caf265636a7723f1874daf58c6cee62d2edebb2e725f24b2e8fdc176e"
+    },
+    {
+      "id": "demo_metrics_skill",
+      "version": "android-poc.1",
+      "builtin": true
+    }
+  ],
+  "runtime_module": {
+    "path": "../skills.py",
+    "sha256": "f5fdf8fae0de318a115e24bae700d24f83933f654e29772c5deffe957292d604"
+  }
+}

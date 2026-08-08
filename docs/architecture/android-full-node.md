@@ -2,14 +2,18 @@
 
 Status: target architecture for an experimental proof of concept.
 
-Implementation status: the first A0/A1/A2/A4 vertical-slice APK is implemented
+Implementation status: the first A0/A1/A2/A3/A4/A5 vertical-slice APK is implemented
 under `src/adaos/integrations/android-node` and has been exercised on an
 Android 16 Samsung SM-F721N. It proves the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
-over `/yws/desktop` and recovered after a forced process stop. Fixed skill
-execution, member connectivity, and the 2 GB device gate remain owned by the
+over `/yws/desktop` and recovered after a forced process stop. The immutable
+`android_poc_v1` profile executes Weather, AdaOS Connect, Notebook, subnet
+environment, and Taiga demo metrics in-process; the browser has rendered
+persisted Notebook data, AdaOS Connect's degraded state, and the Taiga metrics
+table/chart from that profile. Member connectivity and the 2 GB device gate
+remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
 ## Purpose

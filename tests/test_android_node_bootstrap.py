@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import time
 import types
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,6 +27,36 @@ BOOTSTRAP_PATH = (
     / "android"
     / "bootstrap.py"
 )
+
+
+def _post_json(url: str, payload: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Origin": "https://inimatic.com"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.load(exc)
+
+
+def _control_command(websocket, command_id: str, kind: str, payload: dict) -> tuple[dict, list[dict]]:
+    websocket.send(
+        json.dumps(
+            {"ch": "events", "t": "cmd", "id": command_id, "kind": kind, "payload": payload}
+        )
+    )
+    events: list[dict] = []
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        message = json.loads(websocket.recv(timeout=5))
+        if message.get("t") == "ack" and message.get("id") == command_id:
+            return message, events
+        events.append(message)
+    raise AssertionError(f"control command {kind} was not acknowledged")
 
 
 def _load_bootstrap():
@@ -218,7 +249,7 @@ def test_native_yws_ystore_completes_diff_sync_and_persists_yjs_state(tmp_path: 
                         timeout=2,
                     ) as response:
                         status = json.load(response)["runtime"]
-                        if status["yjs_update_count"] == 1 and status["yjs_revision"] >= 2:
+                        if status["yjs_update_count"] >= 2 and status["yjs_revision"] >= 3:
                             break
                 time.sleep(0.02)
             else:
@@ -255,5 +286,191 @@ def test_native_yws_ystore_completes_diff_sync_and_persists_yjs_state(tmp_path: 
             assert sync_type == 1
             Y.apply_update(restored, merged_update)
             assert json.loads(restored.get_map("runtime").to_json())["restart_probe"] == "persisted"
+    finally:
+        bootstrap.stop()
+
+
+def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base_url = f"http://127.0.0.1:{runtime['port']}"
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/node/status", timeout=2) as response:
+            status = json.load(response)
+        assert status["runtime"]["skills_ready"] is True
+        assert status["runtime"]["skill_execution"] == "in_process"
+        assert status["runtime"]["install_profile"] == "android_poc_v1"
+        assert {
+            "weather_skill",
+            "adaos_connect",
+            "notebook_skill",
+            "demo_metrics_skill",
+        }.issubset(status["runtime"]["active_skills"])
+
+        code, created = _post_json(
+            f"{base_url}/api/tools/call",
+            {
+                "tool": "notebook_skill:create_note",
+                "arguments": {"content": "Android note"},
+                "idempotency_key": "create-note-proof",
+            },
+        )
+        assert code == 200 and created["ok"] is True
+        note_id = created["result"]["selected_note_id"]
+        code, saved = _post_json(
+            f"{base_url}/api/tools/call",
+            {
+                "tool": "notebook_skill:save_note",
+                "arguments": {"note_id": note_id, "content": "Persistent Android notebook"},
+                "idempotency_key": "save-note-proof",
+            },
+        )
+        assert code == 200
+        assert saved["result"]["editor"]["content"] == "Persistent Android notebook"
+
+        code, disposable = _post_json(
+            f"{base_url}/api/tools/call",
+            {"tool": "notebook_skill:create_note", "arguments": {"content": "delete me"}},
+        )
+        disposable_id = disposable["result"]["selected_note_id"]
+        code, deleted = _post_json(
+            f"{base_url}/api/tools/call",
+            {
+                "tool": "notebook_skill:delete_note",
+                "arguments": {"note_id": disposable_id},
+            },
+        )
+        assert code == 200
+        assert all(item["id"] != disposable_id for item in deleted["result"]["items"])
+
+        bootstrap._skills._fetch_weather = lambda _lat, _lon, label, request_id: {
+            "current": {
+                "city": label,
+                "label": label,
+                "temp_c": 21.5,
+                "condition": "Clear",
+                "summary": "Android weather proof",
+                "pending": False,
+                "source": "test",
+                "error": "",
+                "request_id": request_id,
+                "updated_at": "now",
+            },
+            "hourly_chart": {"title": "Next hours", "unit": "C", "points": []},
+            "daily": [],
+        }
+        with connect(
+            f"ws://127.0.0.1:{runtime['port']}/ws",
+            origin="https://inimatic.com",
+            open_timeout=2,
+            close_timeout=2,
+        ) as websocket:
+            ack, _ = _control_command(
+                websocket,
+                "weather-proof",
+                "skill.event.publish",
+                {
+                    "event_type": "weather.location.requested",
+                    "payload": {"city": "Moscow", "request_id": "weather-request"},
+                },
+            )
+            assert ack["data"]["accepted"] is True
+
+            bootstrap._skills._fetch_weather = lambda *_args: (_ for _ in ()).throw(
+                OSError("offline proof")
+            )
+            ack, _ = _control_command(
+                websocket,
+                "weather-offline-proof",
+                "skill.event.publish",
+                {
+                    "event_type": "weather.location.requested",
+                    "payload": {"city": "Berlin", "request_id": "weather-offline-request"},
+                },
+            )
+            assert ack["data"]["result"]["current"]["source"] == "offline"
+            assert ack["data"]["result"]["current"]["pending"] is False
+
+            ack, _ = _control_command(
+                websocket,
+                "connect-proof",
+                "adaos_connect.prepare.browser",
+                {"mode": "browser", "refresh": True},
+            )
+            assert ack["data"]["result"]["current"]["status"] == "offline"
+
+            ack, events = _control_command(
+                websocket,
+                "notebook-stream-proof",
+                "webio.stream.snapshot.requested",
+                {"webspace_id": "desktop", "receiver": "notebook_skill.notes"},
+            )
+            assert ack["data"]["snapshot"]["items"]
+            assert any(
+                event.get("kind") == "webio.stream.desktop.notebook_skill.notes"
+                for event in events
+            )
+
+            ack, _ = _control_command(
+                websocket,
+                "taiga-proof",
+                "desktop.scenario.set",
+                {"webspace_id": "desktop", "scenario_id": "taiga_ui_demo_scenario"},
+            )
+            assert ack["data"]["scenario_id"] == "taiga_ui_demo_scenario"
+
+            ack, events = _control_command(
+                websocket,
+                "demo-event-proof",
+                "demo_metrics.host_action",
+                {"action_id": "test", "metric_id": "cpu"},
+            )
+            assert ack["data"]["result"]["ok"] is True
+            assert any(
+                event.get("kind") == "webio.stream.desktop.demo_metrics.events"
+                for event in events
+            )
+
+            ack, _ = _control_command(
+                websocket,
+                "desktop-proof",
+                "desktop.scenario.set",
+                {"webspace_id": "desktop", "scenario_id": "web_desktop"},
+            )
+            assert ack["data"]["scenario_id"] == "web_desktop"
+
+        with urllib.request.urlopen(
+            f"{base_url}/api/node/yjs/webspaces/desktop/materialization/snapshot",
+            timeout=2,
+        ) as response:
+            snapshot = json.load(response)["snapshot"]
+        assert snapshot["data"]["weather"]["current"]["source"] == "offline"
+        assert snapshot["data"]["weather"]["current"]["request_id"] == "weather-offline-request"
+        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "offline"
+        assert snapshot["data"]["desktop"]["notebook"]["editor"]["content"] == (
+            "Persistent Android notebook"
+        )
+        assert snapshot["ui"]["current_scenario"] == "web_desktop"
+
+        code, rejected = _post_json(
+            f"{base_url}/api/tools/call",
+            {"tool": "arbitrary_skill:run", "arguments": {}},
+        )
+        assert code == 400
+        assert rejected["error"].startswith("skill_not_in_android_descriptor")
+    finally:
+        bootstrap.stop()
+
+    restarted = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    try:
+        code, notebook = _post_json(
+            f"http://127.0.0.1:{restarted['port']}/api/tools/call",
+            {"tool": "notebook_skill:get_notebook_snapshot", "arguments": {}},
+        )
+        assert code == 200
+        assert any(
+            item["content"] == "Persistent Android notebook"
+            for item in notebook["result"]["items"]
+        )
     finally:
         bootstrap.stop()

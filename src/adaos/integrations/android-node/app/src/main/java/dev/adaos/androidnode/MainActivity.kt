@@ -84,8 +84,8 @@ class MainActivity : Activity() {
         content.addView(openButton)
         content.addView(
             label(
-                "This APK serves a packaged web_desktop Yjs seed and a persistent update " +
-                    "journal to the hosted client. Skill execution remains experimental.",
+                "Native Yjs and local Notebook state are persistent. Weather, AdaOS " +
+                    "Connect, Notebook, and Taiga UI run from the fixed in-process bundle.",
                 14f,
                 Color.rgb(156, 163, 175),
                 false,

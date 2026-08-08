@@ -14,15 +14,19 @@ Current scope:
 - browser control `/ws` and Yjs `/yws/desktop` endpoints;
 - the AdaOS `y-py` fork as a CPython 3.11 Android arm64 wheel;
 - a real `desktop` YDoc with a bounded SQLite snapshot/update YStore;
+- the verified, immutable `android_poc_v1` install profile;
+- fixed in-process Weather, AdaOS Connect, Notebook, subnet environment, and
+  Taiga demo-metrics handlers, with no subprocess or runtime package install;
 - fixed UI descriptors for Weather, AdaOS Connect, Notebook, and the Taiga UI
   demo scenario;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the A0/A1/A2/A4 vertical-slice artifact. It reports `yjs_ready=true`,
+This is the A0/A1/A2/A3/A4/A5 vertical-slice artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
-app-private SQLite YStore. Fixed skill execution and member connectivity remain
-later roadmap gates.
+app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
+the existing `/api/tools/call` contract; all visible state returns through Yjs
+or bounded WebIO stream events. Member connectivity remains a later gate.
 
 ## Build
 
@@ -50,7 +54,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc2-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc3-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -59,7 +63,7 @@ Connect an arm64 Android 8+ phone with USB debugging enabled, then run the
 repeatable smoke test:
 
 ```powershell
-.\smoke-device.ps1 -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe" -VerifyYjsRestart -OpenBrowser
+.\smoke-device.ps1 -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe" -VerifyYjsRestart -VerifySkills -OpenBrowser
 ```
 
 The script installs the APK, starts the foreground service through the visible
@@ -69,3 +73,6 @@ ready, Yjs is available, and local authentication is disabled.
 restarts it, and verifies the same Yjs value. `-OpenBrowser` then launches the
 hosted client with explicit LO intent. The browser should show the four fixed
 apps, two widgets, and a green YJS status without login or a development token.
+`-VerifySkills` runs Weather, the AdaOS Connect degraded path, Notebook
+create/delete/stream/restart, and the Taiga scenario/event round trip against
+the physical device.

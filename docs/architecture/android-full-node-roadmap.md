@@ -1,9 +1,9 @@
 # AdaOS Android Full Node Roadmap
 
 Status: active domain roadmap for an experimental proof of concept. The first
-A0/A1/A2/A4 vertical slice is running on a physical Android 16 arm64 phone and
-renders `web_desktop` from a native `y-py` document. Fixed skill execution,
-member connectivity, and the 2 GB device gate remain open.
+A0/A1/A2/A3/A4/A5 vertical slice is running on a physical Android 16 arm64
+phone. It renders `web_desktop` from native `y-py` and executes the fixed skill
+profile in-process. Member connectivity and the 2 GB device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -155,12 +155,12 @@ lifecycle at all.
 Outcome: the phone materializes one fixed, offline-installable webspace and
 skill set without git, `pip`, venvs, or subprocess preparation.
 
-- [ ] `[must]` define the versioned `android_poc_v1` install descriptor with an
+- [x] `[must]` define the versioned `android_poc_v1` install descriptor with an
   exact version and hash for every scenario, skill, Python package, and native
   wheel.
-- [ ] `[must]` include `web_desktop` as the `desktop` home scenario.
-- [ ] `[must]` include `taiga_ui_demo_scenario` as an alternate scenario.
-- [ ] `[must]` include these in-process skills:
+- [x] `[must]` include `web_desktop` as the `desktop` home scenario.
+- [x] `[must]` include `taiga_ui_demo_scenario` as an alternate scenario.
+- [x] `[must]` include these in-process skills:
   `web_desktop_skill`, `subnet_env`, `weather_skill`, `adaos_connect`,
   `notebook_skill`, and `demo_metrics_skill`.
 - [ ] `[must]` convert the `web_desktop` manifest so only
@@ -168,17 +168,17 @@ skill set without git, `pip`, venvs, or subprocess preparation.
   helpers are optional.
 - [ ] `[must]` align the Taiga scenario version declared in `scenario.yaml` and
   `scenario.json` before locking the bundle.
-- [ ] `[must]` add an Android packaged-runtime path to skill installation which
+- [x] `[must]` add an Android packaged-runtime path to skill installation which
   verifies and activates bundled in-process code without `prepare_runtime`,
   venv creation, git, shell, or `pip`.
-- [ ] `[must]` reject activation of a skill not present in the descriptor.
-- [ ] `[must]` seed `desktop`, rebuild its effective projection, and verify
+- [x] `[must]` reject activation of a skill not present in the descriptor.
+- [x] `[must]` seed `desktop`, rebuild its effective projection, and verify
   `ui.application`, `data.catalog`, and `data.installed` are present.
 - [ ] `[must]` add an Android dependency lock which excludes desktop-only
   packages and records the transitive native closure.
 - [ ] `[should]` make first-run bundle materialization transactional and
   repeatable after an interrupted install.
-- [ ] `[should]` expose installed descriptor id, versions, and hashes in local
+- [x] `[should]` expose installed descriptor id, versions, and hashes in local
   diagnostics.
 
 Gate A3:
@@ -188,6 +188,11 @@ Gate A3:
 - a second launch reuses verified materialized content without reinstalling it;
 - no runtime command invokes git, `pip`, a virtual environment, or a child
   process.
+
+Physical evidence (2026-08-08): PoC3 verified the descriptor on startup,
+executed Weather against Open-Meteo, emitted Notebook and demo-metrics stream
+events, rejected an undeclared skill, switched Taiga UI and back, and recovered
+Notebook/Yjs state after forced process restarts on the Samsung SM-F721N.
 
 ## Phase A4: Hosted Browser and LO Vertical Slice
 
@@ -209,9 +214,9 @@ local Yjs state.
   `dev-local-token`; display no local login or pairing UI.
 - [x] `[must]` connect to `/yws/desktop`, complete first sync, and render
   `web_desktop` from the local document.
-- [ ] `[must]` connect `/ws` and prove one browser action and one live stream
+- [x] `[must]` connect `/ws` and prove one browser action and one live stream
   event.
-- [ ] `[must]` distinguish local API, local Yjs, and remote member-link status
+- [x] `[must]` distinguish local API, local Yjs, and remote member-link status
   in diagnostics.
 - [ ] `[should]` rename new client diagnostics from `local hub` to
   `local runtime` while preserving compatibility keys.
@@ -242,18 +247,18 @@ the PoC.
 
 ### Weather
 
-- [ ] `[must]` select a city and observe `data/weather/current` update in the
+- [x] `[must]` select a city and observe `data/weather/current` update in the
   widget and modal.
 - [ ] `[should]` grant browser geolocation and repeat the update with device
   coordinates.
-- [ ] `[must]` show a bounded, understandable error while offline.
+- [x] `[must]` show a bounded, understandable error while offline.
 
 ### Notebook
 
-- [ ] `[must]` create, edit, and delete a plain-text note.
-- [ ] `[must]` verify the note list arrives through the declared stream
+- [x] `[must]` create, edit, and delete a plain-text note.
+- [x] `[must]` verify the note list arrives through the declared stream
   snapshot and the compact durable projection remains in Yjs.
-- [ ] `[must]` restart the node and verify skill-memory rehydration republishes
+- [x] `[must]` restart the node and verify skill-memory rehydration republishes
   the same note state.
 - [ ] `[could]` attach one browser-selected file and reopen it through the local
   file route.
@@ -262,18 +267,18 @@ the PoC.
 
 ### AdaOS Connect
 
-- [ ] `[must]` open the modal and render its Yjs state.
-- [ ] `[must]` show a useful offline/degraded state when Root is unreachable.
+- [x] `[must]` open the modal and render its Yjs state.
+- [x] `[must]` show a useful offline/degraded state when Root is unreachable.
 - [ ] `[should]` exercise one real Root-backed browser or node preparation flow
   after Phase A6 connectivity exists.
 
 ### Taiga UI
 
-- [ ] `[must]` switch from `web_desktop` to
+- [x] `[must]` switch from `web_desktop` to
   `taiga_ui_demo_scenario` and back.
 - [ ] `[must]` render the metrics table, tree, chart, and selection from Yjs.
-- [ ] `[must]` emit a skill event and a host event and observe the live receiver.
-- [ ] `[must]` verify scenario switching does not create a second legacy
+- [x] `[must]` emit a skill event and a host event and observe the live receiver.
+- [x] `[must]` verify scenario switching does not create a second legacy
   `default` room or lose the `desktop` document.
 
 Gate A5:
@@ -351,6 +356,11 @@ Gate A7:
   enough to drive one explicit optimization phase;
 - Android lifecycle behavior is visible and recoverable rather than presented
   as guaranteed always-on service.
+
+Early evidence, not an A7 pass: after the PoC3 skill/restart smoke on the
+Samsung SM-F721N, Android reported 79,635 KiB total PSS for the AdaOS process
+(APK 22,448,355 bytes). This is comfortably below the provisional idle budget,
+but it is not a substitute for the required 2 GB device and duration matrix.
 
 ## Dependency Work Queue
 

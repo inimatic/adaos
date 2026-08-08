@@ -35,7 +35,7 @@ class PythonHost(context: Context) {
                     Result.success(
                         NodeStatus(
                             phase = NodePhase.READY,
-                            detail = "Packaged web_desktop Yjs seed and journal are ready",
+                            detail = "Native Yjs and fixed in-process skills are ready",
                             pythonVersion = parsed.optString("python_version"),
                             dataRoot = parsed.optString("data_root"),
                             port = parsed.optInt("port", 8777),

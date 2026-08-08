@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.IBinder
+import android.util.Log
 
 class NodeService : Service() {
     private lateinit var pythonHost: PythonHost
@@ -41,6 +42,7 @@ class NodeService : Service() {
                     }
                 },
                 onFailure = { error ->
+                    Log.e(TAG, "AdaOS Python bootstrap failed", error)
                     publish(
                         NodeStatus(
                             NodePhase.FAILED,
@@ -56,7 +58,8 @@ class NodeService : Service() {
     }
 
     override fun onDestroy() {
-        if (!stopping && NodeStateStore.snapshot().phase != NodePhase.STOPPED) {
+        val phase = NodeStateStore.snapshot().phase
+        if (!stopping && phase != NodePhase.STOPPED && phase != NodePhase.FAILED) {
             pythonHost.stop { }
             publish(NodeStatus.stopped("Android stopped the service"))
         }
@@ -135,5 +138,6 @@ class NodeService : Service() {
         const val ACTION_STOP = "dev.adaos.androidnode.action.STOP"
         private const val CHANNEL_ID = "adaos_node_runtime"
         private const val NOTIFICATION_ID = 1701
+        private const val TAG = "AdaOSNodeService"
     }
 }
