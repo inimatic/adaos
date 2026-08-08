@@ -11,6 +11,9 @@ import y_py as Y
 from websockets.sync.client import connect
 
 
+_MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
+
+
 def _encode_var_uint(value: int) -> bytes:
     encoded = bytearray()
     while value > 0x7F:
@@ -60,6 +63,7 @@ def _sync_document(uri: str) -> tuple[Any, Any]:
         origin="https://inimatic.com",
         open_timeout=5,
         close_timeout=2,
+        max_size=_MAX_WEBSOCKET_MESSAGE_BYTES,
     )
     sync_type, _ = _read_sync(websocket.recv(timeout=5))
     if sync_type != 0:

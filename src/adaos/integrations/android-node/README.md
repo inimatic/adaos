@@ -73,9 +73,12 @@ The script installs the APK, starts the foreground service through the visible
 Activity, creates an adb loopback forward, and fails unless the runtime is
 ready, Yjs is available, and local authentication is disabled.
 `-VerifyYjsRestart` also writes through `/yws/desktop`, force-stops the app,
-restarts it, and verifies the same Yjs value. `-OpenBrowser` then launches the
-hosted client with explicit LO intent. The browser should show the four fixed
-apps, two widgets, and a green YJS status without login or a development token.
+restarts it, and verifies the same Yjs value. Its verifier accepts YWS messages
+up to the runtime's bounded 4 MiB message contract, including documents whose
+retained CRDT history exceeds the WebSocket library's 1 MiB default.
+`-OpenBrowser` then launches the hosted client with explicit LO intent. The
+browser should show the four fixed apps, two widgets, and a green YJS status
+without login or a development token.
 `-VerifySkills` runs Weather, the AdaOS Connect degraded path, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.

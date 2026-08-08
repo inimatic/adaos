@@ -240,6 +240,15 @@ Gate A4:
 - restarting the service reconnects HTTP, WS, and YWS without reinstalling the
   app or clearing browser storage.
 
+Physical evidence (2026-08-08): PoC4 was installed over the existing PoC3
+application data on the Samsung SM-F721N. The hosted Chrome client synchronized
+the 1.32 MiB persisted `desktop` document, displayed `Online local`, switched
+to Taiga UI, and invoked the actual close control. The node acknowledged
+`desktop.webspace.go_home` with `scenario_id=web_desktop`; the browser rendered
+the desktop without entering `Recovering`, and live materialization reported
+`ready`, no missing branches, and a consistent scenario. A persisted Taiga
+projection created by PoC3 was also repaired on startup without clearing data.
+
 ## Phase A5: Skill and Scenario Proof Matrix
 
 Outcome: the fixed bundle demonstrates the actual UI-as-data paths chosen for
@@ -294,6 +303,14 @@ Gate A5:
 - Yjs and stream ownership match the manifests;
 - no selected skill starts a child process;
 - unavailable optional behavior degrades without blocking desktop readiness.
+
+Physical evidence (2026-08-08): the PoC4 device smoke exercised Weather
+through Open-Meteo, AdaOS Connect's bounded offline state, Notebook
+create/delete and stream snapshots, the demo stream, and the Taiga scenario
+round trip. A Yjs marker and the created Notebook note both survived separate
+forced process restarts. The final scenario was `web_desktop`, the process was
+still alive, and Logcat contained no Python traceback, fatal application
+exception, or ANR.
 
 ## Phase A6: Member Link
 
@@ -364,9 +381,12 @@ Gate A7:
   as guaranteed always-on service.
 
 Early evidence, not an A7 pass: after the PoC3 skill/restart smoke on the
-Samsung SM-F721N, Android reported 79,635 KiB total PSS for the AdaOS process
-(APK 22,448,355 bytes). This is comfortably below the provisional idle budget,
-but it is not a substitute for the required 2 GB device and duration matrix.
+Samsung SM-F721N, Android reported 79,635 KiB total PSS for the AdaOS process.
+After the expanded PoC4 smoke and with the Activity in the foreground it
+reported 165,752 KiB total PSS and 253,872 KiB total RSS; the debug APK was
+22,448,351 bytes. Both PSS samples are below the provisional steady budget,
+but neither is a controlled steady/peak measurement or a substitute for the
+required 2 GB device and duration matrix.
 
 ## Dependency Work Queue
 
