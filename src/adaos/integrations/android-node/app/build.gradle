@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "dev.adaos.androidnode"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "dev.adaos.androidnode"

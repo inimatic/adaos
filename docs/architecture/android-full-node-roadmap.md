@@ -51,7 +51,7 @@ toolchain works on one physical arm64 phone.
 
 - [x] `[must]` Create a separate native Android application module for the full
   node; do not modify or fork the ReDevice application.
-- [x] `[must]` Configure `minSdk 26`, `targetSdk 36`, `compileSdk 37`, and the
+- [x] `[must]` Configure `minSdk 26`, `targetSdk 36`, `compileSdk 36`, and the
   single `arm64-v8a` ABI.
 - [x] `[must]` Embed CPython 3.11 with Chaquopy behind a small `PythonHost`
   interface.

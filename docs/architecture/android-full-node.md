@@ -86,7 +86,7 @@ versions below API 26 are outside this track.
 ### Upper boundary
 
 There is no architectural upper Android version. The first build should use
-`targetSdk 36` and `compileSdk 37`, then validate behavior rather than encode a
+`targetSdk 36` and `compileSdk 36`, then validate behavior rather than encode a
 maximum OS version. Native libraries must support both 4 KB and 16 KB memory
 page-size devices so Android 15 and later do not become an artificial ceiling.
 

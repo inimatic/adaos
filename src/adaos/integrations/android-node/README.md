@@ -30,7 +30,7 @@ or bounded WebIO stream events. Member connectivity remains a later gate.
 
 ## Build
 
-Install JDK 17 or later, Android SDK platform 37.0, and Build Tools 36.0.0.
+Install JDK 17 or later, Android SDK platform 36, and Build Tools 36.0.0.
 Python 3.11 must be available as `py -3.11` on Windows. Then run:
 
 ```powershell
