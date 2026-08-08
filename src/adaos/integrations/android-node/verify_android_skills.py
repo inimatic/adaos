@@ -56,13 +56,23 @@ def _materialization(base_url: str) -> dict:
         return json.load(response)
 
 
-def _verify_note(base_url: str, marker: str) -> None:
+def _node_label(marker: str) -> str:
+    return f"Android Smoke {marker[-12:]}"[:64]
+
+
+def _verify_persisted_state(base_url: str, marker: str) -> None:
     notebook = _post(
         base_url,
         {"tool": "notebook_skill:get_notebook_snapshot", "arguments": {}},
     )
     if not any(item.get("content") == marker for item in notebook.get("items") or []):
         raise RuntimeError("notebook marker did not survive restart")
+    subnet = _post(
+        base_url,
+        {"tool": "subnet_env:get_snapshot", "arguments": {}},
+    )
+    if subnet.get("node_label") != _node_label(marker):
+        raise RuntimeError("subnet_env node label did not survive restart")
 
 
 def main() -> int:
@@ -72,7 +82,7 @@ def main() -> int:
     parser.add_argument("--marker", required=True)
     arguments = parser.parse_args()
     if arguments.mode == "verify":
-        _verify_note(arguments.base_url, arguments.marker)
+        _verify_persisted_state(arguments.base_url, arguments.marker)
         print(json.dumps({"ok": True, "mode": "verify", "marker": arguments.marker}))
         return 0
 
@@ -115,8 +125,43 @@ def main() -> int:
     if any(item.get("id") == disposable_id for item in deleted.get("items") or []):
         raise RuntimeError("Notebook delete did not remove the disposable note")
 
+    subnet = _post(
+        arguments.base_url,
+        {"tool": "subnet_env:get_snapshot", "arguments": {}},
+    )
+    if not subnet.get("node_id") or not subnet.get("subnet_id"):
+        raise RuntimeError("subnet_env snapshot is incomplete")
+
     ws_url = arguments.base_url.replace("http://", "ws://") + "/ws"
     with connect(ws_url, origin="https://inimatic.com", open_timeout=5, close_timeout=2) as websocket:
+        subnet_result, _ = _command(
+            websocket,
+            "subnet-env-smoke",
+            "skill.event.publish",
+            {
+                "event_type": "subnet_env.node_label.changed",
+                "payload": {"node_label": _node_label(arguments.marker)},
+            },
+        )
+        if subnet_result.get("result", {}).get("node_label") != _node_label(arguments.marker):
+            raise RuntimeError("subnet_env node label was not projected")
+
+        offline_request_id = f"weather-offline-{time.time_ns()}"
+        offline_weather, _ = _command(
+            websocket,
+            "weather-offline-smoke",
+            "skill.event.publish",
+            {
+                "event_type": "weather.location.requested",
+                "payload": {
+                    "city": "AdaOS-City-That-Does-Not-Exist-948271",
+                    "request_id": offline_request_id,
+                },
+            },
+        )
+        if offline_weather.get("result", {}).get("current", {}).get("source") != "offline":
+            raise RuntimeError("weather did not publish its bounded offline state")
+
         request_id = f"weather-{time.time_ns()}"
         weather, _ = _command(
             websocket,
@@ -129,6 +174,8 @@ def main() -> int:
         )
         if weather.get("result", {}).get("current", {}).get("request_id") != request_id:
             raise RuntimeError("weather request was not projected")
+        if weather.get("result", {}).get("current", {}).get("source") != "open-meteo":
+            raise RuntimeError("weather did not recover from offline to Open-Meteo")
 
         connect_result, _ = _command(
             websocket,
@@ -185,6 +232,31 @@ def main() -> int:
             set((taiga_application.get("modals") or {}).keys())
         ):
             raise RuntimeError("Taiga materialization dropped desktop catalog modals")
+        page_widgets = {
+            str(item.get("id") or ""): str(item.get("type") or "")
+            for item in (
+                taiga_application.get("desktop", {})
+                .get("pageSchema", {})
+                .get("widgets", [])
+            )
+            if isinstance(item, dict)
+        }
+        required_widgets = {
+            "demo-table": "ui.table",
+            "demo-tree": "collection.tree",
+            "demo-chart-payload": "visual.metricChart",
+        }
+        if any(page_widgets.get(key) != value for key, value in required_widgets.items()):
+            raise RuntimeError(f"Taiga proof widgets are incomplete: {page_widgets}")
+
+        selection, _ = _command(
+            websocket,
+            "demo-selection-smoke",
+            "demo_metrics.selection.changed",
+            {"metric_id": "memory"},
+        )
+        if selection.get("result", {}).get("selection", {}).get("metric_id") != "memory":
+            raise RuntimeError("Taiga metric selection was not projected")
 
         demo, demo_events = _command(
             websocket,
@@ -216,7 +288,13 @@ def main() -> int:
     weather_state = snapshot["data"]["weather"]["current"]
     if weather_state.get("request_id") != request_id or weather_state.get("pending") is not False:
         raise RuntimeError("weather Yjs projection is incomplete")
-    _verify_note(arguments.base_url, arguments.marker)
+    if snapshot["data"]["subnet_env"]["current"].get("node_label") != _node_label(
+        arguments.marker
+    ):
+        raise RuntimeError("subnet_env Yjs projection is incomplete")
+    if snapshot["data"]["demo_metrics"]["selection"].get("metric_id") != "memory":
+        raise RuntimeError("Taiga selection Yjs projection is incomplete")
+    _verify_persisted_state(arguments.base_url, arguments.marker)
     print(
         json.dumps(
             {
@@ -225,6 +303,9 @@ def main() -> int:
                 "marker": arguments.marker,
                 "weather_source": weather_state.get("source"),
                 "weather_error": weather_state.get("error") or "",
+                "weather_offline_recovered": True,
+                "subnet_env_round_trip": True,
+                "taiga_widgets": sorted(required_widgets),
                 "scenario_round_trip": True,
                 "notebook_stream": True,
                 "demo_stream": True,

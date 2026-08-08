@@ -36,6 +36,7 @@ _MAX_YJS_JOURNAL_BYTES = 8 * 1024 * 1024
 _BUNDLE_ROOT = Path(__file__).with_name("bundle")
 _SKILL_WEBUI_FILES = (
     ("web_desktop_skill", "web_desktop_skill.webui.json"),
+    ("subnet_env", "subnet_env.webui.json"),
     ("weather_skill", "weather_skill.webui.json"),
     ("adaos_connect", "adaos_connect.webui.json"),
     ("notebook_skill", "notebook_skill.webui.json"),

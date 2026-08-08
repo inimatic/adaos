@@ -190,7 +190,41 @@
                   { "key": "unit", "label": "Unit", "width": "90px" }
                 ],
                 "emptyText": "No demo metrics yet"
-              }
+              },
+              "actions": [
+                {
+                  "on": "select",
+                  "type": "callHost",
+                  "target": "demo_metrics.selection.changed",
+                  "params": {
+                    "metric_id": "$event.id"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "demo-tree",
+              "type": "collection.tree",
+              "area": "right",
+              "title": "Metric tree",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/demo_metrics/tree"
+              },
+              "inputs": {
+                "emptyText": "No metric tree yet",
+                "selectedIdStateKey": "demo_metrics.selection.metric_id"
+              },
+              "actions": [
+                {
+                  "on": "select",
+                  "type": "callHost",
+                  "target": "demo_metrics.selection.changed",
+                  "params": {
+                    "metric_id": "$event.id"
+                  }
+                }
+              ]
             },
             {
               "id": "demo-chart-payload",

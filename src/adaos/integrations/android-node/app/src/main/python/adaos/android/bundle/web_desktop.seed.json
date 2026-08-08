@@ -16,6 +16,7 @@
       },
       "pinnedWidgets": [],
       "iconOrder": [
+        "android_node_settings_app",
         "weather_app",
         "adaos_connect_app",
         "notebook_skill_app",
@@ -84,6 +85,7 @@
   },
   "installed": {
     "apps": [
+      "android_node_settings_app",
       "weather_app",
       "adaos_connect_app",
       "notebook_skill_app",

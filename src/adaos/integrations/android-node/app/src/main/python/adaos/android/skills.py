@@ -180,6 +180,11 @@ class AndroidSkillRuntime:
                 response_json TEXT NOT NULL,
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS android_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         if not self._database.execute("SELECT 1 FROM notebook_notes LIMIT 1").fetchone():
@@ -207,6 +212,7 @@ class AndroidSkillRuntime:
             "ui/application": current_application,
             "data/desktop/notebook": self._notebook_snapshot(),
             "data/demo_metrics": self._demo_snapshot(),
+            "data/subnet_env/current": self._subnet_snapshot(),
             "runtime/environment/materialization/scenario_id": current_scenario,
             "runtime/environment/install_profile": {
                 "id": "android_poc_v1",
@@ -280,6 +286,7 @@ class AndroidSkillRuntime:
             "demo_metrics_skill.emit_demo_event": self._demo_event,
             "weather_skill.get_weather": self._weather_event,
             "subnet_env.get_snapshot": lambda _args: self._subnet_snapshot(),
+            "subnet_env.set_node_label": self._subnet_set_node_label,
             "adaos_connect.get_snapshot": lambda _args: self._connect_current(),
         }
         handler = allowed.get(normalized)
@@ -313,6 +320,12 @@ class AndroidSkillRuntime:
         normalized = str(event_type or "").strip()
         if normalized == "weather.location.requested":
             return self._weather_event(payload)
+        if normalized == "subnet_env.snapshot.requested":
+            snapshot = self._subnet_snapshot()
+            self._set_paths({"data/subnet_env/current": snapshot})
+            return snapshot
+        if normalized == "subnet_env.node_label.changed":
+            return self._subnet_set_node_label(payload)
         if normalized.startswith("adaos_connect.prepare"):
             mode = normalized.rsplit(".", 1)[-1]
             if mode == "prepare":
@@ -320,6 +333,13 @@ class AndroidSkillRuntime:
             return self._prepare_connect(mode, payload)
         if normalized == "demo_metrics.host_action":
             return self._demo_event(payload, source="android.host")
+        if normalized == "demo_metrics.selection.changed":
+            metric_id = str(payload.get("metric_id") or "").strip()
+            if metric_id not in {"cpu", "memory", "yjs"}:
+                raise AndroidSkillError("demo_metrics_selection_invalid")
+            selection = {"metric_id": metric_id, "updated_at": _utc_now()}
+            self._set_paths({"data/demo_metrics/selection": selection})
+            return {"ok": True, "selection": selection}
         raise AndroidSkillError(f"event_not_in_android_descriptor:{normalized}")
 
     def switch_scenario(self, scenario_id: str) -> dict[str, Any]:
@@ -478,8 +498,47 @@ class AndroidSkillRuntime:
             "node_id": self.node_id,
             "subnet_id": self.subnet_id,
             "role": "member",
+            "node_label": self._setting("node_label", "Android phone"),
+            "summary": (
+                f"{self._setting('node_label', 'Android phone')} is a local Android "
+                f"member of {self.subnet_id}."
+            ),
             "runtime_profile": "android_poc",
+            "updated_at": _utc_now(),
         }
+
+    def _setting(self, key: str, default: str = "") -> str:
+        with self._lock:
+            row = self._database.execute(
+                "SELECT setting_value FROM android_settings WHERE setting_key = ?",
+                (str(key),),
+            ).fetchone()
+        return str(row[0]) if row else str(default)
+
+    def _subnet_set_node_label(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        label = str(
+            arguments.get("node_label")
+            or arguments.get("value")
+            or ""
+        ).strip()[:64]
+        if not label:
+            raise AndroidSkillError("subnet_env_node_label_required")
+        now = _utc_now()
+        with self._lock:
+            self._database.execute(
+                """
+                INSERT INTO android_settings(setting_key, setting_value, updated_at)
+                VALUES ('node_label', ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    updated_at = excluded.updated_at
+                """,
+                (label, now),
+            )
+            self._database.commit()
+        snapshot = self._subnet_snapshot()
+        self._set_paths({"data/subnet_env/current": snapshot})
+        return snapshot
 
     @staticmethod
     def _connect_snapshot(mode: str, request_id: str = "") -> dict[str, Any]:
@@ -534,6 +593,7 @@ class AndroidSkillRuntime:
         ]
         return {
             "summary": {"value": 3, "label": "Android metrics", "status": "ready"},
+            "selection": {"metric_id": "cpu", "updated_at": _utc_now()},
             "table": table,
             "tree": [{"id": "phone", "title": "Android phone", "children": table}],
             "chart": {

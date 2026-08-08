@@ -1,0 +1,144 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "apps": [
+    {
+      "id": "android_node_settings_app",
+      "title": "Android Node",
+      "icon": "phone-portrait-outline",
+      "launchModal": "subnet_env_modal"
+    }
+  ],
+  "registry": {
+    "modals": {
+      "subnet_env_modal": {
+        "title": "Android Node",
+        "schema": {
+          "id": "subnet_env_modal",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
+          },
+          "widgets": [
+            {
+              "id": "subnet-env-refresh",
+              "type": "input.commandBar",
+              "area": "main",
+              "inputs": {
+                "buttons": [
+                  {
+                    "id": "refresh",
+                    "label": "Refresh"
+                  }
+                ]
+              },
+              "actions": [
+                {
+                  "on": "click:refresh",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "subnet_env.snapshot.requested",
+                    "payload": {}
+                  }
+                }
+              ]
+            },
+            {
+              "id": "subnet-env-summary",
+              "type": "item.codeViewer",
+              "area": "main",
+              "title": "Status",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/subnet_env/current"
+              },
+              "inputs": {
+                "bindField": "summary",
+                "language": "text"
+              }
+            },
+            {
+              "id": "subnet-env-node-label",
+              "type": "input.text",
+              "area": "main",
+              "title": "Node name",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/subnet_env/current",
+                "observeRoot": true
+              },
+              "inputs": {
+                "bindField": "node_label",
+                "placeholder": "Android phone",
+                "commitMode": "manual",
+                "saveLabel": "Save"
+              },
+              "interaction": {
+                "submit": {
+                  "defaultAction": "subnet_env.update_node_label"
+                }
+              },
+              "actions": [
+                {
+                  "id": "subnet_env.update_node_label",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "subnet_env.node_label.changed",
+                    "payload": {
+                      "node_label": "$event.value"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "subnet-env-id",
+              "type": "item.codeViewer",
+              "area": "main",
+              "title": "Subnet",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/subnet_env/current"
+              },
+              "inputs": {
+                "bindField": "subnet_id",
+                "language": "text",
+                "copyButton": true
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "ydoc_defaults": {
+    "data/subnet_env": {
+      "current": {
+        "ok": true,
+        "node_label": "Android phone",
+        "summary": "Android member state is loading.",
+        "node_id": "",
+        "subnet_id": "",
+        "role": "member",
+        "runtime_profile": "android_poc",
+        "updated_at": ""
+      }
+    }
+  },
+  "contributions": [
+    {
+      "extensionPoint": "desktop.apps",
+      "type": "app",
+      "id": "android_node_settings_app",
+      "autoInstall": true
+    }
+  ]
+}

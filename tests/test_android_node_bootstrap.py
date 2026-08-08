@@ -257,6 +257,7 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
         assert snapshot["ui"]["application"]["desktop"]["pageSchema"]["id"] == "desktop"
         app_ids = {item["id"] for item in snapshot["data"]["catalog"]["apps"]}
         assert {
+            "android_node_settings_app",
             "weather_app",
             "adaos_connect_app",
             "notebook_skill_app",
@@ -265,6 +266,7 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
         assert snapshot["data"]["installed"]["apps"]
         assert snapshot["data"]["nodes"] == {}
         assert "weather_modal" in snapshot["ui"]["application"]["modals"]
+        assert "subnet_env_modal" in snapshot["ui"]["application"]["modals"]
         assert snapshot["registry"]["merged"]["modals"]
 
         request = urllib.request.Request(
@@ -418,6 +420,22 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         assert code == 200
         assert saved["result"]["editor"]["content"] == "Persistent Android notebook"
 
+        code, subnet = _post_json(
+            f"{base_url}/api/tools/call",
+            {"tool": "subnet_env:get_snapshot", "arguments": {}},
+        )
+        assert code == 200
+        assert subnet["result"]["node_id"] == runtime["node_id"]
+        code, subnet = _post_json(
+            f"{base_url}/api/tools/call",
+            {
+                "tool": "subnet_env:set_node_label",
+                "arguments": {"node_label": "Pocket AdaOS"},
+            },
+        )
+        assert code == 200
+        assert subnet["result"]["node_label"] == "Pocket AdaOS"
+
         code, disposable = _post_json(
             f"{base_url}/api/tools/call",
             {"tool": "notebook_skill:create_note", "arguments": {"content": "delete me"}},
@@ -465,6 +483,17 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
                 },
             )
             assert ack["data"]["accepted"] is True
+
+            ack, _ = _control_command(
+                websocket,
+                "subnet-env-proof",
+                "skill.event.publish",
+                {
+                    "event_type": "subnet_env.node_label.changed",
+                    "payload": {"node_label": "Android Proof Node"},
+                },
+            )
+            assert ack["data"]["result"]["node_label"] == "Android Proof Node"
 
             bootstrap._skills._fetch_weather = lambda *_args: (_ for _ in ()).throw(
                 OSError("offline proof")
@@ -584,6 +613,9 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         assert snapshot["data"]["weather"]["current"]["source"] == "offline"
         assert snapshot["data"]["weather"]["current"]["request_id"] == "weather-offline-request"
         assert snapshot["data"]["adaos_connect"]["current"]["status"] == "offline"
+        assert snapshot["data"]["subnet_env"]["current"]["node_label"] == (
+            "Android Proof Node"
+        )
         assert snapshot["data"]["desktop"]["notebook"]["editor"]["content"] == (
             "Persistent Android notebook"
         )
@@ -636,5 +668,11 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             item["content"] == "Persistent Android notebook"
             for item in notebook["result"]["items"]
         )
+        code, subnet = _post_json(
+            f"http://127.0.0.1:{restarted['port']}/api/tools/call",
+            {"tool": "subnet_env:get_snapshot", "arguments": {}},
+        )
+        assert code == 200
+        assert subnet["result"]["node_label"] == "Android Proof Node"
     finally:
         bootstrap.stop()

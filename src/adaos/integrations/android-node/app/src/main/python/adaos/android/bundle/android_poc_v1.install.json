@@ -30,11 +30,11 @@
       "files": [
         {
           "path": "web_desktop.seed.json",
-          "sha256": "00449a153d9b527f77ef83da70c7496ec5e370a1ed3339c91b1ff107948b4501"
+          "sha256": "cffd1cd571b7ec9539a286d9d47581324cdc310d821caf1ebf26d6c4992cdb97"
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "3f478fc9bd2679fc7b45f51129d508d5187c74352729eaa52316f1825c42dfbd"
+          "sha256": "2830f3e4e876858b91d068a4fa151c1f97431406912da434ed555ff1b2655e0d"
         }
       ]
     },
@@ -44,7 +44,7 @@
       "files": [
         {
           "path": "taiga_ui_demo_scenario.scenario.json",
-          "sha256": "416e9d0e33a67c895b9f43338002b20c5b6d6f7bf3fba543c135158e9a7a6105"
+          "sha256": "a4843835f1b1cbf33f2bb6d8e33c88bc853f4013305374054ff7818565154fad"
         }
       ]
     }
@@ -59,7 +59,9 @@
     {
       "id": "subnet_env",
       "version": "android-poc.1",
-      "builtin": true
+      "builtin": true,
+      "descriptor": "subnet_env.webui.json",
+      "sha256": "ef729f55fb5e31c2e408176655f0f8e1cabe8b178518a374bbc762b6b4941fc8"
     },
     {
       "id": "weather_skill",
@@ -87,6 +89,6 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "5772dac62852ab352b0674855d1890035e96e3daa6ba1daff1fdb58c227596a5"
+    "sha256": "60a9af29e4a7a2cfdbc871fa6c01e207613a494194d19806f50263a427299507"
   }
 }

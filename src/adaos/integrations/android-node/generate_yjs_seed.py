@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib.util
+import importlib
+import sys
 from pathlib import Path
 
 import y_py as Y
@@ -17,17 +18,16 @@ import y_py as Y
 
 ROOT = Path(__file__).resolve().parent
 BOOTSTRAP = ROOT / "app/src/main/python/adaos/android/bootstrap.py"
+PYTHON_ROOT = BOOTSTRAP.parents[2]
 OUTPUT = ROOT / "app/src/main/python/adaos/android/bundle/web_desktop.seed.yjs.b64"
 SEED_CLIENT_ID = 0xADA05
 
 
 def load_bootstrap():
-    spec = importlib.util.spec_from_file_location("adaos_android_seed_builder", BOOTSTRAP)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {BOOTSTRAP}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    root = str(PYTHON_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return importlib.import_module("adaos.android.bootstrap")
 
 
 def set_map_value(target, transaction, key: str, value) -> None:
