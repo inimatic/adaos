@@ -248,6 +248,19 @@ def main() -> int:
         }
         if any(page_widgets.get(key) != value for key, value in required_widgets.items()):
             raise RuntimeError(f"Taiga proof widgets are incomplete: {page_widgets}")
+        semantic_views = {
+            str(item.get("id") or ""): str(item.get("kind") or "")
+            for item in (
+                taiga_application.get("desktop", {})
+                .get("pageSchema", {})
+                .get("semantic", {})
+                .get("views")
+                or []
+            )
+            if isinstance(item, dict)
+        }
+        if semantic_views.get("demo_metric_tree") != "collection_tree":
+            raise RuntimeError(f"Taiga semantic tree is missing: {semantic_views}")
 
         selection, _ = _command(
             websocket,

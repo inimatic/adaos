@@ -669,6 +669,11 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             assert taiga_application["desktop"]["pageSchema"]["id"] == "taiga_ui_demo"
             assert "apps_catalog" in taiga_application["modals"]
             assert "widgets_catalog" in taiga_application["modals"]
+            semantic_views = {
+                item["id"]: item["kind"]
+                for item in taiga_application["desktop"]["pageSchema"]["semantic"]["views"]
+            }
+            assert semantic_views["demo_metric_tree"] == "collection_tree"
 
             ack, events = _control_command(
                 websocket,

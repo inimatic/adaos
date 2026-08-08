@@ -382,6 +382,48 @@
                 }
               },
               {
+                "id": "demo_metric_tree",
+                "kind": "collection_tree",
+                "area": "right",
+                "title": "Metric tree",
+                "when": {
+                  "requiredCapabilities": ["inspectable"],
+                  "surfaceClasses": ["workspace"],
+                  "lifecycleStages": ["active"]
+                },
+                "source": {
+                  "kind": "y",
+                  "ref": "y:data/demo_metrics/tree",
+                  "scope": "shared"
+                },
+                "selection": {
+                  "kind": "view",
+                  "ref": "view:demo_metrics.selection",
+                  "scope": "local"
+                },
+                "config": {
+                  "rootLabel": "Demo metrics",
+                  "titleKey": "title",
+                  "statusKey": "status",
+                  "valueKey": "value",
+                  "unitKey": "unit",
+                  "childrenKey": "children",
+                  "selectionMode": "leaf",
+                  "expanded": true,
+                  "emptyText": "No metric tree yet"
+                },
+                "actions": [
+                  {
+                    "ref": "action:view.demo_metrics.select_tree_metric",
+                    "kind": "set_view_state",
+                    "trigger": "select",
+                    "payload": {
+                      "metric_id": "$event.id"
+                    }
+                  }
+                ]
+              },
+              {
                 "id": "demo_metric_events",
                 "kind": "event_log",
                 "area": "bottom",
