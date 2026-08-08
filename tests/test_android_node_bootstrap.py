@@ -756,10 +756,24 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             json.dumps(bootstrap._skills.taiga_application)
         )
         legacy_taiga_application.pop("modals", None)
+        legacy_catalog = json.loads(json.dumps(bootstrap._skills.desktop_catalog))
+        legacy_catalog["apps"] = [
+            item
+            for item in legacy_catalog.get("apps") or []
+            if item.get("id") != "android_node_settings_app"
+        ]
+        legacy_installed = json.loads(json.dumps(bootstrap._skills.desktop_installed))
+        legacy_installed["apps"] = [
+            item
+            for item in legacy_installed.get("apps") or []
+            if item != "android_node_settings_app"
+        ]
         bootstrap._skills._set_paths(
             {
                 "ui/current_scenario": "taiga_ui_demo_scenario",
                 "ui/application": legacy_taiga_application,
+                "data/catalog": legacy_catalog,
+                "data/installed": legacy_installed,
                 "runtime/environment/materialization/scenario_id": (
                     "taiga_ui_demo_scenario"
                 ),
@@ -782,6 +796,12 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         )
         assert "apps_catalog" in repaired["snapshot"]["ui"]["application"]["modals"]
         assert "widgets_catalog" in repaired["snapshot"]["ui"]["application"]["modals"]
+        assert "android_node_settings_app" in {
+            item["id"] for item in repaired["snapshot"]["data"]["catalog"]["apps"]
+        }
+        assert "android_node_settings_app" in repaired["snapshot"]["data"]["installed"][
+            "apps"
+        ]
 
         code, notebook = _post_json(
             f"http://127.0.0.1:{restarted['port']}/api/tools/call",
