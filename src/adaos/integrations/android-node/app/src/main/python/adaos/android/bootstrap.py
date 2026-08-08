@@ -132,11 +132,40 @@ class _Handler(BaseHTTPRequestHandler):
                 self._serve_websocket("control")
                 return
             if path == "/yws" or path.startswith("/yws/"):
-                room = path.removeprefix("/yws/") or "desktop"
+                room_spec = path.removeprefix("/yws/") or "desktop"
+                room, separator, generation_text = room_spec.partition("~g")
                 if room != "desktop":
                     self._json(404, {"ok": False, "error": "webspace_not_found", "webspace_id": room})
                     return
-                self._serve_websocket("yjs")
+                requested_generation: int | None = None
+                if separator:
+                    try:
+                        requested_generation = max(1, int(generation_text))
+                    except (TypeError, ValueError):
+                        self._json(
+                            400,
+                            {
+                                "ok": False,
+                                "error": "ystore_generation_invalid",
+                                "generation": generation_text,
+                            },
+                        )
+                        return
+                current_generation = (
+                    int(_ystore.stats().get("generation") or 1)
+                    if _ystore is not None
+                    else 1
+                )
+                reject_reason = ""
+                if (
+                    requested_generation is not None
+                    and requested_generation != current_generation
+                ):
+                    reject_reason = (
+                        "ystore_generation_mismatch:"
+                        f"{requested_generation}->{current_generation}"
+                    )
+                self._serve_websocket("yjs", reject_reason=reject_reason)
                 return
             self._json(404, {"ok": False, "error": "websocket_route_not_found", "path": path})
             return
@@ -192,6 +221,9 @@ class _Handler(BaseHTTPRequestHandler):
                     "next": "continue",
                     "terminal": False,
                     "local_auth_required": False,
+                    "yjs_generation": int(
+                        _ystore.stats().get("generation") or 1
+                    ) if _ystore is not None else 1,
                 },
             )
             return
@@ -355,7 +387,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 
-    def _serve_websocket(self, kind: str) -> None:
+    def _serve_websocket(self, kind: str, *, reject_reason: str = "") -> None:
         origin = str(self.headers.get("Origin") or "").strip()
         key = str(self.headers.get("Sec-WebSocket-Key") or "").strip()
         if origin not in _ALLOWED_ORIGINS or not key:
@@ -372,6 +404,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
         peer = _WebSocketPeer(self.connection, kind)
+        if reject_reason:
+            peer.close(1012, reject_reason)
+            return
         with _yjs_lock:
             _websocket_peers.add(peer)
         try:

@@ -227,6 +227,45 @@ def test_android_yws_rejects_oversized_client_history_with_recovery_reason(
         bootstrap.stop()
 
 
+def test_android_yws_fences_stale_store_generations(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base = f"http://127.0.0.1:{runtime['port']}"
+    try:
+        with urllib.request.urlopen(
+            f"{base}/api/browser/session/authorize?dev=browser-1&ws=desktop",
+            timeout=2,
+        ) as response:
+            authorization = json.load(response)
+        generation = int(authorization["yjs_generation"])
+        assert generation >= 1
+
+        with connect(
+            f"ws://127.0.0.1:{runtime['port']}/yws/desktop~g{generation + 1}",
+            origin="https://inimatic.com",
+            open_timeout=2,
+            close_timeout=2,
+        ) as websocket:
+            with pytest.raises(ConnectionClosed) as raised:
+                websocket.recv(timeout=2)
+            assert raised.value.rcvd is not None
+            assert raised.value.rcvd.code == 1012
+            assert (
+                raised.value.rcvd.reason
+                == f"ystore_generation_mismatch:{generation + 1}->{generation}"
+            )
+
+        with connect(
+            f"ws://127.0.0.1:{runtime['port']}/yws/desktop~g{generation}",
+            origin="https://inimatic.com",
+            open_timeout=2,
+            close_timeout=2,
+        ) as websocket:
+            assert isinstance(websocket.recv(timeout=2), bytes)
+    finally:
+        bootstrap.stop()
+
+
 def test_loopback_sentinel_admits_inimatic_cors_and_private_network(tmp_path: Path) -> None:
     bootstrap = _load_bootstrap()
     runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
@@ -358,6 +397,7 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
             authorization = json.load(response)
         assert authorization["allowed"] is True
         assert authorization["local_auth_required"] is False
+        assert authorization["yjs_generation"] >= 1
 
         with urllib.request.urlopen(
             f"{base}/api/node/yjs/webspaces/desktop/materialization/snapshot"
