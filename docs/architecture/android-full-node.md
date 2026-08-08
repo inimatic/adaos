@@ -2,18 +2,22 @@
 
 Status: target architecture for an experimental proof of concept.
 
-Implementation status: the first A0/A1/A2/A3/A4/A5 vertical-slice APK is implemented
-under `src/adaos/integrations/android-node` and has been exercised on an
-Android 16 Samsung SM-F721N. It proves the Android lifecycle, embedded CPython
+Implementation status: the first A0/A1/A2/A3/A4/A5 vertical slice and the A6
+member-protocol slice are implemented under
+`src/adaos/integrations/android-node` and have been exercised on an Android 16
+Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
 over `/yws/desktop` and recovered after a forced process stop. The immutable
 `android_poc_v1` profile executes Weather, AdaOS Connect, Notebook, subnet
 environment, and Taiga demo metrics in-process; the browser has rendered
-persisted Notebook data, AdaOS Connect's degraded state, and the Taiga metrics
-table/chart from that profile. Member connectivity and the 2 GB device gate
-remain owned by the
+persisted Notebook data, the editable subnet environment, AdaOS Connect, and
+the Taiga metrics table/tree/chart/selection from that profile. The outbound
+member client has also joined a protocol-compatible Root/Hub fixture, survived
+a process restart and hub outage, and exchanged Yjs updates in both
+directions. A deployed-subnet run, Android Keystore custody, and the 2 GB
+device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
 ## Purpose
@@ -419,6 +423,17 @@ used on desktop seed and reconcile it:
 8. browser actions invoke local tools/events and observe the resulting Yjs or
    stream change.
 
+Retained CRDT history is bounded independently from current semantic state.
+The Android YStore structurally rebuilds an over-limit snapshot on startup,
+increments a persisted generation number, and exposes snapshot pressure in
+`/api/node/status`. Browser authorization announces that generation. The
+client uses a generation-qualified physical YWS room while keeping the logical
+webspace id `desktop`; this prevents an old tab's cross-tab BroadcastChannel
+from replaying pre-compaction history into the rebuilt store. A client that
+reconnects with a stale qualified generation receives
+`ystore_generation_mismatch` and performs a hard reload. Inbound YWS updates
+and member-link queues also have explicit size/count limits.
+
 The control-channel acknowledgement is authoritative. A positive ACK means the
 named command was implemented and its mutation was accepted. Unsupported
 commands receive a negative ACK; they must never fall through as successful
@@ -450,7 +465,7 @@ existing durable membership contract and member-link client described in
 [Member-Hub Connectivity](member-hub-connectivity.md). No inbound LAN listener
 is required for hub membership.
 
-The Android profile requires:
+The PoC5 Android profile implements:
 
 - membership persistence in app-private storage;
 - credentials separate from the unauthenticated loopback listener;
@@ -459,6 +474,16 @@ The Android profile requires:
   states;
 - local desktop availability while the upstream link is down;
 - Yjs and member snapshot convergence after reconnect.
+
+AdaOS Connect accepts a Root URL and one-time join code, calls the existing
+join contract (with the compatibility endpoint as fallback), and persists the
+resolved Hub URL, subnet id, and credential in a separate app-private member
+configuration. The secret is never projected into Yjs or status responses.
+The client is outbound-only, supports `ws` and system-CA-validated `wss`, uses
+bounded exponential reconnect backoff and a bounded send queue, and can be
+explicitly disconnected and forgotten. The checked-in Root/Hub fixture proves
+the protocol and failure states; it is not a substitute for the roadmap's
+deployed-subnet acceptance run or later Android Keystore custody.
 
 The desktop supervisor and realtime sidecar are not required for the first
 member link. Android owns process lifetime and the Python runtime owns the live
@@ -577,6 +602,8 @@ The implementation must preserve these invariants:
 10. ReDevice remains the path for devices below the Android/ABI/resource floor.
 11. Control ACKs and materialization diagnostics describe actual applied Yjs
     state; alternate scenarios cannot leave the browser in false recovery.
+12. Structural Yjs compaction changes the physical browser sync generation;
+    tabs from an older generation cannot share cross-tab state with it.
 
 ## Non-Goals for the First PoC
 

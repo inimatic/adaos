@@ -1,9 +1,11 @@
 # AdaOS Android Full Node Roadmap
 
 Status: active domain roadmap for an experimental proof of concept. The first
-A0/A1/A2/A3/A4/A5 vertical slice is running on a physical Android 16 arm64
-phone. It renders `web_desktop` from native `y-py` and executes the fixed skill
-profile in-process. Member connectivity and the 2 GB device gate remain open.
+A0/A1/A2/A3/A4/A5 vertical slice and the A6 member-protocol slice are running
+on a physical Android 16 arm64 phone. It renders `web_desktop` from native
+`y-py`, executes the fixed skill profile in-process, and maintains an outbound
+member link. A deployed-subnet acceptance run, Keystore custody, and the 2 GB
+device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -90,6 +92,8 @@ Outcome: the custom CRDT foundation works before the rest of AdaOS is packaged.
   second document, and compare state.
 - [x] `[must]` persist encoded state under the app-private directory and reload
   it after process restart.
+- [x] `[must]` bound retained Yjs history, structurally compact an over-limit
+  snapshot, and fence old browser BroadcastChannels from the new generation.
 - [x] `[must]` exercise the Android AdaOS YStore with the same document rather than
   stopping at a direct `y_py` unit test.
 - [x] `[should]` publish the wheel with version, hash, source revision, Android
@@ -249,6 +253,13 @@ the desktop without entering `Recovering`, and live materialization reported
 `ready`, no missing branches, and a consistent scenario. A persisted Taiga
 projection created by PoC3 was also repaired on startup without clearing data.
 
+PoC5 follow-up evidence: the 1.32 MiB retained-history document was
+structurally compacted to a roughly 50 KiB semantic snapshot with its store
+generation incremented. The hosted client now qualifies the physical YWS room
+with this generation, while Android rejects stale qualified generations and
+client updates larger than 512 KiB. This closes the multi-tab path which could
+previously replay pre-compaction history after a node restart.
+
 ## Phase A5: Skill and Scenario Proof Matrix
 
 Outcome: the fixed bundle demonstrates the actual UI-as-data paths chosen for
@@ -256,8 +267,8 @@ the PoC.
 
 ### `subnet_env`
 
-- [ ] `[must]` invoke a read action and render its Yjs snapshot.
-- [ ] `[must]` update one allowlisted value and observe the UI change without a
+- [x] `[must]` invoke a read action and render its Yjs snapshot.
+- [x] `[must]` update one allowlisted value and observe the UI change without a
   full page reload.
 
 ### Weather
@@ -291,7 +302,7 @@ the PoC.
 
 - [x] `[must]` switch from `web_desktop` to
   `taiga_ui_demo_scenario` and back.
-- [ ] `[must]` render the metrics table, tree, chart, and selection from Yjs.
+- [x] `[must]` render the metrics table, tree, chart, and selection from Yjs.
 - [x] `[must]` emit a skill event and a host event and observe the live receiver.
 - [x] `[must]` verify scenario switching does not create a second legacy
   `default` room or lose the `desktop` document.
@@ -312,28 +323,34 @@ forced process restarts. The final scenario was `web_desktop`, the process was
 still alive, and Logcat contained no Python traceback, fatal application
 exception, or ANR.
 
+PoC5 completed the remaining local matrix on the same device. `subnet_env`
+read and updated the editable node label through Yjs. Chrome rendered the
+Taiga semantic table, five-node tree, SVG chart, event list, chat, and shared
+selection, then returned to `web_desktop` with the local connection online and
+no materialization blockers.
+
 ## Phase A6: Member Link
 
 Outcome: the phone remains locally useful and also participates as a real
 member of an existing subnet.
 
-- [ ] `[must]` package the minimal `cryptography`/TLS dependency closure needed
+- [x] `[must]` package the minimal `cryptography`/TLS dependency closure needed
   by the existing membership contract, or supply a tested Android adapter for
   that boundary.
-- [ ] `[must]` store member credentials separately from the local API token.
-- [ ] `[must]` join using the existing short-lived join contract; a temporary
+- [x] `[must]` store member credentials separately from the local API token.
+- [x] `[must]` join using the existing short-lived join contract; a temporary
   manual provisioning step is acceptable before AdaOS Connect owns the whole
   flow.
-- [ ] `[must]` start the outbound member-link client only after the local
+- [x] `[must]` start the outbound member-link client only after the local
   runtime is ready.
-- [ ] `[must]` report `connecting`, `connected`, `offline`, and expected-stop
+- [x] `[must]` report `connecting`, `connected`, `offline`, and expected-stop
   states without blocking LO.
-- [ ] `[must]` send the member identity and bounded local runtime/desktop
+- [x] `[must]` send the member identity and bounded local runtime/desktop
   contribution to the hub.
-- [ ] `[must]` converge the allowed default webspace state after reconnect.
-- [ ] `[must]` apply bounded exponential reconnect backoff and cancel it during
+- [x] `[must]` converge the allowed default webspace state after reconnect.
+- [x] `[must]` apply bounded exponential reconnect backoff and cancel it during
   an explicit service stop.
-- [ ] `[should]` complete member onboarding through the bundled AdaOS Connect
+- [x] `[should]` complete member onboarding through the bundled AdaOS Connect
   UI.
 - [ ] `[should]` move long-lived private-key custody to Android Keystore while
   retaining the existing membership contract at the AdaOS boundary.
@@ -345,6 +362,17 @@ Gate A6:
 - LO remains usable while the hub or WAN is unavailable;
 - local Yjs edits made during the outage converge after reconnect;
 - no inbound LAN listener or supervisor is required.
+
+Protocol evidence (2026-08-08): PoC5 joined a protocol-compatible Root/Hub
+fixture through AdaOS Connect's Root URL and one-time-code contract. The phone
+retained membership across a forced process restart, kept LO ready through a
+hub outage, reconnected with bounded backoff, and exchanged Yjs updates in
+both directions. The temporary token never appeared in status/Yjs evidence
+and was removed by `disconnect & forget`. TLS uses the embedded Python
+standard-library client with system CA validation, avoiding an Android
+`cryptography` dependency in this slice. The A6 gate remains open only for a
+run against an existing deployed subnet and long-lived key migration to
+Android Keystore.
 
 ## Phase A7: Lifecycle and 2 GB Device Gate
 
@@ -387,6 +415,15 @@ reported 165,752 KiB total PSS and 253,872 KiB total RSS; the debug APK was
 22,448,351 bytes. Both PSS samples are below the provisional steady budget,
 but neither is a controlled steady/peak measurement or a substitute for the
 required 2 GB device and duration matrix.
+
+The final PoC5 debug APK is 22,464,739 bytes with SHA-256
+`d79940a1428de272e1e49352db2c174dd6d03e4552edf63c750cea551f5f1e88`.
+After the full skill/restart smoke and member outage/reconnect proof, Android
+reported 108,304 KiB total PSS and 197,732 KiB total RSS. The API 36 SM-F721N
+has 7,442,748 KiB total RAM and a 4 KiB page size, so this remains useful
+upper-device evidence, not the required 2 GB or 16 KiB A7 result. The live
+YStore was generation 2 with a 53,081-byte snapshot, `ready` pressure, and no
+matching fatal exception, Python traceback, or ANR in Logcat.
 
 ## Dependency Work Queue
 

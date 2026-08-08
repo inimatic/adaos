@@ -24,12 +24,13 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the A0/A1/A2/A3/A4/A5 vertical-slice artifact. It reports `yjs_ready=true`,
+This is the A0/A1/A2/A3/A4/A5/A6 protocol-slice artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
 the existing `/api/tools/call` contract; all visible state returns through Yjs
-or bounded WebIO stream events. Member connectivity remains a later gate.
+or bounded WebIO stream events. AdaOS Connect can provision the outbound member
+link with a Root URL and one-time join code while LO remains available offline.
 
 ## Build
 
@@ -57,7 +58,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc4-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc5-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -77,8 +78,26 @@ restarts it, and verifies the same Yjs value. Its verifier accepts YWS messages
 up to the runtime's bounded 4 MiB message contract, including documents whose
 retained CRDT history exceeds the WebSocket library's 1 MiB default.
 `-OpenBrowser` then launches the hosted client with explicit LO intent. The
-browser should show the four fixed apps, two widgets, and a green YJS status
+browser should show the five fixed apps, two widgets, and a green YJS status
 without login or a development token.
 `-VerifySkills` runs Weather, the AdaOS Connect degraded path, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.
+
+The YStore structurally compacts over-limit retained history on startup. Its
+generation is announced during browser authorization and included in the
+physical YWS room name, isolating old browser BroadcastChannels from the new
+document after compaction. Inbound client updates are limited to 512 KiB.
+
+To verify the outbound membership protocol, persistence, outage behavior, and
+bidirectional Yjs flow on a connected phone, run:
+
+```powershell
+.\verify-member-link-device.ps1 -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe"
+```
+
+This starts a protocol-compatible Root/Hub fixture on the workstation, joins
+through a one-time code, restarts the Android process, interrupts the hub, and
+checks recovery. It forgets the temporary membership when finished. Passing
+this fixture is protocol evidence; the A6 product gate still requires a run
+against an existing deployed AdaOS subnet.
