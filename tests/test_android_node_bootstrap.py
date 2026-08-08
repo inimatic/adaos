@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+import threading
 import time
 import types
 import urllib.error
@@ -14,6 +15,7 @@ import pytest
 import y_py as Y
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
+from websockets.sync.server import serve
 
 
 BOOTSTRAP_PATH = (
@@ -30,6 +32,7 @@ BOOTSTRAP_PATH = (
     / "android"
     / "bootstrap.py"
 )
+MEMBER_FIXTURE_PATH = BOOTSTRAP_PATH.parents[6] / "verify_member_link.py"
 
 
 def _post_json(url: str, payload: dict) -> tuple[int, dict]:
@@ -76,6 +79,25 @@ def _load_bootstrap():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_member_fixture():
+    module_name = f"_adaos_android_member_fixture_{time.time_ns()}"
+    spec = importlib.util.spec_from_file_location(module_name, MEMBER_FIXTURE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _wait_until(predicate, *, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise AssertionError("condition did not become true before timeout")
 
 
 def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: Path) -> None:
@@ -228,6 +250,96 @@ def test_loopback_sentinel_admits_inimatic_cors_and_private_network(tmp_path: Pa
             assert "x-adaos-trace-id" in allowed_headers
     finally:
         bootstrap.stop()
+
+
+def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    fixture = _load_member_fixture()
+    evidence = fixture.Evidence(
+        code="TEST-JOIN",
+        token="test-member-token",
+        subnet_id="test-member-subnet",
+        hub_url="",
+    )
+    hub = serve(
+        fixture._hub_handler(evidence),
+        "127.0.0.1",
+        0,
+        compression=None,
+        max_size=4 * 1024 * 1024,
+    )
+    hub_port = int(hub.socket.getsockname()[1])
+    evidence.hub_url = f"http://127.0.0.1:{hub_port}"
+    root = fixture.ThreadingHTTPServer(("127.0.0.1", 0), fixture._root_handler(evidence))
+    root_port = int(root.server_address[1])
+    hub_thread = threading.Thread(target=hub.serve_forever, daemon=True)
+    root_thread = threading.Thread(target=root.serve_forever, daemon=True)
+    hub_thread.start()
+    root_thread.start()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base_url = f"http://127.0.0.1:{runtime['port']}"
+    try:
+        code, joined = _post_json(
+            f"{base_url}/api/node/member/join",
+            {"root_url": f"http://127.0.0.1:{root_port}", "code": "TEST-JOIN"},
+        )
+        assert code == 200 and joined["ok"] is True
+        assert joined["result"]["current"]["join_code"] == ""
+        assert "test-member-token" not in json.dumps(joined)
+
+        def reconnected() -> bool:
+            with urllib.request.urlopen(f"{base_url}/api/node/member/status", timeout=2) as response:
+                member = json.load(response)
+            return bool(
+                member.get("connected")
+                and int(member.get("reconnect_total") or 0) >= 1
+                and evidence.snapshot()["sessions"] >= 2
+                and evidence.snapshot()["inbound_probe_sent"]
+            )
+
+        _wait_until(reconnected, timeout=15)
+        code, renamed = _post_json(
+            f"{base_url}/api/tools/call",
+            {
+                "tool": "subnet_env:set_node_label",
+                "arguments": {"node_label": "Linked Android"},
+            },
+        )
+        assert code == 200 and renamed["result"]["node_label"] == "Linked Android"
+
+        def converged() -> bool:
+            with urllib.request.urlopen(
+                f"{base_url}/api/node/yjs/webspaces/desktop/materialization/snapshot",
+                timeout=2,
+            ) as response:
+                snapshot = json.load(response)["snapshot"]
+            return bool(
+                evidence.snapshot()["yjs_update_total"] >= 1
+                and snapshot.get("runtime", {}).get("member_hub_probe")
+                == "received-from-protocol-hub"
+            )
+
+        _wait_until(converged)
+        with urllib.request.urlopen(f"{base_url}/api/node/status", timeout=2) as response:
+            status = json.load(response)
+        assert status["subnet_id"] == "test-member-subnet"
+        assert status["connected_to_hub"] is True
+        assert status["runtime"]["member_link"]["token_present"] is True
+        assert "test-member-token" not in json.dumps(status)
+
+        code, disconnected = _post_json(
+            f"{base_url}/api/node/member/disconnect",
+            {"forget": True},
+        )
+        assert code == 200
+        assert disconnected["result"]["current"]["configured"] is False
+    finally:
+        bootstrap.stop()
+        root.shutdown()
+        root.server_close()
+        hub.shutdown()
+        root_thread.join(timeout=2)
+        hub_thread.join(timeout=2)
 
 
 def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: Path) -> None:

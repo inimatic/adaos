@@ -45,6 +45,10 @@
                   {
                     "id": "node",
                     "label": "Join node"
+                  },
+                  {
+                    "id": "disconnect",
+                    "label": "Disconnect & forget"
                   }
                 ]
               },
@@ -96,8 +100,93 @@
                     "mode": "node",
                     "refresh": true
                   }
+                },
+                {
+                  "on": "click:disconnect",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "adaos_connect.member.disconnect",
+                    "payload": {
+                      "forget": true
+                    }
+                  }
                 }
               ]
+            },
+            {
+              "id": "adaos-connect-root-url",
+              "type": "input.text",
+              "area": "main",
+              "title": "Root URL",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/adaos_connect/current",
+                "observeRoot": true
+              },
+              "inputs": {
+                "bindField": "root_url",
+                "placeholder": "https://root.example",
+                "commitMode": "manual",
+                "saveLabel": "Use Root"
+              },
+              "interaction": {
+                "submit": {
+                  "defaultAction": "adaos_connect.set_root_url"
+                }
+              },
+              "actions": [
+                {
+                  "id": "adaos_connect.set_root_url",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "adaos_connect.member.root_url.set",
+                    "payload": {
+                      "root_url": "$event.value"
+                    }
+                  }
+                }
+              ],
+              "visibleIf": "$state.adaosConnectMode === 'node'"
+            },
+            {
+              "id": "adaos-connect-join-code-input",
+              "type": "input.text",
+              "area": "main",
+              "title": "One-time join code",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/adaos_connect/current",
+                "observeRoot": true
+              },
+              "inputs": {
+                "bindField": "join_code",
+                "placeholder": "Enter join code",
+                "commitMode": "manual",
+                "saveLabel": "Join subnet"
+              },
+              "interaction": {
+                "submit": {
+                  "defaultAction": "adaos_connect.join_member"
+                }
+              },
+              "actions": [
+                {
+                  "id": "adaos_connect.join_member",
+                  "on": "change",
+                  "type": "callHost",
+                  "target": "skill.event.publish",
+                  "params": {
+                    "event_type": "adaos_connect.member.join",
+                    "payload": {
+                      "code": "$event.value"
+                    }
+                  }
+                }
+              ],
+              "visibleIf": "$state.adaosConnectMode === 'node'"
             },
             {
               "id": "adaos-connect-summary",
@@ -304,7 +393,16 @@
         "windows_ps_command": "",
         "windows_ps_language": "powershell",
         "windows_cmd_command": "",
-        "windows_cmd_language": "bat"
+        "windows_cmd_language": "bat",
+        "root_url": "",
+        "join_code": "",
+        "subnet_id": "",
+        "member_link_state": "offline",
+        "connected": false,
+        "configured": false,
+        "transport_security": "unconfigured",
+        "connect_attempts": 0,
+        "reconnect_total": 0
       }
     }
   },

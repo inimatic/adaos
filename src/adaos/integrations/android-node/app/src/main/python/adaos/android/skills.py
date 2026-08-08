@@ -157,6 +157,7 @@ class AndroidSkillRuntime:
         )
         self.publish_yjs = publish_yjs
         self.publish_event = publish_event
+        self.member_link: Any | None = None
         self._lock = threading.RLock()
         self._stream_revision = 0
         self._database = sqlite3.connect(
@@ -288,6 +289,9 @@ class AndroidSkillRuntime:
             "subnet_env.get_snapshot": lambda _args: self._subnet_snapshot(),
             "subnet_env.set_node_label": self._subnet_set_node_label,
             "adaos_connect.get_snapshot": lambda _args: self._connect_current(),
+            "adaos_connect.configure_member": self._configure_member,
+            "adaos_connect.join_member": self._join_member,
+            "adaos_connect.disconnect_member": self._disconnect_member,
         }
         handler = allowed.get(normalized)
         if handler is None:
@@ -331,6 +335,12 @@ class AndroidSkillRuntime:
             if mode == "prepare":
                 mode = str(payload.get("mode") or "browser")
             return self._prepare_connect(mode, payload)
+        if normalized == "adaos_connect.member.root_url.set":
+            return self._set_member_root_url(payload)
+        if normalized == "adaos_connect.member.join":
+            return self._join_member(payload)
+        if normalized == "adaos_connect.member.disconnect":
+            return self._disconnect_member(payload)
         if normalized == "demo_metrics.host_action":
             return self._demo_event(payload, source="android.host")
         if normalized == "demo_metrics.selection.changed":
@@ -493,17 +503,22 @@ class AndroidSkillRuntime:
         raise AndroidSkillError("notebook_telegram_export_deferred_android_poc")
 
     def _subnet_snapshot(self) -> dict[str, Any]:
+        member = self.member_link.snapshot() if self.member_link is not None else {}
+        subnet_id = str(member.get("subnet_id") or self.subnet_id)
+        link_state = str(member.get("state") or "offline")
         return {
             "ok": True,
             "node_id": self.node_id,
-            "subnet_id": self.subnet_id,
+            "subnet_id": subnet_id,
             "role": "member",
             "node_label": self._setting("node_label", "Android phone"),
             "summary": (
                 f"{self._setting('node_label', 'Android phone')} is a local Android "
-                f"member of {self.subnet_id}."
+                f"member of {subnet_id}; upstream link is {link_state}."
             ),
             "runtime_profile": "android_poc",
+            "member_link_state": link_state,
+            "connected_to_hub": bool(member.get("connected")),
             "updated_at": _utc_now(),
         }
 
@@ -540,16 +555,58 @@ class AndroidSkillRuntime:
         self._set_paths({"data/subnet_env/current": snapshot})
         return snapshot
 
-    @staticmethod
-    def _connect_snapshot(mode: str, request_id: str = "") -> dict[str, Any]:
+    def attach_member_link(self, member_link: Any) -> None:
+        self.member_link = member_link
+        self.project_member_link(member_link.snapshot())
+
+    def project_member_link(self, member_status: dict[str, Any]) -> dict[str, Any]:
+        snapshot = self._connect_snapshot("node", member_status=member_status)
+        self._set_paths(
+            {
+                "data/adaos_connect": snapshot,
+                "data/subnet_env/current": self._subnet_snapshot(),
+            }
+        )
+        return snapshot
+
+    def _connect_snapshot(
+        self,
+        mode: str,
+        request_id: str = "",
+        *,
+        member_status: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        member = (
+            dict(member_status)
+            if isinstance(member_status, dict)
+            else self.member_link.snapshot()
+            if self.member_link is not None
+            else {}
+        )
+        configured = bool(member.get("configured"))
+        connected = bool(member.get("connected"))
+        state = str(member.get("state") or "offline")
+        pending = state == "connecting"
+        error = str(member.get("last_error") or "")
+        if not configured:
+            error = "member_link_not_configured"
+        if connected:
+            summary = f"Connected to {member.get('hub_url') or 'AdaOS Hub'}."
+        elif configured:
+            summary = (
+                f"Member link is {state}; local AdaOS remains available."
+                + (f" {error}" if error else "")
+            )
+        else:
+            summary = "Enter Root URL and a one-time join code to connect this phone."
         return {
             "current": {
                 "mode": mode if mode in {"browser", "telegram", "node"} else "browser",
-                "status": "offline",
-                "degraded": True,
-                "pending": False,
-                "error": "root_unavailable_android_poc",
-                "summary": "Root connection is not configured. Local AdaOS remains available.",
+                "status": "connected" if connected else state,
+                "degraded": not connected,
+                "pending": pending,
+                "error": "" if connected else error,
+                "summary": summary,
                 "summary_language": "text",
                 "request_id": request_id,
                 "updated_at": _utc_now(),
@@ -571,6 +628,15 @@ class AndroidSkillRuntime:
                 "windows_ps_language": "powershell",
                 "windows_cmd_command": "",
                 "windows_cmd_language": "bat",
+                "root_url": str(member.get("hub_url") or self._setting("member_root_url", "")),
+                "join_code": "",
+                "subnet_id": str(member.get("subnet_id") or self.subnet_id),
+                "member_link_state": state,
+                "connected": connected,
+                "configured": configured,
+                "transport_security": str(member.get("transport_security") or "unconfigured"),
+                "connect_attempts": int(member.get("connect_attempts") or 0),
+                "reconnect_total": int(member.get("reconnect_total") or 0),
             }
         }
 
@@ -582,6 +648,58 @@ class AndroidSkillRuntime:
         snapshot = self._connect_snapshot(mode, str(payload.get("request_id") or ""))
         self._set_paths({"data/adaos_connect": snapshot})
         return snapshot
+
+    def _set_member_root_url(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        root_url = str(arguments.get("root_url") or arguments.get("value") or "").strip()
+        if not root_url.startswith(("http://", "https://")):
+            raise AndroidSkillError("adaos_connect_root_url_invalid")
+        with self._lock:
+            self._database.execute(
+                """
+                INSERT INTO android_settings(setting_key, setting_value, updated_at)
+                VALUES ('member_root_url', ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    updated_at = excluded.updated_at
+                """,
+                (root_url.rstrip("/"), _utc_now()),
+            )
+            self._database.commit()
+        snapshot = self._connect_snapshot("node")
+        self._set_paths({"data/adaos_connect": snapshot})
+        return snapshot
+
+    def _configure_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.member_link is None:
+            raise AndroidSkillError("android_member_link_not_ready")
+        try:
+            result = self.member_link.configure(
+                hub_url=str(arguments.get("hub_url") or ""),
+                subnet_id=str(arguments.get("subnet_id") or ""),
+                token=str(arguments.get("token") or ""),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise AndroidSkillError(str(exc)) from exc
+        return self.project_member_link(result)
+
+    def _join_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.member_link is None:
+            raise AndroidSkillError("android_member_link_not_ready")
+        root_url = str(
+            arguments.get("root_url") or self._setting("member_root_url", "")
+        ).strip()
+        code = str(arguments.get("code") or arguments.get("join_code") or "").strip()
+        try:
+            result = self.member_link.join(root_url=root_url, code=code)
+        except (ValueError, RuntimeError) as exc:
+            raise AndroidSkillError(str(exc)) from exc
+        return self.project_member_link(result)
+
+    def _disconnect_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.member_link is None:
+            raise AndroidSkillError("android_member_link_not_ready")
+        result = self.member_link.disconnect(forget=bool(arguments.get("forget")))
+        return self.project_member_link(result)
 
     @staticmethod
     def _demo_snapshot() -> dict[str, Any]:

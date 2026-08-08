@@ -1,0 +1,647 @@
+"""Bounded outbound member link for the experimental Android runtime."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import queue
+import socket
+import ssl
+import struct
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
+
+
+_WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+_MAX_FRAME_BYTES = 4 * 1024 * 1024
+_MAX_OUTBOUND_MESSAGES = 128
+_MAX_MEMBER_YJS_UPDATE_BYTES = 512 * 1024
+
+
+def _redacted_url(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunparse((parsed.scheme, host, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _websocket_url(base_url: str) -> str:
+    parsed = urlparse(str(base_url or "").strip())
+    if parsed.scheme not in {"http", "https", "ws", "wss"} or not parsed.netloc:
+        raise ValueError("member_hub_url_invalid")
+    scheme = {"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
+    path = f"{parsed.path.rstrip('/')}/ws/subnet"
+    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+
+
+def _read_exact(connection: socket.socket, length: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = connection.recv(length - len(chunks))
+        if not chunk:
+            raise ConnectionError("member_link_closed")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+class _WebSocketClient:
+    def __init__(self, url: str, token: str, *, timeout: float = 5.0) -> None:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
+            raise ValueError("member_websocket_url_invalid")
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        connection = socket.create_connection((parsed.hostname, port), timeout=timeout)
+        if parsed.scheme == "wss":
+            context = ssl.create_default_context()
+            connection = context.wrap_socket(connection, server_hostname=parsed.hostname)
+        connection.settimeout(timeout)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        resource = parsed.path or "/"
+        if parsed.query:
+            resource = f"{resource}?{parsed.query}"
+        request = (
+            f"GET {resource} HTTP/1.1\r\n"
+            f"Host: {parsed.netloc}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            f"X-AdaOS-Token: {token}\r\n"
+            "\r\n"
+        ).encode("ascii")
+        connection.sendall(request)
+        response = bytearray()
+        while b"\r\n\r\n" not in response:
+            if len(response) > 32 * 1024:
+                connection.close()
+                raise ConnectionError("member_websocket_handshake_too_large")
+            response.extend(connection.recv(4096))
+        header_block = bytes(response).split(b"\r\n\r\n", 1)[0]
+        lines = header_block.decode("latin-1").split("\r\n")
+        if not lines or " 101 " not in f" {lines[0]} ":
+            connection.close()
+            raise ConnectionError(f"member_websocket_handshake_rejected:{lines[0] if lines else ''}")
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            name, separator, value = line.partition(":")
+            if separator:
+                headers[name.strip().lower()] = value.strip()
+        expected = base64.b64encode(
+            hashlib.sha1(f"{key}{_WEBSOCKET_GUID}".encode("ascii")).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected:
+            connection.close()
+            raise ConnectionError("member_websocket_accept_invalid")
+        self.connection = connection
+        self._send_lock = threading.Lock()
+        self.closed = False
+
+    def _send_frame(self, opcode: int, payload: bytes = b"") -> None:
+        if self.closed:
+            raise ConnectionError("member_link_closed")
+        if len(payload) > _MAX_FRAME_BYTES:
+            raise ValueError("member_link_frame_too_large")
+        mask = os.urandom(4)
+        header = bytearray([0x80 | (opcode & 0x0F)])
+        length = len(payload)
+        if length < 126:
+            header.append(0x80 | length)
+        elif length <= 0xFFFF:
+            header.append(0x80 | 126)
+            header.extend(struct.pack("!H", length))
+        else:
+            header.append(0x80 | 127)
+            header.extend(struct.pack("!Q", length))
+        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        with self._send_lock:
+            self.connection.sendall(bytes(header) + mask + masked)
+
+    def send_json(self, payload: dict[str, Any]) -> None:
+        self._send_frame(
+            0x1,
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        )
+
+    def recv_json(self, *, timeout: float) -> dict[str, Any] | None:
+        self.connection.settimeout(timeout)
+        fragments = bytearray()
+        first_opcode: int | None = None
+        while True:
+            try:
+                head = _read_exact(self.connection, 2)
+            except socket.timeout:
+                return None
+            fin = bool(head[0] & 0x80)
+            opcode = head[0] & 0x0F
+            masked = bool(head[1] & 0x80)
+            length = head[1] & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", _read_exact(self.connection, 2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", _read_exact(self.connection, 8))[0]
+            if length > _MAX_FRAME_BYTES:
+                raise ConnectionError("member_link_inbound_frame_too_large")
+            mask = _read_exact(self.connection, 4) if masked else b""
+            payload = _read_exact(self.connection, length)
+            if mask:
+                payload = bytes(
+                    value ^ mask[index % 4] for index, value in enumerate(payload)
+                )
+            if opcode == 0x8:
+                raise ConnectionError("member_link_remote_closed")
+            if opcode == 0x9:
+                self._send_frame(0xA, payload[:125])
+                continue
+            if opcode == 0xA:
+                continue
+            if opcode in {0x1, 0x2}:
+                first_opcode = opcode
+                fragments = bytearray(payload)
+            elif opcode == 0x0 and first_opcode is not None:
+                fragments.extend(payload)
+            else:
+                continue
+            if len(fragments) > _MAX_FRAME_BYTES:
+                raise ConnectionError("member_link_fragmented_frame_too_large")
+            if not fin:
+                continue
+            if first_opcode != 0x1:
+                return None
+            decoded = json.loads(bytes(fragments).decode("utf-8"))
+            return decoded if isinstance(decoded, dict) else None
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        try:
+            self._send_frame(0x8, struct.pack("!H", 1000))
+        except Exception:
+            pass
+        self.closed = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.connection.close()
+        except OSError:
+            pass
+
+
+class AndroidMemberLink:
+    """Small protocol-compatible member client with bounded reconnect state."""
+
+    def __init__(
+        self,
+        data_root: Path,
+        *,
+        node_id: str,
+        local_subnet_id: str,
+        status_provider: Callable[[], dict[str, Any]],
+        document_provider: Callable[[], dict[str, Any]],
+        apply_yjs_update: Callable[[bytes], bool],
+        state_changed: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self.path = Path(data_root) / "android-member-link.json"
+        self.node_id = str(node_id)
+        self.local_subnet_id = str(local_subnet_id)
+        self.status_provider = status_provider
+        self.document_provider = document_provider
+        self.apply_yjs_update = apply_yjs_update
+        self.state_changed = state_changed
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._outbound: queue.Queue[dict[str, Any]] = queue.Queue(
+            maxsize=_MAX_OUTBOUND_MESSAGES
+        )
+        self._connection: _WebSocketClient | None = None
+        self._thread: threading.Thread | None = None
+        self._config_revision = 0
+        self._state = "offline"
+        self._connected = False
+        self._connected_at = 0.0
+        self._last_message_at = 0.0
+        self._last_error = ""
+        self._connect_attempts = 0
+        self._reconnect_total = 0
+        self._received_yjs_total = 0
+        self._sent_yjs_total = 0
+        self._dropped_messages = 0
+        self._config = self._load_config()
+        if not self._config.get("enabled"):
+            self._last_error = "not_configured"
+
+    def _load_config(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _persist_config(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        temporary.replace(self.path)
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="adaos-android-member-link",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        with self._lock:
+            connection = self._connection
+        if connection is not None:
+            connection.close()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=5)
+        self._set_state("offline", connected=False, error="expected_stop")
+
+    def configure(self, *, hub_url: str, subnet_id: str, token: str) -> dict[str, Any]:
+        hub = str(hub_url or "").strip().rstrip("/")
+        subnet = str(subnet_id or "").strip()
+        secret = str(token or "").strip()
+        _websocket_url(hub)
+        if not subnet:
+            raise ValueError("member_subnet_id_required")
+        if not secret:
+            raise ValueError("member_token_required")
+        payload = {
+            "schema": "adaos.android.member_link.v1",
+            "enabled": True,
+            "hub_url": hub,
+            "subnet_id": subnet,
+            "token": secret,
+            "updated_at": time.time(),
+        }
+        with self._lock:
+            previous_identity = (
+                str(self._config.get("hub_url") or ""),
+                str(self._config.get("subnet_id") or ""),
+                str(self._config.get("token") or ""),
+            )
+        next_identity = (hub, subnet, secret)
+        self._persist_config(payload)
+        with self._lock:
+            self._config = payload
+            self._config_revision += 1
+            connection = self._connection
+        if previous_identity != next_identity:
+            self._clear_outbound()
+        if connection is not None:
+            connection.close()
+        self._wake.set()
+        self.start()
+        self._set_state("connecting", connected=False, error="")
+        return self.snapshot()
+
+    def join(self, *, root_url: str, code: str) -> dict[str, Any]:
+        root = str(root_url or "").strip().rstrip("/")
+        join_code = str(code or "").strip()
+        parsed = urlparse(root)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("member_root_url_invalid")
+        if not join_code:
+            raise ValueError("member_join_code_required")
+        body = json.dumps(
+            {"code": join_code, "node_id": self.node_id, "hostname": "Android phone"}
+        ).encode("utf-8")
+        errors: list[str] = []
+        response: dict[str, Any] | None = None
+        for endpoint in ("/v1/subnets/join", "/api/node/join"):
+            request = Request(
+                f"{root}{endpoint}",
+                data=body,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=8) as opened:
+                    value = json.loads(opened.read(256 * 1024).decode("utf-8"))
+                if isinstance(value, dict) and value.get("ok") is True:
+                    response = value
+                    break
+                errors.append(f"{endpoint}:invalid_response")
+            except HTTPError as exc:
+                errors.append(f"{endpoint}:http_{exc.code}")
+                if exc.code not in {404, 405}:
+                    break
+            except (URLError, OSError, ValueError) as exc:
+                errors.append(f"{endpoint}:{type(exc).__name__}")
+        if response is None:
+            raise RuntimeError("member_join_failed:" + ",".join(errors))
+        result = self.configure(
+            hub_url=str(response.get("hub_url") or root),
+            subnet_id=str(response.get("subnet_id") or ""),
+            token=str(response.get("token") or ""),
+        )
+        result["joined"] = True
+        result["root_url"] = _redacted_url(str(response.get("root_url") or root))
+        return result
+
+    def disconnect(self, *, forget: bool = False) -> dict[str, Any]:
+        with self._lock:
+            payload = {} if forget else dict(self._config)
+            payload["enabled"] = False
+            if forget:
+                payload = {"schema": "adaos.android.member_link.v1", "enabled": False}
+            self._persist_config(payload)
+            self._config = payload
+            self._config_revision += 1
+            connection = self._connection
+        if connection is not None:
+            connection.close()
+        self._clear_outbound()
+        self._wake.set()
+        self._set_state("offline", connected=False, error="disabled")
+        return self.snapshot()
+
+    def send_yjs_update(self, update: bytes) -> bool:
+        payload = bytes(update)
+        if not payload or len(payload) > _MAX_MEMBER_YJS_UPDATE_BYTES:
+            return False
+        return self._enqueue(
+            {
+                "t": "yjs.update",
+                "webspace_id": "desktop",
+                "update_b64": base64.b64encode(payload).decode("ascii"),
+                "ts": time.time(),
+            }
+        )
+
+    def _enqueue(self, message: dict[str, Any]) -> bool:
+        try:
+            self._outbound.put_nowait(message)
+            return True
+        except queue.Full:
+            try:
+                self._outbound.get_nowait()
+            except queue.Empty:
+                pass
+            self._dropped_messages += 1
+            try:
+                self._outbound.put_nowait(message)
+                return True
+            except queue.Full:
+                return False
+
+    def _clear_outbound(self) -> None:
+        while True:
+            try:
+                self._outbound.get_nowait()
+            except queue.Empty:
+                return
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            config = dict(self._config)
+            hub_url = _redacted_url(str(config.get("hub_url") or ""))
+            return {
+                "schema": "adaos.android.member_link.status.v1",
+                "configured": bool(
+                    config.get("hub_url") and config.get("subnet_id") and config.get("token")
+                ),
+                "enabled": bool(config.get("enabled")),
+                "connected": self._connected,
+                "state": self._state,
+                "hub_url": hub_url,
+                "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
+                "token_present": bool(config.get("token")),
+                "transport_security": (
+                    "tls" if hub_url.startswith(("https://", "wss://")) else "plaintext"
+                ),
+                "connected_at": self._connected_at,
+                "last_message_at": self._last_message_at,
+                "last_error": self._last_error,
+                "connect_attempts": self._connect_attempts,
+                "reconnect_total": self._reconnect_total,
+                "queued_messages": self._outbound.qsize(),
+                "dropped_messages": self._dropped_messages,
+                "sent_yjs_total": self._sent_yjs_total,
+                "received_yjs_total": self._received_yjs_total,
+            }
+
+    def _set_state(self, state: str, *, connected: bool, error: str) -> None:
+        with self._lock:
+            changed = (
+                self._state != state
+                or self._connected != connected
+                or self._last_error != error
+            )
+            self._state = state
+            self._connected = connected
+            self._last_error = str(error or "")[:240]
+            if connected and not self._connected_at:
+                self._connected_at = time.time()
+            if not connected:
+                self._connected_at = 0.0
+            snapshot = self.snapshot()
+        if changed:
+            try:
+                self.state_changed(snapshot)
+            except Exception:
+                pass
+
+    def _member_status(self) -> dict[str, Any]:
+        status = self.status_provider()
+        return status if isinstance(status, dict) else {}
+
+    def _member_document(self) -> dict[str, Any]:
+        snapshot = self.document_provider()
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    def _send_initial_state(self, connection: _WebSocketClient) -> None:
+        now = time.time()
+        connection.send_json({"t": "node.status", "status": self._member_status(), "ts": now})
+        document = self._member_document()
+        connection.send_json(
+            {
+                "t": "node.catalog",
+                "snapshot": {
+                    "node_id": self.node_id,
+                    "status": self._member_status(),
+                    "desktop_catalog": document.get("data", {}).get("catalog", {}),
+                    "captured_at": now,
+                },
+                "ts": now,
+            }
+        )
+        connection.send_json(
+            {
+                "t": "yjs.node_state",
+                "webspace_id": "desktop",
+                "state": document,
+                "reason": "member_link_connected",
+                "ts": now,
+            }
+        )
+
+    def _handle_message(self, connection: _WebSocketClient, message: dict[str, Any]) -> None:
+        self._last_message_at = time.time()
+        kind = str(message.get("t") or "")
+        if kind == "ping":
+            connection.send_json({"t": "pong", "ts": time.time()})
+        elif kind == "node.status.request":
+            connection.send_json(
+                {"t": "node.status", "status": self._member_status(), "ts": time.time()}
+            )
+        elif kind in {"node.catalog.request", "node.snapshot.request"}:
+            self._send_initial_state(connection)
+        elif kind == "yjs.update":
+            encoded = str(message.get("update_b64") or "")
+            if encoded:
+                update = base64.b64decode(encoded.encode("ascii"), validate=False)
+                if len(update) <= _MAX_MEMBER_YJS_UPDATE_BYTES and self.apply_yjs_update(update):
+                    self._received_yjs_total += 1
+        elif kind == "rpc.req":
+            connection.send_json(
+                {
+                    "t": "rpc.res",
+                    "id": str(message.get("id") or ""),
+                    "ok": False,
+                    "error": "rpc_not_supported_android_poc",
+                }
+            )
+        elif kind == "core.update.request":
+            connection.send_json(
+                {
+                    "t": "core.update.result",
+                    "result": {
+                        "ok": False,
+                        "accepted": False,
+                        "error": "android_updates_require_apk",
+                    },
+                    "ts": time.time(),
+                }
+            )
+
+    def _run(self) -> None:
+        backoff = 1.0
+        ever_connected = False
+        while not self._stop.is_set():
+            with self._lock:
+                config = dict(self._config)
+                revision = self._config_revision
+            if not config.get("enabled"):
+                self._set_state("offline", connected=False, error="not_configured")
+                self._wake.wait(2.0)
+                self._wake.clear()
+                continue
+            connection: _WebSocketClient | None = None
+            try:
+                self._connect_attempts += 1
+                self._set_state("connecting", connected=False, error="")
+                connection = _WebSocketClient(
+                    _websocket_url(str(config.get("hub_url") or "")),
+                    str(config.get("token") or ""),
+                )
+                with self._lock:
+                    self._connection = connection
+                connection.send_json(
+                    {
+                        "t": "hello",
+                        "node_id": self.node_id,
+                        "subnet_id": str(config.get("subnet_id") or ""),
+                        "hostname": "Android phone",
+                        "roles": ["member"],
+                        "node_names": ["Android phone"],
+                        "base_url": None,
+                        "capacity": {"profile": "android_poc"},
+                    }
+                )
+                acknowledgement = connection.recv_json(timeout=5.0)
+                if not isinstance(acknowledgement, dict) or (
+                    acknowledgement.get("t") != "hello.ack"
+                    or acknowledgement.get("ok") is not True
+                ):
+                    reason = (
+                        str((acknowledgement or {}).get("error") or "hello_ack_rejected")
+                    )
+                    raise ConnectionError(reason)
+                if ever_connected:
+                    self._reconnect_total += 1
+                ever_connected = True
+                backoff = 1.0
+                self._last_message_at = time.time()
+                self._set_state("connected", connected=True, error="")
+                self._send_initial_state(connection)
+                last_ping = time.monotonic()
+                last_status = time.monotonic()
+                while not self._stop.is_set():
+                    with self._lock:
+                        if revision != self._config_revision:
+                            raise ConnectionError("member_configuration_changed")
+                    while True:
+                        try:
+                            outbound = self._outbound.get_nowait()
+                        except queue.Empty:
+                            break
+                        try:
+                            connection.send_json(outbound)
+                        except Exception:
+                            self._enqueue(outbound)
+                            raise
+                        if outbound.get("t") == "yjs.update":
+                            self._sent_yjs_total += 1
+                    now = time.monotonic()
+                    if now - last_ping >= 5.0:
+                        connection.send_json({"t": "ping", "ts": time.time()})
+                        last_ping = now
+                    if now - last_status >= 20.0:
+                        connection.send_json(
+                            {
+                                "t": "node.status",
+                                "status": self._member_status(),
+                                "ts": time.time(),
+                            }
+                        )
+                        last_status = now
+                    message = connection.recv_json(timeout=0.5)
+                    if message is not None:
+                        self._handle_message(connection, message)
+            except Exception as exc:
+                if not self._stop.is_set():
+                    self._set_state(
+                        "offline",
+                        connected=False,
+                        error=f"{type(exc).__name__}:{str(exc)[:180]}",
+                    )
+            finally:
+                with self._lock:
+                    if self._connection is connection:
+                        self._connection = None
+                if connection is not None:
+                    connection.close()
+            if self._stop.is_set():
+                break
+            self._wake.wait(backoff)
+            self._wake.clear()
+            backoff = min(backoff * 2.0, 15.0)
+
+
+__all__ = ["AndroidMemberLink"]

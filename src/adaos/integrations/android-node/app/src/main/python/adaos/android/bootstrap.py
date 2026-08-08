@@ -21,6 +21,7 @@ import y_py as Y
 
 from .ystore import AndroidYStore
 from .skills import AndroidSkillError, AndroidSkillRuntime
+from .member_link import AndroidMemberLink
 
 _ALLOWED_ORIGINS = {
     "https://inimatic.com",
@@ -51,6 +52,7 @@ _desktop_snapshot: dict[str, Any] = {}
 _base_yjs_update = b""
 _ystore: AndroidYStore | None = None
 _skills: AndroidSkillRuntime | None = None
+_member_link: AndroidMemberLink | None = None
 _install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
 
@@ -159,6 +161,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/node/status":
             self._json(200, _node_status())
+            return
+        if path == "/api/node/member/status":
+            self._json(200, _member_link_snapshot())
             return
         if path == "/api/subnet/alias":
             runtime = _snapshot()
@@ -271,6 +276,25 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             except AndroidSkillError as exc:
                 self._json(400, {"ok": False, "error": str(exc), "tool": tool})
+                return
+            self._json(200, {"ok": True, "result": result})
+            return
+        if path in {
+            "/api/node/member/configure",
+            "/api/node/member/join",
+            "/api/node/member/disconnect",
+        }:
+            tool = {
+                "/api/node/member/configure": "adaos_connect.configure_member",
+                "/api/node/member/join": "adaos_connect.join_member",
+                "/api/node/member/disconnect": "adaos_connect.disconnect_member",
+            }[path]
+            try:
+                if _skills is None:
+                    raise AndroidSkillError("android_skills_not_ready")
+                result = _skills.call_tool(tool, body)
+            except AndroidSkillError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
                 return
             self._json(200, {"ok": True, "result": result})
             return
@@ -636,6 +660,9 @@ def _broadcast_yjs(payload: bytes, *, exclude: _WebSocketPeer | None = None) -> 
 def _publish_yjs_update(update: bytes) -> None:
     if update:
         _broadcast_yjs(_encode_sync_message(2, update))
+        member_link = _member_link
+        if member_link is not None:
+            member_link.send_yjs_update(update)
 
 
 def _broadcast_control_event(kind: str, payload: dict[str, Any], source: str) -> None:
@@ -659,7 +686,79 @@ def _broadcast_control_event(kind: str, payload: dict[str, Any], source: str) ->
 
 def _remember_yjs_update(update: bytes) -> bool:
     with _yjs_lock:
-        return _ystore.apply_update(update) if _ystore is not None else False
+        applied = _ystore.apply_update(update) if _ystore is not None else False
+    if applied:
+        member_link = _member_link
+        if member_link is not None:
+            member_link.send_yjs_update(update)
+    return applied
+
+
+def _apply_member_yjs_update(update: bytes) -> bool:
+    """Apply a Hub update locally without reflecting it back to that Hub."""
+
+    with _yjs_lock:
+        applied = _ystore.apply_update(update) if _ystore is not None else False
+    if applied:
+        _broadcast_yjs(_encode_sync_message(2, update))
+    return applied
+
+
+def _member_document_snapshot() -> dict[str, Any]:
+    """Return the bounded node-owned contribution consumed by the Hub."""
+
+    runtime = _snapshot()
+    with _yjs_lock:
+        document = _ystore.snapshot_json() if _ystore is not None else {}
+    data = document.get("data") if isinstance(document.get("data"), dict) else {}
+    ui = document.get("ui") if isinstance(document.get("ui"), dict) else {}
+    return {
+        "schema": "adaos.android.member_contribution.v1",
+        "node_id": str(runtime.get("node_id") or ""),
+        "local_subnet_id": str(runtime.get("subnet_id") or ""),
+        "runtime": {
+            "profile": "android_poc",
+            "ready": bool(runtime.get("ready")),
+            "app_version": str(runtime.get("app_version") or ""),
+        },
+        "desktop": {
+            "current_scenario": str(ui.get("current_scenario") or "web_desktop"),
+            "subnet_env": copy.deepcopy(data.get("subnet_env") or {}),
+            "weather": copy.deepcopy(data.get("weather") or {}),
+            "notebook": copy.deepcopy((data.get("desktop") or {}).get("notebook") or {}),
+        },
+        "captured_at": time.time(),
+    }
+
+
+def _member_link_snapshot() -> dict[str, Any]:
+    member_link = _member_link
+    if member_link is None:
+        runtime = _snapshot()
+        return {
+            "schema": "adaos.android.member_link.status.v1",
+            "configured": False,
+            "enabled": False,
+            "connected": False,
+            "state": "offline",
+            "hub_url": "",
+            "subnet_id": str(runtime.get("subnet_id") or ""),
+            "token_present": False,
+            "transport_security": "unconfigured",
+            "last_error": "member_link_not_ready",
+        }
+    return member_link.snapshot()
+
+
+def _member_link_state_changed(snapshot: dict[str, Any]) -> None:
+    skills = _skills
+    if skills is not None:
+        skills.project_member_link(snapshot)
+    _broadcast_control_event(
+        "android.member_link.state.changed",
+        snapshot,
+        "android.member_link",
+    )
 
 
 def _load_legacy_yjs_updates(path: Path) -> list[bytes]:
@@ -1022,6 +1121,7 @@ def _reliability_payload(*, mode: str = "runtime") -> dict[str, Any]:
         )
     materialization = _materialization_diagnostics(document_snapshot)
     materialization_ready = bool(materialization["ready"])
+    member = _member_link_snapshot()
     return {
         "ok": True,
         "available": True,
@@ -1056,6 +1156,23 @@ def _reliability_payload(*, mode: str = "runtime") -> dict[str, Any]:
                 "reason": "android_loopback_ready",
                 "blockers": [],
                 "servedBy": "android_runtime",
+            },
+            "optionalMemberLink": {
+                "kind": "member_link",
+                "required": False,
+                "transportState": str(member.get("state") or "offline"),
+                "transitionState": str(member.get("state") or "offline"),
+                "plannedTransition": {
+                    "active": str(member.get("state") or "offline") == "connecting",
+                    "reason": str(member.get("last_error") or "") or None,
+                },
+                "reason": (
+                    "member_link_connected"
+                    if member.get("connected")
+                    else str(member.get("last_error") or "member_link_optional")
+                ),
+                "blockers": [],
+                "servedBy": "android_member_link",
             },
         },
         "stateSync": {
@@ -1117,6 +1234,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
     global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore, _skills
+    global _member_link
     global _install_descriptor
     root = Path(data_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -1174,14 +1292,26 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
         )
         _server = server
         _thread = thread
+        member_link = AndroidMemberLink(
+            root,
+            node_id=node_id,
+            local_subnet_id=subnet_id,
+            status_provider=_node_status,
+            document_provider=_member_document_snapshot,
+            apply_yjs_update=_apply_member_yjs_update,
+            state_changed=_member_link_state_changed,
+        )
+        _member_link = member_link
+        _skills.attach_member_link(member_link)
         thread.start()
+        member_link.start()
         return json.dumps(_runtime, sort_keys=True)
 
 
 def stop() -> str:
     """Stop the loopback runtime without terminating the embedded interpreter."""
 
-    global _server, _thread, _runtime, _ystore, _skills
+    global _server, _thread, _runtime, _ystore, _skills, _member_link
     with _lock:
         server = _server
         thread = _thread
@@ -1196,6 +1326,10 @@ def stop() -> str:
         server.server_close()
     if thread is not None and thread is not threading.current_thread():
         thread.join(timeout=5.0)
+    member_link = _member_link
+    _member_link = None
+    if member_link is not None:
+        member_link.stop()
     skills = _skills
     _skills = None
     if skills is not None:
@@ -1227,20 +1361,29 @@ def _node_status() -> dict[str, Any]:
         control_clients = sum(1 for peer in _websocket_peers if peer.kind == "control")
         store_stats = _ystore.stats() if _ystore is not None else {}
     skill_status = _skills.status() if _skills is not None else {}
+    member = _member_link_snapshot()
+    connected = bool(member.get("connected"))
+    effective_subnet_id = str(member.get("subnet_id") or runtime["subnet_id"])
+    node_label = "Android phone"
+    if _skills is not None:
+        try:
+            node_label = str(_skills.call_tool("subnet_env.get_snapshot", {}).get("node_label") or node_label)
+        except AndroidSkillError:
+            pass
     return {
         "node_id": runtime["node_id"],
-        "subnet_id": runtime["subnet_id"],
+        "subnet_id": effective_subnet_id,
         "role": "member",
-        "node_names": ["Android phone"],
-        "primary_node_name": "Android phone",
-        "node_label": "Android phone",
+        "node_names": [node_label],
+        "primary_node_name": node_label,
+        "node_label": node_label,
         "node_compact_label": "Phone",
         "ready": True,
         "node_state": "ready",
         "draining": False,
-        "route_mode": "loopback",
-        "connected_to_subnet": False,
-        "connected_to_hub": False,
+        "route_mode": "member_link_ws" if connected else "loopback",
+        "connected_to_subnet": connected,
+        "connected_to_hub": connected,
         "runtime": {
             "profile": runtime["runtime_profile"],
             "implementation": runtime["implementation"],
@@ -1282,6 +1425,7 @@ def _node_status() -> dict[str, Any]:
             "notebook_note_count": int(skill_status.get("note_count") or 0),
             "install_descriptor_sha256": str(_install_descriptor.get("sha256") or ""),
             "bundle_id": runtime["bundle_id"],
+            "member_link": member,
         },
         "environment": {
             "platform": "android",
