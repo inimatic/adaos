@@ -47,7 +47,14 @@ def _exercise_repository(ctx) -> tuple[ResearchRepository, str]:
     )
     tracker.observe(run_id=run_id, name="accuracy", value=0.5, split_role="validation")
     exported = tracker.finalize(run_id, "succeeded")
-    assert exported["observations"][0]["value"] == 0.5
+    observations = [
+        event["payload"]
+        for event in exported["events"]
+        if event["event_kind"] == "observation"
+    ]
+    assert observations[0]["value"] == 0.5
+    assert exported["session"]["status"] == "succeeded"
+    assert exported["export_digest"].startswith("sha256:")
     assert repository.get("study", study_id).payload["title"] == "storage conformance"
     return repository, study_id
 

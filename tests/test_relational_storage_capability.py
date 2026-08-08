@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 
 from adaos.adapters.db.relational import (
     PostgreSQLRelationalStorageProvider,
@@ -345,6 +347,45 @@ def test_postgresql_provider_conformance_when_server_is_configured(_autocontext)
         encoded = json.dumps(db.binding.to_dict()).lower()
         assert "://" not in encoded
         assert "password" not in encoded
+        service_url = make_url(
+            provider.service_uri(
+                db.binding,
+                owner_ref="skill:postgres_contract_skill",
+            )
+        )
+        admin = make_url(admin_url)
+        assert service_url.username
+        assert service_url.username.startswith("adaos_owner_")
+        assert service_url.username != admin.username
+        assert service_url.password
+        assert service_url.database and service_url.database.startswith("adaos_")
+        service_engine = create_engine(service_url, future=True, pool_pre_ping=True)
+        try:
+            with service_engine.begin() as connection:
+                identity = connection.execute(
+                    text("SELECT current_user, current_database()")
+                ).one()
+                assert identity[0] == service_url.username
+                assert identity[1] == service_url.database
+                connection.execute(
+                    text(
+                        "CREATE TABLE service_login_probe "
+                        "(id INTEGER PRIMARY KEY, value TEXT NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO service_login_probe(id, value) "
+                        "VALUES (:id, :value)"
+                    ),
+                    {"id": 1, "value": "process-only"},
+                )
+                assert connection.execute(
+                    text("SELECT value FROM service_login_probe WHERE id=:id"),
+                    {"id": 1},
+                ).scalar_one() == "process-only"
+        finally:
+            service_engine.dispose()
         rotation = provider.rotate_admin_credentials(admin_url)
         assert rotation["ok"] is True
         assert rotation["bindings_rebound"] == 1
