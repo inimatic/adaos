@@ -75,7 +75,13 @@ def _upstream_url(spec: ServiceSpec, path: str, request: Request) -> str:
         raise HTTPException(status_code=400, detail="invalid service UI path")
     prefix = spec.ui_path.rstrip("/")
     suffix = "/".join(segments)
-    url = f"{spec.base_url}{prefix}/{suffix}" if suffix else f"{spec.base_url}{prefix or '/'}"
+    if suffix:
+        url = f"{spec.base_url}{prefix}/{suffix}"
+    else:
+        # The gateway's public surface is rooted at ``.../ui/``. Preserve that
+        # directory semantic upstream as well; applications mounted under a
+        # static prefix commonly redirect ``/prefix`` to ``/prefix/``.
+        url = f"{spec.base_url}{prefix}/" if prefix else f"{spec.base_url}/"
     query = [(key, value) for key, value in request.query_params.multi_items() if key != "token"]
     return f"{url}?{urlencode(query, doseq=True)}" if query else url
 
@@ -169,8 +175,11 @@ async def service_ui_proxy(name: str, path: str, request: Request) -> Response:
             "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
         }
     )
+    redirect_body = bool(upstream.headers.get("location")) and 300 <= upstream.status_code < 400
     return Response(
-        content=b"" if request.method == "HEAD" else upstream.content,
+        # Redirect bodies are provider-generated HTML and can contain an
+        # absolute loopback URL even after Location has been rewritten.
+        content=b"" if request.method == "HEAD" or redirect_body else upstream.content,
         status_code=upstream.status_code,
         headers=response_headers,
     )

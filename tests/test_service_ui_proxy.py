@@ -12,6 +12,32 @@ from adaos.services.skill.service_supervisor import _resolve_service_spec
 
 class _UiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/provider":
+            body = (
+                f'<a href="http://127.0.0.1:{self.server.server_port}/provider/">redirect</a>'
+            ).encode()
+            self.send_response(308)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{self.server.server_port}/provider/",
+            )
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/provider/redirect":
+            body = (
+                f'<a href="http://127.0.0.1:{self.server.server_port}/provider/target">redirect</a>'
+            ).encode()
+            self.send_response(307)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{self.server.server_port}/provider/target",
+            )
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = b"<html><head><title>Provider UI</title></head><body>ready</body></html>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -68,6 +94,7 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
                     "command": ["-m", "handlers.service"],
                     "ui": {
                         "enabled": True,
+                        "path": "/provider",
                         "access": "authenticated",
                         "origin_policy": "same-origin",
                         "embedding": "same-origin",
@@ -101,6 +128,15 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
         assert "Provider UI" in proxied.text
         assert proxied.headers["x-frame-options"] == "SAMEORIGIN"
         assert "frame-ancestors 'self'" in proxied.headers["content-security-policy"]
+
+        redirected = client.get(
+            "/api/services/provider_ui/ui/redirect",
+            follow_redirects=False,
+        )
+        assert redirected.status_code == 307
+        assert redirected.headers["location"] == "/api/services/provider_ui/ui/target"
+        assert redirected.content == b""
+        assert f"127.0.0.1:{server.server_port}" not in redirected.text
 
         cross_site = client.get(
             "/api/services/provider_ui/ui/?token=service-ui-test-token",
