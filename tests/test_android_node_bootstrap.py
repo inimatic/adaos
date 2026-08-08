@@ -10,6 +10,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+import y_py as Y
+from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import connect
 
 
@@ -95,6 +98,9 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["runtime"]["yjs_seed_ready"] is True
         assert status["runtime"]["ystore_backend"] == "sqlite_snapshot_log"
         assert status["runtime"]["yjs_revision"] >= 1
+        assert status["runtime"]["yjs_generation"] >= 1
+        assert status["runtime"]["yjs_snapshot_bytes"] > 0
+        assert status["runtime"]["yjs_snapshot_pressure"] == "ready"
         assert status["runtime"]["skill_descriptors_ready"] is True
         with urllib.request.urlopen(
             f"http://127.0.0.1:{first['port']}/api/ping",
@@ -111,6 +117,90 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
     try:
         assert second["node_id"] == first["node_id"]
         assert second["subnet_id"] == first["subnet_id"]
+    finally:
+        bootstrap.stop()
+
+
+def test_android_ystore_structurally_compacts_bloated_history_on_restart(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    database_path = tmp_path / "compaction.sqlite3"
+    store = bootstrap.AndroidYStore(
+        database_path,
+        b"",
+        max_snapshot_bytes=8 * 1024 * 1024,
+    )
+    try:
+        client = Y.YDoc(skip_gc=True)
+        runtime = client.get_map("runtime")
+        with client.begin_transaction() as transaction:
+            for index in range(20_000):
+                runtime.set(transaction, f"http_repair_{index}", "discarded history")
+        with client.begin_transaction() as transaction:
+            for index in range(20_000):
+                runtime.pop(transaction, f"http_repair_{index}")
+            runtime.set(transaction, "retained_value", "semantic state")
+        assert store.apply_update(bytes(Y.encode_state_as_update(client)))
+        del client
+        semantic_before = store.snapshot_json()
+        source_bytes = store.stats()["snapshot_bytes"]
+        generation_before = store.stats()["generation"]
+        assert source_bytes > 64 * 1024
+    finally:
+        store.close()
+
+    compacted = bootstrap.AndroidYStore(
+        database_path,
+        b"",
+        max_snapshot_bytes=64 * 1024,
+    )
+    try:
+        stats = compacted.stats()
+        assert compacted.snapshot_json() == semantic_before
+        assert stats["compacted_on_startup"] is True
+        assert stats["generation"] == generation_before + 1
+        assert stats["last_compaction_source_bytes"] == source_bytes
+        assert stats["last_compaction_result_bytes"] < source_bytes
+        assert stats["snapshot_bytes"] == stats["last_compaction_result_bytes"]
+        assert stats["snapshot_pressure"] == "ready"
+    finally:
+        compacted.close()
+
+
+def test_android_yws_rejects_oversized_client_history_with_recovery_reason(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    try:
+        uri = f"ws://127.0.0.1:{runtime['port']}/yws/desktop"
+        with connect(
+            uri,
+            origin="https://inimatic.com",
+            open_timeout=2,
+            close_timeout=2,
+            max_size=4 * 1024 * 1024,
+        ) as websocket:
+            websocket.recv(timeout=2)
+            client = Y.YDoc()
+            with client.begin_transaction() as transaction:
+                client.get_map("runtime").set(
+                    transaction,
+                    "oversized_history",
+                    "x" * (bootstrap._MAX_INBOUND_YJS_UPDATE_BYTES + 4096),
+                )
+            websocket.send(
+                bootstrap._encode_sync_message(
+                    2,
+                    bytes(Y.encode_state_as_update(client)),
+                )
+            )
+            with pytest.raises(ConnectionClosed) as raised:
+                websocket.recv(timeout=2)
+            assert raised.value.rcvd is not None
+            assert raised.value.rcvd.code == 1009
+            assert "inbound_yws_update_payload_blocked" in raised.value.rcvd.reason
     finally:
         bootstrap.stop()
 

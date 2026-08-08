@@ -30,6 +30,7 @@ _ALLOWED_ORIGINS = {
 }
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
+_MAX_INBOUND_YJS_UPDATE_BYTES = 512 * 1024
 _MAX_YJS_UPDATES = 512
 _MAX_YJS_JOURNAL_BYTES = 8 * 1024 * 1024
 _BUNDLE_ROOT = Path(__file__).with_name("bundle")
@@ -77,11 +78,22 @@ class _WebSocketPeer:
             except OSError:
                 self.closed = True
 
-    def close(self) -> None:
+    def close(self, code: int | None = None, reason: str = "") -> None:
         with self.send_lock:
             if self.closed:
                 return
             self.closed = True
+            if code is not None:
+                close_reason = str(reason or "").encode("utf-8")[:123]
+                try:
+                    self.connection.sendall(
+                        _encode_websocket_frame(
+                            0x8,
+                            struct.pack("!H", max(1000, int(code))) + close_reason,
+                        )
+                    )
+                except OSError:
+                    pass
             try:
                 self.connection.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -511,6 +523,12 @@ def _handle_yjs_message(peer: _WebSocketPeer, payload: bytes) -> None:
                 peer.send(0x2, _encode_sync_message(1, response))
                 return
             if sync_type in {1, 2} and update not in {b"", b"\x00\x00"}:
+                if len(update) > _MAX_INBOUND_YJS_UPDATE_BYTES:
+                    peer.close(
+                        1009,
+                        f"inbound_yws_update_payload_blocked:{len(update)}",
+                    )
+                    return
                 if _remember_yjs_update(update):
                     _broadcast_yjs(_encode_sync_message(2, update), exclude=peer)
                 return
@@ -1234,6 +1252,24 @@ def _node_status() -> dict[str, Any]:
             "yjs_clients": yjs_clients,
             "yjs_update_count": int(store_stats.get("update_count") or 0),
             "yjs_revision": int(store_stats.get("revision") or 0),
+            "yjs_generation": int(store_stats.get("generation") or 1),
+            "yjs_snapshot_bytes": int(store_stats.get("snapshot_bytes") or 0),
+            "yjs_snapshot_limit_bytes": int(
+                store_stats.get("snapshot_limit_bytes") or 0
+            ),
+            "yjs_snapshot_pressure": str(
+                store_stats.get("snapshot_pressure") or "unknown"
+            ),
+            "yjs_compacted_on_startup": bool(
+                store_stats.get("compacted_on_startup")
+            ),
+            "yjs_compaction_total": int(store_stats.get("compaction_total") or 0),
+            "yjs_compaction_source_bytes": int(
+                store_stats.get("last_compaction_source_bytes") or 0
+            ),
+            "yjs_compaction_result_bytes": int(
+                store_stats.get("last_compaction_result_bytes") or 0
+            ),
             "ystore_backend": str(store_stats.get("backend") or "unavailable"),
             "ystore_state_vector_bytes": int(store_stats.get("state_vector_bytes") or 0),
             "control_clients": control_clients,
