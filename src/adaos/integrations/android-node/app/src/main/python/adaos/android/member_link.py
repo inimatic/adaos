@@ -385,6 +385,9 @@ class AndroidMemberLink:
         payload = bytes(update)
         if not payload or len(payload) > _MAX_MEMBER_YJS_UPDATE_BYTES:
             return False
+        with self._lock:
+            if not self._config.get("enabled"):
+                return False
         return self._enqueue(
             {
                 "t": "yjs.update",
@@ -421,6 +424,11 @@ class AndroidMemberLink:
         with self._lock:
             config = dict(self._config)
             hub_url = _redacted_url(str(config.get("hub_url") or ""))
+            transport_security = "unconfigured"
+            if hub_url:
+                transport_security = (
+                    "tls" if hub_url.startswith(("https://", "wss://")) else "plaintext"
+                )
             return {
                 "schema": "adaos.android.member_link.status.v1",
                 "configured": bool(
@@ -432,9 +440,7 @@ class AndroidMemberLink:
                 "hub_url": hub_url,
                 "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
                 "token_present": bool(config.get("token")),
-                "transport_security": (
-                    "tls" if hub_url.startswith(("https://", "wss://")) else "plaintext"
-                ),
+                "transport_security": transport_security,
                 "connected_at": self._connected_at,
                 "last_message_at": self._last_message_at,
                 "last_error": self._last_error,

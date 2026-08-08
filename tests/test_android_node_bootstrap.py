@@ -333,6 +333,10 @@ def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> 
         )
         assert code == 200
         assert disconnected["result"]["current"]["configured"] is False
+        with urllib.request.urlopen(f"{base_url}/api/node/member/status", timeout=2) as response:
+            forgotten = json.load(response)
+        assert forgotten["queued_messages"] == 0
+        assert forgotten["transport_security"] == "unconfigured"
     finally:
         bootstrap.stop()
         root.shutdown()
