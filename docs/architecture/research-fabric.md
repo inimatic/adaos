@@ -1,10 +1,9 @@
 # AdaOS Research Fabric
 
-Status: target architecture with ARF0.5 through ARF3 validated locally by the
-TLP single-experiment vertical. A real CPU runner, tracker contract
-`1.0-rc1`, and supervised MLflow provider are implemented. MLflow/ARF4 remains
-a candidate until its full conformance, outage, identity-mapping, and remote
-binding gates pass.
+Status: target architecture with ARF0.5 through ARF4 validated locally by the
+TLP single-experiment vertical. A real CPU runner, frozen tracker contract
+`1.0`, durable local reference provider, and conforming supervised MLflow
+provider are implemented. Distributed execution remains an ARF5 concern.
 
 Last reviewed: 2026-08-08.
 
@@ -207,8 +206,9 @@ The implementation intentionally follows existing AdaOS extension points:
 - skills construct, submit, reconcile, and cancel immutable work through
   `adaos.sdk.execution`; a scientific run may have multiple physical attempts;
 - SQLite is the node-local default. The PostgreSQL provider uses one isolated
-  database and one no-login owner role per skill owner inside an
-  operator-managed cluster;
+  database and one least-privilege login/owner role per skill owner inside an
+  operator-managed cluster; service credentials are injected only into the
+  owning process;
 - the local process executor is bounded but not hostile isolation. The optional
   OCI adapter requires a digest-pinned image and provides the stronger boundary
   for third-party or generated workloads.
@@ -217,12 +217,15 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The locally validated packages are `research_manager_skill` `0.5.0`,
-`mlflow_tracker_skill` `0.1.1`, and `tlp_research` `0.1.4`. They were
+The locally validated ARF4 packages are `research_manager_skill` `0.7.0`,
+`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.2.1`. They were
 published, reinstalled, validated, tested, and executed through the normal
 AdaOS managers and CLI. The TLP Desktop scenario provides a Single Experiment
 Workbench for immutable condition revision, review/lock, bounded start,
 cancel/retry/reconcile, paired results, artifacts, and result finalization.
+Its `Conditions / Runs / Results / Evidence` segmented navigation is the first
+main-area widget, so it stays at the top while the experiment command toolbar
+keeps the composition's bottom action area.
 Its Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
 gates. Scenario calls are routed only to declared dependency tools.
 
@@ -237,11 +240,16 @@ as rejected instrumentation-QC provenance because its original initialization
 digest was not stable across equivalent arms.
 
 The E002 result and normalized tracker export are immutable and independently
-verifiable; eight content-addressed artifacts passed verification after skill
-version migration and AdaOS restart. The Desktop application remained
-installed after rebuild/restart, and both MLflow attempt runs remained
-queryable. This closes the local ARF1 operator proof without claiming the
-larger ARF4 provider matrix or the ARF6 scientific reference proof.
+verifiable; the export has a separate acceptance record and result
+verification now reads that accepted export rather than the live provider.
+Eight content-addressed artifacts passed verification after skill version
+migration and AdaOS restart. The Desktop application remained installed after
+rebuild/restart, and both MLflow attempt runs remained queryable with three
+epoch points and their AdaOS run/attempt tags. The expanded provider
+conformance matrix closes ARF4 locally; it does not claim the ARF6 scientific
+reference proof. E002's historical `1.0-rc1` contract tag is preserved as
+immutable provenance; the frozen provider and scenario declarations use
+contract `1.0` for new sessions.
 
 ## Responsibility Boundaries
 
@@ -406,7 +414,7 @@ provider limits are documented in [Durable Execution](../sdk/execution.md).
 
 ### Tracker provider
 
-Tracker contract `1.0-rc1` binds every physical `ExecutionAttempt` to its own
+Tracker contract `1.0` binds every physical `ExecutionAttempt` to its own
 tracking session while retaining the logical AdaOS `Run` across retries. It
 normalizes metric namespace/name, value type, unit, direction, split role,
 dataset digest, structured step, aggregation, observation time, producer
@@ -418,14 +426,23 @@ The reference provider persists that contract through the neutral relational
 SDK. The MLflow provider uses the same journal as a transactional outbox and
 projects accepted events through supported MLflow REST endpoints. AdaOS owns
 the replay/deduplication coordinate and evidence digest; the provider owns its
-native query indexes and UI. A tracker contract becomes a core candidate only
-if a second non-research domain needs the same semantics.
+native query indexes and UI. Required terminal delivery fails explicitly, and
+provider-native deletion is allowed only after the complete normalized export
+has been accepted into immutable AdaOS evidence. The frozen operation,
+identity, and failure semantics are documented in
+[Research Tracker Contract 1.0](research-tracker-contract-v1.md). A tracker
+contract becomes a core candidate only if a second non-research domain needs
+the same semantics.
 
 ### Generic service UI surface
 
 A supervised service skill may advertise an optional UI endpoint with routing,
 health, authorization, and embedding policy. This is a generic service
-capability, not an MLflow-specific iframe feature.
+capability, not an MLflow-specific iframe feature. Core now exposes only a
+redacted surface descriptor and an authenticated same-origin proxy. The
+generic `visual.serviceFrame` accepts a service id, not an arbitrary URL, and
+uses a short-lived cookie bootstrap plus CSP, origin, request-size, health, and
+lifecycle enforcement.
 
 ## Storage Topology
 
@@ -453,11 +470,11 @@ The local MLflow service skill uses:
 ```
 
 This is a local-development embedded SQLite file, not a separately installed
-database server. The override is confined to the provider skill; the research
-manager never receives or constructs the backend DSN. Production PostgreSQL
-admission still requires a service-facing relational binding that can give the
-MLflow process a secret-backed endpoint without weakening the opaque SQL SDK
-used by ordinary skills. Isolation remains logical and explicit:
+database server. The binding is confined to the provider skill; the research
+manager never receives or constructs the backend DSN. The same service-facing
+contract can select provisioned PostgreSQL and inject a generated
+least-privilege login URI into only the MLflow process without weakening the
+opaque SQL SDK used by ordinary skills. Isolation remains logical and explicit:
 
 - separate database or schema per migration owner;
 - separate roles and least-privilege credentials;
@@ -468,9 +485,11 @@ used by ordinary skills. Isolation remains logical and explicit:
 One shared server does not mean one shared schema. Conversely, local SQLite
 files do not violate the rule against installing a DBMS per integration.
 
-Large immutable artifacts should later use a blob/object-storage capability.
-The relational store holds metadata and content-addressed references, not
-unbounded checkpoint bytes.
+Large immutable artifacts use an independently negotiated blob binding. The
+local provider resolves to the owning runtime's `data/files`; a provisioned
+provider resolves an owner/logical-name-isolated object URI. The relational
+store holds metadata and content-addressed references, not unbounded checkpoint
+bytes.
 
 ## MLflow Integration
 
@@ -510,9 +529,11 @@ Integration rules:
   degraded state; do not silently drop confirmatory observations;
 - support a minimal local tracker so the framework does not require MLflow.
 
-MLflow's backend store can start as the service skill's SQLite file and later
-use a provisioned PostgreSQL binding. Its artifact store starts in the skill's
-`data/files` and may later use an object-storage binding.
+MLflow's backend store starts as the service skill's SQLite file and switches
+to a provisioned PostgreSQL binding when the node advertises one. Its artifact
+store likewise starts in the skill's `data/files` and switches to a
+provisioned object binding. These physical locations are process-only; public
+bindings and status remain opaque.
 
 ### UI
 
@@ -520,13 +541,15 @@ The primary UI is a native AdaOS Research Workbench generated from canonical
 study and evidence state. It covers protocol review, trial matrix, progress,
 comparisons, evidence, and approvals.
 
-The initial local integration opens the loopback MLflow UI in a separate
-top-level browser tab from the native Workbench. It deliberately does not use
-an iframe: current MLflow security headers, independent navigation, and the
-lack of an AdaOS same-origin authorization proxy make embedding the wrong
-boundary. An iframe becomes admissible only behind an AdaOS-controlled
-same-origin route with authentication, authorization, origin/CSP policy,
-health, and lifecycle handling.
+The TLP Workbench opens MLflow in a separate top-level tab so the experiment
+composition remains native and compact. AdaOS also supports optional embedding
+after introducing an authenticated same-origin proxy with authorization,
+origin/CSP policy, request bounds, health, and lifecycle handling. The generic
+iframe client and gateway have both passed browser/API tests; the live MLflow
+React application, its JS/CSS assets, and its query API also loaded through the
+gateway without a redirect loop, upstream URL leak, or CSP violation. A
+scenario may opt in with `visual.serviceFrame` without learning the upstream
+endpoint.
 
 ## Ray Integration
 

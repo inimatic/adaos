@@ -77,6 +77,7 @@ Current target-state control-plane extensions are documented in:
 - [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots
 - [AdaOS Research Fabric](research-fabric.md): target governed research framework, storage/tracker/executor boundaries, MLflow and Ray integration, evidence model, and TLP reference case
 - [Research Fabric Roadmap](research-fabric-roadmap.md): prioritized delivery and proof gates from a local research kernel through storage capability, MLflow, Ray, TLP, generalization, and the deferred aResearcher assistance layer
+- [Research Tracker Contract 1.0](research-tracker-contract-v1.md): frozen provider operations, identity mapping, delivery/backpressure, evidence acceptance/deletion, service binding, and governed UI rules
 - [Research Fabric Core Readiness](research-fabric-core-readiness.md): implemented ARF0.5 storage SDK, per-skill isolation, generic bindings/content refs, local execution reconciliation, and PostgreSQL acceptance boundary
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md): priority checklist for moving skills and scenarios to demand-driven per-webspace projections
 - [Skill Projection and Stream Boundary](skill-projection-and-stream-boundary.md): current stabilization status and target roadmap for skill-owned Yjs projections, stream data, node-aware addressing, and temporary per-skill bridges

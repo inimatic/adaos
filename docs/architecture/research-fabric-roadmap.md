@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-08-08.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first reference case
@@ -90,10 +90,10 @@ scientific conclusion. A local demo is not production acceptance.
 | Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | deliberately unchanged; legacy core repositories are outside ARF0.5 |
 | Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | research-manager migrations and restart rehydration validated locally |
 | Database capability | Negotiated `storage.relational` requirement/binding, owner migrations, backup/restore, retention, lifecycle SDK, and SQLite provider; legacy `SQL` remains | ARF2 local contract validated; legacy repositories deliberately unchanged |
-| PostgreSQL | Isolated database and no-login owner role per skill, bounded pools, health, credential refresh, backup/restore | ARF2 conformance validated locally on `postgres:16-alpine` |
+| PostgreSQL | Isolated database and least-privilege owner/login role per skill, bounded pools, health, credential refresh, backup/restore | ARF2 conformance validated locally on `postgres:16-alpine`; the login is exposed only to its owning service process |
 | Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | E002 fixed a verified result, tracker export, and eight content-addressed artifact references |
 | Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 core and E002 start/reconcile/result integration validated across restart |
-| Tracking | Contract `1.0-rc1`, durable local journal/outbox, local reference provider, supervised MLflow service skill | E002 projected two attempt runs and retained them across install and repeated supervisor/API restarts; full ARF4 matrix remains open |
+| Tracking | Frozen contract `1.0`, bounded durable journal/outbox, local reference provider, conforming supervised/external MLflow adapter | identity, outage/replay, acceptance/deletion, storage binding, remote auth, UI proxy, and browser matrices validated locally |
 | Distributed execution | No Ray provider | open |
 | Research domain | Versioned skill-owned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts and governed workflows | explicit `Study 1:N Experiment`, immutable revisions, and attempt-aware tracking implemented |
 | TLP | E002 conditions, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
@@ -107,7 +107,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF1 | Minimal research manager works with local storage, local tracking, and local execution | `validated-local` by E002 | complete locally |
 | ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `validated-local`, including research-manager integration | complete locally |
 | ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local`, including real CPU attempt integration | complete locally |
-| ARF4 | MLflow is a conforming optional tracker service skill | preparatory candidate; full conformance matrix open | candidate only |
+| ARF4 | MLflow is a conforming optional tracker service skill | `validated-local` | complete locally |
 | ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
 | ARF6 | TLP passes the scientific and operational reference proof | `hypothesis` | later |
 | ARF7 | A second domain and operational hardening prove generality | `deferred` | long-term |
@@ -117,22 +117,25 @@ Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
 ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
 
 Delivery snapshot (2026-08-08): the native registry contains
-`research_manager_skill` `0.5.0`, `mlflow_tracker_skill` `0.1.1`, and
-`tlp_research` `0.1.4` at registry commit `10326cf`. All three were published
+`research_manager_skill` `0.7.0`, `mlflow_tracker_skill` `0.2.2`, and
+`tlp_research` `0.2.1`. All three were published
 through the existing AdaOS lifecycle and the two skills were reinstalled from
 their release revisions with passing self-tests. Scenario validation and all
-five scenario tests passed. The focused supervisor/execution core run through
-`adaos tests run` passed 43 tests in an isolated `ADAOS_BASE_DIR`; earlier live
-PostgreSQL conformance passed its 35-test matrix. The live Desktop snapshot
-contains the installed TLP application and E002 Workbench after API restart.
+five scenario tests passed. The final focused core/storage/execution/service-UI
+run through `adaos tests run` passed 71 tests with two environment-gated
+PostgreSQL skips in an isolated `ADAOS_BASE_DIR`; both skipped PostgreSQL cases
+then passed against a temporary `postgres:16-alpine` container. The live
+Desktop snapshot contains the installed TLP application and E002 Workbench
+after API restart.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
 published-package reinstall, repeated service restart, AdaOS API restart, and
-Desktop snapshot reload. This accepts ARF1 and the ARF2/ARF3 integration slice
-locally. It supplies useful ARF4 evidence but does not waive the remaining
-tracker conformance, outage, identity-mapping, PostgreSQL, and remote-service
-gates.
+Desktop snapshot reload. This accepts ARF1 through ARF3 locally. Tracker
+contract 1.0, the local/MLflow conformance suite, process-only relational/blob
+bindings, authenticated external service binding, governed UI proxy, and
+Chrome iframe tests complete the ARF4 local gate. ARF6 remains the independent
+scientific proof.
 
 ## ARF0. Architecture and Decision Baseline
 
@@ -447,15 +450,13 @@ secret handling; the process provider remains explicitly non-hostile.
 and swapped with the local tracker without changing study semantics.
 
 **Admission gate:** satisfied locally by E002 for ARF1 through ARF3.
-ARF4 conformance acceptance still requires a contract stable enough to freeze
-beyond `1.0-rc1` and the remaining provider gates below.
 
 **Exit proof:** one paired fixture produces equivalent normalized observations
 and evidence exports with the local tracker and MLflow. MLflow may be stopped,
 restarted, and reconciled without losing or silently accepting confirmatory
 observations.
 
-- [ ] `[must]` `ARF4-01` Freeze the provider-neutral tracker contract for
+- [x] `[must]` `ARF4-01` Freeze the provider-neutral tracker contract for
   experiment/run registration, parameters, metrics, tags, artifact refs,
   finalization, query, export, health, and provider links.
 - [x] `[must]` `ARF4-02` Define normalized metric identity including name,
@@ -465,48 +466,63 @@ observations.
   existing install, activate, status, restart, and rollback lifecycle.
 - [x] `[must]` `ARF4-04` Use MLflow's supported REST API or SDK only; prohibit
   direct queries and migrations against MLflow backend tables.
-- [ ] `[must]` `ARF4-05` Map AdaOS study, protocol, trial-group, trial, run,
+- [x] `[must]` `ARF4-05` Map AdaOS study, protocol, trial-group, trial, run,
   attempt, source, environment, data, trace, and evidence identities to
   documented MLflow tags/artifacts.
 - [x] `[must]` `ARF4-06` Start the local provider with backend metadata under
   the service skill's `data/db` and artifacts under `data/files`; do not add a
   top-level research or MLflow directory.
-- [ ] `[must]` `ARF4-07` Implement bounded buffering, backpressure, duplicate
+- [x] `[must]` `ARF4-07` Implement bounded buffering, backpressure, duplicate
   handling, degraded status, flush, and explicit terminal failure for required
   observations.
 - [x] `[must]` `ARF4-08` Export all evidence-required MLflow data into a
   versioned, content-addressed AdaOS evidence bundle and verify the export
   independently of the live server.
-- [ ] `[must]` `ARF4-09` Add tracker conformance tests covering ordering,
+- [x] `[must]` `ARF4-09` Add tracker conformance tests covering ordering,
   duplicate steps, retries, missing provider, restart, large artifact,
   finalization, export, and deletion after evidence acceptance.
-- [ ] `[should]` `ARF4-10` Support a provisioned PostgreSQL backend binding and
+- [x] `[should]` `ARF4-10` Support a provisioned PostgreSQL backend binding and
   a provisioned object/blob artifact binding without exposing either schema to
   the research manager.
-- [ ] `[should]` `ARF4-11` Support externally managed MLflow through an
+- [x] `[should]` `ARF4-11` Support externally managed MLflow through an
   authenticated service binding and capability/version probe.
-- [ ] `[should]` `ARF4-12` Register an optional generic service UI surface for
+- [x] `[should]` `ARF4-12` Register an optional generic service UI surface for
   MLflow behind AdaOS routing, access policy, origin/CSP controls, health, and
   lifecycle handling.
-- [ ] `[could]` `ARF4-13` Embed the advanced MLflow UI in an iframe only after
+- [x] `[could]` `ARF4-13` Embed the advanced MLflow UI in an iframe only after
   the governed same-origin/proxy path passes authentication and browser tests.
 - [ ] `[deferred]` `ARF4-14` Do not use MLflow Model Registry as the automatic
   AdaOS model-promotion authority; integrate promotion with the owning model
   runtime contract later.
 
-Preparatory evidence (2026-08-08): `mlflow_tracker_skill` 0.1.1 pins MLflow
-3.15.1, runs it as a supervised single-worker loopback service, scopes its
-SQLite metadata and artifact roots to the runtime bucket, exposes health and a
-top-level UI link, and passes a real MLflow client/database round-trip in the
-native skill lifecycle. E002 maps each physical attempt to one MLflow Run;
-both Runs remained FINISHED after release reinstall, two consecutive service
-restarts, and an AdaOS API restart. The normalized AdaOS tracker export and
-eight artifact references verify independently of the live MLflow server.
-Core supervision now replaces inherited skill storage identities, terminates
-owned process trees, and serializes lifecycle operations to prevent orphan and
-duplicate starts. The provider contract remains release-candidate: full
-identity mapping, outage/backpressure/deletion conformance, PostgreSQL service
-binding, and governed remote/UI routing remain open.
+Acceptance evidence (2026-08-08): the machine-readable
+[Research Tracker Contract 1.0](research-tracker-contract-v1.md) freezes the
+session, observation, artifact, provider-link, export, query, health, and
+delivery surface. The MLflow adapter maps the complete AdaOS identity set,
+uses the local journal as a bounded transactional outbox, rejects conflicting
+duplicates, exposes degraded delivery state, replays after restart, and fails
+required terminal delivery explicitly. The conformance suite covers ordering,
+duplicate steps, outage/restart, capacity, large artifact references,
+finalization, export, authenticated TLS binding/version probe, and deletion
+only after immutable evidence acceptance.
+
+Core service supervision negotiates owner-scoped relational and blob bindings,
+injects physical locations only into the owning process, and supports
+provisioned PostgreSQL/object providers without lending their schemas to the
+research manager. The generic service UI publishes a redacted surface behind
+an authenticated same-origin proxy with lifecycle, origin, CSP, framing, and
+request-size controls. `visual.serviceFrame` derives only that governed
+bootstrap route. The focused native AdaOS run passed 71 Python checks with two
+PostgreSQL skips, followed by a live 2/2 PostgreSQL run that included the
+least-privilege service login. The tracker conformance run passed four provider
+tests; ChromeHeadless passed six registry/frame tests, and a live Chrome load
+rendered the MLflow React application through the gateway without an upstream
+URL leak or CSP violation. E002's normalized export was accepted immutably;
+result verification now uses `accepted-export` and verifies all eight
+content-addressed artifact references independently of MLflow. Because E002
+started before the freeze, its immutable session tag remains `1.0-rc1`; new
+sessions use contract `1.0` and historical evidence is not relabelled. MLflow
+therefore remains a query/projection provider rather than evidence authority.
 
 ## ARF5. Ray Executor Provider
 

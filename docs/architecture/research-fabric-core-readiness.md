@@ -4,7 +4,7 @@ Status: ARF0.5 plus ARF2/ARF3 implementation record. SQLite, PostgreSQL,
 relational lifecycle, execution ABI, local process, and OCI-admission paths
 are validated locally.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-08-08.
 
 This page records the narrow core foundation now consumed by the first
 Research Fabric skill. It is subordinate to the
@@ -165,9 +165,11 @@ this guard protects supported SDK use and makes ownership mistakes explicit.
 `postgresql`
 : Optional provider enabled by the core-owned
   `ADAOS_RELATIONAL_POSTGRES_URL`. It provisions a deterministic isolated
-  logical database per owner/binding and a no-login owner role per skill. The
-  administrator URL remains inside the adapter and the binding contains only a
-  secret reference. Bounded pools, health, operator credential refresh,
+  logical database per owner/binding and a least-privilege owner role per
+  skill. Ordinary SDK callers receive only an opaque binding. If the owner is
+  a supervised service, core generates a login credential in memory and
+  injects its DSN only into that service process. The administrator URL remains
+  inside the adapter. Bounded pools, health, operator credential refresh,
   backup/restore, and migration upgrade evidence are implemented. Capacity and
   TTL requirements are rejected because this provider does not enforce them.
 
@@ -265,6 +267,15 @@ behavior, migrations, backup/restore, and research-manager/local-tracker
 conformance. The provider removed its exact databases/backups and the exact
 `--rm` test container was stopped afterward.
 
+On 2026-08-08 the ARF4 follow-up added an explicit service-login case. Core
+generated a separate `adaos_owner_*` login URI for the owning service, the
+login connected only to its isolated `adaos_*` database and completed a
+transaction, and the public binding remained free of DSN/password material.
+The updated relational and research-manager integration cases passed 2/2 on a
+temporary `postgres:16-alpine` container; the exact verified container was
+removed afterward. The non-PostgreSQL focused matrix passed 71 tests with the
+two PostgreSQL cases skipped before that live run.
+
 Native package/lifecycle verification used the existing AdaOS commands rather
 than a research-specific CLI:
 
@@ -278,7 +289,8 @@ adaos scenario run tlp_research
 adaos tests run --only-sdk ...
 ```
 
-The published `research_manager_skill` `0.4.0` passed six package tests and was
+In the initial 2026-08-07 slice, published `research_manager_skill` `0.4.0`
+passed six package tests and was
 healthy in its active service slot. Its bounded `get_study` browser route is
 read-only. The published desktop scenario `tlp_research` `0.1.3` passed five
 package tests; installation activated the matching dependency runtime,
@@ -302,5 +314,7 @@ The completed slice deliberately leaves these items to their owning milestones:
   public storage/execution SDKs;
 - cross-skill data sharing requires a specialized provider skill and typed
   views/APIs, never another skill's SQL binding;
-- MLflow, Ray, object/blob provider implementation, remote secrets/network
-  drivers, and broad production operations remain ARF4+ work.
+- Ray, provider-specific cloud credential drivers, and broad production
+  operations remain ARF5+ work. ARF4 adds the generic service-facing
+  relational/blob injection and governed UI proxy without changing the
+  skill-facing relational SDK boundary described here.
