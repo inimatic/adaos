@@ -61,6 +61,8 @@ toolchain works on one physical arm64 phone.
   write/read/restart round trip there.
 - [x] `[must]` Produce an installable debug APK from CI or a documented local
   build command.
+- [x] `[should]` Upload the signed debug APK and checksum from a path-filtered
+  Android CI workflow and keep a repeatable physical-device smoke command.
 - [ ] `[should]` Record APK size, install time, Python cold-start time, ABI,
   Python version, device model, Android version, and page size.
 

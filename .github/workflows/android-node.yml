@@ -1,0 +1,88 @@
+name: Android node APK
+
+on:
+  push:
+    branches: [rev2026]
+    paths:
+      - ".github/workflows/android-node.yml"
+      - "src/adaos/integrations/android-node/**"
+      - "tests/test_android_node_bootstrap.py"
+  pull_request:
+    paths:
+      - ".github/workflows/android-node.yml"
+      - "src/adaos/integrations/android-node/**"
+      - "tests/test_android_node_bootstrap.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-node-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_debug_apk:
+    name: Test and build arm64 debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: src/adaos/integrations/android-node
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+
+      - name: Install runtime test dependencies
+        working-directory: .
+        shell: bash
+        run: |
+          python -m pip install pytest websockets \
+            "y-py @ https://github.com/inimatic/adaos/releases/download/y-py-v0.6.2-adaos.1/y_py-0.6.2%2Badaos.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+
+      - name: Test Android loopback runtime
+        working-directory: .
+        run: python -m pytest -q tests/test_android_node_bootstrap.py
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Verify APK and write checksum
+        shell: bash
+        run: |
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          sha256sum "$apk" > "${apk}.sha256"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaos-android-node-debug-${{ github.sha }}
+          path: |
+            src/adaos/integrations/android-node/app/build/outputs/apk/debug/app-debug.apk
+            src/adaos/integrations/android-node/app/build/outputs/apk/debug/app-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14

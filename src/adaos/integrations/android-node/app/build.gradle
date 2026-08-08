@@ -32,7 +32,11 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.11"
-        buildPython("py", "-3.11")
+        if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+            buildPython("py", "-3.11")
+        } else {
+            buildPython("python3.11")
+        }
         pyc {
             src = false
         }

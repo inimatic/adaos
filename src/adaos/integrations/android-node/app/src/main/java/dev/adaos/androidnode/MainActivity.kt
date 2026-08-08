@@ -27,6 +27,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(buildContent())
         requestNotificationPermission()
+        handleLaunchIntent(intent)
     }
 
     override fun onStart() {
@@ -37,6 +38,18 @@ class MainActivity : Activity() {
     override fun onStop() {
         NodeStateStore.unsubscribe(statusListener)
         super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
+    }
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_START_NODE, false) == true) {
+            startNode()
+        }
     }
 
     private fun buildContent(): View {
@@ -151,4 +164,8 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val EXTRA_START_NODE = "start_node"
+    }
 }

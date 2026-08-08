@@ -34,6 +34,9 @@ Python 3.11 must be available as `py -3.11` on Windows. Then run:
 ```
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+Pushes which touch this module also run the `Android node APK` workflow. It
+executes the host runtime tests, verifies the debug signature, records the
+SHA-256 checksum, and uploads the APK as a 14-day workflow artifact.
 
 If a bundled `webui.json` changes, regenerate the immutable Yjs seed first:
 
@@ -47,14 +50,16 @@ debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
 
-Connect an arm64 Android 8+ phone with USB debugging enabled, then run:
+Connect an arm64 Android 8+ phone with USB debugging enabled, then run the
+repeatable smoke test:
 
 ```powershell
-adb install -r artifacts/android-node/adaos-android-node-0.1.0-poc2-debug.apk
-adb shell am start -n dev.adaos.androidnode/.MainActivity
+.\smoke-device.ps1 -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe" -OpenBrowser
 ```
 
-Tap `Start node`, wait for `READY`, and check the loopback endpoint from the
-phone at `http://127.0.0.1:8777/api/node/status`. `Open AdaOS` launches the
-hosted client with explicit LO intent. The browser should show the four fixed
-apps, two widgets, and a green YJS status without login or a development token.
+The script installs the APK, starts the foreground service through the visible
+Activity, creates an adb loopback forward, and fails unless the runtime is
+ready, Yjs is available, and local authentication is disabled. `-OpenBrowser`
+then launches the hosted client with explicit LO intent. The browser should
+show the four fixed apps, two widgets, and a green YJS status without login or
+a development token.
