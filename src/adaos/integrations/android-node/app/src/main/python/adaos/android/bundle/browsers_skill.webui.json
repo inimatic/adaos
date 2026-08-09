@@ -1,0 +1,85 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "apps": [
+    {
+      "id": "browsers",
+      "title": "Browsers",
+      "subtitle": "Local browser sessions",
+      "icon": "browsers-outline",
+      "launchModal": "browsers_modal"
+    }
+  ],
+  "registry": {
+    "modals": {
+      "browsers_modal": {
+        "title": "Browsers",
+        "schema": {
+          "id": "browsers_modal",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [{ "id": "main", "role": "main" }]
+          },
+          "widgets": [
+            {
+              "id": "browsers-summary",
+              "type": "visual.metricTile",
+              "area": "main",
+              "title": "Active browsers",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/browsers/summary",
+                "observeRoot": true
+              },
+              "inputs": {
+                "valuePath": "value",
+                "labelPath": "title",
+                "subtitlePath": "subtitle",
+                "descriptionPath": "details"
+              }
+            },
+            {
+              "id": "browsers-clients",
+              "type": "ui.list",
+              "area": "main",
+              "title": "Endpoints",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/browsers/clients",
+                "observeRoot": true
+              },
+              "inputs": {
+                "titleKey": "title",
+                "subtitleKey": "subtitle",
+                "detailsPath": "content",
+                "showDetails": true,
+                "itemAccordion": true,
+                "emptyText": "No active local browser endpoints"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "widgets": {}
+  },
+  "ydoc_defaults": {
+    "data/browsers": {
+      "summary": {
+        "title": "Browsers",
+        "value": 0,
+        "subtitle": "0 active endpoints",
+        "details": "Waiting for a local browser"
+      },
+      "clients": []
+    }
+  },
+  "contributions": [
+    {
+      "extensionPoint": "desktop.apps",
+      "type": "app",
+      "id": "browsers",
+      "autoInstall": true
+    }
+  ]
+}

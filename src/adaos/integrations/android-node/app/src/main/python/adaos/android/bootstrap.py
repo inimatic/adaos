@@ -43,6 +43,8 @@ _SKILL_WEBUI_FILES = (
     ("subnet_env", "subnet_env.webui.json"),
     ("weather_skill", "weather_skill.webui.json"),
     ("adaos_connect", "adaos_connect.webui.json"),
+    ("browsers_skill", "browsers_skill.webui.json"),
+    ("voice_assistant", "voice_assistant.webui.json"),
     ("notebook_skill", "notebook_skill.webui.json"),
 )
 
@@ -131,9 +133,24 @@ class _LoopbackServer(ThreadingHTTPServer):
 
 
 class _WebSocketPeer:
-    def __init__(self, connection: socket.socket, kind: str) -> None:
+    def __init__(
+        self,
+        connection: socket.socket,
+        kind: str,
+        *,
+        origin: str = "",
+        user_agent: str = "",
+    ) -> None:
         self.connection = connection
         self.kind = kind
+        self.origin = origin
+        self.user_agent = user_agent
+        self.connected_at = time.time()
+        self.device_id = ""
+        self.client_id = ""
+        self.webspace_id = "desktop"
+        self.browser_family = ""
+        self.name = ""
         self.send_lock = threading.Lock()
         self.closed = False
 
@@ -252,6 +269,11 @@ class _Handler(BaseHTTPRequestHandler):
                         "platform": "android",
                         "local_api": True,
                         "local_auth_required": False,
+                        "voice": {
+                            "stt": "browser_speech_recognition",
+                            "tts": "browser_speech_synthesis",
+                            "assistant": "android_local",
+                        },
                     },
                 },
             )
@@ -471,12 +493,19 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.flush()
 
-        peer = _WebSocketPeer(self.connection, kind)
+        peer = _WebSocketPeer(
+            self.connection,
+            kind,
+            origin=origin,
+            user_agent=str(self.headers.get("User-Agent") or ""),
+        )
         if reject_reason:
             peer.close(1012, reject_reason)
             return
         with _yjs_lock:
             _websocket_peers.add(peer)
+        if kind == "control":
+            _project_browser_sessions()
         try:
             if kind == "yjs":
                 with _yjs_lock:
@@ -486,6 +515,8 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             with _yjs_lock:
                 _websocket_peers.discard(peer)
+            if kind == "control":
+                _project_browser_sessions()
             peer.close()
             self.close_connection = True
 
@@ -683,11 +714,34 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
     data: dict[str, Any]
     try:
         if kind == "device.register":
+            peer.device_id = str(request_payload.get("device_id") or "").strip()
+            peer.client_id = str(
+                request_payload.get("client_id")
+                or request_payload.get("session_id")
+                or message.get("id")
+                or ""
+            ).strip()
+            peer.webspace_id = str(
+                request_payload.get("webspace_id") or "desktop"
+            ).strip() or "desktop"
+            peer.browser_family = str(
+                request_payload.get("browser_family")
+                or request_payload.get("browser_name")
+                or "Browser"
+            ).strip()
+            peer.name = str(
+                request_payload.get("device_name")
+                or request_payload.get("name")
+                or peer.browser_family
+            ).strip()
+            if request_payload.get("user_agent"):
+                peer.user_agent = str(request_payload.get("user_agent"))[:512]
+            _project_browser_sessions()
             data = {
                 "ok": True,
                 "accepted": True,
-                "device_id": str(request_payload.get("device_id") or ""),
-                "webspace_id": str(request_payload.get("webspace_id") or "desktop"),
+                "device_id": peer.device_id,
+                "webspace_id": peer.webspace_id,
             }
         elif kind == "desktop.scenario.set":
             if _skills is None:
@@ -699,6 +753,18 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
                 raise AndroidSkillError("android_skills_not_ready")
             data = {"ok": True, "accepted": True}
             data.update(_skills.switch_scenario("web_desktop"))
+        elif kind in {"dialog.user_message", "voice.chat.user"}:
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data = _skills.handle_dialog_message(request_payload)
+        elif kind == "voice.chat.open":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data = {
+                "ok": True,
+                "accepted": True,
+                "snapshot": _skills.call_tool("voice_assistant.get_snapshot", {}),
+            }
         elif kind == "skill.event.publish":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
@@ -716,6 +782,7 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
                 ),
             }
         elif kind.startswith("adaos_connect.prepare") or kind in {
+            "browsers.refresh",
             "demo_metrics.host_action",
             "demo_metrics.selection.changed",
         }:
@@ -788,6 +855,34 @@ def _broadcast_control_event(kind: str, payload: dict[str, Any], source: str) ->
         peers = [peer for peer in _websocket_peers if peer.kind == "control"]
     for peer in peers:
         peer.send(0x1, message)
+
+
+def _active_browser_sessions() -> list[dict[str, Any]]:
+    with _yjs_lock:
+        peers = [
+            peer
+            for peer in _websocket_peers
+            if peer.kind == "control" and not peer.closed
+        ]
+    return [
+        {
+            "device_id": peer.device_id,
+            "client_id": peer.client_id,
+            "webspace_id": peer.webspace_id,
+            "browser_family": peer.browser_family,
+            "name": peer.name,
+            "origin": peer.origin,
+            "user_agent": peer.user_agent,
+            "connected_at": peer.connected_at,
+        }
+        for peer in peers
+    ]
+
+
+def _project_browser_sessions() -> None:
+    skills = _skills
+    if skills is not None:
+        skills.project_browser_sessions(_active_browser_sessions())
 
 
 def _remember_yjs_update(update: bytes) -> bool:
@@ -1501,6 +1596,11 @@ def _node_status() -> dict[str, Any]:
                 "local_auth_required": False,
                 "webspace_id": "desktop",
                 "scenario_id": "web_desktop",
+                "voice": {
+                    "stt": "browser_speech_recognition",
+                    "tts": "browser_speech_synthesis",
+                    "assistant": "android_local",
+                },
             },
         }
     with _yjs_lock:
@@ -1639,5 +1739,10 @@ def _node_status() -> dict[str, Any]:
             "local_auth_required": False,
             "webspace_id": "desktop",
             "scenario_id": "web_desktop",
+            "voice": {
+                "stt": "browser_speech_recognition",
+                "tts": "browser_speech_synthesis",
+                "assistant": "android_local",
+            },
         },
     }

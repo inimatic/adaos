@@ -51,6 +51,9 @@ _MAX_NOTE_COUNT = 256
 _MAX_PROJECTED_NOTE_COUNT = 32
 _MAX_NOTE_CONTENT_CHARS = 16 * 1024
 _MAX_IDEMPOTENCY_RESULTS = 256
+_MAX_VOICE_MESSAGES = 32
+_MAX_VOICE_TEXT_CHARS = 2 * 1024
+_LOCAL_BROWSER_LINK = "https://inimatic.com/?zone=lo&try_local_hub=1"
 
 
 def _utc_now() -> str:
@@ -135,6 +138,8 @@ class AndroidSkillRuntime:
         "subnet_env",
         "weather_skill",
         "adaos_connect",
+        "browsers_skill",
+        "voice_assistant",
         "notebook_skill",
         "demo_metrics_skill",
     )
@@ -227,6 +232,7 @@ class AndroidSkillRuntime:
             "data/desktop/notebook": self._notebook_snapshot(),
             "data/demo_metrics": self._demo_snapshot(),
             "data/subnet_env/current": self._subnet_snapshot(),
+            "data/browsers": self._empty_browser_snapshot(),
             "runtime/environment/materialization/scenario_id": current_scenario,
             "runtime/environment/install_profile": {
                 "id": "android_poc_v1",
@@ -236,8 +242,18 @@ class AndroidSkillRuntime:
             },
         }
         connect = _plain_at_path(snapshot, "data/adaos_connect")
-        if not isinstance(connect, dict) or "current" not in connect:
-            updates["data/adaos_connect"] = self._connect_snapshot("browser")
+        connect_current = connect.get("current") if isinstance(connect, dict) else {}
+        connect_mode = (
+            str(connect_current.get("mode") or "browser")
+            if isinstance(connect_current, dict)
+            else "browser"
+        )
+        updates["data/adaos_connect"] = self._connect_snapshot(connect_mode)
+        voice_chat = _plain_at_path(snapshot, "data/voice_chat")
+        if not isinstance(voice_chat, dict) or not isinstance(
+            voice_chat.get("messages"), list
+        ):
+            updates["data/voice_chat"] = self._empty_voice_chat()
         self._set_paths(updates)
 
     def _set_paths(self, values: dict[str, Any]) -> bytes:
@@ -318,6 +334,8 @@ class AndroidSkillRuntime:
             "adaos_connect.configure_member": self._configure_member,
             "adaos_connect.join_member": self._join_member,
             "adaos_connect.disconnect_member": self._disconnect_member,
+            "browsers_skill.refresh_snapshot": lambda _args: self._browser_current(),
+            "voice_assistant.get_snapshot": lambda _args: self._voice_current(),
         }
         handler = allowed.get(normalized)
         if handler is None:
@@ -369,6 +387,8 @@ class AndroidSkillRuntime:
             return self._join_member(payload)
         if normalized == "adaos_connect.member.disconnect":
             return self._disconnect_member(payload)
+        if normalized == "browsers.refresh":
+            return self._browser_current()
         if normalized == "demo_metrics.host_action":
             return self._demo_event(payload, source="android.host")
         if normalized == "demo_metrics.selection.changed":
@@ -403,9 +423,12 @@ class AndroidSkillRuntime:
         }
 
     def stream_snapshot(self, receiver: str) -> dict[str, Any] | None:
-        if str(receiver or "").strip() != "notebook_skill.notes":
-            return None
-        return self._publish_notebook_stream()
+        selected = str(receiver or "").strip()
+        if selected == "notebook_skill.notes":
+            return self._publish_notebook_stream()
+        if selected == "voice_chat.messages":
+            return self._voice_current()
+        return None
 
     def _note_rows(self) -> list[sqlite3.Row]:
         with self._lock:
@@ -596,7 +619,11 @@ class AndroidSkillRuntime:
         self.project_member_link(member_link.snapshot())
 
     def project_member_link(self, member_status: dict[str, Any]) -> dict[str, Any]:
-        snapshot = self._connect_snapshot("node", member_status=member_status)
+        current = self._connect_current().get("current") or {}
+        selected_mode = str(current.get("mode") or "browser")
+        if bool(member_status.get("configured")):
+            selected_mode = "node"
+        snapshot = self._connect_snapshot(selected_mode, member_status=member_status)
         self._set_paths(
             {
                 "data/adaos_connect": snapshot,
@@ -604,6 +631,68 @@ class AndroidSkillRuntime:
             }
         )
         return snapshot
+
+    @staticmethod
+    def _empty_browser_snapshot() -> dict[str, Any]:
+        return {
+            "summary": {
+                "title": "Browsers",
+                "value": 0,
+                "subtitle": "0 active endpoints",
+                "details": "Waiting for a local browser",
+                "updated_at": _utc_now(),
+            },
+            "clients": [],
+            "updated_at": _utc_now(),
+        }
+
+    def project_browser_sessions(
+        self,
+        sessions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        clients: list[dict[str, Any]] = []
+        for index, session in enumerate(sessions[:32]):
+            device_id = str(session.get("device_id") or "").strip()
+            client_id = str(session.get("client_id") or "").strip()
+            title = str(
+                session.get("name")
+                or session.get("browser_family")
+                or (f"Browser {index + 1}")
+            ).strip()
+            clients.append(
+                {
+                    "id": client_id or device_id or f"browser-{index + 1}",
+                    "device_id": device_id,
+                    "client_id": client_id,
+                    "title": title,
+                    "subtitle": "Online on this phone",
+                    "description": str(session.get("user_agent") or "")[:240],
+                    "content": {
+                        "webspace_id": str(session.get("webspace_id") or "desktop"),
+                        "connected_at": float(session.get("connected_at") or 0.0),
+                        "origin": str(session.get("origin") or ""),
+                    },
+                    "online": True,
+                }
+            )
+        total = len(clients)
+        snapshot = {
+            "summary": {
+                "title": "Browsers",
+                "value": total,
+                "subtitle": f"{total} active endpoint{'s' if total != 1 else ''}",
+                "details": "Local loopback sessions; management is read-only in the Android MVP.",
+                "updated_at": _utc_now(),
+            },
+            "clients": clients,
+            "updated_at": _utc_now(),
+        }
+        self._set_paths({"data/browsers": snapshot})
+        return snapshot
+
+    def _browser_current(self) -> dict[str, Any]:
+        current = _plain_at_path(self.store.snapshot_json(), "data/browsers")
+        return current if isinstance(current, dict) else self._empty_browser_snapshot()
 
     def _connect_snapshot(
         self,
@@ -619,6 +708,7 @@ class AndroidSkillRuntime:
             if self.member_link is not None
             else {}
         )
+        selected_mode = mode if mode in {"browser", "telegram", "node"} else "browser"
         configured = bool(member.get("configured"))
         connected = bool(member.get("connected"))
         state = str(member.get("state") or "offline")
@@ -626,7 +716,20 @@ class AndroidSkillRuntime:
         error = str(member.get("last_error") or "")
         if not configured:
             error = "member_link_not_configured"
-        if connected:
+        if selected_mode == "browser":
+            state = "ready"
+            pending = False
+            error = ""
+            summary = (
+                "This phone already trusts its loopback browser. Open the LO link "
+                "or scan the QR code; AdaOS login and pairing are not required."
+            )
+        elif selected_mode == "telegram":
+            state = "unavailable"
+            pending = False
+            error = "telegram_not_in_android_mvp"
+            summary = "Telegram pairing is not included in the fixed Android MVP profile."
+        elif connected:
             summary = f"Connected to {member.get('hub_url') or 'AdaOS Hub'}."
         elif configured:
             summary = (
@@ -637,11 +740,11 @@ class AndroidSkillRuntime:
             summary = "Enter Root URL and a one-time join code to connect this phone."
         return {
             "current": {
-                "mode": mode if mode in {"browser", "telegram", "node"} else "browser",
-                "status": "connected" if connected else state,
-                "degraded": not connected,
+                "mode": selected_mode,
+                "status": "connected" if selected_mode == "node" and connected else state,
+                "degraded": selected_mode != "browser" and not connected,
                 "pending": pending,
-                "error": "" if connected else error,
+                "error": "" if selected_mode == "browser" or connected else error,
                 "summary": summary,
                 "summary_language": "text",
                 "request_id": request_id,
@@ -651,8 +754,8 @@ class AndroidSkillRuntime:
                 "expires_at_language": "text",
                 "expires_at_epoch": 0,
                 "expires_in_seconds": 0,
-                "qr_text": "",
-                "link": "",
+                "qr_text": _LOCAL_BROWSER_LINK if selected_mode == "browser" else "",
+                "link": _LOCAL_BROWSER_LINK if selected_mode == "browser" else "",
                 "link_language": "text",
                 "code": "",
                 "code_language": "text",
@@ -673,6 +776,17 @@ class AndroidSkillRuntime:
                 "transport_security": str(member.get("transport_security") or "unconfigured"),
                 "connect_attempts": int(member.get("connect_attempts") or 0),
                 "reconnect_total": int(member.get("reconnect_total") or 0),
+                "zone_id": "lo" if selected_mode == "browser" else "",
+                "navigation_destination": (
+                    {
+                        "intent": "webspace.open",
+                        "zone": "lo",
+                        "webspace_id": "desktop",
+                        "try_local_hub": True,
+                    }
+                    if selected_mode == "browser"
+                    else {}
+                ),
             }
         }
 
@@ -736,6 +850,122 @@ class AndroidSkillRuntime:
             raise AndroidSkillError("android_member_link_not_ready")
         result = self.member_link.disconnect(forget=bool(arguments.get("forget")))
         return self.project_member_link(result)
+
+    @staticmethod
+    def _empty_voice_chat() -> dict[str, Any]:
+        return {
+            "messages": [],
+            "status": "ready",
+            "assistant": {
+                "id": "agent:android:local",
+                "label": "AdaOS Mobile",
+                "voice": "ru-RU",
+                "scope": "local",
+            },
+            "updated_at": _utc_now(),
+        }
+
+    def _voice_current(self) -> dict[str, Any]:
+        current = _plain_at_path(self.store.snapshot_json(), "data/voice_chat")
+        return current if isinstance(current, dict) else self._empty_voice_chat()
+
+    def handle_dialog_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
+        if not text:
+            raise AndroidSkillError("voice_assistant_text_required")
+        now = time.time()
+        response_text = self._voice_response(text)
+        current = self._voice_current()
+        messages = [
+            dict(item)
+            for item in current.get("messages") or []
+            if isinstance(item, dict)
+        ]
+        turn_id = uuid.uuid4().hex[:12]
+        messages.extend(
+            [
+                {
+                    "id": f"mobile-user-{turn_id}",
+                    "from": "user",
+                    "text": text,
+                    "ts": now,
+                },
+                {
+                    "id": f"mobile-assistant-{turn_id}",
+                    "from": "hub",
+                    "text": response_text,
+                    "ts": now + 0.001,
+                    "active_agent_id": "agent:android:local",
+                    "active_agent_label": "AdaOS Mobile",
+                    "active_agent_icon": "sparkles-outline",
+                    "voice": "ru-RU",
+                    "voice_profile": {"lang": "ru-RU", "voice": "ru-RU"},
+                },
+            ]
+        )
+        snapshot = {
+            "messages": messages[-_MAX_VOICE_MESSAGES:],
+            "status": "ready",
+            "assistant": {
+                "id": "agent:android:local",
+                "label": "AdaOS Mobile",
+                "voice": "ru-RU",
+                "scope": "local",
+            },
+            "last_turn_id": turn_id,
+            "updated_at": _utc_now(),
+        }
+        self._set_paths({"data/voice_chat": snapshot})
+        return {
+            "ok": True,
+            "accepted": True,
+            "turn_id": turn_id,
+            "response": response_text,
+            "message_count": len(snapshot["messages"]),
+        }
+
+    def _voice_response(self, text: str) -> str:
+        normalized = " ".join(text.casefold().split())
+        if any(token in normalized for token in ("погод", "weather")):
+            city = "Moscow"
+            city_aliases = {
+                "москв": "Moscow",
+                "берлин": "Berlin",
+                "париж": "Paris",
+                "токио": "Tokyo",
+                "нью-йорк": "New York",
+                "new york": "New York",
+            }
+            for token, candidate in city_aliases.items():
+                if token in normalized:
+                    city = candidate
+                    break
+            weather = self._weather_event(
+                {"city": city, "request_id": f"voice-{uuid.uuid4().hex[:10]}"}
+            )
+            return str((weather.get("current") or {}).get("summary") or "Weather is unavailable.")
+        if any(token in normalized for token in ("статус", "состояние ноды", "node status")):
+            node = self._subnet_snapshot()
+            return (
+                f"Нода {node.get('node_label') or 'Android phone'} готова. "
+                f"Локальная зона {node.get('subnet_id') or self.subnet_id}."
+            )
+        if normalized.startswith(("создай заметку", "запиши заметку", "create note")):
+            content = text
+            for prefix in ("создай заметку", "запиши заметку", "create note"):
+                if normalized.startswith(prefix):
+                    content = text[len(prefix):].lstrip(" :,-")
+                    break
+            if not content:
+                return "Скажите текст заметки после команды «создай заметку»."
+            self._notebook_create({"content": content})
+            return "Заметка сохранена локально на телефоне."
+        if any(token in normalized for token in ("привет", "здравств", "hello", "hi")):
+            return "Привет! Я локальный ассистент AdaOS на этом телефоне."
+        return (
+            "Я работаю локально в экспериментальном Android-профиле. "
+            "Сейчас я умею сообщать статус ноды, узнавать погоду и создавать заметки."
+        )
 
     @staticmethod
     def _demo_snapshot() -> dict[str, Any]:

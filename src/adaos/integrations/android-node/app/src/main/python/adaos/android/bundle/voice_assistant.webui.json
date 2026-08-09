@@ -1,0 +1,103 @@
+{
+  "$schema": "../../../../src/adaos/abi/webui.v1.schema.json",
+  "apps": [
+    {
+      "id": "voice_assistant_app",
+      "title": "Voice Assistant",
+      "subtitle": "Local Android assistant",
+      "icon": "mic-outline",
+      "launchModal": "voice_assistant_modal"
+    }
+  ],
+  "registry": {
+    "modals": {
+      "voice_assistant_modal": {
+        "title": "Voice Assistant",
+        "schema": {
+          "id": "voice_assistant_modal",
+          "layout": {
+            "type": "single",
+            "pattern": "stack",
+            "areas": [{ "id": "main", "role": "main" }]
+          },
+          "widgets": [
+            {
+              "id": "android-voice-input",
+              "type": "ui.voiceInput",
+              "area": "main",
+              "title": "Speak",
+              "inputs": {
+                "startLabel": "Listen",
+                "stopLabel": "Stop",
+                "sendCommand": "dialog.user_message",
+                "scope": "local",
+                "channelSelector": false,
+                "agentChip": true,
+                "meta": {
+                  "route_id": "voice_chat",
+                  "voice_chat_scope": "local"
+                },
+                "stt": {
+                  "provider": "browser",
+                  "lang": "ru-RU",
+                  "autoSend": true,
+                  "pushToTalk": false,
+                  "readyCue": true
+                }
+              },
+              "dataSource": {
+                "kind": "y",
+                "path": "data/voice_chat",
+                "scope": "local"
+              }
+            },
+            {
+              "id": "android-voice-chat",
+              "type": "ui.chat",
+              "area": "main",
+              "title": "Conversation",
+              "dataSource": {
+                "kind": "y",
+                "path": "data/voice_chat",
+                "scope": "local",
+                "observeRoot": true
+              },
+              "inputs": {
+                "sendCommand": "dialog.user_message",
+                "scope": "local",
+                "alignRightFrom": "user",
+                "placeholder": "Ask about node status or weather",
+                "historyButton": false,
+                "meta": {
+                  "route_id": "voice_chat",
+                  "voice_chat_scope": "local"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "widgets": {}
+  },
+  "ydoc_defaults": {
+    "data/voice_chat": {
+      "messages": [],
+      "status": "ready",
+      "assistant": {
+        "id": "agent:android:local",
+        "label": "AdaOS Mobile",
+        "voice": "ru-RU",
+        "scope": "local"
+      }
+    }
+  },
+  "contributions": [
+    {
+      "extensionPoint": "desktop.apps",
+      "type": "app",
+      "id": "voice_assistant_app",
+      "autoInstall": true
+    }
+  ]
+}

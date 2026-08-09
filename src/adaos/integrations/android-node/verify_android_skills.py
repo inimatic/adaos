@@ -183,8 +183,43 @@ def main() -> int:
             "adaos_connect.prepare.browser",
             {"mode": "browser", "refresh": True},
         )
-        if connect_result.get("result", {}).get("current", {}).get("status") != "offline":
-            raise RuntimeError("AdaOS Connect did not publish its bounded offline state")
+        connect_current = connect_result.get("result", {}).get("current", {})
+        if connect_current.get("status") != "ready":
+            raise RuntimeError("AdaOS Connect did not publish its local-ready state")
+        if connect_current.get("link") != "https://inimatic.com/?zone=lo&try_local_hub=1":
+            raise RuntimeError("AdaOS Connect did not publish the local LO link")
+
+        registration, _ = _command(
+            websocket,
+            "browser-register-smoke",
+            "device.register",
+            {
+                "device_id": "android-smoke-browser",
+                "client_id": "android-smoke-client",
+                "webspace_id": "desktop",
+                "browser_family": "Smoke browser",
+                "user_agent": "Android physical smoke",
+            },
+        )
+        if registration.get("device_id") != "android-smoke-browser":
+            raise RuntimeError("Browser session registration was rejected")
+        browsers, _ = _command(
+            websocket,
+            "browser-snapshot-smoke",
+            "browsers.refresh",
+            {"webspace_id": "desktop"},
+        )
+        if browsers.get("result", {}).get("summary", {}).get("value", 0) < 1:
+            raise RuntimeError("Browsers did not project the active control session")
+
+        voice, _ = _command(
+            websocket,
+            "voice-assistant-smoke",
+            "dialog.user_message",
+            {"text": "Привет", "webspace_id": "desktop"},
+        )
+        if voice.get("accepted") is not True or not voice.get("response"):
+            raise RuntimeError("Android voice assistant did not complete a local turn")
 
         stream, stream_events = _command(
             websocket,
@@ -318,6 +353,9 @@ def main() -> int:
                 "weather_error": weather_state.get("error") or "",
                 "weather_offline_recovered": True,
                 "subnet_env_round_trip": True,
+                "adaos_connect_local": True,
+                "browsers_projection": True,
+                "voice_assistant_turn": True,
                 "taiga_widgets": sorted(required_widgets),
                 "scenario_round_trip": True,
                 "notebook_stream": True,

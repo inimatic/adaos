@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -34,7 +34,7 @@
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "f910af1a443b3da858e848cb165a5292080642b49c6528a51d87075d9d0c5c02"
+          "sha256": "b286864d0ecb16c7af217ae508effccdbd0bfe563124952c28c884f8d11afc31"
         }
       ]
     },
@@ -76,6 +76,18 @@
       "sha256": "bc644e68292112cec057a84426fb8e7f7cc89c10756333354b4968ce4d3f48af"
     },
     {
+      "id": "browsers_skill",
+      "version": "android-poc.1",
+      "descriptor": "browsers_skill.webui.json",
+      "sha256": "9c01a1c657d6a4a0367a2e614ff20e6b523f0c09f6442c2ca171962ebe848eed"
+    },
+    {
+      "id": "voice_assistant",
+      "version": "android-poc.1",
+      "descriptor": "voice_assistant.webui.json",
+      "sha256": "baadfb79b1e7b65b6869583a47e25a256a372ab2b16c9e2ad29163dfd3c0b369"
+    },
+    {
       "id": "notebook_skill",
       "version": "android-poc.1",
       "descriptor": "notebook_skill.webui.json",
@@ -89,7 +101,7 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "c7a5ee047f84b41c2d1d6cb98710485e4c24f407db6e88afbfb96f6e6fe499e2"
+    "sha256": "cf44d05dd11a9cdb5c546ba006f66970dfb76d4beaecd02c884d350fea21070b"
   },
   "member_link_module": {
     "path": "../member_link.py",

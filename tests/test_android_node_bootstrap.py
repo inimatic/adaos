@@ -540,6 +540,8 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
             "android_node_settings_app",
             "weather_app",
             "adaos_connect_app",
+            "browsers",
+            "voice_assistant_app",
             "notebook_skill_app",
             "scenario:taiga_ui_demo_scenario",
         } <= app_ids
@@ -673,9 +675,11 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
         assert status["runtime"]["skill_execution"] == "in_process"
         assert status["runtime"]["install_profile"] == "android_poc_v1"
         assert {
-            "weather_skill",
-            "adaos_connect",
-            "notebook_skill",
+                "weather_skill",
+                "adaos_connect",
+                "browsers_skill",
+                "voice_assistant",
+                "notebook_skill",
             "demo_metrics_skill",
         }.issubset(status["runtime"]["active_skills"])
 
@@ -796,7 +800,35 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
                 "adaos_connect.prepare.browser",
                 {"mode": "browser", "refresh": True},
             )
-            assert ack["data"]["result"]["current"]["status"] == "offline"
+            connect_current = ack["data"]["result"]["current"]
+            assert connect_current["status"] == "ready"
+            assert connect_current["degraded"] is False
+            assert connect_current["link"] == (
+                "https://inimatic.com/?zone=lo&try_local_hub=1"
+            )
+
+            ack, _ = _control_command(
+                websocket,
+                "browser-register-proof",
+                "device.register",
+                {
+                    "device_id": "android-browser-device",
+                    "client_id": "android-browser-client",
+                    "webspace_id": "desktop",
+                    "browser_family": "Chrome",
+                    "user_agent": "Android browser proof",
+                },
+            )
+            assert ack["data"]["device_id"] == "android-browser-device"
+
+            ack, _ = _control_command(
+                websocket,
+                "voice-proof",
+                "dialog.user_message",
+                {"text": "Привет", "webspace_id": "desktop"},
+            )
+            assert ack["data"]["accepted"] is True
+            assert "локальный ассистент" in ack["data"]["response"]
 
             ack, events = _control_command(
                 websocket,
@@ -905,7 +937,12 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             snapshot = json.load(response)["snapshot"]
         assert snapshot["data"]["weather"]["current"]["source"] == "offline"
         assert snapshot["data"]["weather"]["current"]["request_id"] == "weather-offline-request"
-        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "offline"
+        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "ready"
+        assert snapshot["data"]["browsers"]["summary"]["value"] == 0
+        assert any(
+            item["from"] == "hub" and "локальный ассистент" in item["text"]
+            for item in snapshot["data"]["voice_chat"]["messages"]
+        )
         assert snapshot["data"]["subnet_env"]["current"]["node_label"] == (
             "Android Proof Node"
         )
