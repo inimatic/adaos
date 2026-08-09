@@ -22,6 +22,7 @@ import y_py as Y
 from .ystore import AndroidYStore
 from .skills import AndroidSkillError, AndroidSkillRuntime
 from .member_link import AndroidMemberLink
+from .resources import AndroidResourceSampler
 
 _ALLOWED_ORIGINS = {
     "https://inimatic.com",
@@ -34,6 +35,8 @@ _MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
 _MAX_INBOUND_YJS_UPDATE_BYTES = 512 * 1024
 _MAX_YJS_UPDATES = 512
 _MAX_YJS_JOURNAL_BYTES = 8 * 1024 * 1024
+_MAX_LOOPBACK_REQUEST_THREADS = 32
+_LOOPBACK_ACCEPT_BACKLOG = 16
 _BUNDLE_ROOT = Path(__file__).with_name("bundle")
 _SKILL_WEBUI_FILES = (
     ("web_desktop_skill", "web_desktop_skill.webui.json"),
@@ -55,11 +58,66 @@ _skills: AndroidSkillRuntime | None = None
 _member_link: AndroidMemberLink | None = None
 _install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
+_resource_sampler = AndroidResourceSampler()
 
 
 class _LoopbackServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = _LOOPBACK_ACCEPT_BACKLOG
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._request_slots = threading.BoundedSemaphore(
+            _MAX_LOOPBACK_REQUEST_THREADS
+        )
+        self._request_metrics_lock = threading.Lock()
+        self._active_request_threads = 0
+        self._peak_request_threads = 0
+        self._rejected_requests = 0
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: socket.socket, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            with self._request_metrics_lock:
+                self._rejected_requests += 1
+            self.shutdown_request(request)
+            return
+        with self._request_metrics_lock:
+            self._active_request_threads += 1
+            self._peak_request_threads = max(
+                self._peak_request_threads,
+                self._active_request_threads,
+            )
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._release_request_slot()
+            raise
+
+    def process_request_thread(
+        self,
+        request: socket.socket,
+        client_address: Any,
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release_request_slot()
+
+    def _release_request_slot(self) -> None:
+        with self._request_metrics_lock:
+            self._active_request_threads = max(0, self._active_request_threads - 1)
+        self._request_slots.release()
+
+    def resource_snapshot(self) -> dict[str, int]:
+        with self._request_metrics_lock:
+            return {
+                "active_request_threads": self._active_request_threads,
+                "peak_request_threads": self._peak_request_threads,
+                "request_thread_limit": _MAX_LOOPBACK_REQUEST_THREADS,
+                "rejected_requests": self._rejected_requests,
+                "accept_backlog_limit": _LOOPBACK_ACCEPT_BACKLOG,
+            }
 
 
 class _WebSocketPeer:
@@ -1271,6 +1329,7 @@ def _load_identity(data_root: Path) -> tuple[str, str]:
 def start(data_root: str, app_version: str, port: int = 8777) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
+    bootstrap_started = time.perf_counter()
     global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore, _skills
     global _member_link
     global _install_descriptor
@@ -1279,6 +1338,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
     with _lock:
         if _server is not None:
             return json.dumps(_snapshot(), sort_keys=True)
+        _resource_sampler.reset()
         node_id, subnet_id = _load_identity(root)
         _install_descriptor = _load_verified_install_descriptor()
         _desktop_snapshot = _build_desktop_snapshot()
@@ -1291,6 +1351,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             max_updates=_MAX_YJS_UPDATES,
             max_update_bytes=_MAX_YJS_JOURNAL_BYTES,
         )
+        _resource_sampler.sample()
         taiga = _load_json(_BUNDLE_ROOT / "taiga_ui_demo_scenario.scenario.json")
         taiga_ui = taiga.get("ui") if isinstance(taiga.get("ui"), dict) else {}
         _skills = AndroidSkillRuntime(
@@ -1306,7 +1367,9 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             publish_yjs=_publish_yjs_update,
             publish_event=_broadcast_control_event,
         )
+        _resource_sampler.sample()
         server = _LoopbackServer(("127.0.0.1", int(port)), _Handler)
+        _resource_sampler.sample()
         actual_port = int(server.server_address[1])
         started_at = time.time()
         _runtime = {
@@ -1322,6 +1385,9 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             "node_id": node_id,
             "subnet_id": subnet_id,
             "started_at": started_at,
+            "startup_duration_ms": int(
+                max(0.0, time.perf_counter() - bootstrap_started) * 1000
+            ),
             "bundle_id": "android_poc_v1",
         }
         marker = root / "android-node-runtime.json"
@@ -1402,6 +1468,19 @@ def _node_status() -> dict[str, Any]:
         control_clients = sum(1 for peer in _websocket_peers if peer.kind == "control")
         store_stats = _ystore.stats() if _ystore is not None else {}
     skill_status = _skills.status() if _skills is not None else {}
+    resources = _resource_sampler.sample()
+    server = _server
+    loopback_bounds = (
+        server.resource_snapshot()
+        if isinstance(server, _LoopbackServer)
+        else {
+            "active_request_threads": 0,
+            "peak_request_threads": 0,
+            "request_thread_limit": _MAX_LOOPBACK_REQUEST_THREADS,
+            "rejected_requests": 0,
+            "accept_backlog_limit": _LOOPBACK_ACCEPT_BACKLOG,
+        }
+    )
     member = _member_link_snapshot()
     connected = bool(member.get("connected"))
     effective_subnet_id = str(member.get("subnet_id") or runtime["subnet_id"])
@@ -1431,6 +1510,8 @@ def _node_status() -> dict[str, Any]:
             "python_version": runtime["python_version"],
             "app_version": runtime["app_version"],
             "transition_role": "active",
+            "started_at": float(runtime.get("started_at") or 0.0),
+            "startup_duration_ms": int(runtime.get("startup_duration_ms") or 0),
             "yjs_ready": True,
             "yjs_mode": "native_y_py_sqlite_ystore",
             "yjs_seed_ready": bool(_base_yjs_update),
@@ -1457,6 +1538,18 @@ def _node_status() -> dict[str, Any]:
             ),
             "ystore_backend": str(store_stats.get("backend") or "unavailable"),
             "ystore_state_vector_bytes": int(store_stats.get("state_vector_bytes") or 0),
+            "ystore_task_queue_depth": int(
+                store_stats.get("task_queue_depth") or 0
+            ),
+            "ystore_task_queue_limit": int(
+                store_stats.get("task_queue_limit") or 0
+            ),
+            "ystore_task_queue_peak": int(
+                store_stats.get("task_queue_peak") or 0
+            ),
+            "ystore_task_queue_rejected": int(
+                store_stats.get("task_queue_rejected") or 0
+            ),
             "control_clients": control_clients,
             "skills_ready": bool(skill_status.get("ready")),
             "skill_descriptors_ready": True,
@@ -1464,6 +1557,34 @@ def _node_status() -> dict[str, Any]:
             "install_profile": str(skill_status.get("profile") or "unavailable"),
             "active_skills": list(skill_status.get("skills") or []),
             "notebook_note_count": int(skill_status.get("note_count") or 0),
+            "resources": resources,
+            "resource_bounds": {
+                "loopback": loopback_bounds,
+                "ystore": {
+                    "task_queue_depth": int(
+                        store_stats.get("task_queue_depth") or 0
+                    ),
+                    "task_queue_limit": int(
+                        store_stats.get("task_queue_limit") or 0
+                    ),
+                    "task_queue_peak": int(
+                        store_stats.get("task_queue_peak") or 0
+                    ),
+                    "task_queue_rejected": int(
+                        store_stats.get("task_queue_rejected") or 0
+                    ),
+                    "update_count_limit": _MAX_YJS_UPDATES,
+                    "update_bytes_limit": _MAX_YJS_JOURNAL_BYTES,
+                    "inbound_update_bytes_limit": _MAX_INBOUND_YJS_UPDATE_BYTES,
+                },
+                "skills": dict(skill_status.get("resource_bounds") or {}),
+                "member_link": {
+                    "queued_messages": int(member.get("queued_messages") or 0),
+                    "queue_limit": 128,
+                    "yjs_update_bytes_limit": 512 * 1024,
+                    "dropped_messages": int(member.get("dropped_messages") or 0),
+                },
+            },
             "install_descriptor_sha256": str(_install_descriptor.get("sha256") or ""),
             "bundle_id": runtime["bundle_id"],
             "member_link": member,

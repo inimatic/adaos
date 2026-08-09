@@ -18,6 +18,8 @@ import y_py as Y
 _DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024
 _SNAPSHOT_WARNING_BYTES = 2 * 1024 * 1024
 _SNAPSHOT_CRITICAL_BYTES = 3 * 1024 * 1024
+_MAX_OWNER_TASKS = 64
+_OWNER_QUEUE_PUT_TIMEOUT_SECONDS = 2.0
 
 
 def _append_shared_value(target: Y.YArray, transaction: Any, value: Any) -> None:
@@ -92,7 +94,12 @@ class AndroidYStore:
         self.max_updates = int(max_updates)
         self.max_update_bytes = int(max_update_bytes)
         self.max_snapshot_bytes = max(64 * 1024, int(max_snapshot_bytes))
-        self._tasks: queue.Queue[tuple[str, tuple[Any, ...], Future[Any]] | None] = queue.Queue()
+        self._tasks: queue.Queue[
+            tuple[str, tuple[Any, ...], Future[Any]] | None
+        ] = queue.Queue(maxsize=_MAX_OWNER_TASKS)
+        self._queue_metrics_lock = threading.Lock()
+        self._task_queue_peak = 0
+        self._task_queue_rejected = 0
         self._owner = threading.Thread(
             target=self._run,
             name="adaos-android-yjs-owner",
@@ -120,7 +127,18 @@ class AndroidYStore:
         if not self._owner.is_alive():
             raise RuntimeError("Android YStore owner thread is not running")
         future: Future[Any] = Future()
-        self._tasks.put((method_name, arguments, future))
+        try:
+            self._tasks.put(
+                (method_name, arguments, future),
+                timeout=_OWNER_QUEUE_PUT_TIMEOUT_SECONDS,
+            )
+        except queue.Full as exc:
+            with self._queue_metrics_lock:
+                self._task_queue_rejected += 1
+            raise RuntimeError("android_ystore_owner_queue_full") from exc
+        depth = self._tasks.qsize()
+        with self._queue_metrics_lock:
+            self._task_queue_peak = max(self._task_queue_peak, depth)
         return future.result(timeout=30)
 
     def _initialize(self, seed_update: bytes, legacy_updates: list[bytes]) -> None:
@@ -366,6 +384,9 @@ class AndroidYStore:
         return self._call("_stats")
 
     def _stats(self) -> dict[str, Any]:
+        with self._queue_metrics_lock:
+            task_queue_peak = self._task_queue_peak
+            task_queue_rejected = self._task_queue_rejected
         count, total = self.connection.execute(
             """
             SELECT COUNT(*), COALESCE(SUM(LENGTH(update_blob)), 0)
@@ -403,6 +424,10 @@ class AndroidYStore:
             "last_compaction_reason": self._last_compaction_reason,
             "last_compaction_source_bytes": self._last_compaction_source_bytes,
             "last_compaction_result_bytes": self._last_compaction_result_bytes,
+            "task_queue_depth": self._tasks.qsize(),
+            "task_queue_limit": _MAX_OWNER_TASKS,
+            "task_queue_peak": task_queue_peak,
+            "task_queue_rejected": task_queue_rejected,
         }
 
     def close(self) -> None:

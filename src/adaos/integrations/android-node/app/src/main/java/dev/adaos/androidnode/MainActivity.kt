@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +26,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "onCreate instance=${System.identityHashCode(this)}")
         setContentView(buildContent())
         requestNotificationPermission()
         handleLaunchIntent(intent)
@@ -32,22 +34,52 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        Log.i(TAG, "onStart instance=${System.identityHashCode(this)}")
         NodeStateStore.subscribe(statusListener)
     }
 
     override fun onStop() {
+        Log.i(TAG, "onStop instance=${System.identityHashCode(this)}")
         NodeStateStore.unsubscribe(statusListener)
         super.onStop()
     }
 
+    override fun onDestroy() {
+        Log.i(TAG, "onDestroy instance=${System.identityHashCode(this)}")
+        super.onDestroy()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        Log.i(
+            TAG,
+            "onNewIntent action=${intent.action} " +
+                "debugStop=${intent.getBooleanExtra(EXTRA_STOP_NODE, false)}",
+        )
         setIntent(intent)
         handleLaunchIntent(intent)
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
+        if (BuildConfig.DEBUG && intent?.action == ACTION_DEBUG_START_NODE) {
+            Log.i(TAG, "debug lifecycle verifier requested node start")
+            startNode()
+            return
+        }
+        if (
+            BuildConfig.DEBUG &&
+            (
+                intent?.action == ACTION_DEBUG_STOP_NODE ||
+                    intent?.getBooleanExtra(EXTRA_STOP_NODE, false) == true
+            )
+        ) {
+            Log.i(TAG, "debug lifecycle verifier requested user stop")
+            intent.removeExtra(EXTRA_STOP_NODE)
+            stopNode()
+            return
+        }
         if (intent?.getBooleanExtra(EXTRA_START_NODE, false) == true) {
+            intent.removeExtra(EXTRA_START_NODE)
             startNode()
         }
     }
@@ -166,6 +198,12 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val TAG = "AdaOSNodeActivity"
+        private const val ACTION_DEBUG_STOP_NODE =
+            "dev.adaos.androidnode.action.DEBUG_STOP_NODE"
+        private const val ACTION_DEBUG_START_NODE =
+            "dev.adaos.androidnode.action.DEBUG_START_NODE"
         private const val EXTRA_START_NODE = "start_node"
+        private const val EXTRA_STOP_NODE = "stop_node"
     }
 }

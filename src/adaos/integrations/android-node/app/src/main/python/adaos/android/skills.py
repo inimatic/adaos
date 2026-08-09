@@ -47,6 +47,10 @@ _WEATHER_CODES = {
     82: "Heavy showers",
     95: "Thunderstorm",
 }
+_MAX_NOTE_COUNT = 256
+_MAX_PROJECTED_NOTE_COUNT = 32
+_MAX_NOTE_CONTENT_CHARS = 16 * 1024
+_MAX_IDEMPOTENCY_RESULTS = 256
 
 
 def _utc_now() -> str:
@@ -265,8 +269,13 @@ class AndroidSkillRuntime:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            note_count = int(
-                self._database.execute("SELECT COUNT(*) FROM notebook_notes").fetchone()[0]
+            note_count, note_content_chars = self._database.execute(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(content)), 0) FROM notebook_notes"
+            ).fetchone()
+            idempotency_count = int(
+                self._database.execute(
+                    "SELECT COUNT(*) FROM idempotency_results"
+                ).fetchone()[0]
             )
         return {
             "ready": True,
@@ -274,7 +283,15 @@ class AndroidSkillRuntime:
             "execution": "in_process",
             "dynamic_install": False,
             "skills": list(self.skill_ids),
-            "note_count": note_count,
+            "note_count": int(note_count),
+            "resource_bounds": {
+                "note_count_limit": _MAX_NOTE_COUNT,
+                "projected_note_count_limit": _MAX_PROJECTED_NOTE_COUNT,
+                "note_content_chars_limit": _MAX_NOTE_CONTENT_CHARS,
+                "idempotency_result_limit": _MAX_IDEMPOTENCY_RESULTS,
+                "note_content_chars": int(note_content_chars),
+                "idempotency_result_count": idempotency_count,
+            },
         }
 
     def call_tool(
@@ -324,7 +341,9 @@ class AndroidSkillRuntime:
                 )
                 self._database.execute(
                     "DELETE FROM idempotency_results WHERE request_key NOT IN "
-                    "(SELECT request_key FROM idempotency_results ORDER BY created_at DESC LIMIT 256)"
+                    "(SELECT request_key FROM idempotency_results "
+                    "ORDER BY created_at DESC LIMIT ?)",
+                    (_MAX_IDEMPOTENCY_RESULTS,),
                 )
                 self._database.commit()
         return result
@@ -392,13 +411,14 @@ class AndroidSkillRuntime:
         with self._lock:
             return list(
                 self._database.execute(
-                    "SELECT * FROM notebook_notes ORDER BY updated_at DESC LIMIT 64"
+                    "SELECT * FROM notebook_notes ORDER BY updated_at DESC LIMIT ?",
+                    (_MAX_PROJECTED_NOTE_COUNT,),
                 ).fetchall()
             )
 
     @staticmethod
     def _note_item(row: sqlite3.Row) -> dict[str, Any]:
-        content = str(row["content"] or "")
+        content = str(row["content"] or "")[:_MAX_NOTE_CONTENT_CHARS]
         title = next((line.strip() for line in content.splitlines() if line.strip()), "New note")[:80]
         preview = " ".join(content.split())[:160]
         return {
@@ -465,9 +485,16 @@ class AndroidSkillRuntime:
 
     def _notebook_create(self, arguments: dict[str, Any]) -> dict[str, Any]:
         note_id = f"note-{uuid.uuid4().hex[:12]}"
-        content = str(arguments.get("content") or "")[:65536]
+        content = str(arguments.get("content") or "")[:_MAX_NOTE_CONTENT_CHARS]
         now = _utc_now()
         with self._lock:
+            note_count = int(
+                self._database.execute(
+                    "SELECT COUNT(*) FROM notebook_notes"
+                ).fetchone()[0]
+            )
+            if note_count >= _MAX_NOTE_COUNT:
+                raise AndroidSkillError("notebook_note_limit_reached")
             self._database.execute(
                 "INSERT INTO notebook_notes VALUES (?, ?, ?, ?, ?)",
                 (note_id, content, now, now, 1),
@@ -478,7 +505,7 @@ class AndroidSkillRuntime:
 
     def _notebook_save(self, arguments: dict[str, Any]) -> dict[str, Any]:
         note_id = str(arguments.get("note_id") or self._selected_note_id).strip()
-        content = str(arguments.get("content") or "")[:65536]
+        content = str(arguments.get("content") or "")[:_MAX_NOTE_CONTENT_CHARS]
         now = _utc_now()
         with self._lock:
             cursor = self._database.execute(

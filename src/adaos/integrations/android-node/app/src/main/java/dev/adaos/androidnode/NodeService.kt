@@ -16,11 +16,13 @@ class NodeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate")
         pythonHost = PythonHost(this)
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand action=${intent?.action} startId=$startId")
         if (intent?.action == ACTION_STOP) {
             stopRuntime()
             return START_NOT_STICKY
@@ -58,6 +60,7 @@ class NodeService : Service() {
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy stopping=$stopping phase=${NodeStateStore.snapshot().phase}")
         val phase = NodeStateStore.snapshot().phase
         if (!stopping && phase != NodePhase.STOPPED && phase != NodePhase.FAILED) {
             pythonHost.stop { }
@@ -74,6 +77,7 @@ class NodeService : Service() {
 
     private fun stopRuntime() {
         if (stopping) return
+        Log.i(TAG, "stopRuntime requested")
         stopping = true
         publish(NodeStatus(NodePhase.STOPPING, "Flushing and stopping Python"))
         pythonHost.stop { result ->

@@ -124,6 +124,24 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["runtime"]["yjs_snapshot_bytes"] > 0
         assert status["runtime"]["yjs_snapshot_pressure"] == "ready"
         assert status["runtime"]["skill_descriptors_ready"] is True
+        assert status["runtime"]["startup_duration_ms"] >= 0
+        assert status["runtime"]["resource_bounds"]["loopback"] == {
+            "active_request_threads": 1,
+            "peak_request_threads": 1,
+            "request_thread_limit": 32,
+            "rejected_requests": 0,
+            "accept_backlog_limit": 16,
+        }
+        assert status["runtime"]["resource_bounds"]["ystore"]["task_queue_limit"] == 64
+        assert status["runtime"]["resource_bounds"]["ystore"]["task_queue_rejected"] == 0
+        assert status["runtime"]["resource_bounds"]["skills"]["note_count_limit"] == 256
+        assert status["runtime"]["resource_bounds"]["skills"][
+            "note_content_chars_limit"
+        ] == 16 * 1024
+        assert status["runtime"]["resources"]["policy"] == {
+            "large_heap_requested": False,
+            "sampler": "procfs_no_psutil",
+        }
         with urllib.request.urlopen(
             f"http://127.0.0.1:{first['port']}/api/ping",
             timeout=2,
@@ -139,6 +157,75 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
     try:
         assert second["node_id"] == first["node_id"]
         assert second["subnet_id"] == first["subnet_id"]
+    finally:
+        bootstrap.stop()
+
+
+def test_android_resource_sampler_reads_procfs_and_retains_peaks(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    self_root = tmp_path / "self"
+    self_root.mkdir()
+    (self_root / "status").write_text(
+        "VmRSS:\t102400 kB\nVmHWM:\t110000 kB\nVmSwap:\t64 kB\nThreads:\t7\n",
+        encoding="utf-8",
+    )
+    (self_root / "smaps_rollup").write_text(
+        "Pss:\t90000 kB\nPrivate_Dirty:\t70000 kB\nSwapPss:\t32 kB\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "meminfo").write_text("MemTotal:\t2097152 kB\n", encoding="utf-8")
+    sampler = bootstrap.AndroidResourceSampler(tmp_path)
+
+    first = sampler.sample()
+    assert first["process"]["pss_kib"] == 90000
+    assert first["process"]["peak_rss_kib"] == 110000
+    assert first["process"]["threads"] == 7
+    assert first["device"]["memory_total_kib"] == 2097152
+    assert first["budgets"]["pressure"] == "ready"
+
+    (self_root / "smaps_rollup").write_text("Pss:\t225000 kB\n", encoding="utf-8")
+    second = sampler.sample()
+    assert second["process"]["peak_pss_kib"] == 225000
+    assert second["budgets"]["pressure"] == "warning"
+
+    (self_root / "smaps_rollup").write_text("Pss:\t100000 kB\n", encoding="utf-8")
+    third = sampler.sample()
+    assert third["process"]["peak_pss_kib"] == 225000
+    assert third["sample_total"] == 3
+
+
+def test_android_notebook_enforces_projection_content_and_count_bounds(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    bootstrap.start(str(tmp_path), "test", 0)
+    try:
+        created = bootstrap._skills.call_tool(
+            "notebook_skill:create_note",
+            {"content": "x" * (20 * 1024)},
+        )
+        assert len(created["editor"]["content"]) == 16 * 1024
+        bounds = bootstrap._skills.status()["resource_bounds"]
+        assert bounds["note_content_chars_limit"] == 16 * 1024
+        assert bounds["projected_note_count_limit"] == 32
+
+        database = bootstrap._skills._database
+        current = int(database.execute("SELECT COUNT(*) FROM notebook_notes").fetchone()[0])
+        now = "2026-01-01T00:00:00Z"
+        database.executemany(
+            "INSERT INTO notebook_notes VALUES (?, ?, ?, ?, ?)",
+            [
+                (f"bounded-note-{index}", "", now, now, 1)
+                for index in range(256 - current)
+            ],
+        )
+        database.commit()
+        with pytest.raises(bootstrap.AndroidSkillError, match="notebook_note_limit_reached"):
+            bootstrap._skills.call_tool(
+                "notebook_skill:create_note",
+                {"content": "one too many"},
+            )
+        assert len(bootstrap._skills._notebook_snapshot()["items"]) == 32
     finally:
         bootstrap.stop()
 

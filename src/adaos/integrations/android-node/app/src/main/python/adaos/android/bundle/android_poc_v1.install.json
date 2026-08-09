@@ -89,7 +89,7 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "f61d3de5fe491807ef0b1fbc706228278aa97838194c7299878cca673e0494e8"
+    "sha256": "c7a5ee047f84b41c2d1d6cb98710485e4c24f407db6e88afbfb96f6e6fe499e2"
   },
   "member_link_module": {
     "path": "../member_link.py",
