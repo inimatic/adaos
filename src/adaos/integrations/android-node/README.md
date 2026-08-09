@@ -24,7 +24,8 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the A0/A1/A2/A3/A4/A5/A6 protocol-slice artifact. It reports `yjs_ready=true`,
+This is the A0/A1/A2/A3/A4/A5/A6 artifact and the first A7 lifecycle/resource
+slice. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -58,7 +59,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc5-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc6-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -101,3 +102,29 @@ through a one-time code, restarts the Android process, interrupts the hub, and
 checks recovery. It forgets the temporary membership when finished. Passing
 this fixture is protocol evidence; the A6 product gate still requires a run
 against an existing deployed AdaOS subnet.
+
+## Lifecycle and resource gate
+
+PoC6 does not request `largeHeap`. `/api/node/status` exposes a psutil-free
+procfs PSS/RSS sampler and the declared bounds for the loopback server, YStore,
+member link, Notebook projection/content, and idempotency results. The current
+limits are 32 request threads with a backlog of 16, 64 YStore owner tasks, 128
+member-link messages, 256 Notebook notes with 32 projected at once and 16,384
+characters per note, and 256 idempotency results. The existing Yjs update, journal, and
+snapshot limits remain independent bounds.
+
+Run the reproducible physical lifecycle gate with:
+
+```powershell
+.\verify-lifecycle-device.ps1 -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe"
+```
+
+Its default duration is 30 minutes. It installs the APK; records APK,
+descriptor, device, Chrome, page-size, and memory identities; recreates the
+Activity while the service stays ready; tests screen, browser, Wi-Fi, and WAN
+transitions; samples PSS/RSS; force-stops and verifies Yjs/Notebook/install and
+membership state; then exercises the same start/stop methods as the visible UI
+through debug-only intent actions. Evidence is written under
+`app/build/reports/android-lifecycle-evidence.json`. A passing high-memory
+phone is useful upper-device evidence, but it does not close the separate
+physical 2 GB gate.

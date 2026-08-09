@@ -567,6 +567,24 @@ A steady state between 200 and 300 MiB is diagnostic evidence requiring
 optimization before widening the pilot. Measurements must separate the AdaOS
 process from Chrome, because the browser is an independent Android process.
 
+PoC6 makes these limits executable. A small procfs adapter samples the Android
+process PSS, RSS, high-water mark, swap, thread count, device RAM, and page
+size without importing `psutil`. Status publishes both the current/observed
+peak sample and a `resource_bounds` contract. The loopback listener admits at
+most 32 request threads with a backlog of 16; the YStore owner queue admits 64
+tasks; the outbound member link admits 128 messages. Notebook storage admits
+256 notes, projects the 32 most recent notes, limits each projected/stored
+content value to 16,384 characters, and retains at most 256 idempotency results. Yjs
+snapshot, update-count, journal-byte, inbound-update, and WebSocket-message
+limits remain independently enforced. The application manifest explicitly
+sets `largeHeap=false`.
+
+The lifecycle verifier treats `START_NOT_STICKY` as user intent: Activity
+recreation must not restart the Python runtime, while the visible Stop path
+must flush and destroy the service and remain stopped. Debug builds expose
+explicit start/stop Activity actions solely so adb can exercise those same UI
+methods deterministically; they do not exist as an exported service contract.
+
 ## Observability
 
 The Android status screen and notification expose only a compact state:
