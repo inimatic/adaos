@@ -110,8 +110,8 @@ procfs PSS/RSS sampler and the declared bounds for the loopback server, YStore,
 member link, Notebook projection/content, and idempotency results. The current
 limits are 32 request threads with a backlog of 16, 64 YStore owner tasks, 128
 member-link messages, 256 Notebook notes with 32 projected at once and 16,384
-characters per note, and 256 idempotency results. The existing Yjs update, journal, and
-snapshot limits remain independent bounds.
+characters per note, and 256 idempotency results. The existing Yjs update,
+journal, and snapshot limits remain independent bounds.
 
 Run the reproducible physical lifecycle gate with:
 
@@ -128,3 +128,12 @@ through debug-only intent actions. Evidence is written under
 `app/build/reports/android-lifecycle-evidence.json`. A passing high-memory
 phone is useful upper-device evidence, but it does not close the separate
 physical 2 GB gate.
+
+The final full PoC6 run on an API 36 Samsung SM-F721N lasted 1,805 seconds.
+Across 169 steady samples Android total PSS stayed between 124,239 and 126,307
+KiB, all bounded queue rejection/drop counters remained zero, and every
+lifecycle/persistence check passed. The tested APK SHA-256 is
+`bb4abb4b965d7058b42a9c9a9b720c51512dae9014575a978e4408acc6ab41f6`.
+The listener is closed before accepted request threads drain during shutdown,
+so concurrent status polling observes a safe stopped state without a Python
+traceback.

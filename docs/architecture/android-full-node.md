@@ -207,6 +207,11 @@ child process. Stop follows one ordered sequence:
 5. stop the Python loop;
 6. remove the foreground notification.
 
+Closing the listener precedes draining already accepted request threads, so a
+polling browser cannot keep admitting work during shutdown. An in-flight
+status request may observe an explicit `ready=false`, `node_state=stopped`
+snapshot; it must not read partially cleared runtime or skill state.
+
 ## Dependency and Native-Wheel Strategy
 
 The Android build must not install the complete desktop dependency list from

@@ -381,22 +381,22 @@ older phones.
 
 - [ ] `[must]` measure process PSS and startup peak on a physical 2 GB device;
   do not use only emulator measurements.
-- [ ] `[must]` verify preferred idle PSS at or below 200 MiB or record the
+- [x] `[must]` verify preferred idle PSS at or below 200 MiB or record the
   import/cache owners responsible for exceeding it.
-- [ ] `[must]` verify startup peak PSS at or below 320 MiB.
-- [ ] `[must]` run without `largeHeap`.
-- [ ] `[must]` keep all selected queues, caches, logs, note lists, and stream
+- [x] `[must]` verify startup peak PSS at or below 320 MiB.
+- [x] `[must]` run without `largeHeap`.
+- [x] `[must]` keep all selected queues, caches, logs, note lists, and stream
   snapshots within declared bounds.
-- [ ] `[must]` test Activity destroy/recreate while the service remains ready.
-- [ ] `[must]` test screen off/on, browser foreground/background, Wi-Fi loss,
+- [x] `[must]` test Activity destroy/recreate while the service remains ready.
+- [x] `[must]` test screen off/on, browser foreground/background, Wi-Fi loss,
   and WAN loss for at least 30 minutes.
-- [ ] `[must]` force-stop and restart the application, then verify Yjs,
+- [x] `[must]` force-stop and restart the application, then verify Yjs,
   Notebook, install descriptor, and membership persistence.
-- [ ] `[must]` verify the user can stop the foreground service and that it does
+- [x] `[must]` verify the user can stop the foreground service and that it does
   not silently resurrect.
 - [ ] `[should]` run the same artifact on API 26, API 30/31, API 34, and API 36.
 - [ ] `[should]` verify one 16 KB page-size device or emulator image.
-- [ ] `[should]` capture a reproducible evidence bundle with build identity,
+- [x] `[should]` capture a reproducible evidence bundle with build identity,
   device facts, logs, memory samples, browser build, and gate results.
 
 Gate A7:
@@ -424,6 +424,37 @@ has 7,442,748 KiB total RAM and a 4 KiB page size, so this remains useful
 upper-device evidence, not the required 2 GB or 16 KiB A7 result. The live
 YStore was generation 2 with a 53,081-byte snapshot, `ready` pressure, and no
 matching fatal exception, Python traceback, or ANR in Logcat.
+
+PoC6 upper-device evidence (2026-08-09): commit `43046032`, APK
+22,549,213 bytes with SHA-256
+`bb4abb4b965d7058b42a9c9a9b720c51512dae9014575a978e4408acc6ab41f6`
+completed the reproducible lifecycle verifier on the same API 36 SM-F721N.
+The final run lasted 1,805 seconds and retained 169 steady samples. Android
+total PSS ranged from 124,239 to 126,307 KiB (first 125,539; last 126,263),
+with a 129,553 KiB maximum against the startup budget. Activity
+recreation, screen off/on, Chrome 149 foreground/background, 30-second Wi-Fi
+and full-WAN outages, Yjs/Notebook/install persistence, explicit user stop,
+and final restart all passed. YStore, loopback, and member-link rejected or
+dropped counters remained zero. The artifact explicitly uses no large heap
+and publishes all selected limits through status. The evidence JSON is written
+to `app/build/reports/android-lifecycle-evidence.json`.
+
+The first duration run exposed an in-flight status request racing final
+runtime cleanup and logging `KeyError('subnet_id')`. The final artifact closes
+the listener before draining accepted request threads and returns a safe
+stopped status during the transition. An eight-poller host regression test,
+a focused physical stop calibration, and the repeated 1,805-second run all
+passed. The final Logcat scan contained no matching Python traceback,
+bootstrap failure, fatal exception, or ANR.
+
+The full PoC6 run began with no configured membership and verified that this
+state remained stable. The checked force-stop membership item combines this
+run with the earlier PoC5 configured-member fixture, which preserved the
+actual Root/Hub membership across restart and outage.
+
+This closes the A7 implementation and high-memory lifecycle slice, not Gate
+A7 itself. The physical 2 GB run is still mandatory; API 26, API 30/31, API
+34, and a 16 KiB page-size target also remain as matrix evidence.
 
 ## Dependency Work Queue
 
