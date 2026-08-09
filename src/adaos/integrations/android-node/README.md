@@ -15,23 +15,27 @@ Current scope:
 - the AdaOS `y-py` fork as a CPython 3.11 Android arm64 wheel;
 - a real `desktop` YDoc with a bounded SQLite snapshot/update YStore;
 - the verified, immutable `android_poc_v1` install profile;
-- fixed in-process Weather, AdaOS Connect, Notebook, subnet environment, and
-  Taiga demo-metrics handlers, with no subprocess or runtime package install;
-- fixed UI descriptors for Weather, AdaOS Connect, Notebook, and the Taiga UI
-  demo scenario;
+- fixed in-process Weather, AdaOS Connect, Browsers, local Voice Assistant,
+  Notebook, subnet environment, and Taiga demo-metrics handlers, with no
+  subprocess or runtime package install;
+- fixed UI descriptors for Weather, AdaOS Connect, Browsers, Voice Assistant,
+  Notebook, and the Taiga UI demo scenario;
 - browser-compatible home navigation: `desktop.webspace.go_home` restores the
   complete `web_desktop` materialization, while unsupported control commands
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the A0/A1/A2/A3/A4/A5/A6 artifact and the first A7 lifecycle/resource
-slice. It reports `yjs_ready=true`,
+This is the PoC7 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
 the existing `/api/tools/call` contract; all visible state returns through Yjs
-or bounded WebIO stream events. AdaOS Connect can provision the outbound member
-link with a Root URL and one-time join code while LO remains available offline.
+or bounded WebIO stream events. AdaOS Connect publishes an immediately usable
+LO link for the local browser and can provision the optional outbound member
+link with a Root URL and one-time join code. Browsers projects bounded active
+control sessions. Voice uses Android Chrome SpeechRecognition and
+speechSynthesis while the hosted client is open; the APK does not package
+`sounddevice`, background capture, or wake-word support.
 
 ## Build
 
@@ -59,7 +63,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc6-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc7-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -79,9 +83,10 @@ restarts it, and verifies the same Yjs value. Its verifier accepts YWS messages
 up to the runtime's bounded 4 MiB message contract, including documents whose
 retained CRDT history exceeds the WebSocket library's 1 MiB default.
 `-OpenBrowser` then launches the hosted client with explicit LO intent. The
-browser should show the five fixed apps, two widgets, and a green YJS status
+browser should show the seven fixed apps, two widgets, and a green YJS status
 without login or a development token.
-`-VerifySkills` runs Weather, the AdaOS Connect degraded path, Notebook
+`-VerifySkills` runs Weather offline/recovery, the AdaOS Connect LO path,
+Browsers registration, a local Voice Assistant turn, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.
 
@@ -105,7 +110,7 @@ against an existing deployed AdaOS subnet.
 
 ## Lifecycle and resource gate
 
-PoC6 does not request `largeHeap`. `/api/node/status` exposes a psutil-free
+PoC7 does not request `largeHeap`. `/api/node/status` exposes a psutil-free
 procfs PSS/RSS sampler and the declared bounds for the loopback server, YStore,
 member link, Notebook projection/content, and idempotency results. The current
 limits are 32 request threads with a backlog of 16, 64 YStore owner tasks, 128
@@ -137,3 +142,11 @@ lifecycle/persistence check passed. The tested APK SHA-256 is
 The listener is closed before accepted request threads drain during shutdown,
 so concurrent status polling observes a safe stopped state without a Python
 traceback.
+
+The PoC7 debug APK is 22,464,755 bytes with SHA-256
+`0e8cb7a1f08d31d09607ef275982c17ce9483a1718bd6cd38b21ccf769488c3c`.
+Installed over the PoC6 data on the same phone, it passed the Yjs restart and
+fixed-skill smoke, projected one live Chrome endpoint, completed a local
+Voice Assistant turn, and kept the browser materialization ready. Chrome 149
+entered SpeechRecognition listening after the normal site microphone prompt;
+the rendered assistant reply exercised browser speechSynthesis.

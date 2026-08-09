@@ -2,18 +2,21 @@
 
 Status: target architecture for an experimental proof of concept.
 
-Implementation status: the first A0/A1/A2/A3/A4/A5 vertical slice and the A6
-member-protocol slice are implemented under
+Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
+member-protocol slice, the A7 bounded-runtime implementation, and a PoC7
+browser-mediated voice slice are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
 over `/yws/desktop` and recovered after a forced process stop. The immutable
-`android_poc_v1` profile executes Weather, AdaOS Connect, Notebook, subnet
-environment, and Taiga demo metrics in-process; the browser has rendered
-persisted Notebook data, the editable subnet environment, AdaOS Connect, and
-the Taiga metrics table/tree/chart/selection from that profile. The outbound
+`android_poc_v1` profile executes Weather, AdaOS Connect, Browsers, a local
+Voice Assistant, Notebook, subnet environment, and Taiga demo metrics
+in-process. The browser has rendered persisted Notebook data, the editable
+subnet environment, the local Connect link, active browser sessions, bounded
+voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
+profile. The outbound
 member client has also joined a protocol-compatible Root/Hub fixture, survived
 a process restart and hub outage, and exchanged Yjs updates in both
 directions. A deployed-subnet run, Android Keystore custody, and the 2 GB
@@ -66,7 +69,8 @@ optimize for learning rather than breadth.
 | Default webspace | `desktop` with `web_desktop` as its home scenario |
 | Installation | Immutable, versioned bundle packaged with the APK |
 | Core update | Android application update; no `pip` or A/B core switch in the PoC |
-| Audio, media, WebRTC | Disabled in the first slice |
+| Voice | Browser SpeechRecognition and speechSynthesis while the hosted client is open |
+| Native/background audio, media, WebRTC | Disabled in the first slice |
 | Memory hypothesis | A useful node can operate on a 2 GB arm64 phone without `largeHeap` |
 
 Chaquopy is an implementation choice for the first build, not a permanent
@@ -456,7 +460,21 @@ The first vertical proof covers several paths rather than a synthetic page:
 - Taiga UI: demo snapshot -> Yjs table/tree/chart -> selection -> live stream
   event;
 - AdaOS Connect: prepare action -> Root/member orchestration -> Yjs QR and
-  instructions, or an explicit offline state.
+  instructions; the local browser mode instead returns a ready LO link without
+  pairing;
+- Browsers: control-channel registration -> bounded read-only session
+  projection -> modal;
+- Voice Assistant: Android Chrome SpeechRecognition -> `dialog.user_message`
+  -> bounded local handler -> `data/voice_chat` -> browser speechSynthesis.
+
+The PoC7 voice path is intentionally browser-mediated. It uses Android's
+browser-exposed speech services while `https://inimatic.com` is visible and
+requires the normal one-time microphone permission for that origin. It does
+not import `sounddevice`, upload WAV to an absent hub STT endpoint, keep the
+microphone open in the background, or claim wake-word support. The fixed local
+assistant currently handles greeting, node status, Weather, and explicit
+Notebook creation; the tail is limited to 32 messages and each input to 2,048
+characters.
 
 Before membership is configured, this document is local and standalone. After
 the phone joins a subnet, the existing member-link and webspace ownership rules
@@ -545,7 +563,8 @@ capabilities:
   complete `psutil` behavior;
 - secrets and long-lived key custody through Android Keystore;
 - files and uploads through app-private storage and the system picker;
-- future audio through AudioRecord/AudioTrack and Android TTS;
+- foreground browser voice through Web Speech in the implemented PoC7 slice;
+- future app-native/background audio through AudioRecord/AudioTrack and Android TTS;
 - future camera through CameraX or another native adapter;
 - future low-latency media through Android-native WebRTC or separately proven
   Python wheels.
@@ -627,6 +646,8 @@ The implementation must preserve these invariants:
     state; alternate scenarios cannot leave the browser in false recovery.
 12. Structural Yjs compaction changes the physical browser sync generation;
     tabs from an older generation cannot share cross-tab state with it.
+13. Browser voice requires an explicit origin-scoped microphone permission;
+    local no-auth trust does not silently grant hardware permissions.
 
 ## Non-Goals for the First PoC
 
@@ -639,7 +660,8 @@ The first PoC does not include:
 - arbitrary marketplace installation;
 - service skills, per-skill venvs, subprocess isolation, or shell access;
 - supervisor, realtime sidecar, core A/B slots, or self-update;
-- voice, microphone, TTS, camera, media server, WebRTC, or `aiortc`;
+- native/background microphone capture, wake word, camera, media server,
+  WebRTC, or `aiortc`;
 - Rasa, Neural NLU, Builder, MCP, Codex, or model execution;
 - background geolocation or other while-in-use Android permissions;
 - LAN exposure of the local API;

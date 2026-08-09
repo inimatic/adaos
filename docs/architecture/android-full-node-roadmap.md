@@ -294,9 +294,36 @@ the PoC.
 ### AdaOS Connect
 
 - [x] `[must]` open the modal and render its Yjs state.
-- [x] `[must]` show a useful offline/degraded state when Root is unreachable.
+- [x] `[must]` publish a ready LO link/QR for the already-trusted local browser
+  without login or pairing.
+- [x] `[must]` keep Root/member status separate from local-browser readiness and
+  show a useful offline/degraded state when the optional upstream is unreachable.
 - [ ] `[should]` exercise one real Root-backed browser or node preparation flow
   after Phase A6 connectivity exists.
+
+### Browsers
+
+- [x] `[must]` include the standard Browsers surface in the immutable Android
+  install profile.
+- [x] `[must]` project active local control sessions and remove them after the
+  connection closes.
+- [x] `[must]` keep the MVP read-only; rename, detach, lifetime, and remote
+  media controls are not acknowledged as implemented.
+
+### Voice Assistant
+
+- [x] `[must]` use browser SpeechRecognition on Android instead of the Hub WAV
+  provider which the mobile node does not expose.
+- [x] `[must]` accept `dialog.user_message`, project a bounded local dialog tail,
+  and render it through the normal Voice/Chat widgets.
+- [x] `[must]` speak a new assistant response through browser speechSynthesis,
+  including when the Voice Assistant modal is closed.
+- [x] `[must]` require the normal `inimatic.com` microphone permission and keep
+  local authentication policy independent from hardware permission.
+- [x] `[should]` route explicit Weather, node-status, and Notebook commands to
+  allowlisted in-process behavior.
+- [ ] `[deferred]` background listening, wake word, app-native AudioRecord/TTS,
+  and arbitrary model-backed conversation.
 
 ### Taiga UI
 
@@ -328,6 +355,19 @@ read and updated the editable node label through Yjs. Chrome rendered the
 Taiga semantic table, five-node tree, SVG chart, event list, chat, and shared
 selection, then returned to `web_desktop` with the local connection online and
 no materialization blockers.
+
+PoC7 physical evidence (2026-08-09): APK `0.1.0-poc7` was installed over the
+existing PoC6 data on the API 36 Samsung SM-F721N. The restart/skill smoke
+passed Yjs and Notebook persistence, Weather offline/recovery, Connect LO,
+one active Browsers projection, a local voice turn, and the Taiga round trip.
+Chrome 149 exposed both SpeechRecognition and speechSynthesis; clicking the
+header microphone entered listening and raised the origin-scoped microphone
+prompt. A Voice Assistant modal command (`node status`) traversed the real
+control socket, appeared in `data/voice_chat`, rendered its local response,
+and set `speechSynthesis.speaking=true`. The live materialization remained
+ready, displayed Browsers and Voice Assistant, and did not contain a recovery
+state. The debug APK is 22,464,755 bytes with SHA-256
+`0e8cb7a1f08d31d09607ef275982c17ce9483a1718bd6cd38b21ccf769488c3c`.
 
 ## Phase A6: Member Link
 
@@ -469,7 +509,7 @@ the phase which needs it is active.
 | SQLite / SQLAlchemy closure | A2 | prove app-private DB and selected sync paths | use pure-Python SQLAlchemy path; do not replace storage model |
 | `cryptography` | A6 | build/prove Android arm64 package | Android TLS/Keystore adapter behind existing contract |
 | `psutil` | A7 | isolate import and required metrics | Android diagnostics adapter |
-| `sounddevice`, `aiortc`, PyAV | deferred | none in PoC | explicit capability unavailable |
+| `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC7 browser voice | explicit native/background capability unavailable |
 
 The Android lock must be built from imports reached by the selected profile,
 not by copying `pyproject.toml` wholesale.
@@ -545,6 +585,8 @@ must not be copied into a mobile fork.
 - define battery, thermal, and long-duration soak budgets;
 - decide whether API 26 remains supportable from evidence rather than lowering
   it pre-emptively.
+- extend the local assistant only through allowlisted skill intents and add
+  explicit confirmation for every mutating voice command.
 
 ### Could follow only when demanded
 
@@ -552,7 +594,8 @@ must not be copied into a mobile fork.
 - verified pure-Python content updates independent of the APK;
 - a local LAN listener with an explicit access policy;
 - native Android notifications or widgets backed by AdaOS state;
-- Android audio/TTS/camera adapters;
+- app-native foreground audio/TTS/camera adapters when browser mediation is
+  insufficient;
 - WebRTC data/media upgrade;
 - phone-as-hub experiments on higher-memory devices.
 
