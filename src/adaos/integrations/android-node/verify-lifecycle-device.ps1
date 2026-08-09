@@ -16,6 +16,8 @@ $activityName = "$packageName/.MainActivity"
 $statusUrl = "http://127.0.0.1:$ForwardPort/api/node/status"
 $steadyPssLimitKiB = 200 * 1024
 $startupPssLimitKiB = 320 * 1024
+$maxLifecycleLogLines = 512
+$maxLifecycleLogChars = 128 * 1024
 $samples = [Collections.Generic.List[object]]::new()
 $checks = [ordered]@{}
 $startupPeakPssKiB = 0
@@ -135,7 +137,10 @@ function Wait-NodeUnavailable {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($Seconds)
     do {
         try {
-            Get-NodeStatus | Out-Null
+            $status = Get-NodeStatus
+            if (-not $status.ready -or $status.node_state -ne "ready") {
+                return
+            }
         } catch {
             return
         }
@@ -357,7 +362,12 @@ try {
     $nodeShouldBeRunning = $false
     Start-Sleep -Seconds 10
     $resurrected = $false
-    try { Get-NodeStatus | Out-Null; $resurrected = $true } catch { }
+    try {
+        $stoppedStatus = Get-NodeStatus
+        $resurrected = (
+            $stoppedStatus.ready -and $stoppedStatus.node_state -eq "ready"
+        )
+    } catch { }
     if ($resurrected) {
         throw "Node silently resurrected after the user stop action."
     }
@@ -399,12 +409,28 @@ try {
     $checks.bounded_queues_no_rejections = $true
 
     Write-Phase "evidence"
-    $serviceLog = (
+    $serviceLogLines = @(
         Invoke-AdbChecked -AdbArguments @(
             "logcat", "-d", "-s", "AdaOSNodeService:I",
             "AdaOSNodeActivity:I", "Python:I", "*:S"
         )
-    ) -join "`n"
+    )
+    if ($serviceLogLines.Count -gt $maxLifecycleLogLines) {
+        $headCount = [int]($maxLifecycleLogLines / 2)
+        $tailCount = $maxLifecycleLogLines - $headCount - 1
+        $serviceLogLines = @(
+            $serviceLogLines | Select-Object -First $headCount
+            "... lifecycle log middle omitted by bounded evidence capture ..."
+            $serviceLogLines | Select-Object -Last $tailCount
+        )
+    }
+    $serviceLog = $serviceLogLines -join "`n"
+    if ($serviceLog.Length -gt $maxLifecycleLogChars) {
+        $half = [int](($maxLifecycleLogChars - 80) / 2)
+        $serviceLog = $serviceLog.Substring(0, $half) +
+            "`n... lifecycle log middle omitted by character bound ...`n" +
+            $serviceLog.Substring($serviceLog.Length - $half)
+    }
     $result = [ordered]@{
         schema = "adaos.android.lifecycle.evidence.v1"
         ok = $true
