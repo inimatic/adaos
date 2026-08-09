@@ -230,6 +230,43 @@ def test_android_notebook_enforces_projection_content_and_count_bounds(
         bootstrap.stop()
 
 
+def test_android_stop_drains_inflight_status_requests_without_traceback(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    url = f"http://127.0.0.1:{runtime['port']}/api/node/status"
+    polling = threading.Event()
+    polling.set()
+    server_failures: list[BaseException] = []
+
+    def poll_status() -> None:
+        while polling.is_set():
+            try:
+                with urllib.request.urlopen(url, timeout=0.5) as response:
+                    json.load(response)
+            except urllib.error.HTTPError as exc:
+                if exc.code >= 500:
+                    server_failures.append(exc)
+            except (OSError, ValueError):
+                pass
+
+    pollers = [threading.Thread(target=poll_status) for _ in range(8)]
+    for poller in pollers:
+        poller.start()
+    try:
+        time.sleep(0.1)
+        bootstrap.stop()
+    finally:
+        polling.clear()
+        for poller in pollers:
+            poller.join(timeout=2)
+
+    assert server_failures == []
+    assert bootstrap._node_status()["node_state"] == "stopped"
+    assert bootstrap._node_status()["ready"] is False
+
+
 def test_android_ystore_structurally_compacts_bloated_history_on_restart(
     tmp_path: Path,
 ) -> None:

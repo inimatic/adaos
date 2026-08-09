@@ -119,6 +119,16 @@ class _LoopbackServer(ThreadingHTTPServer):
                 "accept_backlog_limit": _LOOPBACK_ACCEPT_BACKLOG,
             }
 
+    def wait_for_request_threads(self, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            with self._request_metrics_lock:
+                if self._active_request_threads == 0:
+                    return True
+            time.sleep(0.01)
+        with self._request_metrics_lock:
+            return self._active_request_threads == 0
+
 
 class _WebSocketPeer:
     def __init__(self, connection: socket.socket, kind: str) -> None:
@@ -1431,6 +1441,7 @@ def stop() -> str:
     if server is not None:
         server.shutdown()
         server.server_close()
+        server.wait_for_request_threads(timeout=5.0)
     if thread is not None and thread is not threading.current_thread():
         thread.join(timeout=5.0)
     member_link = _member_link
@@ -1463,11 +1474,41 @@ def _snapshot() -> dict[str, Any]:
 
 def _node_status() -> dict[str, Any]:
     runtime = _snapshot()
+    if not runtime:
+        return {
+            "node_id": "",
+            "subnet_id": "",
+            "role": "member",
+            "node_names": ["Android phone"],
+            "primary_node_name": "Android phone",
+            "node_label": "Android phone",
+            "node_compact_label": "Phone",
+            "ready": False,
+            "node_state": "stopped",
+            "draining": False,
+            "route_mode": "loopback",
+            "connected_to_subnet": False,
+            "connected_to_hub": False,
+            "runtime": {
+                "profile": "android_poc",
+                "transition_role": "stopped",
+                "yjs_ready": False,
+                "resources": _resource_sampler.sample(),
+            },
+            "environment": {
+                "platform": "android",
+                "local_api": False,
+                "local_auth_required": False,
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+            },
+        }
     with _yjs_lock:
         yjs_clients = sum(1 for peer in _websocket_peers if peer.kind == "yjs")
         control_clients = sum(1 for peer in _websocket_peers if peer.kind == "control")
         store_stats = _ystore.stats() if _ystore is not None else {}
-    skill_status = _skills.status() if _skills is not None else {}
+    skills = _skills
+    skill_status = skills.status() if skills is not None else {}
     resources = _resource_sampler.sample()
     server = _server
     loopback_bounds = (
@@ -1485,9 +1526,12 @@ def _node_status() -> dict[str, Any]:
     connected = bool(member.get("connected"))
     effective_subnet_id = str(member.get("subnet_id") or runtime["subnet_id"])
     node_label = "Android phone"
-    if _skills is not None:
+    if skills is not None:
         try:
-            node_label = str(_skills.call_tool("subnet_env.get_snapshot", {}).get("node_label") or node_label)
+            node_label = str(
+                skills.call_tool("subnet_env.get_snapshot", {}).get("node_label")
+                or node_label
+            )
         except AndroidSkillError:
             pass
     return {
