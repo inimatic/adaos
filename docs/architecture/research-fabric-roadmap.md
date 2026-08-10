@@ -13,16 +13,17 @@ reason to put domain-specific semantics into AdaOS core.
 
 ## Outcome
 
-A clean AdaOS node can install and activate a general research manager plus
-optional MLflow and Ray providers through the existing skill/scenario
-lifecycle, run a locked and paired TLP study locally or on Ray, survive restart
+A clean AdaOS node can install and activate a general research manager plus an
+optional MLflow provider through the existing skill/scenario lifecycle, run a
+locked and paired TLP study on the current or selected AdaOS member node, survive restart
 and provider failures, and export a portable evidence bundle from which the
 declared primary analysis can be reproduced.
 
-The target then extends the same substrate so a user can give Builder notebooks
-and prose, develop and accept a typed Research Prototype with an LLM, let Codex
-adapt the experimental base through ordinary Builder Automation, publish the
-scenario and owned skills, and instantiate a governed Experiment Campaign.
+The target then extends the same substrate so a user can create one
+research-direction skill, give Builder notebooks and prose, develop and accept
+a typed Research Prototype with an LLM, let Codex adapt that skill through
+ordinary Builder Automation, publish it, and instantiate a governed Experiment
+Campaign.
 With an explicit Research Mandate, the same project can run unattended through
 exploration, bounded software adaptation, confirmation, ClaimSet, and
 ResearchRelease. A later writer may derive a neutral draft essay from that
@@ -83,8 +84,8 @@ scientific conclusion. A local demo is not production acceptance.
 9. [Builder](builder.md) and the
    [Builder Roadmap](builder-roadmap.md) own the generic Project, Prototype,
    Preview, Automation/Codex, Trial, Publication, source-capsule, and re-entry
-   contracts. This roadmap owns the `research_study` profile and scientific
-   artifacts that consume them.
+   contracts. This roadmap owns the `research_direction` skill profile,
+   pre-Codex formulation contracts, and scientific artifacts that consume them.
 10. The LLM provider, agent topology, and model profile are replaceable. This
     roadmap owns Research Mandate, autonomy, evaluation, and evidence semantics,
     not a provider-specific autonomous-agent loop.
@@ -93,7 +94,7 @@ scientific conclusion. A local demo is not production acceptance.
 
 - No `.adaos/research` top-level directory.
 - No `adaos research ...` install/runtime command family.
-- No direct access to MLflow or Ray private database schemas.
+- No direct access to MLflow or any future Ray private database schemas.
 - No separately installed DBMS per integration.
 - No claim that changing the current SQL connection string is PostgreSQL
   support.
@@ -107,6 +108,9 @@ scientific conclusion. A local demo is not production acceptance.
 - No completion based on an agent's final message or self-review score.
 - No direct mutation of installed packages by aResearcher; experimental-base
   changes use Builder/Codex and exact candidate releases.
+- No generated scenario per research direction by default. The shared
+  Research Workbench orchestrates direction skills; a custom scenario requires
+  an explicit UI/workflow need.
 - No automatic external paper, repository, or community publication in the
   initial A4 profile.
 
@@ -123,11 +127,11 @@ scientific conclusion. A local demo is not production acceptance.
 | Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | E002 fixed a verified result, tracker export, and eight content-addressed artifact references |
 | Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 core and E002 start/reconcile/result integration validated across restart |
 | Tracking | Frozen contract `1.0`, bounded durable journal/outbox, local reference provider, conforming supervised/external MLflow adapter | identity, outage/replay, acceptance/deletion, storage binding, remote auth, UI proxy, and browser matrices validated locally |
-| Distributed execution | No Ray provider | open |
+| Distributed execution | Current/selected member-node execution through existing AdaOS semantics; no Ray provider | deliberately deferred until the complete local research loop is proven |
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
 | TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
-| Research authoring | Builder has template-based scenario/skill drafts, Prototype/Preview/Automation, companion skills, source snapshots, and isolated Codex | no first-class arbitrary user-file intake, composite research template, Research Prototype profile, or scientific handoff |
+| Research authoring | Builder has bounded immutable individual-file intake, deterministic notebook/text inventory, a `research_direction` skill template, shared orchestrator ledger/chat/activity, strict ResearchPrototype admission, exact acceptance, and a digest-bound AutomationBrief | first pre-Codex slice validated on TLP; directory/security-policy intake, semantic patches, Codex realization, Trial, and publication remain open |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
 | Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
 | Replication evaluation | TLP supplies one internal transparent case | no frozen PaperBench-like task package, target rubric evaluator, matched-budget baseline, or benchmark release |
@@ -142,9 +146,11 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF2 | Relational storage is provisioned as a scoped capability with a PostgreSQL path | `validated-local`, including research-manager integration | complete locally |
 | ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local`, including real CPU attempt integration | complete locally |
 | ARF4 | MLflow is a conforming optional tracker service skill | `validated-local` | complete locally |
-| ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
+| ARF5 | Ray is a conforming optional executor service skill | `deferred` | resume only after the complete local/member-node loop |
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
-| ARF7 | Builder turns attached research artifacts into an accepted, executable TLP Research Project | `hypothesis` | after/alongside ARF6 |
+| ARF7.1 | Builder turns attached artifacts and dialogue into an accepted pre-Codex TLP AutomationBrief | `validated-local` | complete locally |
+| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `hypothesis` | next engineering gate |
+| ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
 | ARF9 | ARRB measures replication on frozen PaperBench-like tasks and matched budgets | `hypothesis` | after autonomous TLP proof |
 | ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
@@ -167,6 +173,31 @@ actions so guidance does not propose controls absent from the current surface.
 Native package installation, scenario validation, package self-tests, Desktop
 rematerialization, migration, and guidance invocation all passed on the
 reference machine.
+
+Authoring snapshot (2026-08-10): `research_orchestrator_skill` `0.0.1` and
+Builder scenario `0.2.57` are published locally; the skill is installed/active
+and the Desktop webspace was rematerialized. The ordinary Builder scenario now
+exposes a shared Research view for any selected skill project, and the dynamic
+template catalogue includes `research_direction`. Generic `builder source-add`/upload
+creates immutable project SourceBundles under CTX-derived state; no research
+CLI or `.adaos/research` tree was added. `research_orchestrator_skill` stores
+private formulation state through `storage.relational`, groups live LLM work in
+chat and a durable activity projection, validates every candidate, and emits a
+handoff only after exact optimistic human acceptance.
+
+The local TLP proof attached the original 3.44 MB notebook and 35.7 KB review,
+accepted SourceBundle
+`sha256:e3dc926450ec58291a85242a5925c1d7743041c2c3ac6f448f8e8f85f60e43e7`,
+rejected earlier structurally insufficient LLM candidates, then replayed the
+human-reviewed content through the published orchestrator and accepted
+ResearchPrototype revision 1
+`sha256:18cbbbe33b1755328762f0ddd73e11650281e702809326c8c84d81b1d25d0578`.
+The resulting AutomationBrief is
+`sha256:1b1a149c841a6598b9d58ccad1f0fe800117b1ffc4252e49f7348efb28b48c29`;
+repeated acceptance preserved generation 3 and `codex_started=false`. Native
+AdaOS source tests, strict skill validation/tool probes, package tests,
+scenario validation, and the full Ionic/Angular client build passed on this
+machine. These facts close ARF7.1 only.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -196,8 +227,9 @@ ownership.
   skill, scenario, governed-workflow, package, and activation paths without a
   research-specific CLI or `.adaos/research` tree.
 - [x] `[must]` `ARF0-04` Define MLflow as an optional typed tracker and Ray as
-  an optional executor, with AdaOS retaining protocol, workflow, and evidence
-  authority.
+  a deferred optional executor, with AdaOS retaining protocol, workflow, and
+  evidence authority and member-node execution sufficient for the current
+  loop.
 - [x] `[must]` `ARF0-05` Define SQLite as the local default and PostgreSQL as a
   future scoped capability/provider rather than one DBMS per component.
 - [x] `[must]` `ARF0-06` Register the architecture and roadmap in the
@@ -602,7 +634,12 @@ and tracker inspection as the current next actions.
 The general contract is documented in
 [Scenario Guidance and Help Contract](scenario-guidance.md).
 
-## ARF5. Ray Executor Provider
+## ARF5. Ray Executor Provider (Deferred)
+
+This lane is intentionally paused. It resumes only after the full
+source-to-formulation-to-Codex-to-local-experiment-to-analysis loop is proven
+on an AdaOS member node. None of ARF6, ARF7, or the first autonomous TLP loop
+may cite Ray as a prerequisite.
 
 **Outcome:** the same immutable trial/run can execute through Ray while AdaOS
 retains identity, workflow, and evidence authority.
@@ -731,92 +768,106 @@ local proof.
 - [ ] `[deferred]` `ARF6-23` Do not import existing notebook outputs as
   confirmatory trials; retain them only as exploratory provenance.
 
-## ARF7. Research Project Authoring and Assisted TLP Design
+## ARF7. Research-Direction Authoring and Assisted TLP Design
 
 **Outcome:** Builder can turn attached notebooks, prose, and code into a
-versioned TLP Research Prototype, let a human and LLM reach explicit consensus,
-adapt the experimental base through isolated Codex, and publish an executable
-scenario plus owned runner skills through the ordinary lifecycle.
+versioned ResearchPrototype for one research-direction skill, let a human and
+LLM reach explicit consensus, adapt that skill through isolated Codex, and
+publish it through the ordinary lifecycle. A shared Research Workbench and
+orchestrator replace the earlier default of generating one scenario per
+direction.
 
-**Admission gate:** ARF4 contracts are locally valid. ARF7 implementation may
-proceed alongside ARF6, but its exit proof uses the canonical operator,
-data/split, protocol, and analysis contracts accepted by ARF6.
+**Admission gate:** ARF4 contracts are locally valid. ARF7 may proceed
+alongside ARF6. Ray is not an admission dependency; Automation and Trial use
+the current or selected member node.
 
-**Exit proof:** starting from the original TLP notebook and review attached in
-Builder, a user selects the research project template, reviews a structured
-source inventory, discusses and accepts an exact Research Prototype/Campaign,
-starts Automation, inspects a CPU Trial, publishes the scenario and owned
-runner, and instantiates a Study whose seed refs match the accepted Prototype.
-No raw chat, notebook output, or direct Codex invocation becomes canonical
-research state.
+**ARF7.1 exit proof (accepted locally):** starting from the original TLP
+notebook and review, a user creates `tlp_direction_skill`, inspects a
+content-addressed SourceBundle, discusses typed candidates, rejects invalid or
+stale revisions, and accepts an exact ResearchPrototype. Acceptance creates an
+ordinary Builder checkpoint and immutable AutomationBrief while
+`codex_started=false`. No raw chat or notebook output becomes canonical state.
 
-### Source intake and project template
+**Full ARF7 exit proof:** isolated Codex implements the exact brief, native
+validation and a bounded CPU Trial pass, the direction skill is published, and
+the resulting Study/Campaign seed refs match the accepted prototype. A custom
+scenario is created only if a declared post-publication UI need requires it.
 
-- [ ] `[must]` `ARF7-01` Define `SourceBundle` with content digests, MIME/type,
-  origin, trust, sensitivity, license, redistribution, attachment-message refs,
-  and exploratory/authoritative classification.
-- [ ] `[must]` `ARF7-02` Add first-class Builder intake for bounded individual
-  files and directories, including `.ipynb` and UTF-8 text, with immutable
-  snapshots, size/count limits, antivirus/secret/archive checks, and no
-  requirement to copy private payloads into a published package.
-- [ ] `[must]` `ARF7-03` Extract notebook cell/source/output metadata,
-  dependency/environment hints, hidden-state warnings, and candidate code
-  regions deterministically where possible. Optional LLM/Codex source
-  assessment remains a typed candidate and cannot promote outputs to evidence.
-- [ ] `[must]` `ARF7-04` Add a `research_study` scenario/Builder profile with
-  Sources, Direction, Hypotheses, Campaign, Analysis, Capability Gaps, and
-  Implementation Brief views plus compact/long-content/invalid/unavailable
-  Preview fixtures.
-- [ ] `[must]` `ARF7-05` Add a project-owned research runner/data-owner skill
-  template and a composite template-role manifest. Reuse installed
-  `research_manager_skill`, tracker, and executor dependencies by exact version;
-  do not scaffold copies of shared services.
+### Source intake and direction template
 
-### Research Prototype and consensus
+- [x] `[must]` `ARF7-01` Define minimum `SourceBundle` ABI with project ref,
+  immutable payload/source/bundle digests, MIME/type, role, origin, deterministic
+  analysis, generation, and count/size bounds. Store objects in CTX-derived
+  Builder state rather than a research-specific tree.
+- [x] `[must]` `ARF7-02` Add first-class Builder API, UI upload, SDK, and generic
+  `builder source-add/source-list` intake for bounded individual files,
+  including `.ipynb` and UTF-8 text. Private payloads are not copied into the
+  published direction package.
+- [x] `[must]` `ARF7-03` Extract notebook cell/code/Markdown/output/import and
+  kernel metadata plus UTF-8 text previews deterministically. Mark notebook
+  outputs as untrusted source material; do not promote them to evidence.
+- [x] `[must]` `ARF7-04` Add a dynamic `research_direction` skill template and
+  shared Builder Research view with source upload, formulation state, chat,
+  durable activity, next-step guidance, acceptance, and AutomationBrief. Do
+  not create a direction-specific scenario.
+- [x] `[must]` `ARF7-05` Make the direction skill the future runner and primary
+  data owner. Reuse `research_orchestrator_skill`, `research_manager_skill`,
+  tracker, and execution capabilities; do not scaffold shared-service copies.
+- [ ] `[should]` `ARF7-05A` Add directory/archive intake, antivirus and secret
+  scans, editable trust/sensitivity/license/redistribution policy, attachment
+  message refs, and retention/deletion UI before accepting arbitrary external
+  corpora or unattended ingestion.
 
-- [ ] `[must]` `ARF7-06` Define `ResearchPrototype` containing ResearchBrief,
-  HypothesisSet, ExperimentCampaign, AnalysisPlan, capability requirements,
-  assumptions, risks, open questions, source refs, and a deterministic digest.
-- [ ] `[must]` `ARF7-07` Define ExperimentCampaign as a validated DAG with
-  experiment dependencies, branch predicates, evidence gates, exploratory/
-  confirmatory families, budgets, stop rules, and cycle/conflict rejection.
-- [ ] `[must]` `ARF7-08` Add a research semantic-patch profile so the Prototype
-  LLM produces bounded operations against stable research refs; arbitrary prose
-  is never treated as an accepted scientific mutation.
-- [ ] `[must]` `ARF7-09` Project after each meaningful turn the agreed facts,
-  proposed changes, unresolved questions, assumptions, risks, and next legal
-  action. Consensus accepts one exact revision through the shared durable
-  Interaction/expected-generation path.
-- [ ] `[must]` `ARF7-10` Keep Builder conversation, inspected Research
-  Prototype, and paired scenario Preview as independent selections; changing
-  one must not silently retarget or mutate the others.
+### ResearchPrototype and consensus
+
+- [x] `[must]` `ARF7-06` Define digestible `ResearchPrototype` with background,
+  question, falsifiable hypotheses, staged experiment plan, evidence classes,
+  execution profiles/budgets/stops, evaluation rules, assumptions, risks, open
+  questions, implementation requirements, acceptance checks, readiness, source
+  bundle, revision, and lineage.
+- [ ] `[must]` `ARF7-07` Extend the current ordered experiment stages into a
+  validated Campaign DAG with dependencies, branch predicates, evidence gates,
+  budget aggregation, and cycle/conflict rejection before adaptive campaigns.
+- [ ] `[should]` `ARF7-08` Add a research semantic-patch profile so later LLM
+  turns can propose bounded field operations against stable refs. The first
+  slice safely records complete schema-valid candidate revisions instead;
+  arbitrary prose is never accepted as a mutation.
+- [x] `[must]` `ARF7-09` Persist direction generation, immutable candidate
+  revisions, actor/parent lineage, grouped chat progress, durable activity,
+  blockers, and workflow-aware next steps. Acceptance names one exact digest
+  and expected generation.
+- [x] `[must]` `ARF7-10` Keep SourceBundle, conversation, current candidate,
+  accepted candidate, Builder checkpoint, and AutomationBrief as distinct
+  identities. Source changes make the candidate stale; LLM self-readiness does
+  not bypass schema and semantic admission.
 
 ### Automation, publication, and re-entry
 
-- [ ] `[must]` `ARF7-11` Extend Prototype-to-Automation handoff with accepted
-  research digests, source refs, scientific invariants, required observations,
-  permitted packages/paths, activity/binding mappings, acceptance tests, and a
-  bounded CPU Trial profile.
-- [ ] `[must]` `ARF7-12` Make isolated Codex materialize runner, data-owner,
-  scenario, schemas, migrations, observations, analyses, and tests from the
-  exact handoff. It may report ambiguity/blockers but cannot amend the accepted
-  objective or analysis to fit implementation results.
+- [x] `[must]` `ARF7-11` Emit an immutable AutomationBrief with exact source,
+  prototype, and Builder checkpoint digests; source inventory; scientific
+  objective; implementation requirements; acceptance checks; and prohibited
+  actions. Acceptance is idempotent and does not start Codex or an experiment.
+- [ ] `[must]` `ARF7-12` Make isolated Codex materialize the direction skill's
+  operator, data preparation, runner, schemas, migrations, observations,
+  analyses, and tests from the exact handoff. It may report blockers but cannot
+  amend the accepted objective or analysis to fit implementation results.
 - [ ] `[must]` `ARF7-13` Validate generated TLP code with ARF6 operator,
-  determinism, split, sealed-data, evidence, workflow, conversation, migration,
-  and package admission tests before Trial/Publication.
-- [ ] `[must]` `ARF7-14` Publish scenario and project-owned skills as one exact
-  ProjectRelease dependency lock and instantiate Study/Campaign seed state from
-  the accepted Research Prototype without retaining two mutable copies.
-- [ ] `[must]` `ARF7-15` Add scenario-to-Builder re-entry: a typed CapabilityGap
-  or defect creates a linked Issue/Change with Study/Campaign/Evidence and
-  installed-release refs. Ordinary condition or campaign edits stay in
-  Research Fabric and do not invoke Codex.
+  determinism, split, sealed-data, evidence, workflow, migration, and package
+  admission tests before Trial/Publication.
+- [ ] `[must]` `ARF7-14` Publish the direction skill as one exact ProjectRelease
+  and instantiate Study/Campaign seed state from the accepted prototype without
+  retaining two mutable copies.
+- [ ] `[must]` `ARF7-15` Add runtime-to-Builder re-entry: a typed CapabilityGap
+  or defect creates a linked Issue/Change with direction, Study/Campaign,
+  evidence, handoff, and installed-release refs. Ordinary experiment/campaign
+  edits remain Research Fabric operations and do not invoke Codex.
 - [ ] `[should]` `ARF7-16` Add source-grounded literature attachments and
   citation links before autonomous retrieval; retrieved text remains untrusted
   evidence with snapshot, license, quotation, and claim-link metadata.
 - [ ] `[should]` `ARF7-17` Measure source-to-prototype target coverage,
   clarification/correction rate, unsupported assumptions, context sufficiency,
-  Codex handoff fidelity, Trial failures, elapsed time, and human interventions.
+  direct-Markdown baseline quality, Codex handoff fidelity, Trial failures,
+  elapsed time, model usage, and human interventions.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 
