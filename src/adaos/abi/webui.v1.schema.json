@@ -610,6 +610,7 @@
         "visual.qrCode",
         "feedback.log",
         "feedback.statusBar",
+        "static.markdown",
         "ui.chat",
         "ui.voiceInput",
         "ui.voiceDebug",
@@ -1461,6 +1462,14 @@
         "id": { "$ref": "#/$defs/id" },
         "label": { "type": "string" },
         "label_i18n": { "$ref": "#/$defs/i18nTextSpec" },
+        "title": {
+          "type": "string",
+          "description": "Concise native tooltip and accessible name for the command. Falls back to description, label, then id."
+        },
+        "description": {
+          "type": "string",
+          "description": "Longer explanation of the command, suitable for a tooltip fallback and channel-neutral help."
+        },
         "icon": { "type": "string" },
         "kind": {
           "type": "string",

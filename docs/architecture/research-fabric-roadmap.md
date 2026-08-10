@@ -119,13 +119,15 @@ ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
 
 Delivery snapshot (2026-08-10): the published and locally activated packages
 are `research_manager_skill` `0.8.1`, `tlp_experiment_skill` `0.1.1`,
-`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.3.1`. The accepted E002
+`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.3.2`. The accepted E002
 result remains immutable from the earlier release. The current packages add
 the runner/data-owner boundary, owner-qualified ResearchSpace projection,
 bounded cross-skill tool invocation, data migration, and channel-neutral
-scenario guidance. Native package installation, scenario validation, package
-self-tests, Desktop rematerialization, migration, and guidance invocation all
-passed on the reference machine.
+scenario guidance. Version `0.3.2` additionally validates safe Markdown help,
+a persistent workflow-command footer, explanatory command titles, and an
+MLflow Model training deep link. Native package installation, scenario
+validation, package self-tests, Desktop rematerialization, migration, and
+guidance invocation all passed on the reference machine.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,

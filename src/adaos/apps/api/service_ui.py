@@ -111,12 +111,27 @@ async def service_ui_surface(name: str, request: Request) -> dict[str, Any]:
 
 
 @router.get("/services/{name}/ui-bootstrap")
-async def service_ui_bootstrap(name: str, request: Request) -> Response:
+async def service_ui_bootstrap(
+    name: str,
+    request: Request,
+    fragment: str | None = None,
+) -> Response:
     _authorize(request)
     spec = _service_spec(name)
     if spec.ui_embedding not in {"external", "same-origin"}:
         raise HTTPException(status_code=403, detail="service UI embedding is disabled")
-    response = RedirectResponse(f"/api/services/{name}/ui/", status_code=303)
+    ui_fragment = str(fragment or "")
+    if ui_fragment:
+        if (
+            len(ui_fragment) > 2048
+            or not ui_fragment.startswith("#/")
+            or any(ord(char) < 32 or ord(char) == 127 for char in ui_fragment)
+        ):
+            raise HTTPException(status_code=400, detail="invalid service UI fragment")
+    response = RedirectResponse(
+        f"/api/services/{name}/ui/{ui_fragment}",
+        status_code=303,
+    )
     response.set_cookie(
         _COOKIE_NAME,
         _presented_token(request) or "",

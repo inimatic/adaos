@@ -120,6 +120,26 @@ def test_service_ui_proxy_requires_auth_and_replaces_provider_frame_policy(monke
         assert bootstrap.headers["location"] == "/api/services/provider_ui/ui/"
         assert "HttpOnly" in bootstrap.headers["set-cookie"]
 
+        deep_link = client.get(
+            "/api/services/provider_ui/ui-bootstrap",
+            params={
+                "token": "service-ui-test-token",
+                "fragment": "#/experiments?workflowType=machine_learning",
+            },
+            follow_redirects=False,
+        )
+        assert deep_link.status_code == 303
+        assert deep_link.headers["location"] == (
+            "/api/services/provider_ui/ui/#/experiments?workflowType=machine_learning"
+        )
+
+        invalid_deep_link = client.get(
+            "/api/services/provider_ui/ui-bootstrap",
+            params={"token": "service-ui-test-token", "fragment": "https://foreign.example"},
+            follow_redirects=False,
+        )
+        assert invalid_deep_link.status_code == 400
+
         proxied = client.get(
             "/api/services/provider_ui/ui/",
             headers={"Sec-Fetch-Site": "same-origin"},

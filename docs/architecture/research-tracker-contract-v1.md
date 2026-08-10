@@ -3,7 +3,7 @@
 Status: frozen provider contract, validated locally by the local reference
 provider and the MLflow provider.
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-10.
 
 This contract makes experiment telemetry portable without making a tracker the
 research authority. AdaOS owns scientific identity, the durable journal,
@@ -113,6 +113,18 @@ gateway. The generic `visual.serviceFrame` widget accepts a service id rather
 than an arbitrary URL and can only navigate to that service's governed
 bootstrap route. The server applies lifecycle checks, request limits, origin
 policy, CSP, and `SAMEORIGIN` framing policy.
+
+The UI compatibility boundary is deliberately narrower than the tracker API
+contract. AdaOS may supply a validated same-origin hash fragment to the
+authenticated bootstrap so a provider can open an appropriate native view;
+the fragment is navigation metadata, not a persisted provider contract. For
+MLflow 3.15 the TLP command selects `workflowType=machine_learning`, because
+the default GenAI workflow displays traces rather than classical training
+runs. AdaOS does not depend on MLflow React routes, DOM structure, numeric
+experiment ids, or private database tables. If a later MLflow release changes
+its native routes, tracker ingestion, export, evidence verification, and all
+AdaOS workflow commands must continue to work; only the optional diagnostic
+deep link may need a provider-version adapter.
 
 ## Conformance evidence
 

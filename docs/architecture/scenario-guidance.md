@@ -101,9 +101,22 @@ Both invoke the same skill operation used by the modal. Voice is therefore a ren
 - A tracker or executor UI is a diagnostic view and does not provide next-action authority.
 - Help operations are read-only. A returned tool name is descriptive; invoking it still passes normal capabilities, input schema, workflow generation, and confirmation checks.
 
+## Interface coherence
+
+A projected next action is useful only when the active channel makes its
+execution path discoverable. Web scenarios should use the same user-facing
+verb on the guidance item and its control, keep the control in a stable command
+region, and provide a concise `title`/accessible description that explains the
+effect and any provider boundary. Text and voice may name the control (for
+example, “press Open MLflow in the bottom command bar”) but must not imply that
+a diagnostic provider UI performs an AdaOS workflow transition. If a projected
+action has no reachable control or conversational invocation in that scenario,
+it should be described as unavailable rather than emitted as an executable
+next step.
+
 ## TLP Reference
 
-`tlp_research` `0.3.1` is the first published conformance package. Its README is shown in `tlp_research_help`; current guidance comes from `research_manager_skill.describe_experiment`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used. The published package passed clean scenario validation, seven package tests, native installation, and Desktop rematerialization on 2026-08-10.
+`tlp_research` `0.3.2` is the first published conformance package. Its README is shown in `tlp_research_help` through the safe `static.markdown` renderer; current guidance comes from `research_manager_skill.describe_experiment`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used. The primary and workflow command bars expose explanatory titles, workflow commands occupy the persistent footer, and Open MLflow selects the Model training workflow. The published package passed clean scenario validation, seven package tests, native installation, and Desktop rematerialization on 2026-08-10.
 
 ## Adoption Checklist
 

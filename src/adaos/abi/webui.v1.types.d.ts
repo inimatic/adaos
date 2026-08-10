@@ -132,6 +132,7 @@ export type WebUiWidgetType =
   | 'visual.qrCode'
   | 'feedback.log'
   | 'feedback.statusBar'
+  | 'static.markdown'
   | 'ui.chat'
   | 'ui.voiceInput'
   | 'ui.voiceDebug'
@@ -407,6 +408,8 @@ export type WebUiActionButtonFill = 'solid' | 'outline' | 'clear'
 export interface WebUiActionButton {
   id: string
   label?: string
+  title?: string
+  description?: string
   icon?: string
   kind?: WebUiActionButtonKind
   fill?: WebUiActionButtonFill

@@ -471,6 +471,37 @@ Required field families:
 - static content: section title, description, markdown, image, video/embed,
   separator, page break
 
+### Markdown surfaces
+
+`static.markdown` is the read-only Markdown presentation contract. The browser
+parses its `inputs.content` (or a bound string field), sanitizes the generated
+HTML with the Angular HTML security context, and renders it without granting
+scripts, arbitrary components, or executable extensions. It is suitable for
+scenario README/help, protocol notes, and workflow guidance. Manifest
+validation and the client widget registry must admit the same widget type; an
+unknown renderer is a validation defect, not an acceptable runtime fallback.
+
+Markdown editing is a separate semantic surface and must not be hidden behind
+`static.markdown` or the plain `item.textEditor`. A future
+`item.markdownEditor` should persist canonical Markdown, offer visual and
+source modes, and pass lossless round-trip fixtures for links, lists, tables,
+code blocks, and domain-specific inline notation. The current preferred
+product direction is a Markdown-first ProseMirror editor such as Milkdown
+Crepe for visual editing; CodeMirror 6 plus a synchronized preview remains the
+source-first option. No editor dependency is part of `webui.v1` until those
+round-trip, accessibility, mobile, clipboard, and collaborative-editing gates
+are proven.
+
+### Persistent command regions
+
+A layout area with `role: footer` is the semantic bottom command region. When
+it contains only command/status widgets (`input.commandBar`, its `ui.actions`
+alias, or `feedback.statusBar`), Desktop docks it to the viewport bottom and
+reserves content space above it. Scenario authors should use this region for
+workflow-wide commands that must remain reachable while the main and auxiliary
+panes scroll. A `toolbar` role remains an in-flow local toolbar and must not be
+used merely to obtain fixed positioning.
+
 Validation must be declarative:
 
 - required and optional state
