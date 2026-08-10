@@ -951,7 +951,7 @@ class HubLinkManager:
         try:
             from adaos.services.registry.subnet_directory import get_directory
 
-            node = get_directory().get_node(node_id)
+            node = await asyncio.to_thread(get_directory().get_node, node_id)
         except Exception:
             node = None
         payload = node_display_from_directory_node(node if isinstance(node, dict) else {"node_id": node_id, "roles": ["member"]})
@@ -1328,7 +1328,7 @@ class HubLinkManager:
 
             directory = get_directory()
             if material_changed:
-                directory.on_member_runtime_snapshot(node_id, snap)
+                await asyncio.to_thread(directory.on_member_runtime_snapshot, node_id, snap)
             else:
                 try:
                     projection_captured_at = (
@@ -1338,7 +1338,8 @@ class HubLinkManager:
                     )
                 except Exception:
                     projection_captured_at = None
-                directory.on_member_runtime_snapshot_heartbeat(
+                await asyncio.to_thread(
+                    directory.on_member_runtime_snapshot_heartbeat,
                     node_id,
                     captured_at=projection_captured_at,
                     node_state=str(snap.get("node_state") or "").strip() or None,

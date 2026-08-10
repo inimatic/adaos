@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,24 @@ async def test_status_watchdog_deduplicates_node_status() -> None:
 
     assert emitted == [("node.status", {"state": "ready", "trigger": "boot"})]
     assert service._suppressed_duplicate_node_status_total == 1
+
+
+async def test_status_watchdog_builds_node_status_off_event_loop_thread() -> None:
+    emitted: list[tuple[str, dict]] = []
+    reported: list[str] = []
+    service = _status_service(emitted=emitted, reported=reported)
+    loop_thread_id = threading.get_ident()
+    payload_thread_ids: list[int] = []
+
+    service._node_status_payload = lambda: (
+        payload_thread_ids.append(threading.get_ident()) or {"state": "ready"}
+    )
+
+    await service.emit_node_status("boot")
+
+    assert payload_thread_ids
+    assert payload_thread_ids[0] != loop_thread_id
+    assert emitted == [("node.status", {"state": "ready", "trigger": "boot"})]
 
 
 async def test_status_watchdog_builds_policy_and_registers_heartbeats(monkeypatch) -> None:

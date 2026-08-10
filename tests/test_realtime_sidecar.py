@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -750,6 +752,45 @@ def test_realtime_sidecar_route_tunnel_ws_bases_return_path_specific_listener_wh
             await server.close()
 
     asyncio.run(_run())
+
+
+def test_realtime_sidecar_route_tunnel_ws_bases_use_fresh_supervisor_owned_diag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.delenv("ADAOS_REALTIME_CHILD", raising=False)
+    realtime_sidecar_mod._reset_route_tunnel_runtime_state()
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+    diag_path.write_text(
+        json.dumps({
+            "ts": time.time(),
+            "route_tunnel_contract": {
+                "ws": {
+                    "current_owner": "sidecar",
+                    "handoff_ready": True,
+                    "listener": {"host": "127.0.0.1", "port": 17423, "url": "ws://127.0.0.1:17423/ws"},
+                    "upstream": {"host": "127.0.0.1", "port": 8778, "url": "ws://127.0.0.1:8778/ws"},
+                },
+                "yws": {
+                    "current_owner": "sidecar",
+                    "handoff_ready": True,
+                    "listener": {"host": "127.0.0.1", "port": 17424, "url": "ws://127.0.0.1:17424/yws"},
+                    "upstream": {"host": "127.0.0.1", "port": 8778, "url": "ws://127.0.0.1:8778/yws"},
+                },
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_diag_path", lambda: diag_path)
+    realtime_sidecar_mod._ROUTE_TUNNEL_DIAG_CACHE.update({"checked_at": 0.0, "record_ts": 0.0, "contract": {}})
+
+    assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/ws") == ["ws://127.0.0.1:17423"]
+    assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/yws") == ["ws://127.0.0.1:17424"]
+    contract = realtime_sidecar_mod.realtime_sidecar_route_tunnel_contract()
+    assert contract["ws"]["current_owner"] == "sidecar"
+    assert contract["yws"]["handoff_ready"] is True
 
 
 def test_realtime_sidecar_route_proxy_relays_local_websocket_payload(

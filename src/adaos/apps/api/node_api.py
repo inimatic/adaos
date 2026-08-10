@@ -531,6 +531,17 @@ def _summary_body_size(payload: Mapping[str, Any]) -> int:
         return 0
 
 
+def _json_response_body(payload: Any) -> bytes:
+    """Encode a JSON response once; callers may run this helper off-loop."""
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        indent=None,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _runtime_endpoint_slow_threshold_ms() -> float:
     return _env_float("ADAOS_RUNTIME_ENDPOINT_SLOW_MS", 1000.0, minimum=1.0)
 
@@ -3511,7 +3522,10 @@ def _node_status_payload() -> dict[str, Any]:
 
 @router.get("/status", response_model=NodeStatus, dependencies=[Depends(require_token)])
 async def node_status():
-    return NodeStatus(**_node_status_payload())
+    # Keep the authoritative status shape, but perform its blocking
+    # filesystem/SQLite/psutil collection outside the ASGI event loop.
+    payload = await asyncio.to_thread(_node_status_payload)
+    return NodeStatus(**payload)
 
 
 @router.get("/control-plane/objects/self", dependencies=[Depends(require_token)])
@@ -4020,7 +4034,8 @@ async def node_reliability() -> Response:
     started_at = time.time()
     try:
         payload = await _current_reliability_payload_async()
-        body_bytes = _summary_body_size(payload)
+        body = await asyncio.to_thread(_json_response_body, payload)
+        body_bytes = len(body)
         duration_ms = max(0.0, (time.time() - started_at) * 1000.0)
         _record_runtime_endpoint_metric(
             endpoint="/api/node/reliability",
@@ -4028,8 +4043,9 @@ async def node_reliability() -> Response:
             status_code=200,
             body_bytes=body_bytes,
         )
-        return JSONResponse(
-            content=payload,
+        return Response(
+            content=body,
+            media_type="application/json",
             headers={
                 "X-AdaOS-Runtime-Duration-Ms": str(round(duration_ms, 3)),
                 "X-AdaOS-Runtime-Body-Bytes": str(body_bytes),

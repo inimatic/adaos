@@ -64,6 +64,11 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "upstream_url": None,
     },
 }
+_ROUTE_TUNNEL_DIAG_CACHE: dict[str, Any] = {
+    "checked_at": 0.0,
+    "record_ts": 0.0,
+    "contract": {},
+}
 _MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
     "listener_ready": False,
     "listener_host": None,
@@ -671,6 +676,10 @@ def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[
     for kind, path in paths.items():
         port = _route_tunnel_listener_port(kind)
         runtime_state = _route_tunnel_runtime_state(kind)
+        if not bool(runtime_state.get("listener_ready")):
+            diag_state = _route_tunnel_runtime_state_from_supervisor_diag(kind)
+            if diag_state:
+                runtime_state.update(diag_state)
         listener_ready = bool(runtime_state.get("listener_ready"))
         listener_url = str(runtime_state.get("listener_url") or "").strip() or _route_tunnel_listener_url(
             host=listener_host,
@@ -945,6 +954,77 @@ def realtime_sidecar_diag_path() -> Path:
             path = _safe_realtime_relative_base() / path
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _route_tunnel_runtime_state_from_supervisor_diag(kind: str) -> dict[str, Any]:
+    """Read supervisor-owned listener evidence from the sidecar process.
+
+    Runtime and supervisor processes do not share the sidecar child's in-memory
+    listener flags.  A fresh diagnostics record is the cross-process ownership
+    contract; without it the runtime incorrectly routes browser WS/YWS back to
+    its own FastAPI listener even while the sidecar proxy is ready.
+    """
+    if str(os.getenv("ADAOS_REALTIME_CHILD") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return {}
+    if _realtime_sidecar_lifecycle_manager() != "supervisor":
+        return {}
+    key = str(kind or "").strip().lower()
+    if key not in {"ws", "yws"}:
+        return {}
+    now_mono = time.monotonic()
+    checked_at = float(_ROUTE_TUNNEL_DIAG_CACHE.get("checked_at") or 0.0)
+    if now_mono - checked_at >= 1.0:
+        record: dict[str, Any] = {}
+        try:
+            path = realtime_sidecar_diag_path()
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 128 * 1024), os.SEEK_SET)
+                for raw_line in reversed(fh.read().splitlines()):
+                    try:
+                        candidate = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except Exception:
+                        continue
+                    if isinstance(candidate, dict):
+                        record = candidate
+                        break
+        except Exception:
+            record = {}
+        _ROUTE_TUNNEL_DIAG_CACHE["checked_at"] = now_mono
+        _ROUTE_TUNNEL_DIAG_CACHE["record_ts"] = float(record.get("ts") or 0.0) if record else 0.0
+        contract = record.get("route_tunnel_contract") if isinstance(record.get("route_tunnel_contract"), dict) else {}
+        _ROUTE_TUNNEL_DIAG_CACHE["contract"] = dict(contract)
+    record_ts = float(_ROUTE_TUNNEL_DIAG_CACHE.get("record_ts") or 0.0)
+    try:
+        diag_every_s = max(0.1, float(os.getenv("ADAOS_REALTIME_DIAG_EVERY_S", "2") or "2"))
+    except Exception:
+        diag_every_s = 2.0
+    if record_ts <= 0 or (time.time() - record_ts) > max(10.0, diag_every_s * 3.0):
+        return {}
+    contract = _ROUTE_TUNNEL_DIAG_CACHE.get("contract")
+    entry = contract.get(key) if isinstance(contract, dict) and isinstance(contract.get(key), dict) else {}
+    if not bool(entry.get("handoff_ready")) or str(entry.get("current_owner") or "").strip().lower() != "sidecar":
+        return {}
+    listener = entry.get("listener") if isinstance(entry.get("listener"), dict) else {}
+    upstream = entry.get("upstream") if isinstance(entry.get("upstream"), dict) else {}
+    try:
+        listener_port = int(listener.get("port") or 0)
+    except Exception:
+        listener_port = 0
+    if listener_port <= 0:
+        return {}
+    return {
+        "listener_ready": True,
+        "listener_host": str(listener.get("host") or DEFAULT_LOOPBACK_HOST).strip() or DEFAULT_LOOPBACK_HOST,
+        "listener_port": listener_port,
+        "listener_url": str(listener.get("url") or "").strip() or None,
+        "upstream_host": str(upstream.get("host") or "").strip() or None,
+        "upstream_port": upstream.get("port"),
+        "upstream_url": str(upstream.get("url") or "").strip() or None,
+        "evidence_source": "supervisor_sidecar_diag",
+        "evidence_observed_at": record_ts,
+    }
 
 
 def _realtime_sidecar_log_max_bytes() -> int:

@@ -224,7 +224,11 @@ class BootstrapStatusWatchdogService:
                 return
             if not callable(self._node_status_payload):
                 return
-            payload = self._node_status_payload()
+            # The status payload includes filesystem/SQLite reads and the
+            # sidecar listener probe (psutil.net_connections).  Building it on
+            # the runtime loop turns a routine heartbeat into a 250-1500 ms
+            # stop-the-world pause on small hubs.
+            payload = await asyncio.to_thread(self._node_status_payload)
             payload["trigger"] = str(trigger or "").strip() or "runtime"
             now = time.time()
             should_emit, fingerprint = self._should_emit_node_status(
