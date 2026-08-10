@@ -2,11 +2,12 @@
 
 Status: active domain roadmap for an experimental proof of concept. The first
 A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
-bounded-runtime implementation, and the PoC9 Rasa/remote-assistant extension
+bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension, and
+the PoC11 routed-connectivity/voice half-duplex corrections
 are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
-in-process, and maintains an outbound member link. A deployed-subnet acceptance
-run, Keystore custody, and the physical 2 GB device gate remain open.
+in-process, and maintains an outbound member link through the deployed regional
+Root route. Keystore custody and the physical 2 GB device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -301,12 +302,15 @@ the PoC.
 ### AdaOS Connect
 
 - [x] `[must]` open the modal and render its Yjs state.
-- [x] `[must]` publish a ready LO link/QR for the already-trusted local browser
-  without login or pairing.
+- [x] `[must]` keep the already-trusted LO browser behind the native `Open
+  AdaOS` action without login or pairing; do not present it as a remote AdaOS
+  Connect invitation.
 - [x] `[must]` keep Root/member status separate from local-browser readiness and
   show a useful offline/degraded state when the optional upstream is unreachable.
-- [ ] `[should]` exercise one real Root-backed browser or node preparation flow
-  after Phase A6 connectivity exists.
+- [x] `[should]` split `Connect this phone` from canonical Hub-delegated `Add
+  browser`, `Add Telegram`, and `Add node` actions.
+- [ ] `[should]` exercise one real Root-backed browser and node preparation flow
+  against the deployed subnet after the corresponding Hub build is live.
 
 ### Browsers
 
@@ -325,6 +329,8 @@ the PoC.
   and render it through the normal Voice/Chat widgets.
 - [x] `[must]` speak a new assistant response through browser speechSynthesis,
   including when the Voice Assistant modal is closed.
+- [x] `[must]` use shared client half-duplex arbitration so continuous STT is
+  stopped during speechSynthesis and resumes only after an acoustic tail.
 - [x] `[must]` require the normal `inimatic.com` microphone permission and keep
   local authentication policy independent from hardware permission.
 - [x] `[should]` route explicit Weather, node-status, and Notebook commands to
@@ -604,6 +610,68 @@ browser/Yjs restart also exposed pre-existing `y_py` cross-thread drop errors;
 that issue is not caused by portable NLU or member RPC and remains a separate
 reliability investigation.
 
+## PoC11 Extension: Routed Connect, Voice Arbitration, and Native Identity
+
+Outcome: make the deployed-subnet path match the product semantics and remove
+two misleading mobile-only behaviors.
+
+- [x] `[must]` fix Root join responses to advertise the public request base,
+  not the backend container listener protocol.
+- [x] `[must]` canonicalize public Inimatic membership routes to HTTPS on
+  Android and migrate an older persisted plaintext URL without another join.
+- [x] `[must]` remove the LO browser link from AdaOS Connect; LO remains the
+  native Activity's local `Open AdaOS` path.
+- [x] `[must]` expose a distinct `Connect this phone` flow for member
+  enrollment.
+- [x] `[must]` delegate remote browser, Telegram, and other-node invitations
+  to the canonical Hub `adaos_connect:prepare` tool through the bounded member
+  RPC allowlist.
+- [x] `[must]` acknowledge invitation preparation immediately and finish it
+  as a single-flight background RPC so Hub latency cannot starve control
+  WebSocket ping/pong and cause false browser Recovery.
+- [x] `[must]` make companion projections report `hub_delegated` and
+  `model_backed=true` only while the authenticated Hub link is connected.
+- [x] `[must]` pause shared-client STT around speechSynthesis and ignore TTS
+  echo transcripts until the bounded acoustic tail expires.
+- [x] `[must]` execute a dialog turn outside the control-socket reader with a
+  single bounded slot, preserving ping/pong throughout a slow Hub/LLM call.
+- [x] `[should]` use the canonical AdaOS mark with an indigo native-node
+  background, leaving the browser/PWA mark monochrome.
+- [x] `[must]` install PoC11 on the physical phone and capture deployed Root,
+  companion LLM, remote Connect invitation, transport keepalive, and launcher
+  evidence.
+- [ ] `[should]` capture one unlocked, hands-free acoustic STT -> TTS -> STT
+  cycle after the user grants Chrome microphone permission; deterministic
+  client tests already cover the half-duplex state machine.
+
+PoC11 physical evidence (2026-08-10): APK `0.1.0-poc11` was installed over the
+persisted application data on the API 36 Samsung SM-F721N. The debug APK is
+22,661,987 bytes with SHA-256
+`2ee30da3ed6fd8109ebd8843438e12e1b303954c4017cfa5e960cec0316cf0f2`;
+status reported CPython 3.11.14, install descriptor
+`93980767388ac6f49761ebe6900629e887c61bbcb65ffde6bf3f95407e151502`,
+Rasa model `362b6f47acb743658d8cd4bb8f538a41`, and no `largeHeap`. The app
+automatically migrated its persisted public member route to
+`https://ru.api.inimatic.com/hubs/sn_6acf0c01` and connected with TLS.
+
+The phone prepared a canonical remote browser invitation through the Hub in
+1.42 seconds: the control ACK returned `pending` in 125 ms, then Yjs published
+`ready`, `source=hub_delegated`, and `zone_id=ru`; no LO invitation was
+projected. Арсений and Мира both returned `response_source=hub_skill_llm` and
+`used_llm=true` in 3.92 and 9.06 seconds respectively. A deliberately delayed
+45-second upstream run retained the same control connection with five-second
+keepalives, and the host test proves ping/pong is answered while a dialog
+worker is blocked. The launcher rendered the canonical white AdaOS mark on an
+indigo native-node background, visibly distinct from the monochrome
+browser/ReDevice identity. The Chrome acoustic-loop evidence remains the one
+manual item because microphone permission and a spoken turn require an
+unlocked browser surface.
+
+Anti-drift rule: Android owns enrollment and projection only. Invitation
+generation, companion prompts/profiles, external LLM use, and Teacher behavior
+remain canonical Hub skills. The voice arbitration fix is in
+`adaos-client/main`, not in a mobile client fork.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -700,6 +768,11 @@ must not be copied into a mobile fork.
 - route Builder through a separately reviewed authenticated Hub contract;
 - keep the existing companion Hub path and bounded local fallback under
   outage/latency testing before considering any on-phone LLM runtime.
+- add shared skill/scenario compatibility metadata for portable-local,
+  Hub-delegated, Android-adapted, and unsupported-service execution classes;
+- specify a restricted edge-Hub profile with outbound-only Root routing,
+  member/Yjs authority, Keystore custody, resource budgets, and no arbitrary
+  service skills. External LLM use remains remote and does not block this work.
 
 ### Could follow only when demanded
 
@@ -710,7 +783,8 @@ must not be copied into a mobile fork.
 - app-native foreground audio/TTS/camera adapters when browser mediation is
   insufficient;
 - WebRTC data/media upgrade;
-- phone-as-hub experiments on higher-memory devices.
+- restricted edge-Hub experiments on higher-memory devices after member
+  routing, lifecycle, Keystore, and resource-budget gates are specified.
 
 ### Deferred until a separate architecture exists
 

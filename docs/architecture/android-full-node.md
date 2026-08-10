@@ -4,7 +4,8 @@ Status: target architecture for an experimental proof of concept.
 
 Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
 member-protocol slice, the A7 bounded-runtime implementation, the PoC8
-browser-mediated voice/dialog slice, and the PoC9 Rasa/remote-assistant slice
+browser-mediated voice/dialog slice, the PoC9 Rasa/remote-assistant slice,
+and the PoC11 routed-connectivity/voice half-duplex corrections
 are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
@@ -16,16 +17,17 @@ over `/yws/desktop` and recovered after a forced process stop. The immutable
 Voice Assistant with a bounded dialog roster, full offline Rasa NLU, Notebook,
 subnet environment, and Taiga demo metrics
 in-process. The browser has rendered persisted Notebook data, the editable
-subnet environment, the local Connect link, active browser sessions, bounded
+subnet environment, routed AdaOS Connect state, active browser sessions, bounded
 voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
 profile. The outbound
 member client has also joined a protocol-compatible Root/Hub fixture, survived
 a process restart and hub outage, and exchanged Yjs updates in both
-directions. A deployed-subnet run, Android Keystore custody, and the 2 GB
+directions. PoC11 additionally exercised the real regional Root route and the
+canonical Hub skills from the phone. Android Keystore custody and the 2 GB
 device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9 deliberately does not introduce Android-specific conversational models.
+PoC9-PoC11 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -77,13 +79,15 @@ optimize for learning rather than breadth.
 | Skill execution | Curated in-process skills only |
 | NLU | Always-on, offline Rasa inference; training and promotion off-device |
 | Model-backed companions | Canonical Hub skills over an allowlisted member RPC |
+| AdaOS Connect | This phone joins through Root; browser/Telegram/other-node invitations are created by the canonical Hub skill |
 | LLM secrets | Hub/Root only; never packaged or projected by the phone |
 | Local API | `127.0.0.1:8777`, HTTP and WebSocket |
 | Browser UI | Hosted `https://inimatic.com`, deployment zone `LO` |
 | Default webspace | `desktop` with `web_desktop` as its home scenario |
 | Installation | Immutable, versioned bundle packaged with the APK |
+| App identity | Canonical AdaOS mark on indigo for the native node; monochrome mark remains the browser/PWA identity |
 | Core update | Android application update; no `pip` or A/B core switch in the PoC |
-| Voice | Browser SpeechRecognition and speechSynthesis while the hosted client is open |
+| Voice | Half-duplex browser SpeechRecognition and speechSynthesis while the hosted client is open |
 | Native/background audio, media, WebRTC | Disabled in the first slice |
 | Memory hypothesis | A useful node can operate on a 2 GB arm64 phone without `largeHeap` |
 
@@ -299,6 +303,31 @@ with the application. Service skills and arbitrary marketplace installation
 remain unavailable. The normal skill SDK, event subscriptions, tools, skill
 memory, Yjs projections, and streams remain valid.
 
+### Mobile compatibility classes
+
+Compatibility is decided by declared capabilities, not by maintaining a
+second mobile implementation of each skill:
+
+| Class | Execution owner | Mobile rule | Examples |
+| --- | --- | --- | --- |
+| Portable local | Phone process | No subprocess, runtime `pip`, desktop signals, unbounded memory, or unavailable native wheel; uses the normal tool/event/Yjs contracts | Weather, Notebook, subnet environment, portable Rasa inference |
+| Hub delegated | Canonical Hub skill | Phone may project the UI and invoke only an explicitly allowlisted public tool over authenticated member RPC | conversation companions, LLM Teacher admission, AdaOS Connect invitations |
+| Android adapted | Existing AdaOS port with native Android adapter | Permissions and lifecycle are explicit; domain contract stays shared | future camera, location, notification, Keystore, foreground audio adapters |
+| Unsupported service | Desktop/service runtime | Reject activation and expose a capability error | shell, Docker, arbitrary child processes, service skills, runtime package installation |
+
+A scenario is mobile-compatible only when every required skill resolves to one
+of the first three classes. Optional requirements may be absent only when the
+scenario declares and renders that degradation. WebUI and Yjs data do not by
+themselves make a scenario compatible: background duration, permissions,
+native dependencies, storage bounds, and execution ownership are part of the
+gate.
+
+The next manifest revision should express these checks as shared metadata such
+as `execution_owner`, `requires_capabilities`, `resource_budget`, and
+`degradation_contract`. Android packaging then selects from the same skill and
+scenario sources. Its bundle descriptor is a delivery/profile adapter, not an
+independent behavior fork.
+
 ## Immutable Installation Profile
 
 The APK contains a versioned install descriptor named `android_poc_v1`. It
@@ -355,8 +384,11 @@ also tests pointer-first scenario switching and Yjs reconciliation.
 - `weather_skill` exercises browser geolocation, outbound HTTP, bounded caches,
   and a visible Yjs projection under `data/weather`.
 - `adaos_connect` exercises Root/member-link orchestration and the
-  `data/adaos_connect/current` projection. Root-dependent actions degrade
-  visibly while offline instead of blocking desktop boot.
+  `data/adaos_connect/current` projection. `Connect this phone` consumes a
+  Root one-time code; `Add browser`, `Add Telegram`, and `Add node` delegate to
+  the canonical Hub skill and therefore create remotely usable invitations.
+  Root-dependent actions degrade visibly while offline instead of blocking
+  desktop boot.
 - `notebook_skill` exercises local writes, skill memory, Yjs summary state,
   stream snapshots, restart rehydration, and browser uploads. Plain-text notes
   are the MVP gate; attachments and Telegram export are secondary checks.
@@ -479,8 +511,9 @@ The first vertical proof covers several paths rather than a synthetic page:
 - Taiga UI: demo snapshot -> Yjs table/tree/chart -> selection -> live stream
   event;
 - AdaOS Connect: prepare action -> Root/member orchestration -> Yjs QR and
-  instructions; the local browser mode instead returns a ready LO link without
-  pairing;
+  instructions. LO is deliberately absent from AdaOS Connect: the native
+  Activity's `Open AdaOS` action owns the already-trusted local-browser path,
+  while Connect creates authenticated remote invitations;
 - Browsers: control-channel registration -> bounded read-only session
   projection -> modal;
 - Voice Assistant: Android Chrome SpeechRecognition -> `dialog.user_message`
@@ -504,6 +537,19 @@ rather than maintaining a mobile copy of the persona. If that call is
 unavailable or times out, the turn remains usable through the explicit
 `android_offline_fallback` response source. The phone still cannot
 generate/install skills or start subprocesses.
+
+Continuous listening is half-duplex. Before browser TTS starts, the shared
+client stops STT and suppresses partial/final recognition events; it resumes
+continuous listening only after speech completion plus a bounded acoustic
+tail. This prevents a companion from turning its synthesized answer into the
+next user message. The implementation lives in `adaos-client`, so the browser
+contract is shared by stationary and mobile nodes.
+
+Remote dialog work also cannot occupy the control WebSocket reader. The phone
+runs at most one dialog command on a bounded worker while the reader continues
+to answer ping/pong; a concurrent second turn receives an explicit busy ACK.
+This separates a slow or unavailable LLM provider from browser transport
+health and prevents a long companion turn from being reported as Recovery.
 
 Before membership is configured, this document is local and standalone. After
 the phone joins a subnet, the existing member-link and webspace ownership rules
@@ -543,13 +589,13 @@ Dialogue execution is split by ownership, not duplicated by platform:
 - the canonical LLM Teacher consumes low-confidence
   `nlp.intent.not_obtained` events forwarded by the member link.
 
-The member RPC is not a generic remote executor. Its allowlist contains only
-the public `conversation_companions` operations; requests carry the authenticated
-member identity, use bounded timeouts, and cannot invoke shell, installation,
-or arbitrary skill tools. Teacher delivery similarly allows only the named
-NLU feedback event. The optional Teacher MCP-evidence lookup may time out
-independently and must not be interpreted as failure of phone NLU or companion
-LLM execution.
+The member RPC is not a generic remote executor. Its allowlist contains the
+public `conversation_companions` operations and `adaos_connect:prepare`;
+requests carry the authenticated member identity, use bounded timeouts, and
+cannot invoke shell, installation, or arbitrary skill tools. Teacher delivery
+similarly allows only the named NLU feedback event. The optional Teacher
+MCP-evidence lookup may time out independently and must not be interpreted as
+failure of phone NLU or companion LLM execution.
 
 ## Member Connectivity
 
@@ -570,15 +616,32 @@ The PoC9 Android profile implements:
 - bounded member-to-Hub RPC for canonical companion tools;
 - bounded forwarding of low-confidence NLU evidence to the canonical Teacher.
 
-AdaOS Connect accepts a Root URL and one-time join code, calls the existing
-join contract (with the compatibility endpoint as fallback), and persists the
-resolved Hub URL, subnet id, and credential in a separate app-private member
-configuration. The secret is never projected into Yjs or status responses.
+AdaOS Connect's `Connect this phone` mode accepts a Root URL and one-time join
+code, calls the existing join contract (with the compatibility endpoint as
+fallback), and persists the resolved Hub URL, subnet id, and credential in a
+separate app-private member configuration. Once connected, the other modes
+call the canonical Hub `adaos_connect:prepare` tool to add a remote browser,
+Telegram endpoint, or another node. The secret is never projected into Yjs or
+status responses.
+
+Invitation preparation is asynchronous and single-flight on Android. The
+control WebSocket acknowledges immediately with `pending`; the bounded member
+RPC runs on a worker and publishes `ready` or `error` through Yjs. Blocking the
+control socket for the Hub timeout would also block ping/pong and incorrectly
+push an otherwise healthy browser into Recovery.
 The client is outbound-only, supports `ws` and system-CA-validated `wss`, uses
 bounded exponential reconnect backoff and a bounded send queue, and can be
 explicitly disconnected and forgotten. The checked-in Root/Hub fixture proves
 the protocol and failure states; it is not a substitute for the roadmap's
 deployed-subnet acceptance run or later Android Keystore custody.
+
+Public Root membership must never downgrade HTTPS because the backend happens
+to listen on HTTP behind TLS termination. Root now derives join URLs from the
+public forwarded request base; Android additionally canonicalizes public
+`*.inimatic.com` URLs to HTTPS, upgrades an older persisted plaintext route
+without consuming a new join code, and rejects an HTTPS join response that
+tries to return a plaintext Hub route. Localhost HTTP remains valid for the
+development fixture.
 
 The desktop supervisor and realtime sidecar are not required for the first
 member link. Android owns process lifetime and the Python runtime owns the live
@@ -729,6 +792,46 @@ The implementation must preserve these invariants:
     dataset.
 16. Companion profiles, prompts, tools, Teacher logic, and LLM credentials
     remain canonical Hub/Root assets and are never copied into the APK.
+
+## Phone-as-Hub Boundary
+
+LLM training is not a phone-as-Hub blocker. The Hub may continue to use an
+external Root-configured LLM, exactly as companion execution does today. The
+remaining work is control-plane and lifecycle work:
+
+- a phone is normally behind Wi-Fi/cellular NAT and cannot be an inbound
+  rendezvous, so browser/member traffic needs an outbound Root/NATS reverse
+  route owned by the phone;
+- Hub authority must own a member registry, authenticated sessions, Yjs
+  ownership/convergence, member RPC, and reconnect semantics, rather than only
+  acting as one member;
+- Android Doze, process reclamation, network handover, battery, and thermal
+  limits make 24/7 Hub availability weaker than on a stationary host;
+- Hub secrets, long-lived keys, and route credentials need Android Keystore
+  custody and rotation;
+- the common Hub runtime's dependency closure still includes native or
+  desktop-oriented packages which need Android wheels or capability adapters;
+- arbitrary service skills cannot rely on subprocess isolation, signals,
+  Docker, writable virtual environments, or runtime `pip`;
+- a 2 GB device needs explicit bounds for concurrent WebSockets, YDocs,
+  caches, logs, and skill calls;
+- core activation and rollback must use signed APK/application updates rather
+  than desktop A/B Python slots.
+
+The realistic next product is therefore a **restricted edge Hub**, not an
+unqualified desktop Hub port. It keeps all Root/route transports outbound,
+uses the common Hub protocols and canonical skills, admits only portable,
+Hub-delegated, or Android-adapted capabilities, and remains locally usable
+during WAN loss. It can later graduate toward a full Hub as dependency,
+isolation, Keystore, and lifecycle gates are proven; embedded/on-device LLM
+training is not on that critical path.
+
+The shortest edge-Hub experiment should therefore add Hub authority to this
+same Android runtime profile rather than create another mobile core: one local
+webspace, a small bounded member registry, the existing outbound Root route,
+canonical allowlisted skills, and APK-owned updates. Multi-webspace hosting,
+arbitrary service skills, marketplace execution, boot-time availability, and
+large media workloads remain later gates.
 
 ## Non-Goals for the First PoC
 
