@@ -887,7 +887,7 @@ def _publish_yjs_update(update: bytes) -> None:
         _broadcast_yjs(_encode_sync_message(2, update))
         member_link = _member_link
         if member_link is not None:
-            member_link.send_yjs_update(update)
+            member_link.send_node_state(reason="android_projection_changed")
 
 
 def _broadcast_control_event(kind: str, payload: dict[str, Any], source: str) -> None:
@@ -943,7 +943,7 @@ def _remember_yjs_update(update: bytes) -> bool:
     if applied:
         member_link = _member_link
         if member_link is not None:
-            member_link.send_yjs_update(update)
+            member_link.send_node_state(reason="browser_projection_changed")
     return applied
 
 

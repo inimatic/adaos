@@ -52,6 +52,16 @@ class Evidence:
                 "last_status_connected": bool(self.last_status),
                 "last_catalog_received": bool(self.last_catalog),
                 "last_node_state_received": bool(self.last_node_state),
+                "last_node_label": str(
+                    (
+                        (
+                            (self.last_node_state.get("desktop") or {}).get("subnet_env")
+                            or {}
+                        ).get("current")
+                        or {}
+                    ).get("node_label")
+                    or ""
+                ),
             }
 
 

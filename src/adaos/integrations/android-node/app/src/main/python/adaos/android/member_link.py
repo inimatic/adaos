@@ -24,6 +24,7 @@ _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_FRAME_BYTES = 4 * 1024 * 1024
 _MAX_OUTBOUND_MESSAGES = 128
 _MAX_MEMBER_YJS_UPDATE_BYTES = 512 * 1024
+_HUB_ACTIVITY_STALE_AFTER_SECONDS = 15.0
 _ALLOWED_MEMBER_EVENTS = frozenset({"nlp.intent.not_obtained"})
 
 
@@ -265,11 +266,17 @@ class AndroidMemberLink:
         self._connected = False
         self._connected_at = 0.0
         self._last_message_at = 0.0
+        self._last_pong_at = 0.0
+        self._hello_ack_ok = False
+        self._hello_ack_at = 0.0
         self._last_error = ""
         self._connect_attempts = 0
         self._reconnect_total = 0
         self._received_yjs_total = 0
+        self._ignored_hub_yjs_total = 0
         self._sent_yjs_total = 0
+        self._sent_node_state_total = 0
+        self._node_state_queued = False
         self._dropped_messages = 0
         self._pending_rpc: dict[str, queue.Queue[dict[str, Any]]] = {}
         self._rpc_requested_total = 0
@@ -385,8 +392,14 @@ class AndroidMemberLink:
         join_code = str(code or "").strip()
         if not join_code:
             raise ValueError("member_join_code_required")
+        status = self._member_status()
+        node_label = str(
+            status.get("node_label")
+            or status.get("primary_node_name")
+            or "Android phone"
+        ).strip()
         body = json.dumps(
-            {"code": join_code, "node_id": self.node_id, "hostname": "Android phone"}
+            {"code": join_code, "node_id": self.node_id, "hostname": node_label}
         ).encode("utf-8")
         errors: list[str] = []
         response: dict[str, Any] | None = None
@@ -405,7 +418,18 @@ class AndroidMemberLink:
                     break
                 errors.append(f"{endpoint}:invalid_response")
             except HTTPError as exc:
-                errors.append(f"{endpoint}:http_{exc.code}")
+                server_error = ""
+                try:
+                    error_payload = json.loads(exc.read(64 * 1024).decode("utf-8"))
+                    if isinstance(error_payload, dict):
+                        server_error = str(
+                            error_payload.get("error")
+                            or error_payload.get("detail")
+                            or ""
+                        ).strip()
+                except (OSError, UnicodeDecodeError, ValueError, TypeError):
+                    pass
+                errors.append(f"{endpoint}:{server_error or f'http_{exc.code}'}")
                 if exc.code not in {404, 405}:
                     break
             except (URLError, OSError, ValueError) as exc:
@@ -442,20 +466,27 @@ class AndroidMemberLink:
         return self.snapshot()
 
     def send_yjs_update(self, update: bytes) -> bool:
+        """Compatibility shim: publish bounded node-owned state, never a raw YDoc."""
+
         payload = bytes(update)
         if not payload or len(payload) > _MAX_MEMBER_YJS_UPDATE_BYTES:
             return False
+        return self.send_node_state(reason="local_yjs_changed")
+
+    def send_node_state(self, *, reason: str = "local_state_changed") -> bool:
         with self._lock:
             if not self._config.get("enabled"):
                 return False
-        return self._enqueue(
-            {
-                "t": "yjs.update",
-                "webspace_id": "desktop",
-                "update_b64": base64.b64encode(payload).decode("ascii"),
-                "ts": time.time(),
-            }
+            if self._node_state_queued:
+                return True
+            self._node_state_queued = True
+        queued = self._enqueue(
+            {"t": "_node_state.refresh", "reason": str(reason or "local_state_changed")}
         )
+        if not queued:
+            with self._lock:
+                self._node_state_queued = False
+        return queued
 
     def send_bus_event(
         self,
@@ -468,7 +499,7 @@ class AndroidMemberLink:
         if normalized not in _ALLOWED_MEMBER_EVENTS:
             return False
         with self._lock:
-            if not self._connected:
+            if not self._is_connected_locked():
                 return False
         return self._enqueue(
             {
@@ -493,7 +524,7 @@ class AndroidMemberLink:
         if ":" not in normalized_tool:
             raise ValueError("member_rpc_tool_invalid")
         with self._lock:
-            if not self._connected:
+            if not self._is_connected_locked():
                 raise ConnectionError("member_link_not_connected")
         request_id = f"android_rpc_{uuid.uuid4().hex}"
         response_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
@@ -550,7 +581,10 @@ class AndroidMemberLink:
             return True
         except queue.Full:
             try:
-                self._outbound.get_nowait()
+                dropped = self._outbound.get_nowait()
+                if dropped.get("t") == "_node_state.refresh":
+                    with self._lock:
+                        self._node_state_queued = False
             except queue.Empty:
                 pass
             self._dropped_messages += 1
@@ -565,10 +599,27 @@ class AndroidMemberLink:
             try:
                 self._outbound.get_nowait()
             except queue.Empty:
+                with self._lock:
+                    self._node_state_queued = False
                 return
+
+    def _is_connected_locked(self, now: float | None = None) -> bool:
+        if not self._connected or not self._hello_ack_ok:
+            return False
+        current = time.time() if now is None else float(now)
+        last_activity = max(
+            float(self._last_pong_at or 0.0),
+            float(self._last_message_at or 0.0),
+            float(self._hello_ack_at or 0.0),
+        )
+        return bool(
+            last_activity > 0.0
+            and current - last_activity <= _HUB_ACTIVITY_STALE_AFTER_SECONDS
+        )
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            now = time.time()
             config = dict(self._config)
             hub_url = _redacted_url(str(config.get("hub_url") or ""))
             transport_security = "unconfigured"
@@ -576,14 +627,20 @@ class AndroidMemberLink:
                 transport_security = (
                     "tls" if hub_url.startswith(("https://", "wss://")) else "plaintext"
                 )
+            connected = self._is_connected_locked(now)
+            state = self._state
+            last_error = self._last_error
+            if self._connected and not connected:
+                state = "recovering"
+                last_error = "hub_activity_timeout"
             return {
                 "schema": "adaos.android.member_link.status.v1",
                 "configured": bool(
                     config.get("hub_url") and config.get("subnet_id") and config.get("token")
                 ),
                 "enabled": bool(config.get("enabled")),
-                "connected": self._connected,
-                "state": self._state,
+                "connected": connected,
+                "state": state,
                 "hub_url": hub_url,
                 "root_url": _redacted_url(str(config.get("root_url") or "")),
                 "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
@@ -591,13 +648,29 @@ class AndroidMemberLink:
                 "transport_security": transport_security,
                 "connected_at": self._connected_at,
                 "last_message_at": self._last_message_at,
-                "last_error": self._last_error,
+                "last_message_ago_s": (
+                    round(max(0.0, now - self._last_message_at), 3)
+                    if self._last_message_at
+                    else None
+                ),
+                "last_pong_at": self._last_pong_at,
+                "last_pong_ago_s": (
+                    round(max(0.0, now - self._last_pong_at), 3)
+                    if self._last_pong_at
+                    else None
+                ),
+                "hello_ack_ok": self._hello_ack_ok,
+                "hello_ack_at": self._hello_ack_at,
+                "heartbeat_stale_after_s": _HUB_ACTIVITY_STALE_AFTER_SECONDS,
+                "last_error": last_error,
                 "connect_attempts": self._connect_attempts,
                 "reconnect_total": self._reconnect_total,
                 "queued_messages": self._outbound.qsize(),
                 "dropped_messages": self._dropped_messages,
                 "sent_yjs_total": self._sent_yjs_total,
                 "received_yjs_total": self._received_yjs_total,
+                "ignored_hub_yjs_total": self._ignored_hub_yjs_total,
+                "sent_node_state_total": self._sent_node_state_total,
                 "pending_rpc": len(self._pending_rpc),
                 "rpc_requested_total": self._rpc_requested_total,
                 "rpc_completed_total": self._rpc_completed_total,
@@ -618,6 +691,7 @@ class AndroidMemberLink:
                 self._connected_at = time.time()
             if not connected:
                 self._connected_at = 0.0
+                self._hello_ack_ok = False
             snapshot = self.snapshot()
         if changed:
             try:
@@ -635,14 +709,15 @@ class AndroidMemberLink:
 
     def _send_initial_state(self, connection: _WebSocketClient) -> None:
         now = time.time()
-        connection.send_json({"t": "node.status", "status": self._member_status(), "ts": now})
+        status = self._member_status()
+        connection.send_json({"t": "node.status", "status": status, "ts": now})
         document = self._member_document()
         connection.send_json(
             {
                 "t": "node.catalog",
                 "snapshot": {
                     "node_id": self.node_id,
-                    "status": self._member_status(),
+                    "status": status,
                     "desktop_catalog": document.get("data", {}).get("catalog", {}),
                     "captured_at": now,
                 },
@@ -658,12 +733,15 @@ class AndroidMemberLink:
                 "ts": now,
             }
         )
+        self._sent_node_state_total += 1
 
     def _handle_message(self, connection: _WebSocketClient, message: dict[str, Any]) -> None:
         self._last_message_at = time.time()
         kind = str(message.get("t") or "")
         if kind == "ping":
             connection.send_json({"t": "pong", "ts": time.time()})
+        elif kind == "pong":
+            self._last_pong_at = time.time()
         elif kind == "node.status.request":
             connection.send_json(
                 {"t": "node.status", "status": self._member_status(), "ts": time.time()}
@@ -671,11 +749,11 @@ class AndroidMemberLink:
         elif kind in {"node.catalog.request", "node.snapshot.request"}:
             self._send_initial_state(connection)
         elif kind == "yjs.update":
-            encoded = str(message.get("update_b64") or "")
-            if encoded:
-                update = base64.b64decode(encoded.encode("ascii"), validate=False)
-                if len(update) <= _MAX_MEMBER_YJS_UPDATE_BYTES and self.apply_yjs_update(update):
-                    self._received_yjs_total += 1
+            # A member owns its local webspace. Hub state is projected into the
+            # Hub's data.nodes/<node_id> branch and must not be merged into the
+            # phone's standalone desktop YDoc.
+            self._received_yjs_total += 1
+            self._ignored_hub_yjs_total += 1
         elif kind == "rpc.res":
             request_id = str(message.get("id") or "")
             with self._lock:
@@ -734,9 +812,13 @@ class AndroidMemberLink:
                         "t": "hello",
                         "node_id": self.node_id,
                         "subnet_id": str(config.get("subnet_id") or ""),
-                        "hostname": "Android phone",
+                        "hostname": str(
+                            self._member_status().get("node_label") or "Android phone"
+                        ),
                         "roles": ["member"],
-                        "node_names": ["Android phone"],
+                        "node_names": [
+                            str(self._member_status().get("node_label") or "Android phone")
+                        ],
                         "base_url": None,
                         "capacity": {"profile": "android_poc"},
                     }
@@ -754,7 +836,10 @@ class AndroidMemberLink:
                     self._reconnect_total += 1
                 ever_connected = True
                 backoff = 1.0
-                self._last_message_at = time.time()
+                acknowledged_at = time.time()
+                self._last_message_at = acknowledged_at
+                self._hello_ack_at = acknowledged_at
+                self._hello_ack_ok = True
                 self._set_state("connected", connected=True, error="")
                 self._send_initial_state(connection)
                 last_ping = time.monotonic()
@@ -768,13 +853,33 @@ class AndroidMemberLink:
                             outbound = self._outbound.get_nowait()
                         except queue.Empty:
                             break
+                        outbound_kind = str(outbound.get("t") or "")
+                        if outbound_kind == "_node_state.refresh":
+                            with self._lock:
+                                self._node_state_queued = False
+                            outbound = {
+                                "t": "yjs.node_state",
+                                "webspace_id": "desktop",
+                                "state": self._member_document(),
+                                "reason": str(
+                                    outbound.get("reason") or "local_state_changed"
+                                ),
+                                "ts": time.time(),
+                            }
                         try:
                             connection.send_json(outbound)
                         except Exception:
-                            self._enqueue(outbound)
+                            if outbound.get("t") == "yjs.node_state":
+                                self.send_node_state(
+                                    reason=str(outbound.get("reason") or "send_retry")
+                                )
+                            else:
+                                self._enqueue(outbound)
                             raise
                         if outbound.get("t") == "yjs.update":
                             self._sent_yjs_total += 1
+                        elif outbound.get("t") == "yjs.node_state":
+                            self._sent_node_state_total += 1
                     now = time.monotonic()
                     if now - last_ping >= 5.0:
                         connection.send_json({"t": "ping", "ts": time.time()})
@@ -791,6 +896,18 @@ class AndroidMemberLink:
                     message = connection.recv_json(timeout=0.5)
                     if message is not None:
                         self._handle_message(connection, message)
+                    with self._lock:
+                        last_activity = max(
+                            float(self._last_pong_at or 0.0),
+                            float(self._last_message_at or 0.0),
+                            float(self._hello_ack_at or 0.0),
+                        )
+                    if (
+                        last_activity > 0.0
+                        and time.time() - last_activity
+                        > _HUB_ACTIVITY_STALE_AFTER_SECONDS
+                    ):
+                        raise ConnectionError("hub_activity_timeout")
             except Exception as exc:
                 if not self._stop.is_set():
                     self._set_state(

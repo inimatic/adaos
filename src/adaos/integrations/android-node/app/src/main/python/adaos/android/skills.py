@@ -260,6 +260,11 @@ class AndroidSkillRuntime:
         self._closed = False
         self._connect_prepare_generation = 0
         self._connect_prepare_thread: threading.Thread | None = None
+        self._member_join_generation = 0
+        self._member_join_thread: threading.Thread | None = None
+        self._last_dialog_route = "not_used"
+        self._last_dialog_error = ""
+        self._last_dialog_route_at = ""
         self._stream_revision = 0
         self._database = sqlite3.connect(
             str(Path(data_root) / "android-skills.sqlite3"),
@@ -895,6 +900,7 @@ class AndroidSkillRuntime:
                 ),
                 "hub_url": str(member.get("hub_url") or ""),
                 "join_code": "",
+                "join_status": "idle",
                 "subnet_id": str(member.get("subnet_id") or self.subnet_id),
                 "member_link_state": state,
                 "connected": connected,
@@ -1066,18 +1072,117 @@ class AndroidSkillRuntime:
             arguments.get("root_url") or self._setting("member_root_url", "")
         ).strip()
         code = str(arguments.get("code") or arguments.get("join_code") or "").strip()
+        if not root_url.startswith(("http://", "https://")):
+            raise AndroidSkillError("adaos_connect_root_url_invalid")
+        if not code:
+            raise AndroidSkillError("member_join_code_required")
+        request_id = str(
+            arguments.get("request_id") or f"android-join-{uuid.uuid4().hex}"
+        )
+        with self._lock:
+            active = self._member_join_thread
+            if active is not None and active.is_alive():
+                return self._connect_current()
+            self._member_join_generation += 1
+            generation = self._member_join_generation
+            worker = threading.Thread(
+                target=self._finish_member_join,
+                args=(root_url, code, request_id, generation),
+                name="adaos-android-member-join",
+                daemon=True,
+            )
+            self._member_join_thread = worker
+        member = self.member_link.snapshot()
+        snapshot = self._connect_snapshot(
+            "member", request_id, member_status=member
+        )
+        snapshot["current"].update(
+            {
+                "status": "pending",
+                "degraded": False,
+                "pending": True,
+                "error": "",
+                "summary": "The phone is validating the join code with AdaOS Root.",
+                "join_code": "",
+                "join_status": "validating",
+                "source": "android_member_join",
+            }
+        )
+        self._set_paths({"data/adaos_connect": snapshot})
+        worker.start()
+        return snapshot
+
+    def _finish_member_join(
+        self,
+        root_url: str,
+        code: str,
+        request_id: str,
+        generation: int,
+    ) -> None:
+        error: Exception | None = None
+        result: dict[str, Any] | None = None
         try:
             result = self.member_link.join(root_url=root_url, code=code)
-        except (ValueError, RuntimeError) as exc:
-            raise AndroidSkillError(str(exc)) from exc
-        joined_root_url = str(result.get("root_url") or root_url).strip()
-        if joined_root_url:
-            self._set_setting("member_root_url", joined_root_url.rstrip("/"))
-        return self.project_member_link(result)
+        except Exception as exc:
+            error = exc
+        with self._lock:
+            if self._closed or generation != self._member_join_generation:
+                return
+            member = (
+                dict(result)
+                if isinstance(result, dict)
+                else self.member_link.snapshot()
+                if self.member_link is not None
+                else {}
+            )
+            if error is None:
+                joined_root_url = str(member.get("root_url") or root_url).strip()
+                if joined_root_url:
+                    self._set_setting("member_root_url", joined_root_url.rstrip("/"))
+                snapshot = self._connect_snapshot(
+                    "member", request_id, member_status=member
+                )
+                connected = bool(member.get("connected"))
+                snapshot["current"].update(
+                    {
+                        "status": "connected" if connected else "connecting",
+                        "degraded": False,
+                        "pending": not connected,
+                        "error": "",
+                        "summary": (
+                            "The phone joined the subnet and the Hub link is ready."
+                            if connected
+                            else "Join accepted; the phone is establishing the Hub link."
+                        ),
+                        "join_code": "",
+                        "join_status": "joined",
+                        "source": "android_member_join",
+                    }
+                )
+            else:
+                snapshot = self._connect_snapshot(
+                    "member", request_id, member_status=member
+                )
+                snapshot["current"].update(
+                    {
+                        "status": "error",
+                        "degraded": True,
+                        "pending": False,
+                        "error": f"{type(error).__name__}:{str(error)[:180]}",
+                        "summary": "The phone could not join the subnet. Check that the one-time code is still valid.",
+                        "join_code": "",
+                        "join_status": "error",
+                        "source": "android_member_join",
+                    }
+                )
+            self._member_join_thread = None
+        self._set_paths({"data/adaos_connect": snapshot})
 
     def _disconnect_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.member_link is None:
             raise AndroidSkillError("android_member_link_not_ready")
+        with self._lock:
+            self._member_join_generation += 1
         result = self.member_link.disconnect(forget=bool(arguments.get("forget")))
         return self.project_member_link(result)
 
@@ -1141,6 +1246,16 @@ class AndroidSkillRuntime:
                 "model_backed": model_backed,
                 "full_runtime": hub_companion and hub_connected,
                 "scope": scope,
+                "llm_route_status": (
+                    "root_connected_unverified"
+                    if hub_companion and hub_connected
+                    else "offline_fallback"
+                    if hub_companion
+                    else "not_applicable"
+                ),
+                "llm_last_route": self._last_dialog_route if hub_companion else "not_used",
+                "llm_last_error": self._last_dialog_error if hub_companion else "",
+                "llm_last_route_at": self._last_dialog_route_at if hub_companion else "",
                 "voice_profile": {
                     "lang": "ru-RU",
                     "gender": projected.get("gender"),
@@ -1448,12 +1563,22 @@ class AndroidSkillRuntime:
                 },
                 timeout=40.0,
             )
-        except Exception:
+        except Exception as exc:
+            self._last_dialog_route = "root_rpc_failed"
+            self._last_dialog_error = f"{type(exc).__name__}:{str(exc)[:180]}"
+            self._last_dialog_route_at = _utc_now()
             return None, False
         if not isinstance(result, dict):
+            self._last_dialog_route = "root_result_invalid"
+            self._last_dialog_error = "conversation_companions_result_invalid"
+            self._last_dialog_route_at = _utc_now()
             return None, False
         message = str(result.get("message") or "").strip()
-        return (message or None), bool(result.get("used_llm"))
+        used_llm = bool(result.get("used_llm"))
+        self._last_dialog_route = "root_llm" if used_llm else "root_skill_without_llm"
+        self._last_dialog_error = ""
+        self._last_dialog_route_at = _utc_now()
+        return (message or None), used_llm
 
     def handle_dialog_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
@@ -1508,6 +1633,11 @@ class AndroidSkillRuntime:
             response_text = self._voice_response(response_input, active_agent)
             response_source = "android_offline_fallback"
             used_llm = False
+            if str(active_agent.get("owner") or "") == "skill:conversation_companions":
+                if self._last_dialog_route not in {"root_rpc_failed", "root_result_invalid"}:
+                    self._last_dialog_route = "android_offline_fallback"
+                    self._last_dialog_error = "hub_link_unavailable"
+                    self._last_dialog_route_at = _utc_now()
         current = self._voice_current()
         messages = [
             dict(item)
@@ -1543,6 +1673,8 @@ class AndroidSkillRuntime:
                     },
                     "response_source": response_source,
                     "used_llm": used_llm,
+                    "llm_route": self._last_dialog_route,
+                    "llm_route_error": self._last_dialog_error,
                 },
             ]
         )
@@ -1598,6 +1730,8 @@ class AndroidSkillRuntime:
             "active_agent_label": active_agent["label"],
             "response_source": response_source,
             "used_llm": used_llm,
+            "llm_route": self._last_dialog_route,
+            "llm_route_error": self._last_dialog_error,
             "nlu": nlu_projection,
         }
 
@@ -1864,5 +1998,6 @@ class AndroidSkillRuntime:
         with self._lock:
             self._closed = True
             self._connect_prepare_generation += 1
+            self._member_join_generation += 1
             self._database.commit()
             self._database.close()

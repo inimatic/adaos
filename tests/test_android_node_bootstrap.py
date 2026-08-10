@@ -581,7 +581,7 @@ def test_loopback_sentinel_admits_inimatic_cors_and_private_network(tmp_path: Pa
         bootstrap.stop()
 
 
-def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> None:
+def test_android_member_join_reconnect_and_node_owned_yjs_projection(tmp_path: Path) -> None:
     bootstrap = _load_bootstrap()
     fixture = _load_member_fixture()
     evidence = fixture.Evidence(
@@ -613,6 +613,8 @@ def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> 
             {"root_url": f"http://127.0.0.1:{root_port}", "code": "TEST-JOIN"},
         )
         assert code == 200 and joined["ok"] is True
+        assert joined["result"]["current"]["status"] == "pending"
+        assert joined["result"]["current"]["join_status"] == "validating"
         assert joined["result"]["current"]["join_code"] == ""
         assert "test-member-token" not in json.dumps(joined)
 
@@ -643,9 +645,9 @@ def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> 
             ) as response:
                 snapshot = json.load(response)["snapshot"]
             return bool(
-                evidence.snapshot()["yjs_update_total"] >= 1
-                and snapshot.get("runtime", {}).get("member_hub_probe")
-                == "received-from-protocol-hub"
+                evidence.snapshot()["yjs_node_state_total"] >= 2
+                and evidence.snapshot()["last_node_label"] == "Linked Android"
+                and "member_hub_probe" not in snapshot.get("runtime", {})
             )
 
         _wait_until(converged)
@@ -654,6 +656,8 @@ def test_android_member_join_reconnect_and_bidirectional_yjs(tmp_path: Path) -> 
         assert status["subnet_id"] == "test-member-subnet"
         assert status["connected_to_hub"] is True
         assert status["runtime"]["member_link"]["token_present"] is True
+        assert status["runtime"]["member_link"]["sent_yjs_total"] == 0
+        assert status["runtime"]["member_link"]["ignored_hub_yjs_total"] >= 1
         assert "test-member-token" not in json.dumps(status)
 
         code, disconnected = _post_json(
