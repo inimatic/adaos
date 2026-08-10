@@ -10,6 +10,10 @@ import pytest
 
 from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
+from adaos.services.bootstrap_runtime import hub_route_proxy as _hub_route_proxy
+from adaos.services.bootstrap_runtime import nats_bridge as _nats_bridge
+from adaos.services.bootstrap_runtime import status_policy as _status_policy
+from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cleanup
 from adaos.services.bootstrap_runtime.nats_transport_runtime import _sidecar_tail_summary
 from adaos.services.system_model import service as system_model_service
 
@@ -21,8 +25,8 @@ def _generic_public_route(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_nats_url_needs_public_ws_refresh_for_legacy_public_tcp_url() -> None:
-    assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://nats.inimatic.com:4222") is True
-    assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://api.inimatic.com:4222") is True
+    assert _nats_bridge._nats_url_needs_public_ws_refresh("nats://nats.inimatic.com:4222") is True
+    assert _nats_bridge._nats_url_needs_public_ws_refresh("nats://api.inimatic.com:4222") is True
 
 
 def test_nats_bridge_policy_is_typed_bootstrap_dependency() -> None:
@@ -43,27 +47,27 @@ def test_hub_route_proxy_policy_owns_discovery_cache() -> None:
 
 
 def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:
-    assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://127.0.0.1:4222") is False
-    assert bootstrap_mod._nats_url_needs_public_ws_refresh("nats://localhost:4222") is False
-    assert bootstrap_mod._nats_url_needs_public_ws_refresh("wss://nats.inimatic.com/nats") is False
+    assert _nats_bridge._nats_url_needs_public_ws_refresh("nats://127.0.0.1:4222") is False
+    assert _nats_bridge._nats_url_needs_public_ws_refresh("nats://localhost:4222") is False
+    assert _nats_bridge._nats_url_needs_public_ws_refresh("wss://nats.inimatic.com/nats") is False
 
 
 def test_loop_hang_watchdog_requires_explicit_unsafe_opt_in(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG", "1")
     monkeypatch.delenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", raising=False)
 
-    assert bootstrap_mod._loop_hang_watchdog_enabled_from_env() is False
+    assert _status_policy._loop_hang_watchdog_enabled_from_env() is False
 
     monkeypatch.setenv("ADAOS_LOOP_HANG_WATCHDOG_UNSAFE", "1")
 
-    assert bootstrap_mod._loop_hang_watchdog_enabled_from_env() is True
+    assert _status_policy._loop_hang_watchdog_enabled_from_env() is True
 
 
 def test_realtime_sidecar_fallback_candidates_disable_tcp_fallback_by_default(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_REALTIME_ALLOW_TCP_FALLBACK", raising=False)
 
     assert (
-        bootstrap_mod._build_realtime_sidecar_fallback_candidates(
+        _nats_bridge._build_realtime_sidecar_fallback_candidates(
             ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"],
             local_candidate="nats://127.0.0.1:7422",
         )
@@ -74,7 +78,7 @@ def test_realtime_sidecar_fallback_candidates_disable_tcp_fallback_by_default(mo
 def test_realtime_sidecar_fallback_candidates_can_keep_raw_tcp_fallback(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ALLOW_TCP_FALLBACK", "1")
 
-    assert bootstrap_mod._build_realtime_sidecar_fallback_candidates(
+    assert _nats_bridge._build_realtime_sidecar_fallback_candidates(
         ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"],
         local_candidate="nats://127.0.0.1:7422",
     ) == ["nats://nats.inimatic.com:4222", "wss://nats.inimatic.com/nats"]
@@ -82,14 +86,14 @@ def test_realtime_sidecar_fallback_candidates_can_keep_raw_tcp_fallback(monkeypa
 
 def test_nats_quarantine_skips_local_realtime_sidecar_candidate() -> None:
     assert (
-        bootstrap_mod._should_quarantine_nats_candidate(
+        _nats_bridge._should_quarantine_nats_candidate(
             "nats://127.0.0.1:7422",
             local_sidecar_url="nats://127.0.0.1:7422",
         )
         is False
     )
     assert (
-        bootstrap_mod._should_quarantine_nats_candidate(
+        _nats_bridge._should_quarantine_nats_candidate(
             "wss://ru.api.inimatic.com/nats",
             local_sidecar_url="nats://127.0.0.1:7422",
         )
@@ -99,15 +103,15 @@ def test_nats_quarantine_skips_local_realtime_sidecar_candidate() -> None:
 
 def test_sidecar_transient_failover_is_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", raising=False)
-    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is False
+    assert _nats_bridge._hub_nats_sidecar_failover_on_transient() is False
 
     monkeypatch.setenv("HUB_NATS_SIDECAR_FAILOVER_ON_TRANSIENT", "1")
-    assert bootstrap_mod._hub_nats_sidecar_failover_on_transient() is True
+    assert _nats_bridge._hub_nats_sidecar_failover_on_transient() is True
 
 
 def test_resolve_nats_log_server_prefers_current_attempt() -> None:
     assert (
-        bootstrap_mod._resolve_nats_log_server(
+        _nats_bridge._resolve_nats_log_server(
             current_attempt="nats://127.0.0.1:7422",
             connected_server="nats://nats.inimatic.com:4222",
         )
@@ -118,37 +122,37 @@ def test_resolve_nats_log_server_prefers_current_attempt() -> None:
 def test_hub_nats_prefer_dedicated_defaults_to_api_domain(monkeypatch) -> None:
     monkeypatch.delenv("HUB_NATS_PREFER_DEDICATED", raising=False)
 
-    assert bootstrap_mod._hub_nats_prefer_dedicated() == "0"
+    assert _nats_bridge._hub_nats_prefer_dedicated() == "0"
 
 
 def test_hub_nats_prefer_dedicated_respects_explicit_override(monkeypatch) -> None:
     monkeypatch.setenv("HUB_NATS_PREFER_DEDICATED", "1")
 
-    assert bootstrap_mod._hub_nats_prefer_dedicated() == "1"
+    assert _nats_bridge._hub_nats_prefer_dedicated() == "1"
 
 
 def test_normalize_hub_nats_ws_url_rewrites_public_dedicated_by_default(monkeypatch) -> None:
     monkeypatch.delenv("HUB_NATS_PREFER_DEDICATED", raising=False)
 
-    assert bootstrap_mod._normalize_hub_nats_ws_url("wss://nats.inimatic.com/nats") == "wss://api.inimatic.com/nats"
+    assert _nats_bridge._normalize_hub_nats_ws_url("wss://nats.inimatic.com/nats") == "wss://api.inimatic.com/nats"
 
 
 def test_normalize_hub_nats_ws_url_keeps_public_dedicated_on_opt_in(monkeypatch) -> None:
     monkeypatch.setenv("HUB_NATS_PREFER_DEDICATED", "1")
 
-    assert bootstrap_mod._normalize_hub_nats_ws_url("wss://nats.inimatic.com/nats") == "wss://nats.inimatic.com/nats"
+    assert _nats_bridge._normalize_hub_nats_ws_url("wss://nats.inimatic.com/nats") == "wss://nats.inimatic.com/nats"
 
 
 def test_hub_public_ws_candidates_default_to_api_only(monkeypatch) -> None:
     monkeypatch.delenv("HUB_NATS_PREFER_DEDICATED", raising=False)
 
-    assert bootstrap_mod._hub_public_ws_candidates(None) == ["wss://api.inimatic.com/nats"]
+    assert _nats_bridge._hub_public_ws_candidates(None) == ["wss://api.inimatic.com/nats"]
 
 
 def test_hub_public_ws_candidates_rewrite_public_dedicated_default(monkeypatch) -> None:
     monkeypatch.delenv("HUB_NATS_PREFER_DEDICATED", raising=False)
 
-    assert bootstrap_mod._hub_public_ws_candidates("wss://nats.inimatic.com/nats") == [
+    assert _nats_bridge._hub_public_ws_candidates("wss://nats.inimatic.com/nats") == [
         "wss://api.inimatic.com/nats"
     ]
 
@@ -156,7 +160,7 @@ def test_hub_public_ws_candidates_rewrite_public_dedicated_default(monkeypatch) 
 def test_hub_public_ws_candidates_can_opt_in_dedicated(monkeypatch) -> None:
     monkeypatch.setenv("HUB_NATS_PREFER_DEDICATED", "1")
 
-    assert bootstrap_mod._hub_public_ws_candidates("wss://nats.inimatic.com/nats") == [
+    assert _nats_bridge._hub_public_ws_candidates("wss://nats.inimatic.com/nats") == [
         "wss://nats.inimatic.com/nats",
         "wss://api.inimatic.com/nats",
     ]
@@ -165,13 +169,13 @@ def test_hub_public_ws_candidates_can_opt_in_dedicated(monkeypatch) -> None:
 def test_hub_route_force_close_no_upstream_defaults_enabled(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_FORCE_CLOSE_NO_UPSTREAM_S", raising=False)
 
-    assert bootstrap_mod._hub_route_force_close_no_upstream_s() == 1.5
+    assert _hub_route_proxy._hub_route_force_close_no_upstream_s() == 1.5
 
 
 def test_hub_route_force_close_no_upstream_can_disable(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_FORCE_CLOSE_NO_UPSTREAM_S", "0")
 
-    assert bootstrap_mod._hub_route_force_close_no_upstream_s() == 0.0
+    assert _hub_route_proxy._hub_route_force_close_no_upstream_s() == 0.0
 
 
 @pytest.mark.asyncio
@@ -376,7 +380,7 @@ def test_sidecar_error_tail_is_byte_bounded_for_large_diag_file(monkeypatch: pyt
     monkeypatch.setenv("HUB_SIDECAR_TAIL_READ_BYTES", "4096")
     monkeypatch.setenv("HUB_SIDECAR_TAIL_MAX_LINE_CHARS", "256")
 
-    lines = bootstrap_mod._read_sidecar_tail_lines(diag_path, lines=2)
+    lines = _nats_bridge._read_sidecar_tail_lines(diag_path, lines=2)
 
     assert lines == ['{"ts": 2, "line": "middle"}', '{"ts": 3, "line": "tail"}']
 
@@ -405,7 +409,7 @@ def test_sidecar_error_tail_summary_bounds_plain_text() -> None:
 def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", raising=False)
 
-    raw = bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024)
+    raw = _hub_route_proxy._hub_route_max_chunk_raw_bytes(256 * 1024)
 
     assert raw < 256 * 1024
     assert raw % (4 * 1024) == 0
@@ -415,17 +419,17 @@ def test_hub_route_max_chunk_raw_accounts_for_base64_overhead(monkeypatch) -> No
 def test_hub_route_max_chunk_raw_clamps_explicit_value_to_guard(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", str(300_000))
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) < 256 * 1024
+    assert _hub_route_proxy._hub_route_max_chunk_raw_bytes(256 * 1024) < 256 * 1024
 
 
 def test_hub_route_max_chunk_raw_respects_smaller_explicit_value(monkeypatch) -> None:
     monkeypatch.setenv("HUB_ROUTE_MAX_CHUNK_RAW_BYTES", str(64 * 1024))
 
-    assert bootstrap_mod._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
+    assert _hub_route_proxy._hub_route_max_chunk_raw_bytes(256 * 1024) == 64 * 1024
 
 
 def test_hub_route_normalize_resend_chunk_indexes_deduplicates_and_bounds() -> None:
-    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes(
+    assert _hub_route_proxy._hub_route_normalize_resend_chunk_indexes(
         [3, "1", 3, -1, "bad", 6, 2],
         5,
         max_items=3,
@@ -433,20 +437,20 @@ def test_hub_route_normalize_resend_chunk_indexes_deduplicates_and_bounds() -> N
 
 
 def test_hub_route_normalize_resend_chunk_indexes_rejects_invalid_inputs() -> None:
-    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes("1,2", 4) == []
-    assert bootstrap_mod._hub_route_normalize_resend_chunk_indexes([0, 1], 0) == []
+    assert _hub_route_proxy._hub_route_normalize_resend_chunk_indexes("1,2", 4) == []
+    assert _hub_route_proxy._hub_route_normalize_resend_chunk_indexes([0, 1], 0) == []
 
 
 def test_hub_route_semantic_flow_classifies_control_and_sync_paths() -> None:
-    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws?token=secret") == "control"
-    assert bootstrap_mod._hub_route_semantic_flow_for_path("/ws/subnet") == "subnet"
-    assert bootstrap_mod._hub_route_semantic_flow_for_path("/yws/desktop") == "sync"
-    assert bootstrap_mod._hub_route_semantic_flow_for_path("/api/node/status") == "route"
+    assert _hub_route_proxy._hub_route_semantic_flow_for_path("/ws?token=secret") == "control"
+    assert _hub_route_proxy._hub_route_semantic_flow_for_path("/ws/subnet") == "subnet"
+    assert _hub_route_proxy._hub_route_semantic_flow_for_path("/yws/desktop") == "sync"
+    assert _hub_route_proxy._hub_route_semantic_flow_for_path("/api/node/status") == "route"
 
 
 def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshold() -> None:
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=96 * 1024,
             guardrail_active=False,
@@ -457,7 +461,7 @@ def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshol
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=128 * 1024,
             guardrail_active=False,
@@ -468,7 +472,7 @@ def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshol
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=512 * 1024,
             guardrail_active=False,
@@ -479,7 +483,7 @@ def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshol
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/ws",
             pending_data_size=96 * 1024,
             guardrail_active=True,
@@ -490,7 +494,7 @@ def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshol
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=0,
             guardrail_active=False,
@@ -504,7 +508,7 @@ def test_hub_route_sheds_sync_frames_only_when_pending_bytes_cross_sync_threshol
 
 def test_hub_route_does_not_use_flush_threshold_as_sync_shed_threshold() -> None:
     assert (
-        bootstrap_mod._hub_route_should_shed_sync_frame(
+        _hub_route_proxy._hub_route_should_shed_sync_frame(
             "/yws/desktop",
             pending_data_size=96 * 1024,
             guardrail_active=False,
@@ -518,14 +522,14 @@ def test_hub_route_does_not_use_flush_threshold_as_sync_shed_threshold() -> None
 def test_hub_route_sync_frame_force_flush_defaults_to_disabled(monkeypatch) -> None:
     monkeypatch.delenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", raising=False)
 
-    assert bootstrap_mod._hub_route_sync_frame_force_flush_enabled() is False
+    assert _hub_route_proxy._hub_route_sync_frame_force_flush_enabled() is False
 
 
 def test_hub_route_sync_frame_force_flush_allows_explicit_opt_in(monkeypatch) -> None:
     for value in ("1", "true", "yes", "on"):
         monkeypatch.setenv("HUB_ROUTE_SYNC_FRAME_FORCE_FLUSH", value)
 
-        assert bootstrap_mod._hub_route_sync_frame_force_flush_enabled() is True
+        assert _hub_route_proxy._hub_route_sync_frame_force_flush_enabled() is True
 
 
 def test_hub_route_force_flushes_all_sync_chunks_when_configured() -> None:
@@ -538,28 +542,28 @@ def test_hub_route_force_flushes_all_sync_chunks_when_configured() -> None:
     }
 
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
             **common,
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "sync", "idx": 3, "total": 4},
             **common,
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **common,
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "route", "idx": 0, "total": 4},
             **{**common, "tunnel_flow": "route"},
         )
@@ -577,42 +581,42 @@ def test_hub_route_flushes_sync_chunks_when_pending_pressure_is_high() -> None:
     }
 
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "sync", "idx": 3, "total": 4},
             **common,
         )
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "sync", "idx": 0, "total": 4},
             **{**common, "pending_data_size": 128 * 1024},
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "chunk", "flow": "sync", "idx": 3, "total": 4},
             **{**common, "pending_data_size": 128 * 1024},
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **common,
         )
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "sync", "kind": "bin"},
             **{**common, "pending_data_size": 128 * 1024},
         )
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_force_flush_reply(
+        _hub_route_proxy._hub_route_should_force_flush_reply(
             {"t": "frame", "flow": "route", "kind": "bin"},
             **{**common, "tunnel_flow": "route", "pending_data_size": 128 * 1024},
         )
@@ -622,14 +626,14 @@ def test_hub_route_flushes_sync_chunks_when_pending_pressure_is_high() -> None:
 
 def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> None:
     assert (
-        bootstrap_mod._hub_route_subnet_sync_payload_type(
+        _hub_route_proxy._hub_route_subnet_sync_payload_type(
             "/ws/subnet",
             '{"t":"yjs.update","update_b64":"abc"}',
         )
         == "yjs.update"
     )
     assert (
-        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+        _hub_route_proxy._hub_route_should_drop_subnet_sync_frame(
             "/ws/subnet",
             "yjs.update",
             pending_data_size=0,
@@ -640,7 +644,7 @@ def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> Non
         is True
     )
     assert (
-        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+        _hub_route_proxy._hub_route_should_drop_subnet_sync_frame(
             "/ws/subnet",
             "yjs.node_state",
             pending_data_size=128 * 1024,
@@ -651,7 +655,7 @@ def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> Non
         is False
     )
     assert (
-        bootstrap_mod._hub_route_should_drop_subnet_sync_frame(
+        _hub_route_proxy._hub_route_should_drop_subnet_sync_frame(
             "/ws",
             "yjs.update",
             pending_data_size=128 * 1024,
@@ -664,13 +668,13 @@ def test_hub_route_subnet_sync_policy_drops_only_raw_yjs_under_pressure() -> Non
 
 
 def test_hub_id_from_nats_user_extracts_canonical_hub_id() -> None:
-    assert bootstrap_mod._hub_id_from_nats_user("hub_sn_92ffc943") == "sn_92ffc943"
-    assert bootstrap_mod._hub_id_from_nats_user("hub_9d91f466-0349-475d-9887-2d2bb3c783ee") == "9d91f466-0349-475d-9887-2d2bb3c783ee"
-    assert bootstrap_mod._hub_id_from_nats_user("alias_hub") is None
+    assert _nats_bridge._hub_id_from_nats_user("hub_sn_92ffc943") == "sn_92ffc943"
+    assert _nats_bridge._hub_id_from_nats_user("hub_9d91f466-0349-475d-9887-2d2bb3c783ee") == "9d91f466-0349-475d-9887-2d2bb3c783ee"
+    assert _nats_bridge._hub_id_from_nats_user("alias_hub") is None
 
 
 def test_canonical_hub_nats_identity_prefers_response_hub_id() -> None:
-    hub_id, user = bootstrap_mod._canonical_hub_nats_identity(
+    hub_id, user = _nats_bridge._canonical_hub_nats_identity(
         local_hub_id="local-stale",
         nats_user="hub_remote-live",
         response_hub_id="sn_92ffc943",
@@ -681,7 +685,7 @@ def test_canonical_hub_nats_identity_prefers_response_hub_id() -> None:
 
 
 def test_canonical_hub_nats_identity_falls_back_to_canonical_nats_user() -> None:
-    hub_id, user = bootstrap_mod._canonical_hub_nats_identity(
+    hub_id, user = _nats_bridge._canonical_hub_nats_identity(
         local_hub_id="local-stale",
         nats_user="hub_9d91f466-0349-475d-9887-2d2bb3c783ee",
         response_hub_id=None,
@@ -694,11 +698,11 @@ def test_canonical_hub_nats_identity_falls_back_to_canonical_nats_user() -> None
 def test_build_hub_route_ws_bases_ignores_remote_hub_url(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
-    monkeypatch.setattr(bootstrap_mod, "_discover_active_runtime_local_base", lambda **_: None)
+    monkeypatch.setattr(_hub_route_proxy, "_discover_active_runtime_local_base", lambda **_: None)
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg) == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg) == [
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
     ]
@@ -707,11 +711,11 @@ def test_build_hub_route_ws_bases_ignores_remote_hub_url(monkeypatch) -> None:
 def test_build_hub_route_ws_bases_prefers_process_runtime_port(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_SELF_BASE_URL", "http://127.0.0.1:8779")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8780")
-    monkeypatch.setattr(bootstrap_mod, "_discover_active_runtime_local_base", lambda **_: None)
+    monkeypatch.setattr(_hub_route_proxy, "_discover_active_runtime_local_base", lambda **_: None)
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg) == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg) == [
         "ws://127.0.0.1:8780",
         "ws://127.0.0.1:8779",
         "ws://127.0.0.1:8778",
@@ -723,19 +727,19 @@ def test_build_hub_route_http_bases_prefers_process_runtime_port_over_stale_stat
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_active_runtime_state_local_http_bases",
         lambda ctx=None: ["http://127.0.0.1:8778"],
     )
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_http_bases(
+    assert _hub_route_proxy._build_hub_route_http_bases(
         path_norm="/api/tools/call",
         method="POST",
         cfg=cfg,
@@ -751,19 +755,19 @@ def test_build_hub_route_http_bases_prefers_supervisor_state_over_legacy_env(mon
     monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
     monkeypatch.setenv("ADAOS_API_BASE", "http://127.0.0.1:8777")
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_active_runtime_state_local_http_bases",
         lambda ctx=None: ["http://127.0.0.1:8778"],
     )
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
     cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
 
-    assert bootstrap_mod._build_hub_route_http_bases(
+    assert _hub_route_proxy._build_hub_route_http_bases(
         path_norm="/api/node/reliability/summary",
         method="GET",
         cfg=cfg,
@@ -778,62 +782,62 @@ def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monke
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
     monkeypatch.setenv("ADAOS_BASE", "http://127.0.0.1:8777")
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_active_runtime_state_local_http_bases",
         lambda ctx=None: ["http://127.0.0.1:8778"],
     )
-    monkeypatch.setattr(bootstrap_mod, "realtime_sidecar_route_tunnel_ws_bases", lambda **_: [])
+    monkeypatch.setattr(_hub_route_proxy, "realtime_sidecar_route_tunnel_ws_bases", lambda **_: [])
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
     cfg = SimpleNamespace(hub_url="http://127.0.0.1:8777")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg, path="/ws")[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/ws")[:2] == [
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
     ]
 
 
 def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
-    assert bootstrap_mod._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
-    assert bootstrap_mod._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
+    assert _hub_route_proxy._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
 def test_hub_route_local_http_timeout_allows_skill_file_upload_to_finish() -> None:
-    assert bootstrap_mod._hub_route_local_http_timeout("/api/skills/new_face_vision_skill/files/meta.jsonl") == (
+    assert _hub_route_proxy._hub_route_local_http_timeout("/api/skills/new_face_vision_skill/files/meta.jsonl") == (
         3.0,
         300.0,
     )
 
 
 def test_hub_route_tools_call_retries_only_transport_safe_or_idempotent_failures() -> None:
-    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ReadTimeout",
         body=b'{"tool":"notes:save","arguments":{"content":"a"}}',
     ) is False
-    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ConnectionError",
     ) is True
-    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ReadTimeout",
         body=b'{"tool":"notes:save","idempotency_key":"idem-1","arguments":{"content":"a"}}',
     ) is True
-    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="POST",
         path="/api/tools/call",
         error_kind="ReadTimeout",
         body=b'{"tool":"notes:save","arguments":{"_meta":{"request_id":"req-1"}}}',
     ) is True
-    assert bootstrap_mod._hub_route_should_retry_http_upstream_error(
+    assert _hub_route_proxy._hub_route_should_retry_http_upstream_error(
         method="GET",
         path="/api/ping",
         error_kind="ConnectionError",
@@ -841,7 +845,7 @@ def test_hub_route_tools_call_retries_only_transport_safe_or_idempotent_failures
 
 
 def test_hub_route_parse_resend_delays_filters_and_clamps_values() -> None:
-    assert bootstrap_mod._hub_route_parse_resend_delays("0.35, bad, -1, 1, 1.0, 30") == [
+    assert _hub_route_proxy._hub_route_parse_resend_delays("0.35, bad, -1, 1, 1.0, 30") == [
         0.35,
         1.0,
         10.0,
@@ -849,29 +853,29 @@ def test_hub_route_parse_resend_delays_filters_and_clamps_values() -> None:
 
 
 def test_hub_route_should_resend_http_resp_only_for_critical_control_paths() -> None:
-    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/node/status") is True
-    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/node/ui/diagnostics") is True
+    assert _hub_route_proxy._hub_route_should_resend_http_resp("/api/node/status") is True
+    assert _hub_route_proxy._hub_route_should_resend_http_resp("/api/node/ui/diagnostics") is True
     assert (
-        bootstrap_mod._hub_route_should_resend_http_resp(
+        _hub_route_proxy._hub_route_should_resend_http_resp(
             "/api/node/yjs/webspaces/desktop/materialization?include_runtime=1"
         )
         is True
     )
-    assert bootstrap_mod._hub_route_should_resend_http_resp("/api/media/files/example.bin") is False
+    assert _hub_route_proxy._hub_route_should_resend_http_resp("/api/media/files/example.bin") is False
 
 
 def test_build_hub_route_http_bases_prefers_supervisor_active_runtime(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: "http://127.0.0.1:8777",
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_http_bases(
+    assert _hub_route_proxy._build_hub_route_http_bases(
         path_norm="/api/ws/test",
         method="GET",
         cfg=cfg,
@@ -885,14 +889,14 @@ def test_build_hub_route_ws_bases_prefers_supervisor_active_runtime(monkeypatch)
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: "http://127.0.0.1:8777",
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg)[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg)[:2] == [
         "ws://127.0.0.1:8777",
         "ws://127.0.0.1:8778",
     ]
@@ -901,16 +905,16 @@ def test_build_hub_route_ws_bases_prefers_supervisor_active_runtime(monkeypatch)
 def test_build_hub_route_ws_bases_prefers_sidecar_route_tunnel_for_matching_path(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
-    monkeypatch.setattr(bootstrap_mod, "_discover_active_runtime_local_base", lambda **_: None)
+    monkeypatch.setattr(_hub_route_proxy, "_discover_active_runtime_local_base", lambda **_: None)
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "realtime_sidecar_route_tunnel_ws_bases",
         lambda *, path=None, role=None: ["ws://127.0.0.1:7424"] if str(path or "").startswith("/yws") else [],
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb", role="hub")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg, path="/yws?token=dev")[:3] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/yws?token=dev")[:3] == [
         "ws://127.0.0.1:7424",
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
@@ -920,16 +924,16 @@ def test_build_hub_route_ws_bases_prefers_sidecar_route_tunnel_for_matching_path
 def test_build_hub_route_ws_bases_keeps_runtime_bases_for_non_route_tunnel_paths(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
-    monkeypatch.setattr(bootstrap_mod, "_discover_active_runtime_local_base", lambda **_: None)
+    monkeypatch.setattr(_hub_route_proxy, "_discover_active_runtime_local_base", lambda **_: None)
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "realtime_sidecar_route_tunnel_ws_bases",
         lambda *, path=None, role=None: [],
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb", role="hub")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg, path="/custom/socket") == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg, path="/custom/socket") == [
         "ws://127.0.0.1:8778",
         "ws://127.0.0.1:8777",
     ]
@@ -939,14 +943,14 @@ def test_build_hub_route_ws_bases_skips_discovery_when_runtime_port_available(mo
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_ws_bases(cfg=cfg)[:2] == [
+    assert _hub_route_proxy._build_hub_route_ws_bases(cfg=cfg)[:2] == [
         "ws://127.0.0.1:8777",
         "ws://127.0.0.1:8778",
     ]
@@ -956,14 +960,14 @@ def test_build_hub_route_http_bases_skips_discovery_when_runtime_port_available(
     monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
     monkeypatch.setattr(
-        bootstrap_mod,
+        _hub_route_proxy,
         "_discover_active_runtime_local_base",
         lambda **_: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
     cfg = SimpleNamespace(hub_url="https://ru.api.inimatic.com/hubs/sn_b249afeb")
 
-    assert bootstrap_mod._build_hub_route_http_bases(
+    assert _hub_route_proxy._build_hub_route_http_bases(
         path_norm="/api/ws/test",
         method="GET",
         cfg=cfg,
@@ -1013,9 +1017,9 @@ def test_node_status_push_heartbeat_rejects_non_finite_values(monkeypatch) -> No
 
 
 def test_bootstrap_bounded_interval_rejects_non_finite_values() -> None:
-    assert bootstrap_mod._bounded_interval_seconds("nan", default=15.0, minimum=5.0) == 15.0
-    assert bootstrap_mod._bounded_interval_seconds("inf", default=15.0, minimum=5.0) == 15.0
-    assert bootstrap_mod._bounded_interval_seconds("1", default=15.0, minimum=5.0) == 5.0
+    assert _status_policy._bounded_interval_seconds("nan", default=15.0, minimum=5.0) == 15.0
+    assert _status_policy._bounded_interval_seconds("inf", default=15.0, minimum=5.0) == 15.0
+    assert _status_policy._bounded_interval_seconds("1", default=15.0, minimum=5.0) == 5.0
 
 
 @pytest.mark.asyncio
@@ -1028,7 +1032,7 @@ async def test_nats_cleanup_timeout_does_not_trap_reconnect_supervisor() -> None
         finally:
             cancelled.set()
 
-    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=0.01)
+    cleaned = await _transport_cleanup._run_bounded_async_cleanup(_stuck_close, timeout_s=0.01)
 
     assert cleaned is False
     await asyncio.wait_for(cancelled.wait(), timeout=0.1)
@@ -1042,7 +1046,7 @@ async def test_nats_cleanup_reports_successful_close() -> None:
         nonlocal closed
         closed = True
 
-    cleaned = await bootstrap_mod._run_bounded_async_cleanup(_close, timeout_s=0.1)
+    cleaned = await _transport_cleanup._run_bounded_async_cleanup(_close, timeout_s=0.1)
 
     assert cleaned is True
     assert closed is True
@@ -1053,7 +1057,7 @@ async def test_nats_cleanup_does_not_promote_child_cancellation_to_supervisor_sh
     async def _self_cancelled_close() -> None:
         raise asyncio.CancelledError()
 
-    assert await bootstrap_mod._run_bounded_async_cleanup(_self_cancelled_close, timeout_s=0.1) is False
+    assert await _transport_cleanup._run_bounded_async_cleanup(_self_cancelled_close, timeout_s=0.1) is False
 
 
 @pytest.mark.asyncio
@@ -1065,7 +1069,7 @@ async def test_nats_cleanup_preserves_owner_requested_task_cancellation() -> Non
         await asyncio.Future()
 
     async def _worker() -> bool:
-        return await bootstrap_mod._run_bounded_async_cleanup(_stuck_close, timeout_s=10.0)
+        return await _transport_cleanup._run_bounded_async_cleanup(_stuck_close, timeout_s=10.0)
 
     task = asyncio.create_task(_worker())
     await asyncio.wait_for(started.wait(), timeout=1.0)
@@ -1095,7 +1099,7 @@ async def test_nats_route_tunnel_cleanup_is_concurrent_and_bounded() -> None:
     }
     started = asyncio.get_running_loop().time()
 
-    result = await bootstrap_mod._close_route_tunnels_bounded(tunnels, timeout_s=0.02)
+    result = await _transport_cleanup._close_route_tunnels_bounded(tunnels, timeout_s=0.02)
 
     elapsed = asyncio.get_running_loop().time() - started
     assert elapsed < 0.1
@@ -1105,9 +1109,9 @@ async def test_nats_route_tunnel_cleanup_is_concurrent_and_bounded() -> None:
 
 
 def test_should_forward_node_status_to_members_skips_member_originated_payloads() -> None:
-    assert bootstrap_mod._should_forward_node_status_to_members({}) is True
+    assert _status_policy._should_forward_node_status_to_members({}) is True
     assert (
-        bootstrap_mod._should_forward_node_status_to_members(
+        _status_policy._should_forward_node_status_to_members(
             {"_meta": {"subnet_origin_node_id": "member-1"}}
         )
         is False
@@ -1115,17 +1119,17 @@ def test_should_forward_node_status_to_members_skips_member_originated_payloads(
 
 
 def test_should_forward_webio_control_to_members_requires_node_target() -> None:
-    assert bootstrap_mod._should_forward_webio_control_to_members(
+    assert _status_policy._should_forward_webio_control_to_members(
         {"receiver": "infrastate.skills", "webspace_id": "desktop"}
     ) is False
-    assert bootstrap_mod._should_forward_webio_control_to_members(
+    assert _status_policy._should_forward_webio_control_to_members(
         {
             "receiver": "infrastate.skills",
             "webspace_id": "desktop",
             "target_node_id": "member-1",
         }
     ) is True
-    assert bootstrap_mod._should_forward_webio_control_to_members(
+    assert _status_policy._should_forward_webio_control_to_members(
         {
             "receiver": "infrastate.skills",
             "webspace_id": "desktop",
@@ -1149,7 +1153,7 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
         "trigger": "heartbeat",
     }
 
-    should_emit, fingerprint = bootstrap_mod._should_emit_node_status(
+    should_emit, fingerprint = _status_policy._should_emit_node_status(
         payload=payload,
         now=100.0,
         last_emitted_at=0.0,
@@ -1157,7 +1161,7 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
     )
     assert should_emit is True
 
-    should_emit, fingerprint2 = bootstrap_mod._should_emit_node_status(
+    should_emit, fingerprint2 = _status_policy._should_emit_node_status(
         payload=dict(payload),
         now=105.0,
         last_emitted_at=100.0,
@@ -1166,7 +1170,7 @@ def test_should_emit_node_status_suppresses_duplicate_fingerprint_within_window(
     assert should_emit is False
     assert fingerprint2 == fingerprint
 
-    should_emit, _ = bootstrap_mod._should_emit_node_status(
+    should_emit, _ = _status_policy._should_emit_node_status(
         payload={**payload, "trigger": "sys.ready"},
         now=100.5,
         last_emitted_at=100.0,
@@ -1189,14 +1193,14 @@ def test_should_emit_node_status_allows_explicit_short_dedupe_window() -> None:
         "connected_to_hub": None,
         "trigger": "heartbeat",
     }
-    _, fingerprint = bootstrap_mod._should_emit_node_status(
+    _, fingerprint = _status_policy._should_emit_node_status(
         payload=payload,
         now=100.0,
         last_emitted_at=0.0,
         last_fingerprint=None,
     )
 
-    should_emit, _ = bootstrap_mod._should_emit_node_status(
+    should_emit, _ = _status_policy._should_emit_node_status(
         payload=dict(payload),
         now=105.0,
         last_emitted_at=100.0,
@@ -1209,10 +1213,10 @@ def test_should_emit_node_status_allows_explicit_short_dedupe_window() -> None:
 
 def test_node_status_dedupe_window_rejects_non_finite_values(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "nan")
-    assert bootstrap_mod._node_status_dedupe_window_s() == 30.0
+    assert _status_policy._node_status_dedupe_window_s() == 30.0
 
     monkeypatch.setenv("ADAOS_NODE_STATUS_DEDUPE_WINDOW_S", "inf")
-    assert bootstrap_mod._node_status_dedupe_window_s() == 30.0
+    assert _status_policy._node_status_dedupe_window_s() == 30.0
 
 
 def test_node_status_emit_fingerprint_reads_connected_to_subnet_alias() -> None:
@@ -1230,7 +1234,7 @@ def test_node_status_emit_fingerprint_reads_connected_to_subnet_alias() -> None:
         "trigger": "heartbeat",
     }
 
-    fingerprint = bootstrap_mod._node_status_emit_fingerprint(payload)
+    fingerprint = _status_policy._node_status_emit_fingerprint(payload)
 
     assert fingerprint[-2] is False
 
@@ -1513,8 +1517,8 @@ def test_switch_role_to_hub_fails_when_root_bootstrap_fails(monkeypatch) -> None
 
 
 def test_runtime_candidate_mode_follows_transition_role(monkeypatch) -> None:
-    monkeypatch.setattr(bootstrap_mod, "runtime_transition_role", lambda: "candidate")
-    assert bootstrap_mod._runtime_candidate_mode() is True
+    monkeypatch.setattr(_nats_bridge, "runtime_transition_role", lambda: "candidate")
+    assert _nats_bridge._runtime_candidate_mode() is True
 
-    monkeypatch.setattr(bootstrap_mod, "runtime_transition_role", lambda: "active")
-    assert bootstrap_mod._runtime_candidate_mode() is False
+    monkeypatch.setattr(_nats_bridge, "runtime_transition_role", lambda: "active")
+    assert _nats_bridge._runtime_candidate_mode() is False

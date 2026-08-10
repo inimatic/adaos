@@ -24,23 +24,10 @@ from adaos.services.chat_io.interfaces import ChatOutputEvent, ChatOutputMessage
 from adaos.services.chat_io.nlu_bridge import register_chat_nlu_bridge  # chat->NLU bridge
 from adaos.services.eventbus import LocalEventBus
 from adaos.services.io_bus.local_bus import LocalIoBus
-from adaos.services.nats_config import (
-    normalize_nats_ws_url,
-    nats_url_uses_websocket,
-    public_nats_ws_api,
-    public_nats_tcp_candidates,
-    public_nats_ws_candidates,
-)
 from adaos.services.reliability import (
     configure_hub_root_transport_strategy,
     hub_root_transport_strategy_snapshot,
-    observe_hub_root_route_runtime,
     record_hub_root_transport_event,
-)
-from adaos.services.realtime_sidecar import (
-    realtime_sidecar_diag_path,
-    realtime_sidecar_local_url,
-    realtime_sidecar_route_tunnel_ws_bases,
 )
 from adaos.services.node_config import NodeConfig, generate_provisional_subnet_id, load_config, set_role as cfg_set_role
 from adaos.services.node_runtime_state import (
@@ -69,10 +56,7 @@ from adaos.services.bootstrap_runtime import (
     RootTransportService,
 )
 from adaos.services.bootstrap_runtime import core_update_convergence as _core_update_convergence
-from adaos.services.bootstrap_runtime import hub_route_proxy as _hub_route_proxy
-from adaos.services.bootstrap_runtime import nats_bridge as _nats_bridge
 from adaos.services.bootstrap_runtime import status_policy as _status_policy
-from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cleanup
 from adaos.services.bootstrap_runtime.nats_root_runtime import start_nats_root_transport
 from adaos.services.skill import runtime_shutdown_runtime as _runtime_shutdown_runtime  # ensure skill shutdown subscriptions
 from adaos.services.skill import service_supervisor_runtime as _service_supervisor_runtime  # ensure service supervisor subscriptions
@@ -80,342 +64,6 @@ from adaos.services.skill.service_supervisor import get_service_supervisor
 from adaos.integrations.telegram.sender import TelegramSender
 
 
-_BOOTSTRAP_RUNTIME_ORIGINALS: dict[str, dict[str, Any]] = {
-    "_status_policy": {name: getattr(_status_policy, name) for name in ('_bounded_interval_seconds', '_hub_root_bridge_watchdog_interval_s', '_should_forward_node_status_to_members', '_webio_control_target_node_id', '_should_forward_webio_control_to_members', '_node_status_dedupe_window_s', '_node_status_emit_fingerprint', '_should_emit_node_status', '_env_truthy', '_loop_hang_watchdog_enabled_from_env', '_hub_channel_console_trace_enabled', '_hub_channel_console_allow_rl')},
-    "_transport_cleanup": {name: getattr(_transport_cleanup, name) for name in ('_run_bounded_async_cleanup', '_close_route_tunnels_bounded', '_current_async_task_is_cancelling')},
-    "_hub_route_proxy": {name: getattr(_hub_route_proxy, name) for name in ('_hub_route_max_chunk_raw_bytes', '_hub_route_normalize_resend_chunk_indexes', '_hub_route_path_token', '_hub_route_semantic_flow_for_path', '_hub_route_should_shed_sync_frame', '_hub_route_sync_frame_force_flush_enabled', '_hub_route_should_force_flush_reply', '_hub_route_subnet_sync_payload_type', '_hub_route_should_drop_subnet_sync_frame', '_is_local_http_base', '_hub_route_prefers_supervisor_public_status', '_dev_without_supervisor', '_read_json_file_silent', '_hub_route_node_status_supervisor_runtime', '_dev_api_serve_core_update_sync_disabled', '_supervisor_local_bases', '_route_local_base_cache_ttl_s', '_runtime_port_local_http_base', '_runtime_port_probe_candidates', '_route_state_dir_from_ctx', '_route_state_dir_fallback', '_active_runtime_state_local_http_bases', '_append_local_http_base', '_hub_route_local_http_timeout', '_hub_route_tools_call_has_idempotency', '_hub_route_should_retry_http_upstream_error', '_hub_route_parse_resend_delays', '_hub_route_should_resend_http_resp', '_probe_runtime_http_base', '_observe_route_local_base_diag', '_note_route_local_base_shortcut', '_discover_active_runtime_local_base', '_build_hub_route_http_bases', '_http_base_to_ws_base', '_build_hub_route_ws_bases', '_hub_route_force_close_no_upstream_s')},
-    "_nats_bridge": {name: getattr(_nats_bridge, name) for name in ('_read_sidecar_tail_lines', '_nats_credentials_refresh_evidence', '_should_refresh_nats_credentials', '_hub_root_transport_kind', '_hub_nats_prefer_dedicated', '_normalize_hub_nats_ws_url', '_hub_public_ws_candidates', '_hub_public_tcp_candidates', '_runtime_candidate_mode', '_hub_root_candidate_passive_mode', '_nats_url_needs_public_ws_refresh', '_build_realtime_sidecar_fallback_candidates', '_should_quarantine_nats_candidate', '_hub_nats_sidecar_failover_on_transient', '_hub_nats_sidecar_quarantine_s', '_resolve_nats_log_server', '_hub_id_from_nats_user', '_canonical_hub_nats_identity')},
-    "_core_update_convergence": {name: getattr(_core_update_convergence, name) for name in ('_core_update_status_fingerprint', '_core_update_waits_for_supervisor_convergence', '_watch_supervisor_core_update_convergence')},
-}
-_BOOTSTRAP_RUNTIME_WRAPPERS: dict[str, dict[str, Any]] = {
-    "_status_policy": {},
-    "_transport_cleanup": {},
-    "_hub_route_proxy": {},
-    "_nats_bridge": {},
-    "_core_update_convergence": {},
-}
-
-def _sync_bootstrap_runtime_helpers(module_alias: str) -> None:
-    module = globals()[module_alias]
-    originals = _BOOTSTRAP_RUNTIME_ORIGINALS[module_alias]
-    wrappers = _BOOTSTRAP_RUNTIME_WRAPPERS[module_alias]
-    for helper_name, original in originals.items():
-        current = globals().get(helper_name, original)
-        wrapper = wrappers.get(helper_name)
-        setattr(module, helper_name, original if wrapper is not None and current is wrapper else current)
-
-    if module_alias == "_hub_route_proxy":
-        module.realtime_sidecar_route_tunnel_ws_bases = realtime_sidecar_route_tunnel_ws_bases
-        module.observe_hub_root_route_runtime = observe_hub_root_route_runtime
-    elif module_alias == "_nats_bridge":
-        module.runtime_transition_role = runtime_transition_role
-        module.realtime_sidecar_local_url = realtime_sidecar_local_url
-        module.realtime_sidecar_diag_path = realtime_sidecar_diag_path
-        module.normalize_nats_ws_url = normalize_nats_ws_url
-        module.nats_url_uses_websocket = nats_url_uses_websocket
-        module.public_nats_ws_api = public_nats_ws_api
-        module.public_nats_ws_candidates = public_nats_ws_candidates
-        module.public_nats_tcp_candidates = public_nats_tcp_candidates
-
-def _bounded_interval_seconds(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._bounded_interval_seconds(*args, **kwargs)
-def _hub_root_bridge_watchdog_interval_s(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._hub_root_bridge_watchdog_interval_s(*args, **kwargs)
-def _should_forward_node_status_to_members(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._should_forward_node_status_to_members(*args, **kwargs)
-def _webio_control_target_node_id(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._webio_control_target_node_id(*args, **kwargs)
-def _should_forward_webio_control_to_members(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._should_forward_webio_control_to_members(*args, **kwargs)
-def _node_status_dedupe_window_s(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._node_status_dedupe_window_s(*args, **kwargs)
-def _node_status_emit_fingerprint(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._node_status_emit_fingerprint(*args, **kwargs)
-def _should_emit_node_status(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._should_emit_node_status(*args, **kwargs)
-def _env_truthy(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._env_truthy(*args, **kwargs)
-def _loop_hang_watchdog_enabled_from_env(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._loop_hang_watchdog_enabled_from_env(*args, **kwargs)
-def _hub_channel_console_trace_enabled(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._hub_channel_console_trace_enabled(*args, **kwargs)
-def _hub_channel_console_allow_rl(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_status_policy")
-    return _status_policy._hub_channel_console_allow_rl(*args, **kwargs)
-async def _run_bounded_async_cleanup(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_transport_cleanup")
-    return await _transport_cleanup._run_bounded_async_cleanup(*args, **kwargs)
-async def _close_route_tunnels_bounded(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_transport_cleanup")
-    return await _transport_cleanup._close_route_tunnels_bounded(*args, **kwargs)
-def _current_async_task_is_cancelling(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_transport_cleanup")
-    return _transport_cleanup._current_async_task_is_cancelling(*args, **kwargs)
-def _hub_route_max_chunk_raw_bytes(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_max_chunk_raw_bytes(*args, **kwargs)
-def _hub_route_normalize_resend_chunk_indexes(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_normalize_resend_chunk_indexes(*args, **kwargs)
-def _hub_route_path_token(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_path_token(*args, **kwargs)
-def _hub_route_semantic_flow_for_path(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_semantic_flow_for_path(*args, **kwargs)
-def _hub_route_should_shed_sync_frame(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_should_shed_sync_frame(*args, **kwargs)
-def _hub_route_sync_frame_force_flush_enabled(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_sync_frame_force_flush_enabled(*args, **kwargs)
-def _hub_route_should_force_flush_reply(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_should_force_flush_reply(*args, **kwargs)
-def _hub_route_subnet_sync_payload_type(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_subnet_sync_payload_type(*args, **kwargs)
-def _hub_route_should_drop_subnet_sync_frame(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_should_drop_subnet_sync_frame(*args, **kwargs)
-def _is_local_http_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._is_local_http_base(*args, **kwargs)
-def _hub_route_prefers_supervisor_public_status(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_prefers_supervisor_public_status(*args, **kwargs)
-def _dev_without_supervisor(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._dev_without_supervisor(*args, **kwargs)
-def _read_json_file_silent(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._read_json_file_silent(*args, **kwargs)
-def _hub_route_node_status_supervisor_runtime(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_node_status_supervisor_runtime(*args, **kwargs)
-def _dev_api_serve_core_update_sync_disabled(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._dev_api_serve_core_update_sync_disabled(*args, **kwargs)
-def _supervisor_local_bases(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._supervisor_local_bases(*args, **kwargs)
-def _route_local_base_cache_ttl_s(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._route_local_base_cache_ttl_s(*args, **kwargs)
-def _runtime_port_local_http_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._runtime_port_local_http_base(*args, **kwargs)
-def _runtime_port_probe_candidates(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._runtime_port_probe_candidates(*args, **kwargs)
-def _route_state_dir_from_ctx(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._route_state_dir_from_ctx(*args, **kwargs)
-def _route_state_dir_fallback(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._route_state_dir_fallback(*args, **kwargs)
-def _active_runtime_state_local_http_bases(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._active_runtime_state_local_http_bases(*args, **kwargs)
-def _append_local_http_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._append_local_http_base(*args, **kwargs)
-def _hub_route_local_http_timeout(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_local_http_timeout(*args, **kwargs)
-def _hub_route_tools_call_has_idempotency(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_tools_call_has_idempotency(*args, **kwargs)
-def _hub_route_should_retry_http_upstream_error(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_should_retry_http_upstream_error(*args, **kwargs)
-def _hub_route_parse_resend_delays(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_parse_resend_delays(*args, **kwargs)
-def _hub_route_should_resend_http_resp(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_should_resend_http_resp(*args, **kwargs)
-def _probe_runtime_http_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._probe_runtime_http_base(*args, **kwargs)
-def _observe_route_local_base_diag(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._observe_route_local_base_diag(*args, **kwargs)
-def _note_route_local_base_shortcut(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._note_route_local_base_shortcut(*args, **kwargs)
-def _discover_active_runtime_local_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._discover_active_runtime_local_base(*args, **kwargs)
-def _build_hub_route_http_bases(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._build_hub_route_http_bases(*args, **kwargs)
-def _http_base_to_ws_base(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._http_base_to_ws_base(*args, **kwargs)
-def _build_hub_route_ws_bases(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._build_hub_route_ws_bases(*args, **kwargs)
-def _hub_route_force_close_no_upstream_s(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_hub_route_proxy")
-    return _hub_route_proxy._hub_route_force_close_no_upstream_s(*args, **kwargs)
-def _read_sidecar_tail_lines(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._read_sidecar_tail_lines(*args, **kwargs)
-def _nats_credentials_refresh_evidence(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._nats_credentials_refresh_evidence(*args, **kwargs)
-def _should_refresh_nats_credentials(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._should_refresh_nats_credentials(*args, **kwargs)
-def _hub_root_transport_kind(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_root_transport_kind(*args, **kwargs)
-def _hub_nats_prefer_dedicated(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_nats_prefer_dedicated(*args, **kwargs)
-def _normalize_hub_nats_ws_url(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._normalize_hub_nats_ws_url(*args, **kwargs)
-def _hub_public_ws_candidates(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_public_ws_candidates(*args, **kwargs)
-def _hub_public_tcp_candidates(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_public_tcp_candidates(*args, **kwargs)
-def _runtime_candidate_mode(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._runtime_candidate_mode(*args, **kwargs)
-def _hub_root_candidate_passive_mode(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_root_candidate_passive_mode(*args, **kwargs)
-def _nats_url_needs_public_ws_refresh(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._nats_url_needs_public_ws_refresh(*args, **kwargs)
-def _build_realtime_sidecar_fallback_candidates(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._build_realtime_sidecar_fallback_candidates(*args, **kwargs)
-def _should_quarantine_nats_candidate(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._should_quarantine_nats_candidate(*args, **kwargs)
-def _hub_nats_sidecar_failover_on_transient(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_nats_sidecar_failover_on_transient(*args, **kwargs)
-def _hub_nats_sidecar_quarantine_s(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_nats_sidecar_quarantine_s(*args, **kwargs)
-def _resolve_nats_log_server(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._resolve_nats_log_server(*args, **kwargs)
-def _hub_id_from_nats_user(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._hub_id_from_nats_user(*args, **kwargs)
-def _canonical_hub_nats_identity(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_nats_bridge")
-    return _nats_bridge._canonical_hub_nats_identity(*args, **kwargs)
-def _core_update_status_fingerprint(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_core_update_convergence")
-    return _core_update_convergence._core_update_status_fingerprint(*args, **kwargs)
-def _core_update_waits_for_supervisor_convergence(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_core_update_convergence")
-    return _core_update_convergence._core_update_waits_for_supervisor_convergence(*args, **kwargs)
-async def _watch_supervisor_core_update_convergence(*args: Any, **kwargs: Any) -> Any:
-    _sync_bootstrap_runtime_helpers("_core_update_convergence")
-    return await _core_update_convergence._watch_supervisor_core_update_convergence(*args, **kwargs)
-
-_BOOTSTRAP_RUNTIME_WRAPPERS["_status_policy"] = {
-    "_bounded_interval_seconds": _bounded_interval_seconds,
-    "_hub_root_bridge_watchdog_interval_s": _hub_root_bridge_watchdog_interval_s,
-    "_should_forward_node_status_to_members": _should_forward_node_status_to_members,
-    "_webio_control_target_node_id": _webio_control_target_node_id,
-    "_should_forward_webio_control_to_members": _should_forward_webio_control_to_members,
-    "_node_status_dedupe_window_s": _node_status_dedupe_window_s,
-    "_node_status_emit_fingerprint": _node_status_emit_fingerprint,
-    "_should_emit_node_status": _should_emit_node_status,
-    "_env_truthy": _env_truthy,
-    "_loop_hang_watchdog_enabled_from_env": _loop_hang_watchdog_enabled_from_env,
-    "_hub_channel_console_trace_enabled": _hub_channel_console_trace_enabled,
-    "_hub_channel_console_allow_rl": _hub_channel_console_allow_rl,
-}
-_BOOTSTRAP_RUNTIME_WRAPPERS["_transport_cleanup"] = {
-    "_run_bounded_async_cleanup": _run_bounded_async_cleanup,
-    "_close_route_tunnels_bounded": _close_route_tunnels_bounded,
-    "_current_async_task_is_cancelling": _current_async_task_is_cancelling,
-}
-_BOOTSTRAP_RUNTIME_WRAPPERS["_hub_route_proxy"] = {
-    "_hub_route_max_chunk_raw_bytes": _hub_route_max_chunk_raw_bytes,
-    "_hub_route_normalize_resend_chunk_indexes": _hub_route_normalize_resend_chunk_indexes,
-    "_hub_route_path_token": _hub_route_path_token,
-    "_hub_route_semantic_flow_for_path": _hub_route_semantic_flow_for_path,
-    "_hub_route_should_shed_sync_frame": _hub_route_should_shed_sync_frame,
-    "_hub_route_sync_frame_force_flush_enabled": _hub_route_sync_frame_force_flush_enabled,
-    "_hub_route_should_force_flush_reply": _hub_route_should_force_flush_reply,
-    "_hub_route_subnet_sync_payload_type": _hub_route_subnet_sync_payload_type,
-    "_hub_route_should_drop_subnet_sync_frame": _hub_route_should_drop_subnet_sync_frame,
-    "_is_local_http_base": _is_local_http_base,
-    "_hub_route_prefers_supervisor_public_status": _hub_route_prefers_supervisor_public_status,
-    "_dev_without_supervisor": _dev_without_supervisor,
-    "_read_json_file_silent": _read_json_file_silent,
-    "_hub_route_node_status_supervisor_runtime": _hub_route_node_status_supervisor_runtime,
-    "_dev_api_serve_core_update_sync_disabled": _dev_api_serve_core_update_sync_disabled,
-    "_supervisor_local_bases": _supervisor_local_bases,
-    "_route_local_base_cache_ttl_s": _route_local_base_cache_ttl_s,
-    "_runtime_port_local_http_base": _runtime_port_local_http_base,
-    "_runtime_port_probe_candidates": _runtime_port_probe_candidates,
-    "_route_state_dir_from_ctx": _route_state_dir_from_ctx,
-    "_route_state_dir_fallback": _route_state_dir_fallback,
-    "_active_runtime_state_local_http_bases": _active_runtime_state_local_http_bases,
-    "_append_local_http_base": _append_local_http_base,
-    "_hub_route_local_http_timeout": _hub_route_local_http_timeout,
-    "_hub_route_tools_call_has_idempotency": _hub_route_tools_call_has_idempotency,
-    "_hub_route_should_retry_http_upstream_error": _hub_route_should_retry_http_upstream_error,
-    "_hub_route_parse_resend_delays": _hub_route_parse_resend_delays,
-    "_hub_route_should_resend_http_resp": _hub_route_should_resend_http_resp,
-    "_probe_runtime_http_base": _probe_runtime_http_base,
-    "_observe_route_local_base_diag": _observe_route_local_base_diag,
-    "_note_route_local_base_shortcut": _note_route_local_base_shortcut,
-    "_discover_active_runtime_local_base": _discover_active_runtime_local_base,
-    "_build_hub_route_http_bases": _build_hub_route_http_bases,
-    "_http_base_to_ws_base": _http_base_to_ws_base,
-    "_build_hub_route_ws_bases": _build_hub_route_ws_bases,
-    "_hub_route_force_close_no_upstream_s": _hub_route_force_close_no_upstream_s,
-}
-_BOOTSTRAP_RUNTIME_WRAPPERS["_nats_bridge"] = {
-    "_read_sidecar_tail_lines": _read_sidecar_tail_lines,
-    "_nats_credentials_refresh_evidence": _nats_credentials_refresh_evidence,
-    "_should_refresh_nats_credentials": _should_refresh_nats_credentials,
-    "_hub_root_transport_kind": _hub_root_transport_kind,
-    "_hub_nats_prefer_dedicated": _hub_nats_prefer_dedicated,
-    "_normalize_hub_nats_ws_url": _normalize_hub_nats_ws_url,
-    "_hub_public_ws_candidates": _hub_public_ws_candidates,
-    "_hub_public_tcp_candidates": _hub_public_tcp_candidates,
-    "_runtime_candidate_mode": _runtime_candidate_mode,
-    "_hub_root_candidate_passive_mode": _hub_root_candidate_passive_mode,
-    "_nats_url_needs_public_ws_refresh": _nats_url_needs_public_ws_refresh,
-    "_build_realtime_sidecar_fallback_candidates": _build_realtime_sidecar_fallback_candidates,
-    "_should_quarantine_nats_candidate": _should_quarantine_nats_candidate,
-    "_hub_nats_sidecar_failover_on_transient": _hub_nats_sidecar_failover_on_transient,
-    "_hub_nats_sidecar_quarantine_s": _hub_nats_sidecar_quarantine_s,
-    "_resolve_nats_log_server": _resolve_nats_log_server,
-    "_hub_id_from_nats_user": _hub_id_from_nats_user,
-    "_canonical_hub_nats_identity": _canonical_hub_nats_identity,
-}
-_BOOTSTRAP_RUNTIME_WRAPPERS["_core_update_convergence"] = {
-    "_core_update_status_fingerprint": _core_update_status_fingerprint,
-    "_core_update_waits_for_supervisor_convergence": _core_update_waits_for_supervisor_convergence,
-    "_watch_supervisor_core_update_convergence": _watch_supervisor_core_update_convergence,
-}
 
 
 
@@ -598,7 +246,7 @@ class BootstrapService:
             role=lambda: str(getattr(self.ctx.config, "role", "") or ""),
             candidate_passive=self._nats_policy.candidate_passive_mode,
             reconnect=lambda **kwargs: self.request_hub_root_reconnect(**kwargs),
-            watchdog_interval=lambda: _hub_root_bridge_watchdog_interval_s(),
+            watchdog_interval=_status_policy._hub_root_bridge_watchdog_interval_s,
             record_event=lambda *args, **kwargs: record_hub_root_transport_event(*args, **kwargs),
             logger=self._log,
         )
@@ -617,27 +265,31 @@ class BootstrapService:
             bus=bus,
             chat_output_event_type=ChatOutputEvent,
             chat_output_message_type=ChatOutputMessage,
-            core_update_waits_for_supervisor_convergence=_core_update_waits_for_supervisor_convergence,
+            core_update_waits_for_supervisor_convergence=(
+                _core_update_convergence._core_update_waits_for_supervisor_convergence
+            ),
             ensure_managed_nlu_service_skills=_ensure_managed_nlu_service_skills,
             get_service_supervisor=get_service_supervisor,
             json_module=_json,
             load_config=load_config,
             local_event_bus_type=LocalEventBus,
             local_io_bus_type=LocalIoBus,
-            loop_hang_watchdog_enabled_from_env=_loop_hang_watchdog_enabled_from_env,
+            loop_hang_watchdog_enabled_from_env=_status_policy._loop_hang_watchdog_enabled_from_env,
             register_chat_nlu_bridge=register_chat_nlu_bridge,
             register_subscriptions=register_subscriptions,
             report_hub_control_lifecycle_state=report_hub_control_lifecycle_state,
             runtime_transition_role=runtime_transition_role,
-            should_emit_node_status=_should_emit_node_status,
-            should_forward_node_status_to_members=_should_forward_node_status_to_members,
-            should_forward_webio_control_to_members=_should_forward_webio_control_to_members,
+            should_emit_node_status=_status_policy._should_emit_node_status,
+            should_forward_node_status_to_members=_status_policy._should_forward_node_status_to_members,
+            should_forward_webio_control_to_members=_status_policy._should_forward_webio_control_to_members,
             start_nats_root_transport=start_nats_root_transport,
             start_scheduler=start_scheduler,
             status_watchdog_service=BootstrapStatusWatchdogService,
             telegram_sender_type=TelegramSender,
             telemetry=tm,
-            watch_supervisor_core_update_convergence=_watch_supervisor_core_update_convergence,
+            watch_supervisor_core_update_convergence=(
+                _core_update_convergence._watch_supervisor_core_update_convergence
+            ),
         )
 
     # Compatibility facades for callers and tests that still inspect the
@@ -1073,7 +725,7 @@ class BootstrapService:
             await bus.emit("net.subnet.register.error", {"status": "hub_url_missing"}, source="lifecycle", actor="system")
             return None
         member_hub_token = str(load_member_hub_token() or conf.token or "").strip()
-        register_retry_s = _bounded_interval_seconds(
+        register_retry_s = _status_policy._bounded_interval_seconds(
             os.getenv("ADAOS_MEMBER_REGISTER_RETRY_INITIAL_S", "1"),
             default=1.0,
             minimum=0.05,

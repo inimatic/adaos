@@ -155,6 +155,8 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+from adaos.apps.api.runtime_lifecycle import RuntimeApplicationLifecycle
+
 from pydantic import BaseModel, Field
 import asyncio
 import json
@@ -768,40 +770,11 @@ def _mount_browser_assets_static(app: FastAPI) -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 1) инициализируем AgentContext (публикуется через set_ctx внутри bootstrap_app)
-
-    # 2) только теперь импортируем то, что может косвенно дернуть контекст
-    from adaos.apps.api import tool_bridge, subnet_api, observe_api, node_api, operations, release_validation, scenarios, root_endpoints, skills, stt_api, nlu_teacher_api, join_api, personalization, redevice_api, service_ui
-    from adaos.apps.api import builder as builder_api
-    from adaos.apps.api import io_webhooks
-    from adaos.services.yjs.gateway import router as y_router, start_y_server, stop_y_server
-    from adaos.services.subnet.link_ws import router as subnet_link_router
+async def _runtime_context(app: FastAPI):
+    # Runtime internals remain lazy so AgentContext initialization completes
+    # before gateway and subnet modules resolve their dependencies.
+    from adaos.services.yjs.gateway import start_y_server, stop_y_server
     from adaos.services.subnet.runtime import start_subnet_p2p, stop_subnet_p2p
-
-    # 3) монтируем роутеры после bootstrap
-    app.include_router(tool_bridge.router, prefix="/api")
-    app.include_router(subnet_api.router, prefix="/api")
-    app.include_router(nlu_teacher_api.router, prefix="/api")
-    app.include_router(builder_api.router, prefix="/api/builder")
-    app.include_router(node_api.router, prefix="/api/node")
-    app.include_router(join_api.router, prefix="/api")
-    app.include_router(personalization.router, prefix="/api")
-    app.include_router(observe_api.router, prefix="/api/observe")
-    app.include_router(operations.router, prefix="/api/operations")
-    app.include_router(release_validation.router, prefix="/api/release-validation")
-    app.include_router(scenarios.router, prefix="/api/scenarios")
-    app.include_router(skills.router, prefix="/api/skills")
-    app.include_router(service_ui.router, prefix="/api")
-    app.include_router(stt_api.router, prefix="/api")
-    app.include_router(redevice_api.router)
-    app.include_router(root_endpoints.router)
-    # Chat IO webhooks (mounted without /api prefix to keep exact paths)
-    app.include_router(io_webhooks.router)
-    # Yjs / events gateways (Stage A1)
-    app.include_router(y_router)
-    # Subnet P2P member link (member->hub)
-    app.include_router(subnet_link_router)
 
     # 3.5) сохранить ссылки на контекст/шину в state для внешних компонентов
     try:
@@ -1318,6 +1291,16 @@ async def lifespan(app: FastAPI):
 
 
 # пересоздаём приложение с lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    lifecycle = RuntimeApplicationLifecycle(app, runtime_context_factory=_runtime_context)
+    await lifecycle.start()
+    try:
+        yield
+    finally:
+        await lifecycle.stop()
+
+
 _CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 _CORS_ALLOW_HEADERS = ["*"]
 

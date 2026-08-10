@@ -632,6 +632,15 @@ Implementation status, 2026-08-06:
   owners, preventing a validated slot from importing a component omitted from
   root-promotion classification
 
+Follow-up ownership cleanup on 2026-08-10 removed the synchronized private
+helper registry and all bootstrap wrapper callbacks. `BootstrapService` now
+wires status policy and core-update convergence operations directly to their
+owning modules, and transport policy tests target `nats_bridge`,
+`hub_route_proxy`, `status_policy`, and `transport_cleanup` instead of patching
+the compatibility facade. The FastAPI composition root now uses
+`RuntimeApplicationLifecycle`; router discovery and mounting are owned by a
+separate lazy registry, leaving `lifespan()` with only lifecycle start/stop.
+
 The 2026-08-06 `.30` delivery checkpoint promoted commit `5422f6c7` through
 the rooted A/B path to slot `B`; supervisor update state finished as
 `succeeded` and the replacement root supervisor validated the active runtime.
