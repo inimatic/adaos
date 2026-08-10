@@ -1,6 +1,7 @@
 # src\adaos\apps\api\subnet_api.py
 from __future__ import annotations
 
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -15,6 +16,35 @@ from adaos.services.subnet_registry_mem import get_subnet_registry
 from adaos.sdk.data import bus
 
 router = APIRouter(tags=["subnet"])
+
+
+def _register_directory_node(node_info: Dict[str, Any]) -> bool:
+    """Persist a registration and report whether it is an offline -> online edge."""
+    directory = get_directory()
+    node_id = str(node_info.get("node_id") or "").strip()
+    known = bool(node_id and directory.repo.get_node(node_id))
+    was_online = bool(node_id and directory.is_online(node_id))
+    directory.on_register(node_info)
+    return not known or not was_online
+
+
+def _heartbeat_directory_node(
+    node_id: str,
+    *,
+    capacity: Dict[str, Any] | None,
+    node_state: str | None,
+    base_url: str | None,
+) -> bool:
+    directory = get_directory()
+    if not directory.repo.get_node(node_id):
+        return False
+    directory.on_heartbeat(
+        node_id,
+        capacity,
+        node_state=node_state,
+        base_url=base_url,
+    )
+    return True
 
 
 # ---------- Models ----------
@@ -69,8 +99,8 @@ async def register(body: RegisterRequest):
         raise HTTPException(status_code=400, detail="subnet mismatch")
 
     # Добавляем/обновляем запись в persistent directory
-    directory = get_directory()
-    directory.on_register(
+    became_online = await asyncio.to_thread(
+        _register_directory_node,
         {
             "node_id": body.node_id,
             "subnet_id": body.subnet_id,
@@ -79,13 +109,14 @@ async def register(body: RegisterRequest):
             "base_url": body.base_url,
             "node_state": body.node_state,
             "capacity": body.capacity or {},
-        }
+        },
     )
     # Сигнализируем о появлении ноды (node.up)
-    try:
-        await bus.emit("net.subnet.node.up", {"node_id": body.node_id}, source="subnet_api", actor="system")
-    except Exception:
-        pass
+    if became_online:
+        try:
+            await bus.emit("net.subnet.node.up", {"node_id": body.node_id}, source="subnet_api", actor="system")
+        except Exception:
+            pass
 
     return RegisterResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
 
@@ -99,16 +130,16 @@ async def heartbeat(body: HeartbeatRequest):
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node accepts heartbeats")
 
-    directory = get_directory()
-    # Если нода неизвестна — 404 (сохраняем поведение)
-    if not directory.repo.get_node(body.node_id):
-        raise HTTPException(status_code=404, detail="node not registered")
-    directory.on_heartbeat(
+    known = await asyncio.to_thread(
+        _heartbeat_directory_node,
         body.node_id,
-        body.capacity or None,
+        capacity=body.capacity or None,
         node_state=body.node_state,
         base_url=body.base_url,
     )
+    # Если нода неизвестна — 404 (сохраняем поведение)
+    if not known:
+        raise HTTPException(status_code=404, detail="node not registered")
     return HeartbeatResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
 
 
@@ -155,7 +186,7 @@ async def nodes_list():
     conf = get_ctx().config
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node lists nodes")
-    items = get_directory().list_known_nodes()
+    items = await asyncio.to_thread(lambda: get_directory().list_known_nodes())
     return {"ok": True, "nodes": items}
 
 
@@ -167,8 +198,7 @@ async def node_get(node_id: str):
     conf = get_ctx().config
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node has node details")
-    directory = get_directory()
-    info = directory.get_node(node_id)
+    info = await asyncio.to_thread(lambda: get_directory().get_node(node_id))
     if not isinstance(info, dict):
         raise HTTPException(status_code=404, detail="node not found")
     return {"ok": True, "node": dict(info)}
