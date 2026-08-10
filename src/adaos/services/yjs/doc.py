@@ -481,6 +481,72 @@ def try_read_live_map_value(webspace_id: str, map_name: str, key: str) -> tuple[
         return True, None
 
 
+def read_live_maps_snapshot_sync(
+    webspace_id: str,
+    map_names: list[str] | tuple[str, ...],
+    *,
+    timeout_s: float = 2.0,
+) -> tuple[bool, dict[str, Any]]:
+    """Copy selected live YDoc maps on the room owner thread.
+
+    Synchronous control-report builders run in worker threads.  Returning
+    plain JSON from an owner-loop callback lets those readers consume current
+    state without replaying the shared YStore or moving native ``y_py``
+    objects across threads.
+    """
+    room = _resolve_live_room(webspace_id)
+    if not _live_room_pipeline_ready(room):
+        return False, {}
+    names = tuple(dict.fromkeys(str(name or "").strip() for name in map_names if str(name or "").strip()))
+    if not names:
+        return True, {}
+    completed = threading.Event()
+    result: dict[str, Any] = {}
+    error: list[BaseException] = []
+
+    def _capture() -> None:
+        try:
+            for name in names:
+                raw = room.ydoc.get_map(name).to_json()
+                value = json.loads(raw) if isinstance(raw, str) else raw
+                # A JSON round trip guarantees no native Y types escape the
+                # owner thread even if a backend returns a mapping directly.
+                result[name] = json.loads(json.dumps(value, ensure_ascii=False))
+        except BaseException as exc:
+            error.append(exc)
+        finally:
+            completed.set()
+
+    owner_thread = getattr(room, "_thread_id", None)
+    if owner_thread is None or owner_thread == threading.get_ident():
+        _capture()
+    else:
+        owner_loop = getattr(room, "_loop", None)
+        if owner_loop is None or not owner_loop.is_running():
+            return False, {}
+        try:
+            owner_loop.call_soon_threadsafe(_capture)
+        except RuntimeError:
+            return False, {}
+        if not completed.wait(timeout=max(0.0, float(timeout_s))):
+            _log.warning(
+                "timed out reading live YDoc maps on owner loop webspace=%s maps=%s timeout_s=%s",
+                webspace_id,
+                names,
+                timeout_s,
+            )
+            return False, {}
+    if error:
+        _log.warning(
+            "failed reading live YDoc maps on owner loop webspace=%s maps=%s error=%s",
+            webspace_id,
+            names,
+            error[0],
+        )
+        return False, {}
+    return True, result
+
+
 def _schedule_room_update(
     webspace_id: str,
     update: Optional[bytes],
@@ -629,6 +695,13 @@ def get_ydoc(
     entry and writing the resulting state back on exit.
     """
     _log.debug("get_ydoc enter webspace=%s", webspace_id)
+    room = _resolve_live_room(webspace_id)
+    if _live_room_pipeline_ready(room) and not _can_access_live_room_directly(room):
+        # A cached YStore belongs to the owner runtime. Replaying it through a
+        # worker thread's private asyncio loop has produced uncatchable native
+        # access violations on Windows. Callers that need a synchronous read
+        # while a room is live must use read_live_maps_snapshot_sync().
+        raise RuntimeError("sync_get_ydoc_live_room_requires_owner_handoff")
     session_started = time.perf_counter()
     operation_timeout_s = _sync_get_ydoc_operation_timeout_s()
     wait_started = time.perf_counter()
@@ -1392,6 +1465,7 @@ __all__ = [
     "async_get_ydoc",
     "async_read_ydoc",
     "try_read_live_map_value",
+    "read_live_maps_snapshot_sync",
     "invalidate_live_map_value_cache",
     "live_room_generation",
     "live_room_command_diagnostics_snapshot",

@@ -177,10 +177,19 @@ def _read_scenario_manifest(scenario_id: str, *, ctx: AgentContext | None = None
 
 
 def _read_yjs_teacher_snapshot(webspace_id: str) -> dict[str, Any]:
-    from adaos.services.yjs.doc import get_ydoc
+    from adaos.services.yjs.doc import get_ydoc, read_live_maps_snapshot_sync
 
     ws = _webspace_id(webspace_id)
     try:
+        live_hit, live_maps = read_live_maps_snapshot_sync(ws, ("data",))
+        if live_hit:
+            data = coerce_dict(live_maps.get("data"))
+            return {
+                "webspace_id": ws,
+                "teacher": coerce_dict(data.get("nlu_teacher")),
+                "trace": coerce_dict(data.get("nlu_trace")),
+                "nlu": coerce_dict(data.get("nlu")),
+            }
         with get_ydoc(ws, read_only=True, load_mark_roots=["data"]) as ydoc:
             data_map = ydoc.get_map("data")
             teacher = data_map.get("nlu_teacher")
@@ -203,10 +212,18 @@ def _read_yjs_teacher_snapshot(webspace_id: str) -> dict[str, Any]:
 
 
 def _read_yjs_context_snapshot(webspace_id: str) -> dict[str, Any]:
-    from adaos.services.yjs.doc import get_ydoc
+    from adaos.services.yjs.doc import get_ydoc, read_live_maps_snapshot_sync
 
     ws = _webspace_id(webspace_id)
     try:
+        live_hit, live_maps = read_live_maps_snapshot_sync(ws, ("ui", "data", "registry"))
+        if live_hit:
+            return {
+                "webspace_id": ws,
+                "ui": coerce_dict(live_maps.get("ui")),
+                "data": coerce_dict(live_maps.get("data")),
+                "registry": coerce_dict(live_maps.get("registry")),
+            }
         with get_ydoc(ws, read_only=True, load_mark_roots=["ui", "data", "registry"]) as ydoc:
             ui_map = ydoc.get_map("ui")
             data_map = ydoc.get_map("data")

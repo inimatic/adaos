@@ -1229,6 +1229,56 @@ async def test_submit_live_room_mutation_hands_off_to_room_owner_loop(monkeypatc
     assert owner_thread.is_alive() is False
 
 
+async def test_sync_live_map_snapshot_hands_read_to_owner_loop(monkeypatch) -> None:
+    webspace_id = "live-room-read-owner-loop"
+    ready = threading.Event()
+    shared: dict[str, object] = {}
+
+    def _run_owner_loop() -> None:
+        class _OwnerRoom:
+            pass
+
+        owner_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(owner_loop)
+        room = _OwnerRoom()
+        room.ydoc = Y.YDoc()
+        with room.ydoc.begin_transaction() as txn:
+            room.ydoc.get_map("data").set(txn, "status", "ready")
+        room.ystore = object()
+        room._task_group = object()
+        room._thread_id = threading.get_ident()
+        room._loop = owner_loop
+        shared["loop"] = owner_loop
+        shared["room"] = room
+        ready.set()
+        owner_loop.run_forever()
+        shared.pop("room", None)
+        del room
+        owner_loop.close()
+
+    owner_thread = threading.Thread(target=_run_owner_loop, name="test-yjs-read-owner")
+    owner_thread.start()
+    assert await asyncio.to_thread(ready.wait, 2.0)
+    owner_loop = shared["loop"]
+    monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: shared["room"])
+
+    try:
+        hit, maps = await asyncio.to_thread(
+            ydoc_module.read_live_maps_snapshot_sync,
+            webspace_id,
+            ("data",),
+        )
+        assert hit is True
+        assert maps == {"data": {"status": "ready"}}
+        with pytest.raises(RuntimeError, match="requires_owner_handoff"):
+            with get_ydoc(webspace_id, read_only=True):
+                pass
+    finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        await asyncio.to_thread(owner_thread.join, 2.0)
+    assert owner_thread.is_alive() is False
+
+
 async def test_submit_live_room_mutation_reports_pending_room(monkeypatch) -> None:
     monkeypatch.setattr(ydoc_module, "_resolve_live_room", lambda _webspace_id: None)
     ydoc_module.reset_live_room_command_diagnostics()
