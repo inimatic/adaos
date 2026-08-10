@@ -31,7 +31,9 @@
                 "stopLabel": "Stop",
                 "sendCommand": "dialog.user_message",
                 "scope": "local",
-                "channelSelector": false,
+                "channelSelector": true,
+                "agentSelector": true,
+                "agentSelectorLabel": "Ассистент",
                 "agentChip": true,
                 "meta": {
                   "route_id": "voice_chat",
@@ -66,7 +68,7 @@
                 "sendCommand": "dialog.user_message",
                 "scope": "local",
                 "alignRightFrom": "user",
-                "placeholder": "Ask about node status or weather",
+                "placeholder": "Ask an assistant about node status or weather",
                 "historyButton": false,
                 "meta": {
                   "route_id": "voice_chat",

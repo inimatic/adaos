@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -54,6 +55,79 @@ _MAX_IDEMPOTENCY_RESULTS = 256
 _MAX_VOICE_MESSAGES = 32
 _MAX_VOICE_TEXT_CHARS = 2 * 1024
 _LOCAL_BROWSER_LINK = "https://inimatic.com/?zone=lo&try_local_hub=1"
+_GENERAL_DIALOG_AGENT_ID = "agent:android:local"
+_ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
+_NIKA_AGENT_ID = "agent:conversation_companions:nika"
+_MIRA_AGENT_ID = "agent:conversation_companions:mira"
+_BUILDER_AGENT_ID = "agent:builder_skill:builder"
+_DIALOG_AGENTS: tuple[dict[str, Any], ...] = (
+    {
+        "id": _GENERAL_DIALOG_AGENT_ID,
+        "label": "AdaOS Mobile",
+        "owner": "core:general_assistant",
+        "kind": "core_agent",
+        "channel_id": "general",
+        "gender": "neutral",
+        "voice": "ru-RU",
+        "icon": "sparkles-outline",
+        "aliases": ("adaos", "ада", "ассистент", "adaos mobile"),
+        "capabilities": ("node_status", "weather", "notebook_create"),
+    },
+    {
+        "id": _ARSENI_AGENT_ID,
+        "label": "Арсений",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": "conversational",
+        "gender": "male",
+        "voice": "ru-male",
+        "icon": "male-outline",
+        "aliases": ("арсений", "арсени", "arseni", "arseniy"),
+        "capabilities": ("local_companion", "node_status", "weather", "notebook_create"),
+    },
+    {
+        "id": _NIKA_AGENT_ID,
+        "label": "Ника",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": "conversational",
+        "gender": "female",
+        "voice": "ru-female",
+        "icon": "female-outline",
+        "aliases": ("ника", "nika"),
+        "capabilities": ("local_companion", "node_status", "weather", "notebook_create"),
+    },
+    {
+        "id": _MIRA_AGENT_ID,
+        "label": "Мира",
+        "owner": "skill:conversation_companions",
+        "kind": "skill_agent",
+        "channel_id": "conversational",
+        "gender": "female",
+        "voice": "ru-female",
+        "icon": "heart-circle-outline",
+        "aliases": ("мира", "mira"),
+        "capabilities": ("local_companion", "node_status", "weather", "notebook_create"),
+    },
+    {
+        "id": _BUILDER_AGENT_ID,
+        "label": "Строитель",
+        "owner": "skill:builder_skill",
+        "kind": "skill_agent",
+        "channel_id": "builder",
+        "gender": "male",
+        "voice": "ru-male",
+        "icon": "construct-outline",
+        "aliases": ("строитель", "builder", "билдер"),
+        "capabilities": ("mobile_architecture_advice", "node_status", "weather", "notebook_create"),
+    },
+)
+_DIALOG_AGENT_BY_ID = {str(item["id"]): item for item in _DIALOG_AGENTS}
+_DIALOG_CHANNEL_DEFAULTS = {
+    "general": _GENERAL_DIALOG_AGENT_ID,
+    "conversational": _ARSENI_AGENT_ID,
+    "builder": _BUILDER_AGENT_ID,
+}
 
 
 def _utc_now() -> str:
@@ -254,6 +328,13 @@ class AndroidSkillRuntime:
             voice_chat.get("messages"), list
         ):
             updates["data/voice_chat"] = self._empty_voice_chat()
+        else:
+            voice_chat = dict(voice_chat)
+            voice_chat["assistant"] = self._dialog_agent_projection(
+                self._active_dialog_agent()
+            )
+            updates["data/voice_chat"] = voice_chat
+        updates["data/dialog"] = self._dialog_snapshot(event="startup")
         self._set_paths(updates)
 
     def _set_paths(self, values: dict[str, Any]) -> bytes:
@@ -389,6 +470,10 @@ class AndroidSkillRuntime:
             return self._disconnect_member(payload)
         if normalized == "browsers.refresh":
             return self._browser_current()
+        if normalized == "dialog.channel.select":
+            return self.select_dialog_channel(payload)
+        if normalized == "dialog.agent.select":
+            return self.select_dialog_agent(payload)
         if normalized == "demo_metrics.host_action":
             return self._demo_event(payload, source="android.host")
         if normalized == "demo_metrics.selection.changed":
@@ -588,6 +673,20 @@ class AndroidSkillRuntime:
                 (str(key),),
             ).fetchone()
         return str(row[0]) if row else str(default)
+
+    def _set_setting(self, key: str, value: str) -> None:
+        with self._lock:
+            self._database.execute(
+                """
+                INSERT INTO android_settings(setting_key, setting_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    setting_value = excluded.setting_value,
+                    updated_at = excluded.updated_at
+                """,
+                (str(key), str(value), _utc_now()),
+            )
+            self._database.commit()
 
     def _subnet_set_node_label(self, arguments: dict[str, Any]) -> dict[str, Any]:
         label = str(
@@ -852,16 +951,209 @@ class AndroidSkillRuntime:
         return self.project_member_link(result)
 
     @staticmethod
-    def _empty_voice_chat() -> dict[str, Any]:
+    def _dialog_agent(agent_id: str) -> dict[str, Any]:
+        return dict(
+            _DIALOG_AGENT_BY_ID.get(str(agent_id), _DIALOG_AGENT_BY_ID[_GENERAL_DIALOG_AGENT_ID])
+        )
+
+    @staticmethod
+    def _dialog_agent_projection(agent: dict[str, Any]) -> dict[str, Any]:
+        projected = {
+            key: copy.deepcopy(value)
+            for key, value in agent.items()
+            if key != "aliases"
+        }
+        projected["capabilities"] = list(projected.get("capabilities") or [])
+        projected.update(
+            {
+                "availability": "ready",
+                "implementation": "android_local_bounded",
+                "model_backed": False,
+                "full_runtime": False,
+                "scope": "local",
+                "voice_profile": {
+                    "lang": "ru-RU",
+                    "gender": projected.get("gender"),
+                    "voice": projected.get("voice"),
+                },
+            }
+        )
+        return projected
+
+    def _active_dialog_agent(self) -> dict[str, Any]:
+        agent_id = self._setting("dialog_active_agent_id", _GENERAL_DIALOG_AGENT_ID)
+        return self._dialog_agent(agent_id)
+
+    def _preferred_conversational_agent(self) -> dict[str, Any]:
+        agent_id = self._setting("dialog_conversational_agent_id", _ARSENI_AGENT_ID)
+        agent = self._dialog_agent(agent_id)
+        if agent.get("channel_id") != "conversational":
+            return self._dialog_agent(_ARSENI_AGENT_ID)
+        return agent
+
+    def _dialog_channel_agent(self, channel_id: str) -> dict[str, Any]:
+        normalized = str(channel_id or "general").strip().lower() or "general"
+        if normalized == "conversational":
+            return self._preferred_conversational_agent()
+        return self._dialog_agent(
+            _DIALOG_CHANNEL_DEFAULTS.get(normalized, _GENERAL_DIALOG_AGENT_ID)
+        )
+
+    def _dialog_snapshot(self, *, event: str = "snapshot") -> dict[str, Any]:
+        active_agent = self._active_dialog_agent()
+        active_channel_id = str(active_agent.get("channel_id") or "general")
+        agents = [self._dialog_agent_projection(dict(item)) for item in _DIALOG_AGENTS]
+        channel_specs = (
+            ("general", "General", "core:general_assistant", "voice_chat_skill", "handle_text"),
+            (
+                "conversational",
+                "Conversational",
+                "skill:conversation_companions",
+                "conversation_companions",
+                "talk",
+            ),
+            ("builder", "Builder", "skill:builder_skill", "builder_skill", "chat"),
+        )
+        channels: list[dict[str, Any]] = []
+        for channel_id, label, owner, default_skill, default_tool in channel_specs:
+            channel_agent = (
+                active_agent
+                if channel_id == active_channel_id
+                else self._dialog_channel_agent(channel_id)
+            )
+            agent_projection = self._dialog_agent_projection(channel_agent)
+            channels.append(
+                {
+                    "id": channel_id,
+                    "channel_id": channel_id,
+                    "label": label,
+                    "owner": owner,
+                    "route_id": "voice_chat",
+                    "conversation_id": f"conv.android.{channel_id}.desktop",
+                    "default_skill": default_skill,
+                    "default_tool": default_tool,
+                    "active_agent_id": agent_projection["id"],
+                    "active_agent_label": agent_projection["label"],
+                    "active_agent_gender": agent_projection.get("gender"),
+                    "active_agent_voice": agent_projection.get("voice"),
+                    "active_agent_icon": agent_projection.get("icon"),
+                    "active_agent": agent_projection,
+                    "active": channel_id == active_channel_id,
+                    "implementation": "android_local_bounded",
+                }
+            )
+        active_projection = self._dialog_agent_projection(active_agent)
+        active_channel = next(
+            item for item in channels if item["id"] == active_channel_id
+        )
+        return {
+            "schema": "adaos.dialog.android.v1",
+            "active_channel_id": active_channel_id,
+            "active_channel": copy.deepcopy(active_channel),
+            "active_agent": active_projection,
+            "channels": channels,
+            "agents": agents,
+            "implementation": {
+                "id": "android_local_bounded",
+                "status": "ready",
+                "model_backed": False,
+                "full_builder_runtime": False,
+                "limitations": [
+                    "bounded allowlisted intents only",
+                    "no LLM-backed free-form conversation",
+                    "no skill generation or subprocess execution",
+                ],
+            },
+            "event": event,
+            "webspace_id": "desktop",
+            "updated_at": _utc_now(),
+        }
+
+    def _activate_dialog_agent(
+        self,
+        agent_id: str,
+        *,
+        event: str,
+        project: bool = True,
+    ) -> dict[str, Any]:
+        normalized = str(agent_id or "").strip()
+        if normalized not in _DIALOG_AGENT_BY_ID:
+            raise AndroidSkillError(f"dialog_agent_not_available_android_poc:{normalized}")
+        agent = self._dialog_agent(normalized)
+        self._set_setting("dialog_active_agent_id", normalized)
+        if agent.get("channel_id") == "conversational":
+            self._set_setting("dialog_conversational_agent_id", normalized)
+        snapshot = self._dialog_snapshot(event=event)
+        if project:
+            voice = self._voice_current()
+            voice = dict(voice)
+            voice["assistant"] = self._dialog_agent_projection(agent)
+            voice["updated_at"] = _utc_now()
+            self._set_paths({"data/dialog": snapshot, "data/voice_chat": voice})
+        return snapshot
+
+    def select_dialog_channel(self, payload: dict[str, Any]) -> dict[str, Any]:
+        channel_id = str(
+            payload.get("channel_id") or payload.get("id") or payload.get("value") or ""
+        ).strip().lower()
+        if channel_id in {"", "default"}:
+            channel_id = "general"
+        if channel_id not in _DIALOG_CHANNEL_DEFAULTS:
+            raise AndroidSkillError(
+                f"dialog_channel_not_available_android_poc:{channel_id}"
+            )
+        agent = self._dialog_channel_agent(channel_id)
+        snapshot = self._activate_dialog_agent(
+            str(agent["id"]), event="channel_selected"
+        )
+        return {
+            "ok": True,
+            "accepted": True,
+            "channel_id": snapshot["active_channel_id"],
+            "active_agent": snapshot["active_agent"],
+        }
+
+    def select_dialog_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        agent_id = str(
+            payload.get("agent_id")
+            or payload.get("active_agent_id")
+            or payload.get("id")
+            or ""
+        ).strip()
+        snapshot = self._activate_dialog_agent(agent_id, event="agent_selected")
+        return {
+            "ok": True,
+            "accepted": True,
+            "channel_id": snapshot["active_channel_id"],
+            "active_agent": snapshot["active_agent"],
+        }
+
+    def _addressed_dialog_agent(self, text: str) -> tuple[dict[str, Any], str] | None:
+        value = str(text or "").strip()
+        lowered = value.casefold()
+        for agent in _DIALOG_AGENTS:
+            aliases = sorted(
+                (str(item) for item in agent.get("aliases") or ()),
+                key=len,
+                reverse=True,
+            )
+            for alias in aliases:
+                match = re.match(
+                    rf"^\s*{re.escape(alias)}(?:\s*[,;:.!?-]\s*|\s+)(?P<rest>.*)$",
+                    value,
+                    re.IGNORECASE | re.UNICODE,
+                )
+                if lowered == alias.casefold():
+                    return dict(agent), ""
+                if match:
+                    return dict(agent), str(match.group("rest") or "").strip()
+        return None
+
+    def _empty_voice_chat(self) -> dict[str, Any]:
         return {
             "messages": [],
             "status": "ready",
-            "assistant": {
-                "id": "agent:android:local",
-                "label": "AdaOS Mobile",
-                "voice": "ru-RU",
-                "scope": "local",
-            },
+            "assistant": self._dialog_agent_projection(self._active_dialog_agent()),
             "updated_at": _utc_now(),
         }
 
@@ -873,8 +1165,37 @@ class AndroidSkillRuntime:
         text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
         if not text:
             raise AndroidSkillError("voice_assistant_text_required")
+        meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        requested_agent_id = str(
+            payload.get("active_agent_id") or meta.get("active_agent_id") or ""
+        ).strip()
+        requested_channel_id = str(
+            payload.get("dialog_channel_id") or meta.get("dialog_channel_id") or ""
+        ).strip().lower()
+        active_agent = self._active_dialog_agent()
+        if requested_agent_id and requested_agent_id in _DIALOG_AGENT_BY_ID:
+            active_agent = self._dialog_agent(requested_agent_id)
+            self._activate_dialog_agent(
+                requested_agent_id, event="message_target", project=False
+            )
+        elif (
+            requested_channel_id in _DIALOG_CHANNEL_DEFAULTS
+            and requested_channel_id != active_agent.get("channel_id")
+        ):
+            active_agent = self._dialog_channel_agent(requested_channel_id)
+            self._activate_dialog_agent(
+                str(active_agent["id"]), event="message_channel", project=False
+            )
+        addressed = self._addressed_dialog_agent(text)
+        response_input = text
+        if addressed is not None:
+            active_agent, addressed_text = addressed
+            self._activate_dialog_agent(
+                str(active_agent["id"]), event="addressed_agent", project=False
+            )
+            response_input = addressed_text or "привет"
         now = time.time()
-        response_text = self._voice_response(text)
+        response_text = self._voice_response(response_input, active_agent)
         current = self._voice_current()
         messages = [
             dict(item)
@@ -889,43 +1210,67 @@ class AndroidSkillRuntime:
                     "from": "user",
                     "text": text,
                     "ts": now,
+                    "dialog_channel_id": active_agent["channel_id"],
+                    "active_agent_id": active_agent["id"],
                 },
                 {
                     "id": f"mobile-assistant-{turn_id}",
                     "from": "hub",
                     "text": response_text,
                     "ts": now + 0.001,
-                    "active_agent_id": "agent:android:local",
-                    "active_agent_label": "AdaOS Mobile",
-                    "active_agent_icon": "sparkles-outline",
-                    "voice": "ru-RU",
-                    "voice_profile": {"lang": "ru-RU", "voice": "ru-RU"},
+                    "dialog_channel_id": active_agent["channel_id"],
+                    "active_agent_id": active_agent["id"],
+                    "active_agent_label": active_agent["label"],
+                    "active_agent_gender": active_agent.get("gender"),
+                    "active_agent_voice": active_agent.get("voice"),
+                    "active_agent_icon": active_agent.get("icon"),
+                    "voice": active_agent.get("voice"),
+                    "voice_profile": {
+                        "lang": "ru-RU",
+                        "gender": active_agent.get("gender"),
+                        "voice": active_agent.get("voice"),
+                    },
                 },
             ]
         )
         snapshot = {
             "messages": messages[-_MAX_VOICE_MESSAGES:],
             "status": "ready",
-            "assistant": {
-                "id": "agent:android:local",
-                "label": "AdaOS Mobile",
-                "voice": "ru-RU",
-                "scope": "local",
-            },
+            "assistant": self._dialog_agent_projection(active_agent),
             "last_turn_id": turn_id,
             "updated_at": _utc_now(),
         }
-        self._set_paths({"data/voice_chat": snapshot})
+        dialog = self._dialog_snapshot(event="turn")
+        self._set_paths({"data/voice_chat": snapshot, "data/dialog": dialog})
         return {
             "ok": True,
             "accepted": True,
             "turn_id": turn_id,
             "response": response_text,
             "message_count": len(snapshot["messages"]),
+            "dialog_channel_id": active_agent["channel_id"],
+            "active_agent_id": active_agent["id"],
+            "active_agent_label": active_agent["label"],
         }
 
-    def _voice_response(self, text: str) -> str:
+    def _voice_response(self, text: str, agent: dict[str, Any]) -> str:
         normalized = " ".join(text.casefold().split())
+        label = str(agent.get("label") or "AdaOS Mobile")
+        if any(
+            token in normalized
+            for token in (
+                "кто доступен",
+                "какие ассистенты",
+                "список ассистентов",
+                "покажи ассистентов",
+                "agent roster",
+            )
+        ):
+            return (
+                "Локально доступны AdaOS Mobile, Арсений, Ника, Мира и Строитель. "
+                "Это ограниченные Android-персоны без LLM: статус ноды, погода, "
+                "заметки и базовые подсказки."
+            )
         if any(token in normalized for token in ("погод", "weather")):
             city = "Moscow"
             city_aliases = {
@@ -961,9 +1306,34 @@ class AndroidSkillRuntime:
             self._notebook_create({"content": content})
             return "Заметка сохранена локально на телефоне."
         if any(token in normalized for token in ("привет", "здравств", "hello", "hi")):
-            return "Привет! Я локальный ассистент AdaOS на этом телефоне."
+            return (
+                f"Привет! Я {label}, локальный ассистент в экспериментальном "
+                "Android-профиле AdaOS."
+            )
+        if agent.get("id") == _BUILDER_AGENT_ID:
+            return (
+                "Я Строитель в ограниченном мобильном режиме. Могу обсудить "
+                "архитектуру телефона-ноды, проверить её статус и сохранить план "
+                "в Notebook. Сборка навыков, subprocess и модельный runtime здесь "
+                "не запускаются."
+            )
+        if agent.get("id") == _ARSENI_AGENT_ID:
+            return (
+                "Я Арсений в локальном мобильном режиме. Пока могу спокойно помочь "
+                "со статусом ноды, погодой и заметками; свободный LLM-диалог не включён."
+            )
+        if agent.get("id") == _NIKA_AGENT_ID:
+            return (
+                "Я Ника в локальном мобильном режиме. Могу проверить факты о состоянии "
+                "ноды, погоде и заметках; модельная дискуссия пока недоступна."
+            )
+        if agent.get("id") == _MIRA_AGENT_ID:
+            return (
+                "Я Мира в локальном мобильном режиме. Могу поддержать короткий "
+                "сценарий со статусом, погодой и заметками; LLM пока не подключён."
+            )
         return (
-            "Я работаю локально в экспериментальном Android-профиле. "
+            f"Я {label} и работаю локально в экспериментальном Android-профиле. "
             "Сейчас я умею сообщать статус ноды, узнавать погоду и создавать заметки."
         )
 

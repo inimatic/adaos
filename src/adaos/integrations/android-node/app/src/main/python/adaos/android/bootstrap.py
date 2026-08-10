@@ -757,6 +757,14 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
             data = _skills.handle_dialog_message(request_payload)
+        elif kind == "dialog.channel.select":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data = _skills.select_dialog_channel(request_payload)
+        elif kind == "dialog.agent.select":
+            if _skills is None:
+                raise AndroidSkillError("android_skills_not_ready")
+            data = _skills.select_dialog_agent(request_payload)
         elif kind == "voice.chat.open":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")

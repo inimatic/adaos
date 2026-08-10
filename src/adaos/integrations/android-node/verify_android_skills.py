@@ -73,6 +73,9 @@ def _verify_persisted_state(base_url: str, marker: str) -> None:
     )
     if subnet.get("node_label") != _node_label(marker):
         raise RuntimeError("subnet_env node label did not survive restart")
+    dialog = _snapshot(base_url).get("data", {}).get("dialog", {})
+    if dialog.get("active_agent", {}).get("label") != "Арсений":
+        raise RuntimeError("selected Android dialog agent did not survive restart")
 
 
 def main() -> int:
@@ -221,6 +224,36 @@ def main() -> int:
         if voice.get("accepted") is not True or not voice.get("response"):
             raise RuntimeError("Android voice assistant did not complete a local turn")
 
+        selected, _ = _command(
+            websocket,
+            "dialog-agent-nika-smoke",
+            "dialog.agent.select",
+            {
+                "agent_id": "agent:conversation_companions:nika",
+                "webspace_id": "desktop",
+            },
+        )
+        if selected.get("active_agent", {}).get("label") != "Ника":
+            raise RuntimeError("Android dialog agent selector did not activate Nika")
+
+        builder, _ = _command(
+            websocket,
+            "dialog-builder-smoke",
+            "dialog.channel.select",
+            {"channel_id": "builder", "webspace_id": "desktop"},
+        )
+        if builder.get("active_agent", {}).get("label") != "Строитель":
+            raise RuntimeError("Android dialog channel selector did not activate Builder")
+
+        arseni, _ = _command(
+            websocket,
+            "dialog-addressed-arseni-smoke",
+            "dialog.user_message",
+            {"text": "Арсений, привет", "webspace_id": "desktop"},
+        )
+        if arseni.get("active_agent_label") != "Арсений":
+            raise RuntimeError("Android addressed dialog did not activate Arseni")
+
         stream, stream_events = _command(
             websocket,
             "notebook-stream-smoke",
@@ -342,6 +375,14 @@ def main() -> int:
         raise RuntimeError("subnet_env Yjs projection is incomplete")
     if snapshot["data"]["demo_metrics"]["selection"].get("metric_id") != "memory":
         raise RuntimeError("Taiga selection Yjs projection is incomplete")
+    dialog = snapshot["data"].get("dialog") or {}
+    expected_agents = {"AdaOS Mobile", "Арсений", "Ника", "Мира", "Строитель"}
+    if {item.get("label") for item in dialog.get("agents") or []} != expected_agents:
+        raise RuntimeError("Android dialog roster projection is incomplete")
+    if dialog.get("active_agent", {}).get("label") != "Арсений":
+        raise RuntimeError("Android active dialog agent projection is incomplete")
+    if dialog.get("implementation", {}).get("model_backed") is not False:
+        raise RuntimeError("Android dialog capability boundary is not explicit")
     _verify_persisted_state(arguments.base_url, arguments.marker)
     print(
         json.dumps(
@@ -356,6 +397,8 @@ def main() -> int:
                 "adaos_connect_local": True,
                 "browsers_projection": True,
                 "voice_assistant_turn": True,
+                "dialog_roster": sorted(expected_agents),
+                "dialog_agent_switch": True,
                 "taiga_widgets": sorted(required_widgets),
                 "scenario_round_trip": True,
                 "notebook_stream": True,

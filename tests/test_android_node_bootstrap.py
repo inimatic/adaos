@@ -547,6 +547,21 @@ def test_loopback_runtime_serves_no_auth_web_desktop_materialization(tmp_path: P
         } <= app_ids
         assert snapshot["data"]["installed"]["apps"]
         assert snapshot["data"]["nodes"] == {}
+        assert snapshot["data"]["dialog"]["active_channel_id"] == "general"
+        assert snapshot["data"]["dialog"]["implementation"]["id"] == (
+            "android_local_bounded"
+        )
+        assert {
+            "AdaOS Mobile",
+            "Арсений",
+            "Ника",
+            "Мира",
+            "Строитель",
+        } == {item["label"] for item in snapshot["data"]["dialog"]["agents"]}
+        assert all(
+            item["model_backed"] is False
+            for item in snapshot["data"]["dialog"]["agents"]
+        )
         assert "weather_modal" in snapshot["ui"]["application"]["modals"]
         assert "subnet_env_modal" in snapshot["ui"]["application"]["modals"]
         assert snapshot["registry"]["merged"]["modals"]
@@ -830,6 +845,45 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             assert ack["data"]["accepted"] is True
             assert "локальный ассистент" in ack["data"]["response"]
 
+            ack, _ = _control_command(
+                websocket,
+                "dialog-agent-nika-proof",
+                "dialog.agent.select",
+                {
+                    "agent_id": "agent:conversation_companions:nika",
+                    "webspace_id": "desktop",
+                },
+            )
+            assert ack["data"]["active_agent"]["label"] == "Ника"
+            assert ack["data"]["channel_id"] == "conversational"
+
+            ack, _ = _control_command(
+                websocket,
+                "dialog-nika-turn-proof",
+                "dialog.user_message",
+                {"text": "статус ноды", "webspace_id": "desktop"},
+            )
+            assert ack["data"]["active_agent_label"] == "Ника"
+            assert ack["data"]["dialog_channel_id"] == "conversational"
+            assert "Нода" in ack["data"]["response"]
+
+            ack, _ = _control_command(
+                websocket,
+                "dialog-builder-channel-proof",
+                "dialog.channel.select",
+                {"channel_id": "builder", "webspace_id": "desktop"},
+            )
+            assert ack["data"]["active_agent"]["label"] == "Строитель"
+
+            ack, _ = _control_command(
+                websocket,
+                "dialog-addressed-arseni-proof",
+                "dialog.user_message",
+                {"text": "Арсений, привет", "webspace_id": "desktop"},
+            )
+            assert ack["data"]["active_agent_label"] == "Арсений"
+            assert "Я Арсений" in ack["data"]["response"]
+
             ack, events = _control_command(
                 websocket,
                 "notebook-stream-proof",
@@ -943,6 +997,8 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             item["from"] == "hub" and "локальный ассистент" in item["text"]
             for item in snapshot["data"]["voice_chat"]["messages"]
         )
+        assert snapshot["data"]["dialog"]["active_agent"]["label"] == "Арсений"
+        assert snapshot["data"]["dialog"]["active_channel_id"] == "conversational"
         assert snapshot["data"]["subnet_env"]["current"]["node_label"] == (
             "Android Proof Node"
         )
@@ -1016,6 +1072,9 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             "apps"
         ]
         assert "subnet_env_modal" in repaired["snapshot"]["registry"]["merged"]["modals"]
+        assert repaired["snapshot"]["data"]["dialog"]["active_agent"]["label"] == (
+            "Арсений"
+        )
 
         code, notebook = _post_json(
             f"http://127.0.0.1:{restarted['port']}/api/tools/call",
