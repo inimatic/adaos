@@ -125,6 +125,14 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["runtime"]["yjs_snapshot_bytes"] > 0
         assert status["runtime"]["yjs_snapshot_pressure"] == "ready"
         assert status["runtime"]["skill_descriptors_ready"] is True
+        assert status["runtime"]["nlu"]["status"] == "ready"
+        assert status["runtime"]["nlu"]["provider"] == "rasa"
+        assert status["runtime"]["nlu"]["mode"] == "always"
+        assert status["runtime"]["nlu"]["training"] == "off_device"
+        assert status["runtime"]["nlu"]["model_id"] == (
+            "362b6f47acb743658d8cd4bb8f538a41"
+        )
+        assert status["environment"]["nlu"] == status["runtime"]["nlu"]
         assert status["runtime"]["startup_duration_ms"] >= 0
         assert status["runtime"]["resource_bounds"]["loopback"] == {
             "active_request_threads": 1,
@@ -266,6 +274,55 @@ def test_android_stop_drains_inflight_status_requests_without_traceback(
     assert server_failures == []
     assert bootstrap._node_status()["node_state"] == "stopped"
     assert bootstrap._node_status()["ready"] is False
+
+
+def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    bootstrap.start(str(tmp_path), "test", 0)
+
+    class FakeMemberLink:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict, str]] = []
+            self.calls: list[tuple[str, dict, float]] = []
+
+        def send_bus_event(
+            self, event_type: str, payload: dict, *, source: str = ""
+        ) -> bool:
+            self.events.append((event_type, payload, source))
+            return True
+
+        def call_hub_tool(
+            self, tool: str, arguments: dict, *, timeout: float
+        ) -> dict:
+            self.calls.append((tool, arguments, timeout))
+            return {"message": "Canonical Hub companion response", "used_llm": True}
+
+    member_link = FakeMemberLink()
+    try:
+        assert bootstrap._skills is not None
+        bootstrap._skills.member_link = member_link
+        bootstrap._skills.select_dialog_agent(
+            {"agent_id": "agent:conversation_companions:arseni"}
+        )
+
+        result = bootstrap._skills.handle_dialog_message(
+            {"text": "Why should one runtime stay canonical?", "webspace_id": "desktop"}
+        )
+
+        assert result["response"] == "Canonical Hub companion response"
+        assert result["response_source"] == "hub_skill_llm"
+        assert result["used_llm"] is True
+        assert result["nlu"]["provider"] == "rasa"
+        assert result["nlu"]["mode"] == "always"
+        assert result["nlu"]["teacher_dispatched"] is True
+        assert member_link.calls[0][0] == "conversation_companions:talk"
+        assert member_link.calls[0][1]["character_id"] == "arseni"
+        assert member_link.events[0][0] == "nlp.intent.not_obtained"
+        assert member_link.events[0][2] == "android.nlu.rasa"
+    finally:
+        bootstrap.stop()
 
 
 def test_android_ystore_structurally_compacts_bloated_history_on_restart(

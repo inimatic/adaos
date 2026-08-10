@@ -1003,6 +1003,9 @@ def _load_verified_install_descriptor() -> dict[str, Any]:
     for skill in descriptor.get("skills") or []:
         if isinstance(skill, dict) and skill.get("descriptor"):
             files.append({"path": skill["descriptor"], "sha256": skill.get("sha256")})
+    for model in descriptor.get("models") or []:
+        if isinstance(model, dict) and model.get("path"):
+            files.append({"path": model["path"], "sha256": model.get("sha256")})
     # Chaquopy exposes non-Python bundle data as files, while Python modules
     # remain in its import archive. The runtime module digest is still pinned
     # for build provenance, but startup verifies the materialized data files.
@@ -1016,7 +1019,9 @@ def _load_verified_install_descriptor() -> dict[str, Any]:
         try:
             # Descriptor digests use repository-canonical LF bytes so the
             # same immutable bundle verifies on Windows and Linux builders.
-            canonical = target.read_bytes().replace(b"\r\n", b"\n")
+            canonical = target.read_bytes()
+            if target.suffix.lower() not in {".gz", ".zip", ".tar", ".whl"}:
+                canonical = canonical.replace(b"\r\n", b"\n")
             actual = hashlib.sha256(canonical).hexdigest()
         except OSError as exc:
             raise RuntimeError(f"android_install_artifact_missing:{relative}") from exc
@@ -1596,6 +1601,12 @@ def _node_status() -> dict[str, Any]:
                 "profile": "android_poc",
                 "transition_role": "stopped",
                 "yjs_ready": False,
+                "nlu": {
+                    "status": "stopped",
+                    "provider": "rasa",
+                    "mode": "always",
+                    "training": "off_device",
+                },
                 "resources": _resource_sampler.sample(),
             },
             "environment": {
@@ -1708,6 +1719,7 @@ def _node_status() -> dict[str, Any]:
             "skill_execution": str(skill_status.get("execution") or "unavailable"),
             "install_profile": str(skill_status.get("profile") or "unavailable"),
             "active_skills": list(skill_status.get("skills") or []),
+            "nlu": dict(skill_status.get("nlu") or {}),
             "notebook_note_count": int(skill_status.get("note_count") or 0),
             "resources": resources,
             "resource_bounds": {
@@ -1747,6 +1759,7 @@ def _node_status() -> dict[str, Any]:
             "local_auth_required": False,
             "webspace_id": "desktop",
             "scenario_id": "web_desktop",
+            "nlu": dict(skill_status.get("nlu") or {}),
             "voice": {
                 "stt": "browser_speech_recognition",
                 "tts": "browser_speech_synthesis",

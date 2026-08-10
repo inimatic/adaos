@@ -6,7 +6,7 @@ import pytest
 from fastapi.websockets import WebSocketDisconnect
 
 from adaos.services import access_links
-from adaos.services.subnet import link_ws
+from adaos.services.subnet import link_ws, member_rpc
 
 
 class _FakeWebSocket:
@@ -149,3 +149,63 @@ async def test_subnet_ws_stops_after_closed_websocket_runtime_error(monkeypatch)
 
     assert websocket.receive_calls == 2
     assert events[-1] == "unregister:member-1"
+
+
+@pytest.mark.asyncio
+async def test_member_rpc_routes_allowlisted_tool_with_member_identity(monkeypatch) -> None:
+    sent: list[dict[str, object]] = []
+    link = SimpleNamespace(send_json=lambda payload: None)
+
+    async def send_json(payload: dict[str, object]) -> None:
+        sent.append(payload)
+
+    link.send_json = send_json
+    calls: list[dict[str, object]] = []
+
+    def run_member_tool(**kwargs):  # noqa: ANN003, ANN202
+        calls.append(kwargs)
+        return {"response": "Ответ Арсения", "used_llm": True}
+
+    monkeypatch.setattr(member_rpc, "run_member_tool", run_member_tool)
+
+    await link_ws._handle_member_rpc_request(
+        node_id="android-1",
+        link=link,
+        message={
+            "t": "rpc.req",
+            "id": "request-1",
+            "method": "tools.call",
+            "params": {
+                "tool": "conversation_companions:talk",
+                "arguments": {"message": "Привет"},
+                "timeout": 40,
+            },
+        },
+    )
+
+    assert calls == [
+        {
+            "node_id": "android-1",
+            "tool": "conversation_companions:talk",
+            "arguments": {"message": "Привет"},
+            "timeout": 40,
+        }
+    ]
+    assert sent == [
+        {
+            "t": "rpc.res",
+            "id": "request-1",
+            "ok": True,
+            "result": {"response": "Ответ Арсения", "used_llm": True},
+        }
+    ]
+
+
+def test_member_rpc_rejects_non_allowlisted_tools_before_context_access() -> None:
+    with pytest.raises(PermissionError, match="member_rpc_tool_not_allowed"):
+        member_rpc.run_member_tool(
+            node_id="android-1",
+            tool="shell:run",
+            arguments={"command": "whoami"},
+            timeout=40,
+        )

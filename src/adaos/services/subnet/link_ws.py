@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -14,6 +15,56 @@ from adaos.services.subnet.link_manager import get_hub_link_manager
 
 router = APIRouter()
 _log = logging.getLogger("adaos.subnet.ws")
+
+
+async def _handle_member_rpc_request(
+    *,
+    node_id: str,
+    link: Any,
+    message: dict[str, Any],
+) -> None:
+    request_id = str(message.get("id") or "").strip()
+    if not request_id:
+        return
+    method = str(message.get("method") or "").strip()
+    params = message.get("params")
+    if method != "tools.call" or not isinstance(params, dict):
+        await link.send_json(
+            {"t": "rpc.res", "id": request_id, "ok": False, "error": "unknown_method"}
+        )
+        return
+    tool = str(params.get("tool") or "").strip()
+    arguments = params.get("arguments")
+    if not isinstance(arguments, dict):
+        arguments = {}
+    try:
+        from adaos.services.subnet.member_rpc import run_member_tool
+
+        result = await asyncio.to_thread(
+            run_member_tool,
+            node_id=node_id,
+            tool=tool,
+            arguments=arguments,
+            timeout=params.get("timeout"),
+        )
+        await link.send_json(
+            {"t": "rpc.res", "id": request_id, "ok": True, "result": result}
+        )
+    except Exception as exc:
+        _log.warning(
+            "member RPC failed node_id=%s tool=%s error=%s",
+            node_id,
+            tool,
+            exc,
+        )
+        await link.send_json(
+            {
+                "t": "rpc.res",
+                "id": request_id,
+                "ok": False,
+                "error": f"{type(exc).__name__}:{str(exc)[:240]}",
+            }
+        )
 
 
 def _extract_token(websocket: WebSocket) -> str | None:
@@ -98,6 +149,7 @@ async def subnet_ws(websocket: WebSocket) -> None:
     node_names: Any = []
     link = None
     registered = False
+    member_rpc_tasks: set[asyncio.Task[Any]] = set()
     try:
         try:
             raw = await websocket.receive_json()
@@ -216,6 +268,18 @@ async def subnet_ws(websocket: WebSocket) -> None:
                     pass
                 continue
 
+            if t == "rpc.req":
+                task = asyncio.create_task(
+                    _handle_member_rpc_request(
+                        node_id=node_id,
+                        link=link,
+                        message=msg,
+                    )
+                )
+                member_rpc_tasks.add(task)
+                task.add_done_callback(member_rpc_tasks.discard)
+                continue
+
             if t == "bus.emit":
                 ev = msg.get("event")
                 if isinstance(ev, dict):
@@ -299,6 +363,10 @@ async def subnet_ws(websocket: WebSocket) -> None:
 
             _ = link
     finally:
+        for task in list(member_rpc_tasks):
+            task.cancel()
+        if member_rpc_tasks:
+            await asyncio.gather(*member_rpc_tasks, return_exceptions=True)
         if node_id and registered:
             try:
                 from adaos.services.access_links import touch_member_link

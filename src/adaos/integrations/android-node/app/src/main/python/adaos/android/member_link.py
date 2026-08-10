@@ -12,6 +12,7 @@ import ssl
 import struct
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -23,6 +24,7 @@ _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_FRAME_BYTES = 4 * 1024 * 1024
 _MAX_OUTBOUND_MESSAGES = 128
 _MAX_MEMBER_YJS_UPDATE_BYTES = 512 * 1024
+_ALLOWED_MEMBER_EVENTS = frozenset({"nlp.intent.not_obtained"})
 
 
 def _redacted_url(value: str) -> str:
@@ -238,6 +240,10 @@ class AndroidMemberLink:
         self._received_yjs_total = 0
         self._sent_yjs_total = 0
         self._dropped_messages = 0
+        self._pending_rpc: dict[str, queue.Queue[dict[str, Any]]] = {}
+        self._rpc_requested_total = 0
+        self._rpc_completed_total = 0
+        self._rpc_failed_total = 0
         self._config = self._load_config()
         if not self._config.get("enabled"):
             self._last_error = "not_configured"
@@ -277,6 +283,7 @@ class AndroidMemberLink:
             connection = self._connection
         if connection is not None:
             connection.close()
+        self._fail_pending_rpc("member_link_stopped")
         thread = self._thread
         if thread is not None:
             thread.join(timeout=5)
@@ -397,6 +404,93 @@ class AndroidMemberLink:
             }
         )
 
+    def send_bus_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        source: str = "android.member",
+    ) -> bool:
+        normalized = str(event_type or "").strip()
+        if normalized not in _ALLOWED_MEMBER_EVENTS:
+            return False
+        with self._lock:
+            if not self._connected:
+                return False
+        return self._enqueue(
+            {
+                "t": "bus.emit",
+                "event": {
+                    "type": normalized,
+                    "payload": dict(payload or {}),
+                    "source": str(source or "android.member"),
+                    "ts": time.time(),
+                },
+            }
+        )
+
+    def call_hub_tool(
+        self,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        timeout: float = 40.0,
+    ) -> Any:
+        normalized_tool = str(tool or "").strip()
+        if ":" not in normalized_tool:
+            raise ValueError("member_rpc_tool_invalid")
+        with self._lock:
+            if not self._connected:
+                raise ConnectionError("member_link_not_connected")
+        request_id = f"android_rpc_{uuid.uuid4().hex}"
+        response_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+        with self._lock:
+            self._pending_rpc[request_id] = response_queue
+            self._rpc_requested_total += 1
+        if not self._enqueue(
+            {
+                "t": "rpc.req",
+                "id": request_id,
+                "method": "tools.call",
+                "params": {
+                    "tool": normalized_tool,
+                    "arguments": dict(arguments or {}),
+                    "timeout": min(50.0, max(5.0, float(timeout))),
+                    "dev": False,
+                },
+            }
+        ):
+            with self._lock:
+                self._pending_rpc.pop(request_id, None)
+                self._rpc_failed_total += 1
+            raise ConnectionError("member_rpc_queue_full")
+        try:
+            response = response_queue.get(timeout=min(55.0, max(6.0, float(timeout) + 5.0)))
+        except queue.Empty as exc:
+            with self._lock:
+                self._rpc_failed_total += 1
+            raise TimeoutError("member_rpc_timeout") from exc
+        finally:
+            with self._lock:
+                self._pending_rpc.pop(request_id, None)
+        if response.get("ok") is not True:
+            with self._lock:
+                self._rpc_failed_total += 1
+            raise RuntimeError(str(response.get("error") or "member_rpc_failed"))
+        with self._lock:
+            self._rpc_completed_total += 1
+        return response.get("result")
+
+    def _fail_pending_rpc(self, error: str) -> None:
+        with self._lock:
+            pending = list(self._pending_rpc.values())
+            self._pending_rpc.clear()
+        for response_queue in pending:
+            try:
+                response_queue.put_nowait({"ok": False, "error": str(error)})
+            except queue.Full:
+                pass
+
     def _enqueue(self, message: dict[str, Any]) -> bool:
         try:
             self._outbound.put_nowait(message)
@@ -450,6 +544,10 @@ class AndroidMemberLink:
                 "dropped_messages": self._dropped_messages,
                 "sent_yjs_total": self._sent_yjs_total,
                 "received_yjs_total": self._received_yjs_total,
+                "pending_rpc": len(self._pending_rpc),
+                "rpc_requested_total": self._rpc_requested_total,
+                "rpc_completed_total": self._rpc_completed_total,
+                "rpc_failed_total": self._rpc_failed_total,
             }
 
     def _set_state(self, state: str, *, connected: bool, error: str) -> None:
@@ -524,6 +622,15 @@ class AndroidMemberLink:
                 update = base64.b64decode(encoded.encode("ascii"), validate=False)
                 if len(update) <= _MAX_MEMBER_YJS_UPDATE_BYTES and self.apply_yjs_update(update):
                     self._received_yjs_total += 1
+        elif kind == "rpc.res":
+            request_id = str(message.get("id") or "")
+            with self._lock:
+                response_queue = self._pending_rpc.get(request_id)
+            if response_queue is not None:
+                try:
+                    response_queue.put_nowait(dict(message))
+                except queue.Full:
+                    pass
         elif kind == "rpc.req":
             connection.send_json(
                 {
@@ -638,6 +745,7 @@ class AndroidMemberLink:
                         error=f"{type(exc).__name__}:{str(exc)[:180]}",
                     )
             finally:
+                self._fail_pending_rpc("member_link_disconnected")
                 with self._lock:
                     if self._connection is connection:
                         self._connection = None

@@ -3,6 +3,13 @@ plugins {
     id "com.chaquo.python"
 }
 
+def portableRasaPython = layout.buildDirectory.dir("generated/portable-rasa-python")
+
+tasks.register("syncPortableRasaRuntime", Copy) {
+    from(file("../../../services/nlu/portable_rasa.py"))
+    into(portableRasaPython.map { it.dir("adaos/services/nlu") })
+}
+
 android {
     namespace = "dev.adaos.androidnode"
     compileSdk = 36
@@ -11,8 +18,8 @@ android {
         applicationId = "dev.adaos.androidnode"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.1.0-poc8"
+        versionCode = 9
+        versionName = "0.1.0-poc9"
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -27,6 +34,20 @@ android {
     buildFeatures {
         buildConfig = true
     }
+
+    sourceSets {
+        main {
+            python.srcDir(portableRasaPython)
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(tasks.named("syncPortableRasaRuntime"))
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("PythonSources") }.configureEach {
+    dependsOn(tasks.named("syncPortableRasaRuntime"))
 }
 
 chaquopy {

@@ -17,6 +17,8 @@ from urllib.request import Request, urlopen
 
 import y_py as Y
 
+from adaos.services.nlu.portable_rasa import PortableRasaRuntime, load_portable_rasa
+
 from .ystore import AndroidYStore
 
 
@@ -54,6 +56,8 @@ _MAX_NOTE_CONTENT_CHARS = 16 * 1024
 _MAX_IDEMPOTENCY_RESULTS = 256
 _MAX_VOICE_MESSAGES = 32
 _MAX_VOICE_TEXT_CHARS = 2 * 1024
+_RASA_LOW_CONFIDENCE = 0.45
+_RASA_BUNDLE_PATH = Path(__file__).with_name("bundle") / "rasa_mobile_bundle.json.gz"
 _LOCAL_BROWSER_LINK = "https://inimatic.com/?zone=lo&try_local_hub=1"
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
@@ -247,6 +251,12 @@ class AndroidSkillRuntime:
         self.publish_yjs = publish_yjs
         self.publish_event = publish_event
         self.member_link: Any | None = None
+        self._nlu_runtime: PortableRasaRuntime | None = None
+        self._nlu_error = ""
+        try:
+            self._nlu_runtime = load_portable_rasa(_RASA_BUNDLE_PATH)
+        except Exception as exc:
+            self._nlu_error = f"{type(exc).__name__}:{str(exc)[:200]}"
         self._lock = threading.RLock()
         self._stream_revision = 0
         self._database = sqlite3.connect(
@@ -314,6 +324,7 @@ class AndroidSkillRuntime:
                 "dynamic_install": False,
                 "skills": list(self.skill_ids),
             },
+            "runtime/environment/nlu": self._nlu_status(),
         }
         connect = _plain_at_path(snapshot, "data/adaos_connect")
         connect_current = connect.get("current") if isinstance(connect, dict) else {}
@@ -380,6 +391,7 @@ class AndroidSkillRuntime:
             "execution": "in_process",
             "dynamic_install": False,
             "skills": list(self.skill_ids),
+            "nlu": self._nlu_status(),
             "note_count": int(note_count),
             "resource_bounds": {
                 "note_count_limit": _MAX_NOTE_COUNT,
@@ -1161,11 +1173,131 @@ class AndroidSkillRuntime:
         current = _plain_at_path(self.store.snapshot_json(), "data/voice_chat")
         return current if isinstance(current, dict) else self._empty_voice_chat()
 
+    def _nlu_status(self) -> dict[str, Any]:
+        runtime = self._nlu_runtime
+        if runtime is None:
+            return {
+                "status": "failed",
+                "provider": "rasa",
+                "mode": "always",
+                "training": "off_device",
+                "error": self._nlu_error or "rasa_mobile_bundle_unavailable",
+            }
+        return {
+            "status": "ready",
+            "provider": "rasa",
+            "mode": "always",
+            "training": "off_device",
+            **runtime.describe(),
+        }
+
+    def _parse_nlu(self, text: str) -> dict[str, Any]:
+        runtime = self._nlu_runtime
+        if runtime is None:
+            return {
+                "text": text,
+                "intent": {"name": None, "confidence": 0.0},
+                "intent_ranking": [],
+                "entities": [],
+                "error": self._nlu_error or "rasa_mobile_bundle_unavailable",
+            }
+        try:
+            return runtime.parse(text)
+        except Exception as exc:
+            self._nlu_error = f"{type(exc).__name__}:{str(exc)[:200]}"
+            return {
+                "text": text,
+                "intent": {"name": None, "confidence": 0.0},
+                "intent_ranking": [],
+                "entities": [],
+                "error": self._nlu_error,
+            }
+
+    def _dispatch_nlu_teacher(
+        self,
+        *,
+        text: str,
+        nlu_result: dict[str, Any],
+        request_id: str,
+        webspace_id: str,
+    ) -> bool:
+        intent = nlu_result.get("intent")
+        confidence = (
+            float(intent.get("confidence") or 0.0) if isinstance(intent, dict) else 0.0
+        )
+        if confidence >= _RASA_LOW_CONFIDENCE:
+            return False
+        member_link = self.member_link
+        if member_link is None:
+            return False
+        return bool(
+            member_link.send_bus_event(
+                "nlp.intent.not_obtained",
+                {
+                    "text": text,
+                    "utterance": text,
+                    "reason": "low_confidence",
+                    "via": "rasa_android",
+                    "confidence": confidence,
+                    "request_id": request_id,
+                    "webspace_id": webspace_id,
+                    "_meta": {
+                        "route_id": "voice_chat",
+                        "runtime_profile": "android",
+                        "rasa_model_id": (
+                            self._nlu_runtime.metadata.get("model_id")
+                            if self._nlu_runtime is not None
+                            else None
+                        ),
+                    },
+                },
+                source="android.nlu.rasa",
+            )
+        )
+
+    def _hub_dialog_response(
+        self,
+        text: str,
+        agent: dict[str, Any],
+        *,
+        webspace_id: str,
+    ) -> tuple[str | None, bool]:
+        if str(agent.get("owner") or "") != "skill:conversation_companions":
+            return None, False
+        member_link = self.member_link
+        if member_link is None:
+            return None, False
+        character_id = str(agent.get("id") or "").rsplit(":", 1)[-1]
+        try:
+            result = member_link.call_hub_tool(
+                "conversation_companions:talk",
+                {
+                    "text": text,
+                    "character_id": character_id,
+                    "mode": "single",
+                    "webspace_id": webspace_id,
+                    "_meta": {
+                        "dialog_channel_id": agent.get("channel_id"),
+                        "active_agent_id": agent.get("id"),
+                        "runtime_profile": "android",
+                    },
+                },
+                timeout=40.0,
+            )
+        except Exception:
+            return None, False
+        if not isinstance(result, dict):
+            return None, False
+        message = str(result.get("message") or "").strip()
+        return (message or None), bool(result.get("used_llm"))
+
     def handle_dialog_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
         if not text:
             raise AndroidSkillError("voice_assistant_text_required")
         meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        webspace_id = str(payload.get("webspace_id") or meta.get("webspace_id") or "desktop")
+        nlu_result = self._parse_nlu(text)
         requested_agent_id = str(
             payload.get("active_agent_id") or meta.get("active_agent_id") or ""
         ).strip()
@@ -1195,14 +1327,29 @@ class AndroidSkillRuntime:
             )
             response_input = addressed_text or "привет"
         now = time.time()
-        response_text = self._voice_response(response_input, active_agent)
+        turn_id = uuid.uuid4().hex[:12]
+        teacher_dispatched = self._dispatch_nlu_teacher(
+            text=text,
+            nlu_result=nlu_result,
+            request_id=f"mobile-{turn_id}",
+            webspace_id=webspace_id,
+        )
+        response_text, used_llm = self._hub_dialog_response(
+            response_input,
+            active_agent,
+            webspace_id=webspace_id,
+        )
+        response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"
+        if not response_text:
+            response_text = self._voice_response(response_input, active_agent)
+            response_source = "android_offline_fallback"
+            used_llm = False
         current = self._voice_current()
         messages = [
             dict(item)
             for item in current.get("messages") or []
             if isinstance(item, dict)
         ]
-        turn_id = uuid.uuid4().hex[:12]
         messages.extend(
             [
                 {
@@ -1230,6 +1377,8 @@ class AndroidSkillRuntime:
                         "gender": active_agent.get("gender"),
                         "voice": active_agent.get("voice"),
                     },
+                    "response_source": response_source,
+                    "used_llm": used_llm,
                 },
             ]
         )
@@ -1241,7 +1390,39 @@ class AndroidSkillRuntime:
             "updated_at": _utc_now(),
         }
         dialog = self._dialog_snapshot(event="turn")
-        self._set_paths({"data/voice_chat": snapshot, "data/dialog": dialog})
+        intent = nlu_result.get("intent") if isinstance(nlu_result.get("intent"), dict) else {}
+        nlu_projection = {
+            "provider": "rasa",
+            "mode": "always",
+            "text": text,
+            "intent": dict(intent),
+            "intent_ranking": [
+                dict(item)
+                for item in (nlu_result.get("intent_ranking") or [])[:5]
+                if isinstance(item, dict)
+            ],
+            "entities": [
+                dict(item)
+                for item in nlu_result.get("entities") or []
+                if isinstance(item, dict)
+            ],
+            "teacher_dispatched": teacher_dispatched,
+            "model_id": (
+                self._nlu_runtime.metadata.get("model_id")
+                if self._nlu_runtime is not None
+                else None
+            ),
+            "updated_at": _utc_now(),
+        }
+        if nlu_result.get("error"):
+            nlu_projection["error"] = str(nlu_result.get("error"))
+        self._set_paths(
+            {
+                "data/voice_chat": snapshot,
+                "data/dialog": dialog,
+                "data/nlu/current": nlu_projection,
+            }
+        )
         return {
             "ok": True,
             "accepted": True,
@@ -1251,6 +1432,9 @@ class AndroidSkillRuntime:
             "dialog_channel_id": active_agent["channel_id"],
             "active_agent_id": active_agent["id"],
             "active_agent_label": active_agent["label"],
+            "response_source": response_source,
+            "used_llm": used_llm,
+            "nlu": nlu_projection,
         }
 
     def _voice_response(self, text: str, agent: dict[str, Any]) -> str:
