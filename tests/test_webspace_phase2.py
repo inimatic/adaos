@@ -40,7 +40,7 @@ from adaos.services.workspaces import (
 
 
 def _clear_member_snapshot_task_state() -> None:
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_tasks(state.MEMBER_SNAPSHOT, cancel=True)
     state.clear_tasks(state.MEMBER_SNAPSHOT_DELAYED, cancel=True)
     for group in (
@@ -53,7 +53,7 @@ def _clear_member_snapshot_task_state() -> None:
 
 
 def _clear_scenario_switch_task_state() -> None:
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_tasks(state.SCENARIO_SWITCH, cancel=True)
     state.clear_records(state.WEBSPACE_REBUILD_STATUS)
 
@@ -672,7 +672,7 @@ def test_member_access_reactivated_forces_rebuild_even_when_material_fingerprint
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_rebuild_min_interval_s", lambda: 60.0)
     monkeypatch.setattr(webspace_runtime_module, "_member_snapshot_desktop_material_fingerprint", lambda _node_id: "same")
     _clear_member_snapshot_task_state()
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.put_record(state.MEMBER_SNAPSHOT_LAST_AT, key, time.monotonic())
     state.put_record(state.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT, key, "same")
 
@@ -1233,7 +1233,7 @@ def test_member_snapshot_changed_skips_unchanged_desktop_material(monkeypatch) -
             sys.modules.pop("adaos.services.registry.subnet_directory", None)
 
     assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     stats = state.get_record(state.MEMBER_SNAPSHOT_STATS, "member-1\0desktop")
     assert stats["skipped_unchanged_total"] == 1
 
@@ -1871,7 +1871,7 @@ def test_detached_member_node_ids_include_detached_and_denied_policies(monkeypat
 
 
 def test_resolve_webspace_drops_live_remote_entries_for_detached_members(monkeypatch) -> None:
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     monkeypatch.setattr(
         webspace_runtime_module,
         "load_config",
@@ -2912,7 +2912,7 @@ def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
 
-    webspace_runtime_module._CACHE_STATE.clear_materialized_webspaces()  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.clear_materialized_webspaces()  # noqa: SLF001
     identity = {
         "key_hash": "disk-cache-key",
         "key": "disk-cache-key",
@@ -2943,7 +2943,7 @@ def test_materialized_worker_cache_round_trips_disk(monkeypatch, tmp_path) -> No
     }
 
     webspace_runtime_module._remember_materialized_worker_result(identity, worker_result)  # noqa: SLF001
-    webspace_runtime_module._CACHE_STATE.clear_materialized_webspaces()  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.clear_materialized_webspaces()  # noqa: SLF001
 
     cached = webspace_runtime_module._get_cached_materialized_worker_result(identity)  # noqa: SLF001
 
@@ -2967,7 +2967,7 @@ def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(mon
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
 
-    webspace_runtime_module._CACHE_STATE.clear_materialized_webspaces()  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.clear_materialized_webspaces()  # noqa: SLF001
     identity = {
         "key_hash": "payload-cache-key",
         "key": "payload-cache-key",
@@ -3002,7 +3002,7 @@ def test_payload_only_materialized_worker_cache_round_trips_without_snapshot(mon
         cache_mode="payload_only",
         require_snapshot=False,
     )
-    webspace_runtime_module._CACHE_STATE.clear_materialized_webspaces()  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.clear_materialized_webspaces()  # noqa: SLF001
 
     cached = webspace_runtime_module._get_cached_materialized_worker_result(  # noqa: SLF001
         identity,
@@ -3032,8 +3032,8 @@ def test_materialization_cache_invalidation_without_scenario_drops_whole_webspac
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE", "1")
     monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
 
-    webspace_runtime_module._CACHE_STATE.clear_materialized_webspaces()  # noqa: SLF001
-    webspace_runtime_module._CACHE_STATE.put_skill_source_fingerprint(  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.clear_materialized_webspaces()  # noqa: SLF001
+    webspace_runtime_module._RUNTIME.cache.put_skill_source_fingerprint(  # noqa: SLF001
         "workspace",
         123.0,
         "stale",
@@ -3080,8 +3080,8 @@ def test_materialization_cache_invalidation_without_scenario_drops_whole_webspac
 
     assert result["materialization"]["cache_drop_scope"] == "webspace"
     assert result["materialization"]["cache_dropped"] == {"memory": 2, "disk": 2}
-    assert webspace_runtime_module._CACHE_STATE.materialized_webspace_count() == 0  # noqa: SLF001
-    assert webspace_runtime_module._CACHE_STATE.get_skill_source_fingerprint("workspace") is None  # noqa: SLF001
+    assert webspace_runtime_module._RUNTIME.cache.materialized_webspace_count() == 0  # noqa: SLF001
+    assert webspace_runtime_module._RUNTIME.cache.get_skill_source_fingerprint("workspace") is None  # noqa: SLF001
     assert not list(tmp_path.glob("*.json"))
 
 
@@ -3297,7 +3297,7 @@ def test_background_scenario_switch_rebuild_superseded_request_keeps_newer_statu
         assert second["request_id"] != first_request_id
 
         events["scenario_b"].set()
-        state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+        state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
         task = state.get_task(state.SCENARIO_SWITCH, webspace_id)
         assert task is not None
         await task
@@ -3399,7 +3399,7 @@ def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
         await asyncio.sleep(0)
 
     monkeypatch.setattr(webspace_runtime_module, "_sync_webspace_listing", _fake_sync_listing)
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_tasks(state.WEBSPACE_LISTING, cancel=True)
 
     async def _run() -> tuple[dict[str, object], dict[str, object]]:
@@ -3422,7 +3422,7 @@ def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
 
 def test_phase3_stale_rebuild_request_does_not_apply_effective_branches() -> None:
     webspace_id = "phase3-stale-apply-guard"
-    state = webspace_runtime_module._TASK_STATE  # noqa: SLF001
+    state = webspace_runtime_module._RUNTIME.tasks  # noqa: SLF001
     state.clear_records(state.WEBSPACE_REBUILD_STATUS)
     webspace_runtime_module._set_webspace_rebuild_status(
         webspace_id,
@@ -4550,8 +4550,8 @@ def test_phase4_semantic_rebuild_refreshes_projection_rules_before_runtime_rebui
 def test_builder_revision_apply_invalidates_loader_cache_without_reseed(monkeypatch) -> None:
     invalidations: list[tuple[str, str]] = []
     rebuild_kwargs: list[dict[str, object]] = []
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
-    webspace_runtime_module._CACHE_STATE.put_resolved_webspace(
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.put_resolved_webspace(
         "poison",
         {"scenario_id": "stale"},
         max_entries=16,
@@ -4621,7 +4621,7 @@ def test_builder_revision_apply_invalidates_loader_cache_without_reseed(monkeypa
     assert result["accepted"] is True
     assert "invalidate_loader_cache" in result["timings_ms"]
     assert "invalidate_resolver_cache" in result["timings_ms"]
-    assert webspace_runtime_module._CACHE_STATE.resolved_webspace_count() == 0
+    assert webspace_runtime_module._RUNTIME.cache.resolved_webspace_count() == 0
     assert "project_scenario_payload" not in result["timings_ms"]
     assert "seed_from_scenario" not in result["timings_ms"]
 
@@ -5084,7 +5084,7 @@ def test_phase4_projection_refresh_uses_dev_space_for_dev_webspace(monkeypatch) 
 
 
 def test_phase4_rebuild_from_sources_succeeds_without_materialized_yjs_scenario_payload(monkeypatch) -> None:
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     webspace_id = "phase4-loader-rebuild"
     ensure_workspace(webspace_id)
     set_workspace_manifest(
@@ -5324,7 +5324,7 @@ def test_phase3_resolver_attaches_webui_contract_diagnostics(monkeypatch) -> Non
 
 
 def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() -> None:
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     inputs = webspace_runtime_module.WebspaceResolverInputs(
         webspace_id="phase5-resolver-cache",
@@ -5357,7 +5357,7 @@ def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() ->
 
 
 def test_resolver_reuses_scenario_core_across_webspaces_without_overlay_leakage() -> None:
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     common = {
         "scenario_id": "shared-generated-scenario",
@@ -5778,7 +5778,7 @@ def test_skill_activated_event_can_defer_webspace_rebuild(monkeypatch) -> None:
 
 
 def test_phase4_rebuild_status_exposes_legacy_resolver_fallback(monkeypatch) -> None:
-    webspace_runtime_module._CACHE_STATE.clear_resolved_webspaces()
+    webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     webspace_id = "phase4-legacy-fallback"
     ensure_workspace(webspace_id)
     set_workspace_manifest(

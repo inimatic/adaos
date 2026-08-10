@@ -1033,6 +1033,16 @@ the recovery coordinator, made projection refresh explicit, and transferred
 materialization subprocess plus scenario-switch task execution to typed
 owners. The compatibility module still contains pure transformation helpers
 and public entry points; it is no longer an alternate mutable-state owner.
+
+The 2026-08-10 follow-up removed the remaining parallel service aliases from
+the compatibility facade. `WebspaceRuntimeContainer` is now the single
+composition owner for tasks, scheduling, cache, materialization, projections,
+recovery, rebuild, resolution, switching, catalog, and Builder publication.
+Disk materialization persistence/pruning/invalidation belongs to the cache
+component, while skill/scenario/publication event interpretation belongs to a
+dedicated event service; decorated functions in `webspace_runtime.py` are thin
+eventbus adapters. Tests access the container owner explicitly rather than
+reaching through the removed `_TASK_STATE` and `_CACHE_STATE` aliases.
 Local characterization and component coverage passed before rollout.
 
 The bounded `.30` checkpoint completed on 2026-08-06 at core commit

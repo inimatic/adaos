@@ -57,41 +57,20 @@ from adaos.sdk.core.decorators import subscribe
 from .node_data_scope import local_unscoped_data_path, node_scope_data_path
 from .webspace_components import (
     BuilderPublicationOperations,
-    MaterializationExecutorOwner,
     WebspaceMaterializationOperations,
-    WebspaceMaterializationService,
     RebuildOperations,
-    WebspaceCacheState,
-    WebspaceProjectionService,
-    WebspaceRecoveryCoordinator,
-    WebspaceRebuildService,
     WebspaceResolutionOperations,
-    WebspaceResolutionService,
     ScenarioSwitchOperations,
-    WebspaceScenarioSwitchingService,
     WebspaceSkillCatalogOperations,
-    WebspaceSkillCatalogService,
-    WebspaceTaskState,
     WebspaceTaskSchedulingOperations,
-    WebspaceTaskSchedulingService,
-    WebspaceBuilderPublicationService,
+    WebspaceRuntimeContainer,
+    WebspaceEventOperations,
 )
 from .workflow_runtime import ScenarioWorkflowRuntime
 
 _log = logging.getLogger("adaos.scenario.webspace_runtime")
 _WS_ID_RE = re.compile(r"[^a-zA-Z0-9-_]+")
-_TASK_STATE = WebspaceTaskState()
-_TASK_SCHEDULING_SERVICE = WebspaceTaskSchedulingService()
-_CACHE_STATE = WebspaceCacheState()
-_MATERIALIZATION_EXECUTOR = MaterializationExecutorOwner()
-_MATERIALIZATION_SERVICE = WebspaceMaterializationService()
-_PROJECTION_SERVICE = WebspaceProjectionService()
-_RECOVERY_COORDINATOR = WebspaceRecoveryCoordinator(command_cache_limit=256)
-_REBUILD_SERVICE = WebspaceRebuildService()
-_RESOLUTION_SERVICE = WebspaceResolutionService()
-_SCENARIO_SWITCHING = WebspaceScenarioSwitchingService()
-_SKILL_CATALOG_SERVICE = WebspaceSkillCatalogService()
-_BUILDER_PUBLICATION_SERVICE = WebspaceBuilderPublicationService()
+_RUNTIME = WebspaceRuntimeContainer.create_default()
 _SKILL_DECLS_CACHE_TTL_S = 300.0
 _SKILL_SOURCE_FINGERPRINT_CACHE_TTL_S = 600.0
 
@@ -100,7 +79,6 @@ def _is_control_flow_base_exception(exc: BaseException) -> bool:
     return isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, GeneratorExit))
 _RESOLVED_WEBSPACE_CACHE_LIMIT = 16
 _MATERIALIZED_WEBSPACE_CACHE_LIMIT = 8
-_MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
 _DESKTOP_SCENARIOS_CACHE_TTL_S = 30.0
 _LOCAL_NODE_DISPLAY_CACHE_TTL_S = 2.0
 
@@ -125,6 +103,15 @@ def _builder_publication_operations() -> BuilderPublicationOperations:
             _skill_sources_fingerprint_for_materialization
         ),
         workspace_index=workspace_index,
+    )
+
+
+def _event_operations() -> WebspaceEventOperations:
+    return WebspaceEventOperations(
+        default_webspace_id=default_webspace_id,
+        rebuild_webspace=rebuild_webspace_from_sources,
+        schedule_skill_runtime_rebuild=schedule_skill_runtime_rebuild,
+        reload_publication_webspaces=reload_workspace_webspaces_for_publication,
     )
 
 
@@ -176,13 +163,13 @@ def _task_scheduling_operations() -> WebspaceTaskSchedulingOperations:
         pending_materialization_snapshot=_pending_materialization_snapshot,
         rebuild_webspace_from_sources=rebuild_webspace_from_sources,
         scenario_switch_background_route_yield_s=_scenario_switch_background_route_yield_s,
-        scenario_switching=_SCENARIO_SWITCHING,
+        scenario_switching=_RUNTIME.scenario_switching,
         scenario_workflow_runtime_type=ScenarioWorkflowRuntime,
         schedule_member_snapshot_rebuild=_schedule_member_snapshot_rebuild,
         seed_member_snapshot_ydoc_defaults=_seed_member_snapshot_ydoc_defaults,
         set_webspace_rebuild_status=_set_webspace_rebuild_status,
         set_webspace_rebuild_status_if_current=_set_webspace_rebuild_status_if_current,
-        task_state=_TASK_STATE,
+        task_state=_RUNTIME.tasks,
         workflow_sync_debounce_s=_workflow_sync_debounce_s,
         workflow_sync_stats=_workflow_sync_stats,
     )
@@ -192,7 +179,7 @@ def _skill_catalog_operations() -> WebspaceSkillCatalogOperations:
     return WebspaceSkillCatalogOperations(
         apply_node_context_to_ui=_apply_node_context_to_ui,
         apply_webui_load_hint=_apply_webui_load_hint,
-        cache_state=_CACHE_STATE,
+        cache_state=_RUNTIME.cache,
         catalog_entry_is_foreign_relay=_catalog_entry_is_foreign_relay,
         clone_json_like=_clone_json_like,
         coerce_dict=_coerce_dict,
@@ -477,7 +464,7 @@ def _skill_runtime_rebuild_debounce_s() -> float:
 
 def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    stats = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_STATS, key)
+    stats = _RUNTIME.tasks.get_record(_RUNTIME.tasks.SKILL_RUNTIME_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -486,7 +473,7 @@ def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
             "completed_total": 0,
             "failed_total": 0,
         }
-        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_STATS, key, stats)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.SKILL_RUNTIME_STATS, key, stats)
     return stats
 
 
@@ -498,7 +485,7 @@ def _merge_skill_runtime_rebuild_request(
     reason: str,
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
-    pending = _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
+    pending = _RUNTIME.tasks.get_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key)
     if pending is None:
         pending = {
             "webspace_id": key,
@@ -509,7 +496,7 @@ def _merge_skill_runtime_rebuild_request(
             "updated_at": time.time(),
             "request_count": 0,
         }
-        _TASK_STATE.put_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key, pending)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key, pending)
     action_token = str(action or "").strip() or "skill_runtime_sync"
     reason_token = str(reason or "").strip() or action_token
     pending["request_count"] = int(pending.get("request_count") or 0) + 1
@@ -557,7 +544,7 @@ def schedule_skill_runtime_rebuild(
         source_of_truth=source_of_truth,
         reason=reason or action,
     )
-    existing = _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key)
+    existing = _RUNTIME.tasks.active_task(_RUNTIME.tasks.SKILL_RUNTIME, key)
     if existing is not None:
         stats["coalesced_total"] = int(stats.get("coalesced_total") or 0) + 1
         return {
@@ -580,13 +567,13 @@ def _start_skill_runtime_rebuild_task(
 ) -> Dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     stats = stats or _skill_runtime_rebuild_stats(key)
-    pending = pending or _TASK_STATE.get_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key) or {}
+    pending = pending or _RUNTIME.tasks.get_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key) or {}
     stats["scheduled_total"] = int(stats.get("scheduled_total") or 0) + 1
     task = asyncio.create_task(
         _run_skill_runtime_rebuild_coalesced(key),
         name=f"skill-runtime-rebuild:{key}",
     )
-    _TASK_STATE.put_task(_TASK_STATE.SKILL_RUNTIME, key, task)
+    _RUNTIME.tasks.put_task(_RUNTIME.tasks.SKILL_RUNTIME, key, task)
     return {
         "scheduled": True,
         "mode": "coalesced",
@@ -606,7 +593,7 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
             delay_s = _skill_runtime_rebuild_debounce_s()
             if delay_s > 0:
                 await asyncio.sleep(delay_s)
-            pending = _TASK_STATE.pop_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
+            pending = _RUNTIME.tasks.pop_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key)
             if not pending:
                 return
             actions = list(pending.get("actions") or [])
@@ -637,14 +624,14 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
                     action,
                     exc_info=True,
                 )
-            if not _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key):
+            if not _RUNTIME.tasks.has_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key):
                 return
     finally:
         current = asyncio.current_task()
-        _TASK_STATE.pop_task(_TASK_STATE.SKILL_RUNTIME, key, expected=current)
+        _RUNTIME.tasks.pop_task(_RUNTIME.tasks.SKILL_RUNTIME, key, expected=current)
         if (
-            _TASK_STATE.has_record(_TASK_STATE.SKILL_RUNTIME_PENDING, key)
-            and _TASK_STATE.active_task(_TASK_STATE.SKILL_RUNTIME, key) is None
+            _RUNTIME.tasks.has_record(_RUNTIME.tasks.SKILL_RUNTIME_PENDING, key)
+            and _RUNTIME.tasks.active_task(_RUNTIME.tasks.SKILL_RUNTIME, key) is None
         ):
             _start_skill_runtime_rebuild_task(key)
 
@@ -683,7 +670,7 @@ def _member_snapshot_desktop_material_fingerprint(node_id: str) -> str:
 
 
 def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
-    stats = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key)
+    stats = _RUNTIME.tasks.get_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_STATS, task_key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -702,20 +689,20 @@ def _member_snapshot_rebuild_stats(task_key: str) -> Dict[str, Any]:
             "last_completed_request_id": "",
             "last_delayed_request_id": "",
         }
-        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_STATS, task_key, stats)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_STATS, task_key, stats)
     return stats
 
 
 def member_snapshot_rebuild_runtime_snapshot(*, limit: int = 25) -> Dict[str, Any]:
     items: list[Dict[str, Any]] = []
     now_ts = time.time()
-    for task_key, raw_stats in _TASK_STATE.record_items(_TASK_STATE.MEMBER_SNAPSHOT_STATS):
+    for task_key, raw_stats in _RUNTIME.tasks.record_items(_RUNTIME.tasks.MEMBER_SNAPSHOT_STATS):
         if not isinstance(raw_stats, dict):
             continue
         node_id, _, webspace_id = str(task_key or "").partition("\0")
-        dirty = dict(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {})
-        task = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
-        delayed = _TASK_STATE.get_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
+        dirty = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_DIRTY, task_key) or {})
+        task = _RUNTIME.tasks.get_task(_RUNTIME.tasks.MEMBER_SNAPSHOT, task_key)
+        delayed = _RUNTIME.tasks.get_task(_RUNTIME.tasks.MEMBER_SNAPSHOT_DELAYED, task_key)
         last_requested_at = float(raw_stats.get("last_requested_at") or 0.0)
         last_completed_at = float(raw_stats.get("last_completed_at") or 0.0)
         items.append(
@@ -791,7 +778,7 @@ def _member_snapshot_rebuild_reason(evt: Any, payload: Any) -> str:
 
 
 def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str, request_id: str | None = None) -> None:
-    dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key)
+    dirty = _RUNTIME.tasks.get_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_DIRTY, task_key)
     if dirty is None:
         dirty = {
             "count": 0,
@@ -805,7 +792,7 @@ def _mark_member_snapshot_rebuild_dirty(*, task_key: str, reason: str, mode: str
     dirty["last_mode"] = str(mode or "").strip() or "coalesced"
     dirty["last_requested_at"] = time.time()
     dirty["last_request_id"] = str(request_id or "").strip() or str(dirty.get("last_request_id") or "").strip()
-    _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key, dirty)
+    _RUNTIME.tasks.put_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_DIRTY, task_key, dirty)
     stats = _member_snapshot_rebuild_stats(task_key)
     if mode == "task_running":
         stats["coalesced_running_total"] = int(stats.get("coalesced_running_total") or 0) + 1
@@ -825,7 +812,7 @@ def _schedule_member_snapshot_rebuild_delayed(
     request_id: str | None = None,
 ) -> None:
     task_key = f"{str(node_id or '').strip()}\0{str(webspace_id or '').strip()}"
-    existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key)
+    existing = _RUNTIME.tasks.active_task(_RUNTIME.tasks.MEMBER_SNAPSHOT_DELAYED, task_key)
     if existing is not None:
         return
     delayed_request_id = str(request_id or "").strip() or _member_snapshot_rebuild_request_id(
@@ -838,15 +825,15 @@ def _schedule_member_snapshot_rebuild_delayed(
     async def _runner() -> None:
         try:
             await asyncio.sleep(max(0.0, float(delay_s)))
-            if not _TASK_STATE.has_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key):
+            if not _RUNTIME.tasks.has_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_DIRTY, task_key):
                 return
-            current = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, task_key)
+            current = _RUNTIME.tasks.active_task(_RUNTIME.tasks.MEMBER_SNAPSHOT, task_key)
             if current is not None:
                 return
-            _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, task_key, time.monotonic())
+            _RUNTIME.tasks.put_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_LAST_AT, task_key, time.monotonic())
             stats = _member_snapshot_rebuild_stats(task_key)
             stats["delayed_total"] = int(stats.get("delayed_total") or 0) + 1
-            dirty = _TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_DIRTY, task_key) or {}
+            dirty = _RUNTIME.tasks.get_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_DIRTY, task_key) or {}
             delayed_reason = str(dirty.get("last_reason") or reason or "").strip() or "subnet.member.snapshot.changed"
             _schedule_member_snapshot_rebuild(
                 webspace_id=webspace_id,
@@ -855,8 +842,8 @@ def _schedule_member_snapshot_rebuild_delayed(
                 request_id=str(dirty.get("last_request_id") or delayed_request_id),
             )
         finally:
-            _TASK_STATE.pop_task(
-                _TASK_STATE.MEMBER_SNAPSHOT_DELAYED,
+            _RUNTIME.tasks.pop_task(
+                _RUNTIME.tasks.MEMBER_SNAPSHOT_DELAYED,
                 task_key,
                 expected=task,
             )
@@ -865,7 +852,7 @@ def _schedule_member_snapshot_rebuild_delayed(
         _runner(),
         name=f"member-snapshot-rebuild-delayed:{webspace_id}:{node_id}",
     )
-    _TASK_STATE.put_task(_TASK_STATE.MEMBER_SNAPSHOT_DELAYED, task_key, task)
+    _RUNTIME.tasks.put_task(_RUNTIME.tasks.MEMBER_SNAPSHOT_DELAYED, task_key, task)
 
 
 def _webspace_runtime_async_write_meta(*, root_names: list[str], source: str):
@@ -988,7 +975,7 @@ def _local_node_label() -> str:
 
 
 def _local_node_display() -> dict[str, Any]:
-    cached_at, cached = _CACHE_STATE.get_local_node_display()
+    cached_at, cached = _RUNTIME.cache.get_local_node_display()
     now = time.monotonic()
     if cached and (now - cached_at) <= _LOCAL_NODE_DISPLAY_CACHE_TTL_S:
         return dict(cached)
@@ -1001,7 +988,7 @@ def _local_node_display() -> dict[str, Any]:
             "node_index": 0,
             "node_color": "",
         }
-    _CACHE_STATE.put_local_node_display(now, display)
+    _RUNTIME.cache.put_local_node_display(now, display)
     return dict(display)
 
 
@@ -2782,7 +2769,7 @@ def _get_cached_resolved_outputs(fingerprint: str) -> WebspaceResolverOutputs | 
     token = str(fingerprint or "").strip()
     if not token:
         return None
-    cached = _CACHE_STATE.get_resolved_webspace(token)
+    cached = _RUNTIME.cache.get_resolved_webspace(token)
     if not isinstance(cached, Mapping):
         return None
     return _resolved_outputs_from_cache_payload(cached)
@@ -2846,7 +2833,7 @@ def _remember_resolved_outputs(fingerprint: str, resolved: WebspaceResolverOutpu
     if payload_size > max_bytes:
         return
     payload["_cache_size_bytes"] = payload_size
-    _CACHE_STATE.put_resolved_webspace(
+    _RUNTIME.cache.put_resolved_webspace(
         token,
         payload,
         max_entries=_RESOLVED_WEBSPACE_CACHE_LIMIT,
@@ -2868,28 +2855,15 @@ def _materialized_webspace_cache_limit() -> int:
 
 
 def _materialized_webspace_disk_cache_enabled() -> bool:
-    return _env_flag_default_enabled("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE")
+    return _RUNTIME.disk_cache.enabled()
 
 
 def _materialized_webspace_disk_cache_limit() -> int:
-    raw = os.getenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE_LIMIT")
-    try:
-        value = int(str(raw or "128").strip())
-    except Exception:
-        value = 128
-    return max(0, min(value, 4096))
+    return _RUNTIME.disk_cache.limit()
 
 
 def _materialized_webspace_cache_dir() -> Path | None:
-    override = str(os.getenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR") or "").strip()
-    if override:
-        return Path(override)
-    try:
-        from adaos.services.runtime_paths import current_state_dir
-
-        return Path(current_state_dir()) / "scenario" / "materialization_cache"
-    except Exception:
-        return None
+    return _RUNTIME.disk_cache.root()
 
 
 def _materialized_webspace_cache_key(
@@ -2914,13 +2888,7 @@ def _materialized_webspace_cache_key(
 
 
 def _materialized_webspace_disk_cache_path(cache_key: str) -> Path | None:
-    token = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(cache_key or "").strip()).strip(".:-_")
-    if not token:
-        return None
-    root = _materialized_webspace_cache_dir()
-    if root is None:
-        return None
-    return root / f"{token}.json"
+    return _RUNTIME.disk_cache.path_for(cache_key)
 
 
 def _encode_cache_bytes(value: bytes) -> str:
@@ -3018,7 +2986,7 @@ def _remember_materialized_worker_result_in_memory(
     if cached_size > max_bytes:
         return
     cached_value["_cache_size_bytes"] = cached_size
-    _CACHE_STATE.put_materialized_webspace(
+    _RUNTIME.cache.put_materialized_webspace(
         cache_key,
         cached_value,
         max_entries=_materialized_webspace_cache_limit(),
@@ -3033,23 +3001,15 @@ def _load_materialized_worker_result_from_disk(
 ) -> Dict[str, Any] | None:
     if not _materialized_webspace_disk_cache_enabled():
         return None
-    path = _materialized_webspace_disk_cache_path(cache_key)
-    if path is None:
-        return None
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
-    if not isinstance(raw, Mapping) or raw.get("schema") != _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA:
+    raw = _RUNTIME.disk_cache.load_record(cache_key)
+    if not isinstance(raw, Mapping):
         return None
     payload = raw.get("materialized_payload") if isinstance(raw.get("materialized_payload"), Mapping) else None
     snapshot_update = _decode_cache_bytes(raw.get("snapshot_update_b64"))
     if not payload or (require_snapshot and not snapshot_update):
         return None
     value: Dict[str, Any] = {
-        "created_at": raw.get("created_at") or path.stat().st_mtime,
+        "created_at": raw.get("created_at") or time.time(),
         "snapshot_update": snapshot_update,
         "state_vector": _decode_cache_bytes(raw.get("state_vector_b64")),
         "materialized_payload": payload,
@@ -3064,31 +3024,12 @@ def _load_materialized_worker_result_from_disk(
     if cloned is None:
         return None
     _remember_materialized_worker_result_in_memory(cache_key, value)
-    try:
-        path.touch()
-    except Exception:
-        pass
     cloned.setdefault("materialization_cache", {})["source"] = "disk"
     return cloned
 
 
 def _prune_materialized_disk_cache(root: Path) -> None:
-    limit = _materialized_webspace_disk_cache_limit()
-    if limit <= 0:
-        return
-    try:
-        files = sorted(
-            [path for path in root.glob("*.json") if path.is_file()],
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
-    except Exception:
-        return
-    for path in files[limit:]:
-        try:
-            path.unlink()
-        except Exception:
-            pass
+    _RUNTIME.disk_cache.prune(root)
 
 
 def _remember_materialized_worker_result_on_disk(
@@ -3100,16 +3041,11 @@ def _remember_materialized_worker_result_on_disk(
 ) -> None:
     if not _materialized_webspace_disk_cache_enabled() or _materialized_webspace_disk_cache_limit() <= 0:
         return
-    path = _materialized_webspace_disk_cache_path(cache_key)
-    if path is None:
-        return
     payload = value.get("materialized_payload") if isinstance(value.get("materialized_payload"), Mapping) else None
     snapshot_update = bytes(value.get("snapshot_update") or b"")
     if not payload or (require_snapshot and not snapshot_update):
         return
     record = {
-        "schema": _MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA,
-        "cache_key": cache_key,
         "cache_mode": str(cache_mode or "fresh_doc").strip() or "fresh_doc",
         "created_at": value.get("created_at") or time.time(),
         "snapshot_update_b64": _encode_cache_bytes(snapshot_update),
@@ -3121,18 +3057,7 @@ def _remember_materialized_worker_result_on_disk(
         "ydoc_timings_ms": _copy_timing_map(value.get("ydoc_timings_ms")) or {},
         "identity": dict(value.get("identity") or {}) if isinstance(value.get("identity"), Mapping) else {},
     }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        os.replace(tmp, path)
-        _prune_materialized_disk_cache(path.parent)
-    except Exception:
-        try:
-            if "tmp" in locals() and tmp.exists():
-                tmp.unlink()
-        except Exception:
-            pass
+    _RUNTIME.disk_cache.store_record(cache_key, record)
 
 
 def _get_cached_materialized_worker_result(
@@ -3146,12 +3071,12 @@ def _get_cached_materialized_worker_result(
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     if not key:
         return None
-    cached = _CACHE_STATE.get_materialized_webspace(key)
+    cached = _RUNTIME.cache.get_materialized_webspace(key)
     if not isinstance(cached, Mapping):
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
     cloned = _clone_materialized_worker_result(cached, cache_key=key, require_snapshot=require_snapshot)
     if cloned is None:
-        _CACHE_STATE.discard_materialized_webspace(key)
+        _RUNTIME.cache.discard_materialized_webspace(key)
         return _load_materialized_worker_result_from_disk(key, require_snapshot=require_snapshot)
     return cloned
 
@@ -3167,7 +3092,7 @@ def _remember_materialized_worker_result(
         return
     limit = _materialized_webspace_cache_limit()
     if limit <= 0:
-        _CACHE_STATE.clear_materialized_webspaces()
+        _RUNTIME.cache.clear_materialized_webspaces()
         return
     key = _materialized_webspace_cache_key(identity, cache_mode=cache_mode)
     payload = worker_result.get("materialized_payload") if isinstance(worker_result.get("materialized_payload"), Mapping) else None
@@ -3216,32 +3141,25 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
     target = str(webspace_id or "").strip()
     if not target:
         return {"memory": 0, "disk": 0}
-    memory_removed = _CACHE_STATE.discard_materialized_webspaces(
+    memory_removed = _RUNTIME.cache.discard_materialized_webspaces(
         lambda _key, value: _materialized_cache_value_matches(
             value,
             webspace_id=target,
             scenario_id=scenario_id,
         )
     )
-    disk_removed = 0
-    root = _materialized_webspace_cache_dir()
-    if root is not None and root.exists():
-        for path in root.glob("*.json"):
-            try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if isinstance(raw, Mapping) and _materialized_cache_value_matches(raw, webspace_id=target, scenario_id=scenario_id):
-                try:
-                    path.unlink()
-                    disk_removed += 1
-                except Exception:
-                    pass
+    disk_removed = _RUNTIME.disk_cache.discard_records(
+        lambda value: _materialized_cache_value_matches(
+            value,
+            webspace_id=target,
+            scenario_id=scenario_id,
+        )
+    )
     return {"memory": memory_removed, "disk": disk_removed}
 
 
 def _invalidate_resolved_webspace_cache(*, scenario_id: str | None = None, reason: str | None = None) -> int:
-    count = _CACHE_STATE.clear_resolved_webspaces()
+    count = _RUNTIME.cache.clear_resolved_webspaces()
     try:
         _log.debug(
             "invalidated resolved webspace cache scenario=%s reason=%s count=%d",
@@ -3708,7 +3626,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
     mode = _scenario_loader_space(source_mode)
     cache_key = mode
     now = time.monotonic()
-    cached = _CACHE_STATE.get_skill_source_fingerprint(cache_key)
+    cached = _RUNTIME.cache.get_skill_source_fingerprint(cache_key)
     if cached is not None and now - float(cached[0]) <= _skill_source_fingerprint_cache_ttl_s():
         return str(cached[1] or "")
     try:
@@ -3767,7 +3685,7 @@ def _skill_sources_fingerprint_for_materialization(source_mode: str) -> str:
             "stamps": stamps,
         }
     )
-    _CACHE_STATE.put_skill_source_fingerprint(cache_key, now, fingerprint)
+    _RUNTIME.cache.put_skill_source_fingerprint(cache_key, now, fingerprint)
     return fingerprint
 
 
@@ -4013,7 +3931,7 @@ def _materialization_cpu_workers() -> int:
 
 
 def _shutdown_materialization_cpu_executor() -> None:
-    _MATERIALIZATION_EXECUTOR.shutdown()
+    _RUNTIME.materialization_executor.shutdown()
 
 
 async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) -> Any:
@@ -4022,7 +3940,7 @@ async def _run_materialization_cpu(function: Any, /, *args: Any, **kwargs: Any) 
     # make its YDoc finalize on the worker thread during interpreter shutdown.
     # Keep this rare diagnostic/control path single-threaded; persistent API
     # runtimes continue to use the bounded executor.
-    return await _MATERIALIZATION_EXECUTOR.run_cpu(
+    return await _RUNTIME.materialization_executor.run_cpu(
         function,
         *args,
         max_workers=_materialization_cpu_workers(),
@@ -4090,7 +4008,7 @@ async def _run_materialization_worker(
         "skill_decls_fingerprint": str(skill_decls_fingerprint or "").strip() or None,
     }
 
-    return await _MATERIALIZATION_EXECUTOR.run_worker(
+    return await _RUNTIME.materialization_executor.run_worker(
         request,
         timeout_s=_materialization_worker_timeout_s(),
         max_rss_bytes=_materialization_worker_max_rss_bytes(),
@@ -4099,7 +4017,7 @@ async def _run_materialization_worker(
     )
 
 def _scenario_switch_mode() -> str:
-    return _SCENARIO_SWITCHING.mode()
+    return _RUNTIME.scenario_switching.mode()
 
 
 def _extract_scenario_sections_from_content(content: Mapping[str, Any] | None) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
@@ -4571,7 +4489,7 @@ def _pending_materialization_snapshot(
 
 def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
+    current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
     current.update(fields)
     if str(current.get("status") or "").strip() == "ready" and "invalidation_reason" not in fields:
         current.pop("invalidation_reason", None)
@@ -4579,7 +4497,7 @@ def _set_webspace_rebuild_status(webspace_id: str, **fields: Any) -> dict[str, A
         current.pop("materialized_payload", None)
     current["webspace_id"] = target
     current["updated_at"] = time.time()
-    _TASK_STATE.put_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target, current)
+    _RUNTIME.tasks.put_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target, current)
     return dict(current)
 
 
@@ -4592,7 +4510,7 @@ def invalidate_webspace_materialization_cache(
     scenario_id: str | None = None,
 ) -> dict[str, Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
-    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
+    current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
     current_materialization = (
         current.get("materialization") if isinstance(current.get("materialization"), Mapping) else {}
     )
@@ -4617,8 +4535,8 @@ def invalidate_webspace_materialization_cache(
         materialization["previous_observed_at"] = current_materialization.get("observed_at")
     explicit_scenario = str(scenario_id or "").strip() or None
     dropped_cache = _drop_materialized_cache_for_webspace(target, scenario_id=explicit_scenario)
-    _CACHE_STATE.clear_skill_declarations()
-    _CACHE_STATE.clear_skill_source_fingerprints()
+    _RUNTIME.cache.clear_skill_declarations()
+    _RUNTIME.cache.clear_skill_source_fingerprints()
     materialization["cache_dropped"] = dropped_cache
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
     return _set_webspace_rebuild_status(
@@ -4866,7 +4784,7 @@ def _set_webspace_rebuild_status_if_current(webspace_id: str, request_id: str | 
     target = str(webspace_id or "").strip()
     request_token = str(request_id or "").strip()
     if request_token:
-        current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
+        current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
         current_request = str(current.get("request_id") or "").strip()
         if current_request and current_request != request_token:
             return current
@@ -4897,7 +4815,7 @@ def _raise_if_rebuild_request_superseded(webspace_id: str, request_id: str | Non
 
 def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
     target = str(webspace_id or "").strip()
-    current = dict(_TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target) or {})
+    current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
     if not current:
         return {
             "webspace_id": target,
@@ -4965,7 +4883,7 @@ def describe_webspace_rebuild_state(webspace_id: str) -> dict[str, Any]:
 
 def get_webspace_rebuild_materialized_payload(webspace_id: str) -> dict[str, Any] | None:
     target = str(webspace_id or "").strip()
-    current = _TASK_STATE.get_record(_TASK_STATE.WEBSPACE_REBUILD_STATUS, target)
+    current = _RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target)
     if not isinstance(current, Mapping):
         return None
     if str(current.get("status") or "").strip() != "ready" or bool(current.get("pending")):
@@ -5032,7 +4950,7 @@ class WebspaceScenarioRuntime:
             root = self.ctx.paths.scenarios_dir()
             now = time.monotonic()
             cache_key = f"{space}:{root}"
-            cached = _CACHE_STATE.get_desktop_scenarios(cache_key)
+            cached = _RUNTIME.cache.get_desktop_scenarios(cache_key)
             if cached is not None and now - float(cached[0]) <= _DESKTOP_SCENARIOS_CACHE_TTL_S:
                 return list(cached[2])
             children = [child for child in root.iterdir() if child.is_dir()]
@@ -5047,7 +4965,7 @@ class WebspaceScenarioRuntime:
                 )
             )
             if cached is not None and cached[1] == stamp:
-                _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, cached[2])
+                _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, cached[2])
                 return list(cached[2])
             for child in children:
                 scenario_id = child.name
@@ -5065,7 +4983,7 @@ class WebspaceScenarioRuntime:
                     continue
                 title = str(manifest.get("title") or manifest.get("name") or scenario_id)
                 entries.append((scenario_id, title))
-            _CACHE_STATE.put_desktop_scenarios(cache_key, now, stamp, entries)
+            _RUNTIME.cache.put_desktop_scenarios(cache_key, now, stamp, entries)
         except Exception:
             _log.debug("failed to list desktop scenarios", exc_info=True)
         return entries
@@ -5079,7 +4997,7 @@ class WebspaceScenarioRuntime:
         *,
         log_missing: bool = False,
     ) -> dict[str, Any] | None:
-        return _SKILL_CATALOG_SERVICE.load_webui(
+        return _RUNTIME.skill_catalog.load_webui(
             self,
             _skill_catalog_operations(),
             skill_name,
@@ -5093,7 +5011,7 @@ class WebspaceScenarioRuntime:
         *,
         include_remote: bool = True,
     ) -> list[dict[str, Any]]:
-        return _SKILL_CATALOG_SERVICE.collect_skill_decls(
+        return _RUNTIME.skill_catalog.collect_skill_decls(
             self,
             _skill_catalog_operations(),
             mode,
@@ -5101,7 +5019,7 @@ class WebspaceScenarioRuntime:
         )
 
     def _collect_remote_skill_decls(self) -> list[dict[str, Any]]:
-        return _SKILL_CATALOG_SERVICE.collect_remote_skill_decls(
+        return _RUNTIME.skill_catalog.collect_remote_skill_decls(
             self,
             _skill_catalog_operations(),
         )
@@ -5172,7 +5090,7 @@ class WebspaceScenarioRuntime:
         skill_decls_fingerprint_override: str | None = None,
         scenario_content_override: Mapping[str, Any] | None = None,
     ) -> WebspaceResolverInputs:
-        return _RESOLUTION_SERVICE.collect_inputs(
+        return _RUNTIME.resolution.collect_inputs(
             self,
             _resolution_operations(),
             ydoc,
@@ -5236,7 +5154,7 @@ class WebspaceScenarioRuntime:
         return resolved
 
     def _resolve_webspace_uncached(self, inputs: WebspaceResolverInputs) -> WebspaceResolverOutputs:
-        return _RESOLUTION_SERVICE.resolve(self, _resolution_operations(), inputs)
+        return _RUNTIME.resolution.resolve(self, _resolution_operations(), inputs)
 
     def _apply_resolved_state_in_doc(
         self,
@@ -5253,7 +5171,7 @@ class WebspaceScenarioRuntime:
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
     ) -> None:
-        _RESOLUTION_SERVICE.apply(
+        _RUNTIME.resolution.apply(
             self,
             _resolution_operations(),
             ydoc,
@@ -5533,7 +5451,7 @@ class WebspaceScenarioRuntime:
         scenario_content_override: Mapping[str, Any] | None = None,
         skill_source_mode: str | None = None,
     ) -> WebUIRegistryEntry:
-        return await _MATERIALIZATION_SERVICE.resolve_payload(
+        return await _RUNTIME.materialization.resolve_payload(
             self,
             _materialization_operations(),
             webspace_id,
@@ -5650,7 +5568,7 @@ class WebspaceScenarioRuntime:
         fresh_doc: bool = False,
         replace_ystore_snapshot: bool = False,
     ) -> WebUIRegistryEntry:
-        return await _MATERIALIZATION_SERVICE.rebuild(
+        return await _RUNTIME.materialization.rebuild(
             self,
             _materialization_operations(),
             webspace_id,
@@ -5770,7 +5688,7 @@ async def _resolve_rebuild_scenario_target(
 def _resolve_projection_refresh_space(webspace_id: str) -> str:
     try:
         row = workspace_index.get_workspace(webspace_id) or workspace_index.ensure_workspace(webspace_id)
-        return _PROJECTION_SERVICE.space_for_source(getattr(row, "effective_source_mode", ""))
+        return _RUNTIME.projections.space_for_source(getattr(row, "effective_source_mode", ""))
     except Exception:
         return "workspace"
 
@@ -5789,7 +5707,7 @@ async def _refresh_projection_rules_for_rebuild(
             prefer_manifest_home_before_current=False,
         )
 
-    result = await _PROJECTION_SERVICE.refresh_for_rebuild(
+    result = await _RUNTIME.projections.refresh_for_rebuild(
         registry=getattr(ctx, "projections", None),
         webspace_id=webspace_id,
         scenario_id=scenario_id,
@@ -6058,7 +5976,7 @@ async def describe_webspace_projection_state(
     """
     operational = await describe_webspace_operational_state(webspace_id)
     registry = get_ctx().projections
-    return _PROJECTION_SERVICE.describe(
+    return _RUNTIME.projections.describe(
         operational=operational,
         scenario_id=scenario_id,
         registry=registry,
@@ -6259,7 +6177,7 @@ def _schedule_webspace_listing_sync(
     webspace_id: str | None = None,
 ) -> dict[str, Any]:
     task_key = "listing"
-    current = _TASK_STATE.active_task(_TASK_STATE.WEBSPACE_LISTING, task_key)
+    current = _RUNTIME.tasks.active_task(_RUNTIME.tasks.WEBSPACE_LISTING, task_key)
     if current is not None:
         return {
             "scheduled": True,
@@ -6283,8 +6201,8 @@ def _schedule_webspace_listing_sync(
         except Exception:
             _log.warning("post-ready webspace listing sync failed reason=%s", reason, exc_info=True)
         finally:
-            _TASK_STATE.pop_task(
-                _TASK_STATE.WEBSPACE_LISTING,
+            _RUNTIME.tasks.pop_task(
+                _RUNTIME.tasks.WEBSPACE_LISTING,
                 task_key,
                 expected=task,
             )
@@ -6293,7 +6211,7 @@ def _schedule_webspace_listing_sync(
         _runner(),
         name=f"webspace-listing-sync:{str(reason or 'background')[:40]}",
     )
-    _TASK_STATE.put_task(_TASK_STATE.WEBSPACE_LISTING, task_key, task)
+    _RUNTIME.tasks.put_task(_RUNTIME.tasks.WEBSPACE_LISTING, task_key, task)
     return {
         "scheduled": True,
         "coalesced": False,
@@ -6304,7 +6222,7 @@ def _schedule_webspace_listing_sync(
 
 def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _TASK_STATE.get_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key)
+    stats = _RUNTIME.tasks.get_record(_RUNTIME.tasks.LIVE_ROOM_REFRESH_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -6316,7 +6234,7 @@ def _live_room_refresh_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _TASK_STATE.put_record(_TASK_STATE.LIVE_ROOM_REFRESH_STATS, key, stats)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.LIVE_ROOM_REFRESH_STATS, key, stats)
     return stats
 
 
@@ -6329,7 +6247,7 @@ def _schedule_live_room_refresh(
     materialized_payload: Mapping[str, Any] | None = None,
     materialization_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _TASK_SCHEDULING_SERVICE.schedule_live_room_refresh(
+    return _RUNTIME.scheduling.schedule_live_room_refresh(
         _task_scheduling_operations(),
         webspace_id=webspace_id,
         reason=reason,
@@ -6347,7 +6265,7 @@ def _schedule_builder_ystore_snapshot_backup(
 ) -> dict[str, Any]:
     key = str(webspace_id or "").strip() or default_webspace_id()
     reason_token = str(reason or "").strip() or "builder_revision_snapshot_backup"
-    current = _TASK_STATE.active_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key)
+    current = _RUNTIME.tasks.active_task(_RUNTIME.tasks.BUILDER_YSTORE_BACKUP, key)
     if current is not None:
         return {
             "scheduled": True,
@@ -6382,11 +6300,11 @@ def _schedule_builder_ystore_snapshot_backup(
             )
 
     task = loop.create_task(_runner(), name=f"builder-ystore-backup:{key}"[:120])
-    _TASK_STATE.put_task(_TASK_STATE.BUILDER_YSTORE_BACKUP, key, task)
+    _RUNTIME.tasks.put_task(_RUNTIME.tasks.BUILDER_YSTORE_BACKUP, key, task)
 
     def _done(done: asyncio.Task[Any]) -> None:
-        _TASK_STATE.pop_task(
-            _TASK_STATE.BUILDER_YSTORE_BACKUP,
+        _RUNTIME.tasks.pop_task(
+            _RUNTIME.tasks.BUILDER_YSTORE_BACKUP,
             key,
             expected=done,
         )
@@ -6413,7 +6331,7 @@ def _schedule_builder_ystore_snapshot_backup(
 
 def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
     key = str(webspace_id or "").strip()
-    stats = _TASK_STATE.get_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key)
+    stats = _RUNTIME.tasks.get_record(_RUNTIME.tasks.WORKFLOW_SYNC_STATS, key)
     if stats is None:
         stats = {
             "requested_total": 0,
@@ -6426,7 +6344,7 @@ def _workflow_sync_stats(webspace_id: str) -> Dict[str, Any]:
             "last_requested_at": 0.0,
             "last_completed_at": 0.0,
         }
-        _TASK_STATE.put_record(_TASK_STATE.WORKFLOW_SYNC_STATS, key, stats)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.WORKFLOW_SYNC_STATS, key, stats)
     return stats
 
 
@@ -6437,7 +6355,7 @@ def _schedule_workflow_sync(
     scenario_id: str,
     reason: str,
 ) -> dict[str, Any]:
-    return _TASK_SCHEDULING_SERVICE.schedule_workflow_sync(
+    return _RUNTIME.scheduling.schedule_workflow_sync(
         _task_scheduling_operations(),
         ctx,
         webspace_id=webspace_id,
@@ -6751,7 +6669,7 @@ async def _project_webspace_from_scenario(
         emit_event,
     )
     timeout_s = _project_scenario_timeout_s()
-    result = await _PROJECTION_SERVICE.project(
+    result = await _RUNTIME.projections.project(
         operation=lambda: _build_scenario_manager().sync_to_yjs_async(
             scenario_id or "web_desktop",
             webspace_id,
@@ -6802,87 +6720,56 @@ async def _seed_webspace_from_scenario_with_options(
 
 @subscribe("scenarios.synced")
 async def _on_scenarios_synced(evt: Dict[str, Any]) -> None:
-    """
-    Rebuild effective UI for a webspace when its scenario has been projected
-    into YDoc by ScenarioManager.sync_to_yjs*.
-    """
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    scenario_id = str(evt.get("scenario_id") or "").strip() or None
-    await rebuild_webspace_from_sources(
-        webspace_id,
-        action="scenario_projection_sync",
-        scenario_id=scenario_id,
-        scenario_resolution="projected_payload",
-        source_of_truth="scenario_projection",
-    )
+    await _RUNTIME.events.scenarios_synced(evt, _event_operations())
 
 
 @subscribe("skills.activated")
 async def _on_skill_activated(evt: Dict[str, Any]) -> None:
-    """
-    Rebuild effective UI for the target webspace when a skill is activated.
-
-    For MVP we only rebuild the webspace explicitly referenced in the event
-    (or the default webspace), not all workspaces.
-    """
-    if bool(evt.get("defer_webspace_rebuild")):
-        return
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    schedule_skill_runtime_rebuild(
-        webspace_id=webspace_id,
+    _RUNTIME.events.skill_changed(
+        evt,
+        _event_operations(),
         action="skill_activation_sync",
-        source_of_truth="skill_runtime",
-        reason=str(evt.get("skill_name") or evt.get("name") or "skills.activated"),
+        topic="skills.activated",
+        allow_defer=True,
     )
 
 
 @subscribe("skills.updated")
 async def _on_skill_updated(evt: Dict[str, Any]) -> None:
-    if bool(evt.get("defer_webspace_rebuild")):
-        return
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    schedule_skill_runtime_rebuild(
-        webspace_id=webspace_id,
+    _RUNTIME.events.skill_changed(
+        evt,
+        _event_operations(),
         action="skill_update_sync",
-        source_of_truth="skill_runtime",
-        reason=str(evt.get("name") or evt.get("skill_name") or "skills.updated"),
+        topic="skills.updated",
+        allow_defer=True,
     )
 
 
 @subscribe("skills.rolledback")
 async def _on_skill_rolled_back(evt: Dict[str, Any]) -> None:
-    """
-    Rebuild effective UI when a skill is rolled back so that its catalog
-    entries and registry contributions are removed from the target webspace.
-    """
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    schedule_skill_runtime_rebuild(
-        webspace_id=webspace_id,
+    _RUNTIME.events.skill_changed(
+        evt,
+        _event_operations(),
         action="skill_rollback_sync",
-        source_of_truth="skill_runtime",
-        reason=str(evt.get("name") or evt.get("skill_name") or "skills.rolledback"),
+        topic="skills.rolledback",
+        allow_defer=False,
     )
 
 
 @subscribe("skill.uninstalled")
 async def _on_skill_uninstalled(evt: Dict[str, Any]) -> None:
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    schedule_skill_runtime_rebuild(
-        webspace_id=webspace_id,
+    _RUNTIME.events.skill_changed(
+        evt,
+        _event_operations(),
         action="skill_uninstall_sync",
-        source_of_truth="skill_runtime",
-        reason=str(evt.get("name") or evt.get("skill_name") or "skill.uninstalled"),
+        topic="skill.uninstalled",
+        allow_defer=False,
     )
 
 
 @subscribe("scenario.removed")
 async def _on_scenario_removed(evt: Dict[str, Any]) -> None:
-    webspace_id = str(evt.get("webspace_id") or default_webspace_id())
-    await rebuild_webspace_from_sources(
-        webspace_id,
-        action="scenario_uninstall_sync",
-        source_of_truth="scenario_projection",
-    )
+    await _RUNTIME.events.scenario_removed(evt, _event_operations())
 
 
 def _member_snapshot_rebuild_targets() -> list[str]:
@@ -7036,14 +6923,14 @@ async def _schedule_member_snapshot_rebuild_from_event(
         stats["last_requested_at"] = time.time()
         stats["last_request_id"] = request_id
         if force_rebuild:
-            _TASK_STATE.pop_record(
-                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+            _RUNTIME.tasks.pop_record(
+                _RUNTIME.tasks.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
                 key,
             )
         material_fingerprint = _member_snapshot_desktop_material_fingerprint(node_id)
         if material_fingerprint:
-            previous_fingerprint = _TASK_STATE.get_record(
-                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+            previous_fingerprint = _RUNTIME.tasks.get_record(
+                _RUNTIME.tasks.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
                 key,
             )
             if previous_fingerprint == material_fingerprint and not force_rebuild:
@@ -7058,17 +6945,17 @@ async def _schedule_member_snapshot_rebuild_from_event(
                     material_fingerprint[:12],
                 )
                 continue
-            _TASK_STATE.put_record(
-                _TASK_STATE.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
+            _RUNTIME.tasks.put_record(
+                _RUNTIME.tasks.MEMBER_SNAPSHOT_MATERIAL_FINGERPRINT,
                 key,
                 material_fingerprint,
             )
             stats["last_material_fingerprint"] = material_fingerprint
-        existing = _TASK_STATE.active_task(_TASK_STATE.MEMBER_SNAPSHOT, key)
+        existing = _RUNTIME.tasks.active_task(_RUNTIME.tasks.MEMBER_SNAPSHOT, key)
         if existing is not None:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="task_running", request_id=request_id)
             continue
-        last_at = float(_TASK_STATE.get_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key) or 0.0)
+        last_at = float(_RUNTIME.tasks.get_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_LAST_AT, key) or 0.0)
         if not force_rebuild and interval_s > 0 and last_at > 0 and now - last_at < interval_s:
             _mark_member_snapshot_rebuild_dirty(task_key=key, reason=reason, mode="interval_window", request_id=request_id)
             _schedule_member_snapshot_rebuild_delayed(
@@ -7079,7 +6966,7 @@ async def _schedule_member_snapshot_rebuild_from_event(
                 request_id=request_id,
             )
             continue
-        _TASK_STATE.put_record(_TASK_STATE.MEMBER_SNAPSHOT_LAST_AT, key, now)
+        _RUNTIME.tasks.put_record(_RUNTIME.tasks.MEMBER_SNAPSHOT_LAST_AT, key, now)
         _schedule_member_snapshot_rebuild(webspace_id=webspace_id, node_id=node_id, reason=reason, request_id=request_id)
 
 
@@ -7127,7 +7014,7 @@ def _schedule_member_snapshot_rebuild(
     reason: str = "subnet.member.snapshot.changed",
     request_id: str | None = None,
 ) -> None:
-    _TASK_SCHEDULING_SERVICE.schedule_member_snapshot_rebuild(
+    _RUNTIME.scheduling.schedule_member_snapshot_rebuild(
         _task_scheduling_operations(),
         webspace_id=webspace_id,
         node_id=node_id,
@@ -7309,7 +7196,7 @@ async def rebuild_webspace_from_sources(
     scenario_content_override: Mapping[str, Any] | None = None,
     skill_source_mode: str | None = None,
 ) -> dict[str, Any]:
-    return await _REBUILD_SERVICE.rebuild(
+    return await _RUNTIME.rebuild.rebuild(
         _rebuild_operations(),
         webspace_id,
         action=action,
@@ -7360,7 +7247,7 @@ def _schedule_scenario_switch_rebuild(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> None:
-    _TASK_SCHEDULING_SERVICE.schedule_scenario_switch_rebuild(
+    _RUNTIME.scheduling.schedule_scenario_switch_rebuild(
         _task_scheduling_operations(),
         webspace_id,
         scenario_id=scenario_id,
@@ -7416,7 +7303,7 @@ async def reload_webspace_from_scenario(
 
     command_trace = _payload_command_trace(event_payload or {})
     rebuild_state_before = describe_webspace_rebuild_state(webspace_id)
-    recovery_decision = _RECOVERY_COORDINATOR.begin(
+    recovery_decision = _RUNTIME.recovery.begin(
         webspace_id=webspace_id,
         action=requested_action,
         scenario_id=scenario_id,
@@ -7541,7 +7428,7 @@ def _builder_preview_content_override(
     revision: str | None,
     label: str | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    return _BUILDER_PUBLICATION_SERVICE.preview_content_override(
+    return _RUNTIME.builder_publication.preview_content_override(
         scenario_id,
         stage=stage,
         revision=revision,
@@ -7563,7 +7450,7 @@ async def apply_builder_revision_materialization(
     policy_fingerprint: str | None = None,
     event_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return await _BUILDER_PUBLICATION_SERVICE.apply_revision_materialization(
+    return await _RUNTIME.builder_publication.apply_revision_materialization(
         webspace_id,
         scenario_id=scenario_id,
         revision=revision,
@@ -7612,7 +7499,7 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
             exc_info=True,
         )
 
-    return await _RECOVERY_COORDINATOR.restore_snapshot(
+    return await _RUNTIME.recovery.restore_snapshot(
         webspace_id=webspace_id,
         restore_store=restore_ystore_for_webspace,
         reset_room=_reset_room,
@@ -7625,7 +7512,7 @@ async def restore_webspace_from_snapshot(webspace_id: str) -> dict[str, Any]:
 
 def _scenario_switch_operations() -> ScenarioSwitchOperations:
     return ScenarioSwitchOperations(
-        task_state=_TASK_STATE,
+        task_state=_RUNTIME.tasks,
         log=_log,
         workspace_index=workspace_index,
         describe_operational_state=describe_webspace_operational_state,
@@ -7660,7 +7547,7 @@ async def switch_webspace_scenario(
     request_source: str | None = None,
     request_client: str | None = None,
 ) -> dict[str, Any]:
-    return await _SCENARIO_SWITCHING.switch(
+    return await _RUNTIME.scenario_switching.switch(
         _scenario_switch_operations(),
         webspace_id,
         scenario_id,
@@ -7795,7 +7682,7 @@ async def reload_preview_webspaces_for_project(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    return await _BUILDER_PUBLICATION_SERVICE.reload_preview_webspaces_for_project(
+    return await _RUNTIME.builder_publication.reload_preview_webspaces_for_project(
         object_type,
         object_id,
         reason=reason,
@@ -7926,7 +7813,7 @@ async def _on_webspace_go_home(evt: Dict[str, Any]) -> None:
 
 async def prewarm_webspace_materialization_sources() -> dict[str, Any]:
     """Build the process-owned skill declaration catalog before first use."""
-    return await _BUILDER_PUBLICATION_SERVICE.prewarm_materialization_sources(
+    return await _RUNTIME.builder_publication.prewarm_materialization_sources(
         operations=_builder_publication_operations()
     )
 
@@ -7935,7 +7822,7 @@ async def reload_workspace_webspaces_for_publication(
     object_type: str,
     object_id: str,
 ) -> dict[str, Any]:
-    return await _BUILDER_PUBLICATION_SERVICE.reload_workspace_webspaces_for_publication(
+    return await _RUNTIME.builder_publication.reload_workspace_webspaces_for_publication(
         object_type,
         object_id,
         operations=_builder_publication_operations(),
@@ -7945,17 +7832,13 @@ async def reload_workspace_webspaces_for_publication(
 @subscribe("registry.scenarios.published")
 async def _on_scenario_published(evt: Dict[str, Any]) -> None:
     payload = _payload(evt)
-    scenario_id = str(payload.get("name") or payload.get("scenario_id") or "").strip()
-    if scenario_id:
-        await reload_workspace_webspaces_for_publication("scenario", scenario_id)
+    await _RUNTIME.events.publication(payload, _event_operations(), object_type="scenario")
 
 
 @subscribe("registry.skills.published")
 async def _on_skill_published(evt: Dict[str, Any]) -> None:
     payload = _payload(evt)
-    skill_id = str(payload.get("name") or payload.get("skill_id") or "").strip()
-    if skill_id:
-        await reload_workspace_webspaces_for_publication("skill", skill_id)
+    await _RUNTIME.events.publication(payload, _event_operations(), object_type="skill")
 
 
 @subscribe("desktop.webspace.set_home")

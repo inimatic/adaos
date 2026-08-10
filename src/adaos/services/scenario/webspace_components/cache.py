@@ -2,7 +2,141 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+import json
+import os
+from pathlib import Path
+import re
+import time
 from typing import Any
+
+
+MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA = "adaos.webspace.materialized_worker_cache.v1"
+
+
+class MaterializedWebspaceDiskCache:
+    """Owns materialization cache paths, persistence, pruning, and invalidation."""
+
+    def __init__(self, *, schema: str = MATERIALIZED_WEBSPACE_DISK_CACHE_SCHEMA) -> None:
+        self.schema = str(schema)
+
+    @staticmethod
+    def _enabled_by_default(name: str) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return True
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def enabled(self) -> bool:
+        return self._enabled_by_default("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE")
+
+    def limit(self) -> int:
+        raw = os.getenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE_LIMIT")
+        try:
+            value = int(str(raw or "128").strip())
+        except (TypeError, ValueError):
+            value = 128
+        return max(0, min(value, 4096))
+
+    def root(self) -> Path | None:
+        override = str(os.getenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR") or "").strip()
+        if override:
+            return Path(override)
+        try:
+            from adaos.services.runtime_paths import current_state_dir
+
+            return Path(current_state_dir()) / "scenario" / "materialization_cache"
+        except Exception:
+            return None
+
+    def path_for(self, cache_key: str) -> Path | None:
+        token = re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(cache_key or "").strip()).strip(".:-_")
+        root = self.root()
+        if not token or root is None:
+            return None
+        return root / f"{token}.json"
+
+    def load_record(self, cache_key: str) -> dict[str, Any] | None:
+        if not self.enabled():
+            return None
+        path = self.path_for(cache_key)
+        if path is None:
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(raw, dict) or raw.get("schema") != self.schema:
+            return None
+        try:
+            path.touch()
+        except OSError:
+            pass
+        return raw
+
+    def store_record(self, cache_key: str, record: Mapping[str, Any]) -> bool:
+        if not self.enabled() or self.limit() <= 0:
+            return False
+        path = self.path_for(cache_key)
+        if path is None:
+            return False
+        payload = dict(record)
+        payload["schema"] = self.schema
+        payload["cache_key"] = cache_key
+        tmp: Path | None = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, path)
+            self.prune(path.parent)
+            return True
+        except OSError:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return False
+
+    def prune(self, root: Path | None = None) -> None:
+        limit = self.limit()
+        if limit <= 0:
+            return
+        target = root or self.root()
+        if target is None:
+            return
+        try:
+            files = sorted(
+                [path for path in target.glob("*.json") if path.is_file()],
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return
+        for path in files[limit:]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def discard_records(self, predicate: Callable[[Mapping[str, Any]], bool]) -> int:
+        root = self.root()
+        if root is None or not root.exists():
+            return 0
+        removed = 0
+        for path in root.glob("*.json"):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(raw, Mapping) or not predicate(raw):
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
 
 
 class WebspaceCacheState:

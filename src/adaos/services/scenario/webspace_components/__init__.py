@@ -1,4 +1,6 @@
-from .cache import WebspaceCacheState
+from .cache import MaterializedWebspaceDiskCache, WebspaceCacheState
+from .container import WebspaceRuntimeContainer
+from .events import WebspaceEventOperations, WebspaceEventService
 from .builder_publication import (
     BuilderPublicationOperations,
     WebspaceBuilderPublicationService,
@@ -39,6 +41,10 @@ __all__ = [
     "WebspaceSkillCatalogOperations",
     "WebspaceSkillCatalogService",
     "WebspaceCacheState",
+    "MaterializedWebspaceDiskCache",
+    "WebspaceRuntimeContainer",
+    "WebspaceEventOperations",
+    "WebspaceEventService",
     "WebspaceTaskState",
     "WebspaceTaskSchedulingOperations",
     "WebspaceTaskSchedulingService",
