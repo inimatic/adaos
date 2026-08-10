@@ -1470,6 +1470,10 @@
           "type": "string",
           "description": "Longer explanation of the command, suitable for a tooltip fallback and channel-neutral help."
         },
+        "guidanceActionId": {
+          "$ref": "#/$defs/id",
+          "description": "Semantic next-action id implemented by this control when its visual id serves another purpose such as view selection or row-action variants."
+        },
         "icon": { "type": "string" },
         "kind": {
           "type": "string",

@@ -410,6 +410,7 @@ export interface WebUiActionButton {
   label?: string
   title?: string
   description?: string
+  guidanceActionId?: string
   icon?: string
   kind?: WebUiActionButtonKind
   fill?: WebUiActionButtonFill

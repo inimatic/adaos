@@ -107,7 +107,10 @@ A projected next action is useful only when the active channel makes its
 execution path discoverable. Web scenarios should use the same user-facing
 verb on the guidance item and its control, keep the control in a stable command
 region, and provide a concise `title`/accessible description that explains the
-effect and any provider boundary. Text and voice may name the control (for
+effect and any provider boundary. A control whose visual id is not the semantic
+action id declares `guidanceActionId`; a scenario passes its admitted semantic
+action ids to the guidance provider so unavailable controls are not proposed.
+Text and voice may name the control (for
 example, “press Open MLflow in the bottom command bar”) but must not imply that
 a diagnostic provider UI performs an AdaOS workflow transition. If a projected
 action has no reachable control or conversational invocation in that scenario,
@@ -116,7 +119,7 @@ next step.
 
 ## TLP Reference
 
-`tlp_research` `0.3.2` is the first published conformance package. Its README is shown in `tlp_research_help` through the safe `static.markdown` renderer; current guidance comes from `research_manager_skill.describe_experiment`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used. The primary and workflow command bars expose explanatory titles, workflow commands occupy the persistent footer, and Open MLflow selects the Model training workflow. The published package passed clean scenario validation, seven package tests, native installation, and Desktop rematerialization on 2026-08-10.
+`tlp_research` `0.3.3` is the first published conformance package. Its README is shown in `tlp_research_help` through the safe `static.markdown` renderer; current guidance comes from `research_manager_skill.describe_experiment` `0.9.0`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used. The primary and workflow command bars expose explanatory titles, workflow commands occupy the persistent footer, and Open MLflow selects the Model training workflow. Semantic `guidanceActionId` bindings plus the scenario's admitted-action list prevent guidance from proposing the deferred confirmatory control. The published packages passed clean validation, package tests, native installation, and Desktop rematerialization on 2026-08-10.
 
 ## Adoption Checklist
 
