@@ -152,12 +152,16 @@ direct `webrtc_data:yjs` channel.
 
 If an active routed control or YWS socket fails while the last Root lease still
 says `ready`, the failure belongs to that browser transport session. It must not
-invalidate or latch the Hub lifecycle revision: an expired upstream session or
-a sidecar handoff can require a new socket while the semantic Hub revision
-legitimately remains unchanged. Control and YWS each use one single-flight,
-bounded-backoff session recovery loop. A later authoritative lifecycle event
-can still close both gates; no transport-local observation may keep retrying
-through `offline`, `draining`, `updating`, or `restarting`.
+invalidate or rewrite the Hub lifecycle revision. The browser records an
+authority hold against that lease and makes no further routed control, YWS,
+availability-probe, or bootstrap-retry attempt while the same observation is
+current. Only a lifecycle snapshot/event with a monotonically newer
+`observed_at` or `valid_until` releases the hold and admits exactly one
+single-flight reconnect. An intentional runtime-instance rotation does not
+create a failure hold because the replacement session is already authorized by
+the new route observation. This rule prevents transport-local retry loops from
+multiplying the authoritative lifecycle probe or retrying through `offline`,
+`draining`, `updating`, or `restarting`.
 
 On the edge from an unavailable/waiting lifecycle epoch to a fresh `ready`
 epoch, the browser clears outage-derived WebRTC retry and link-upgrade cooldown.

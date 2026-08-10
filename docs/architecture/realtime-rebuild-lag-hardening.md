@@ -194,6 +194,15 @@ projection phases: webspace, source/outcome, owner-loop handoff, queue/apply
 time, payload/update bytes, and projection stage timings. The same counters are
 available in Yjs reliability and `diag360` snapshots.
 
+The runtime status path follows the same ownership boundary as skill state.
+Blocking process/socket inspection, filesystem and SQLite status assembly, and
+large reliability JSON encoding run in worker threads. Member heartbeat
+repository reads and display-name lookup are also offloaded before the compact
+plain-data projection returns to the event loop; Yjs access remains on its
+owner thread. Runtime diagnostics consume only a fresh supervisor-owned sidecar
+contract, so a separately owned listener is not mistaken for a missing local
+socket and stale persisted ownership cannot mask a failed process.
+
 ### Named-Entity Projection Convergence
 
 The named-entity registry no longer treats every registry event as an
