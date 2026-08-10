@@ -467,9 +467,18 @@ def _paths_equivalent(source: Path, target: Path) -> bool:
             return False
         return all(_paths_equivalent(source / name, target / name) for name in source_names)
     try:
-        return source.read_bytes() == target.read_bytes()
+        source_bytes = source.read_bytes()
+        target_bytes = target.read_bytes()
     except Exception:
         return False
+    if source_bytes == target_bytes:
+        return True
+    try:
+        source_text = source_bytes.decode("utf-8")
+        target_text = target_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return source_text.replace("\r\n", "\n") == target_text.replace("\r\n", "\n")
 
 
 def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tuple[bool, dict[str, Any]]:

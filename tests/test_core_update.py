@@ -634,6 +634,31 @@ def test_resolved_root_promotion_detects_stale_operator_cli(monkeypatch, tmp_pat
     assert "src/adaos/apps/cli/commands/node.py" in payload["effective_mismatched_paths"]
 
 
+def test_resolved_root_promotion_ignores_windows_line_endings(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import resolved_root_promotion_requirement
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos" / "apps").mkdir(parents=True, exist_ok=True)
+    relative = Path("src/adaos/apps/supervisor.py")
+    (root_dir / relative).write_bytes(b"def main():\r\n    return 0\r\n")
+    (slot_repo / relative).write_bytes(b"def main():\n    return 0\n")
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    required, payload = resolved_root_promotion_requirement(
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "bootstrap_update": {"required": False, "changed_paths": []},
+        }
+    )
+
+    assert required is False
+    assert relative.as_posix() not in payload["effective_mismatched_paths"]
+
+
 def test_resolved_root_promotion_detects_stale_build_info_dependency(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import resolved_root_promotion_requirement
 
