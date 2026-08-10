@@ -540,6 +540,9 @@ Android and stationary product lines.
   source model id and SHA-256 recorded in the immutable install descriptor.
 - [x] `[must]` implement tokenizer, regex, vectorizer, logistic intent, CRF
   entity, and synonym inference without unavailable Android native packages.
+- [x] `[must]` re-fit only the non-portable CRFsuite component from the dataset
+  and configuration persisted in the canonical model archive, and gate the
+  result with entity parity probes.
 - [x] `[must]` run Rasa on every phone dialog turn (`mode=always`) and retain
   that complete NLU path while Hub/WAN connectivity is absent.
 - [x] `[must]` compare portable intent/entity results with canonical Rasa in
@@ -568,7 +571,9 @@ Android and stationary product lines.
 
 Anti-drift gate:
 
-1. one canonical Rasa training archive is the source of both deployments;
+1. one canonical Rasa training archive is the source of both deployments; the
+   Android CRF is a gated re-fit from its persisted data/config, not an
+   independently curated model;
 2. the Android bundle records that archive's id/hash and is reproducible;
 3. one shared portable runtime source is executed by host parity tests and
    copied by Gradle;

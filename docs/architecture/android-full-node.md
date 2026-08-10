@@ -515,10 +515,15 @@ on a routed Root browser path; LO remains usable during hub or WAN outage.
 PoC9 adds full offline NLU without adding a second model lineage. The
 off-device training command produces the normal Rasa model archive. Promotion
 then exports an immutable `adaos.rasa.mobile.v1` bundle containing the exact
-tokenizer, regex, vectorizer, logistic classifier, CRF, and synonym state
-needed for inference. The standard-library runtime which reads this bundle is
-shared source: Gradle copies `src/adaos/services/nlu/portable_rasa.py` into the
-APK at build time. There is no separately maintained Android implementation.
+tokenizer, regex, vectorizer, logistic classifier, and synonym state needed for
+inference. The non-portable CRFsuite binary is re-fitted during export from the
+training dataset and CRF configuration persisted in that same canonical
+archive, then checked against canonical entity probes. Thus this is one model
+lineage and promotion transaction, not a claim that Android loads the same
+native CRF file byte-for-byte. The standard-library runtime which reads this
+bundle is shared source: Gradle copies
+`src/adaos/services/nlu/portable_rasa.py` into the APK at build time. There is
+no separately maintained Android implementation.
 
 Every phone dialog turn runs through Rasa (`mode=always`), including while the
 Hub and WAN are absent. `/api/node/status` publishes provider, mode, source
