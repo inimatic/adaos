@@ -5,8 +5,9 @@ Status: target architecture for an experimental proof of concept.
 Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
 member-protocol slice, the A7 bounded-runtime implementation, the PoC8
 browser-mediated voice/dialog slice, the PoC9 Rasa/remote-assistant slice,
-the PoC11 routed-connectivity/voice half-duplex corrections, and the PoC13
-deployed-membership recovery corrections
+the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
+deployed-membership recovery corrections, and the PoC14 stale-peer transport
+bound
 are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
@@ -25,11 +26,13 @@ member client has also joined a protocol-compatible Root/Hub fixture, survived
 a process restart and hub outage, and exchanged Yjs updates in both
 directions. PoC13 additionally completed a fresh one-time-code join through
 the real regional Root route, canonical Hub invitations and companion LLM
-calls, and replacement of a wedged member worker. Android Keystore custody and
+calls, and replacement of a wedged member worker. PoC14 prevents a stale Yjs
+browser peer from blocking the control channel and falsely leaving the hosted
+client in Recovery. Android Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC13 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC14 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -689,6 +692,23 @@ replays of the same `desktop` YStore. AdaOS now serializes the complete native
 `get_ydoc` lifetime per webspace with bounded waiting. The Android member
 remains locally ready and reconnects while the Hub supervisor restarts the
 AdaOS API, but the supervisor is still only a stationary lifecycle watchdog.
+
+PoC14 separates another browser Recovery cause from Hub membership. A stale
+local `/yws/desktop` peer could stop reading while remaining registered. A
+synchronous Yjs projection would then block indefinitely in `sendall`, which
+also prevented new `/ws` control sessions from completing registration and
+ping/pong. Android now applies a one-second socket send bound and aborts the
+stale peer after a failed write. A physical regression held a Yjs client open
+without reading and confirmed that a new control ping still completed in
+0.109 seconds. This is a local Android listener invariant and is independent
+of the AdaOS API member route.
+
+After the serialized Hub YDoc core was activated, three concurrent physical
+snapshot reads completed successfully without a native exit. A later Hub
+restart was explicitly classified as `api_unready` during a deliberately
+heavy failed skill migration; it was not a native `y_py` crash or an Android
+member failure. The corrected `conversation_companions` 0.1.13 migration then
+completed, after which the phone again reached the canonical Root LLM route.
 
 The desktop supervisor and realtime sidecar are not required for the first
 member link. Android owns process lifetime and the Python runtime owns the live

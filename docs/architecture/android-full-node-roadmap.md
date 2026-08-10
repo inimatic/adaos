@@ -3,8 +3,9 @@
 Status: active domain roadmap for an experimental proof of concept. The first
 A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
 bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
-the PoC11 routed-connectivity/voice half-duplex corrections, and the PoC13
-deployed-membership recovery corrections
+the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
+deployed-membership recovery corrections, and the PoC14 stale-peer transport
+bound
 are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -724,6 +725,47 @@ the process exited with Windows status `0xC0000005`. Host regression now runs
 all 35 Yjs document-store tests and proves three simultaneous sync readers
 enter native replay one at a time. Physical no-restart evidence remains open
 until that new core is active in the Hub A/B slot.
+
+## PoC14 Extension: Bounded Local WebSocket Writes
+
+Outcome: prevent an abandoned browser Yjs connection from starving the local
+control channel and presenting a healthy phone node as Recovery.
+
+- [x] `[must]` put a finite send bound on each accepted Android WebSocket
+  without changing the blocking read contract.
+- [x] `[must]` abort and remove a stale peer after a failed write so later Yjs
+  broadcasts cannot block behind it.
+- [x] `[must]` hold a physical `/yws/desktop` client open without reading and
+  prove a new `/ws` registration and ping still complete within the bound.
+- [x] `[must]` repeat the full physical Yjs restart and fixed-skill smoke.
+- [x] `[must]` verify the existing member configuration reconnects through
+  the Hub AdaOS API after an Android process restart.
+- [x] `[should]` repeat stationary Hub snapshot pressure after the serialized
+  YDoc core is active and distinguish native exits from supervisor policy
+  restarts in the evidence.
+- [x] `[should]` migrate the corrected canonical conversation companion skill
+  and prove an Arseni turn reaches the Root-configured LLM.
+
+PoC14 physical evidence (2026-08-10): debug APK `0.1.0-poc14` is 22,661,983
+bytes with SHA-256
+`5905dbffe9b09ff729cf5be45c673171b947c5a68404a52ab3e307fb6c8f47ec`.
+On the Samsung SM-F721N (API 36), the stale-reader regression left a Yjs socket
+registered with a 4 KiB receive buffer; a fresh control ping completed in
+0.109 seconds. The full smoke then passed native Yjs/SQLite restart
+persistence, Weather, Notebook, subnet environment, Browsers, voice/dialog,
+the five-agent roster, AdaOS Connect, and the Taiga scenario. The preserved
+member configuration independently returned to `connected` in two attempts
+with no link error.
+
+AdaOS Connect returned a real `hub_delegated` Browser invitation and Arseni
+returned `hub_skill_llm`, `used_llm=true`, and `llm_route=root_llm` after the
+canonical `conversation_companions` 0.1.13 migration passed all of its tests.
+Three concurrent Hub snapshot requests also returned successfully after the
+owner-loop/serialized-YDoc fixes. A separate supervisor `api_unready` restart
+during a deliberately heavy failed migration remains lifecycle evidence, not
+an Android member or native Yjs regression. Membership traffic for
+`sn_6acf0c01` used `/hubs/sn_6acf0c01/ws/subnet` in AdaOS API; supervisor only
+owned the stationary Hub process lifecycle.
 
 ## Dependency Work Queue
 

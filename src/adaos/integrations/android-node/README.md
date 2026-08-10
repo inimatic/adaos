@@ -30,7 +30,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC11 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC14 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -42,6 +42,9 @@ canonical Hub skill. Browsers projects bounded active control sessions. Voice
 uses half-duplex Android Chrome SpeechRecognition and speechSynthesis while
 the hosted client is open. Dialog work runs in one bounded background slot so
 a slow Hub/LLM response cannot starve control WebSocket keepalives.
+Each accepted WebSocket also has a bounded send timeout: a browser Yjs peer
+which stops reading is aborted instead of blocking later control registration
+and pushing a healthy hosted client into Recovery.
 `data/dialog` projects AdaOS
 Mobile, Арсений, Ника, Мира, and Строитель; the hosted selector switches them
 through acknowledged control commands and the choice survives restart. AdaOS
@@ -90,7 +93,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc13-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc14-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -197,3 +200,13 @@ Root external LLM (`hub_skill_llm`, `used_llm=true`) and admitted a
 low-confidence turn to the canonical LLM Teacher. The Teacher's optional MCP
 evidence timed out in that diagnostic run, so final Teacher ledger completion
 remains an explicit follow-up rather than claimed evidence.
+
+The PoC14 debug APK is 22,661,983 bytes with SHA-256
+`5905dbffe9b09ff729cf5be45c673171b947c5a68404a52ab3e307fb6c8f47ec`.
+On the API 36 Samsung, a deliberately stale Yjs reader no longer blocked the
+control channel: a new registration and ping completed in 0.109 seconds. The
+complete Yjs-restart and fixed-skill smoke passed, the preserved member link
+reconnected through the deployed Hub AdaOS API, AdaOS Connect returned a
+Hub-delegated remote Browser invitation, and Arseni used the canonical Root
+LLM route. Supervisor was involved only as the stationary Hub process
+watchdog; it is not part of the Android member protocol.
