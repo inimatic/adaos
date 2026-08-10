@@ -203,6 +203,13 @@ owner thread. Runtime diagnostics consume only a fresh supervisor-owned sidecar
 contract, so a separately owned listener is not mistaken for a missing local
 socket and stale persisted ownership cannot mask a failed process.
 
+Legacy HTTP member registration follows this boundary too. Registration,
+heartbeat, and directory queries perform SQLite/capacity work in worker threads.
+Repeated registration by an already-online member refreshes its durable record
+but does not publish another `net.subnet.node.up`; that event is reserved for an
+unknown/offline-to-online edge. This keeps a recovering member from converting
+its retry cadence into eventbus rebuild pressure on the Hub.
+
 ### Named-Entity Projection Convergence
 
 The named-entity registry no longer treats every registry event as an
