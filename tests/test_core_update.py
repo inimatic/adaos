@@ -659,6 +659,43 @@ def test_resolved_root_promotion_ignores_windows_line_endings(monkeypatch, tmp_p
     assert relative.as_posix() not in payload["effective_mismatched_paths"]
 
 
+def test_resolved_root_promotion_does_not_downgrade_newer_clean_root(monkeypatch, tmp_path) -> None:
+    from adaos.services.core_update import resolved_root_promotion_requirement
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    root_dir = tmp_path / "root"
+    slot_repo = tmp_path / "slots" / "B" / "repo"
+    for base in (root_dir, slot_repo):
+        (base / "src" / "adaos" / "apps").mkdir(parents=True, exist_ok=True)
+    (root_dir / "src" / "adaos" / "apps" / "supervisor.py").write_text("newer\n", encoding="utf-8")
+    (slot_repo / "src" / "adaos" / "apps" / "supervisor.py").write_text("candidate\n", encoding="utf-8")
+    monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+    monkeypatch.setattr(
+        "adaos.services.core_update._root_checkout_contains_candidate_commit",
+        lambda *_args, **_kwargs: (
+            True,
+            {
+                "effective_root_commit_relation": "contains_candidate",
+                "effective_root_commit": "b" * 40,
+                "effective_candidate_commit": "a" * 40,
+            },
+        ),
+    )
+
+    required, payload = resolved_root_promotion_requirement(
+        {
+            "slot": "B",
+            "repo_dir": str(slot_repo),
+            "git_commit": "a" * 40,
+            "bootstrap_update": {"required": True, "changed_paths": ["src/adaos/apps/supervisor.py"]},
+        }
+    )
+
+    assert required is False
+    assert payload["effective_basis"] == "root_checkout_contains_candidate"
+    assert payload["effective_mismatched_paths"] == []
+
+
 def test_resolved_root_promotion_detects_stale_build_info_dependency(monkeypatch, tmp_path) -> None:
     from adaos.services.core_update import resolved_root_promotion_requirement
 

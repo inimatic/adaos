@@ -481,6 +481,61 @@ def _paths_equivalent(source: Path, target: Path) -> bool:
     return source_text.replace("\r\n", "\n") == target_text.replace("\r\n", "\n")
 
 
+def _root_checkout_contains_candidate_commit(
+    manifest: dict[str, Any],
+    root_dir: Path,
+    checked_paths: list[str],
+) -> tuple[bool, dict[str, Any]]:
+    candidate_commit = str(
+        manifest.get("git_commit")
+        or manifest.get("resolved_target_version")
+        or manifest.get("target_version")
+        or ""
+    ).strip()
+    if not (7 <= len(candidate_commit) <= 40) or any(ch not in "0123456789abcdefABCDEF" for ch in candidate_commit):
+        return False, {"effective_root_commit_relation": "candidate_commit_unavailable"}
+    git = shutil.which("git")
+    if not git or not (root_dir / ".git").exists():
+        return False, {"effective_root_commit_relation": "root_git_unavailable"}
+    try:
+        ancestor = subprocess.run(
+            [git, "merge-base", "--is-ancestor", candidate_commit, "HEAD"],
+            cwd=str(root_dir),
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+        if ancestor.returncode != 0:
+            return False, {"effective_root_commit_relation": "candidate_not_in_root_history"}
+        clean = subprocess.run(
+            [git, "diff", "--quiet", "HEAD", "--", *checked_paths],
+            cwd=str(root_dir),
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+        if clean.returncode != 0:
+            return False, {"effective_root_commit_relation": "root_bootstrap_paths_dirty"}
+        head = subprocess.run(
+            [git, "rev-parse", "HEAD"],
+            cwd=str(root_dir),
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+    except Exception as exc:
+        return False, {
+            "effective_root_commit_relation": "root_git_check_failed",
+            "effective_root_commit_relation_error": f"{type(exc).__name__}: {exc}",
+        }
+    root_commit = str(head.stdout or "").strip() if head.returncode == 0 else ""
+    return True, {
+        "effective_root_commit_relation": "contains_candidate",
+        "effective_root_commit": root_commit,
+        "effective_candidate_commit": candidate_commit,
+    }
+
+
 def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tuple[bool, dict[str, Any]]:
     required, bootstrap = manifest_requires_root_promotion(manifest)
     payload = manifest if isinstance(manifest, dict) else {}
@@ -505,6 +560,17 @@ def resolved_root_promotion_requirement(manifest: dict[str, Any] | None) -> tupl
     if root_dir is None or not root_dir.exists():
         resolved["effective_unavailable_reason"] = "root checkout is unavailable for root promotion comparison"
         return bool(required), resolved
+
+    root_contains_candidate, root_relation = _root_checkout_contains_candidate_commit(
+        payload,
+        root_dir,
+        effective_paths,
+    )
+    resolved.update(root_relation)
+    if root_contains_candidate:
+        resolved["effective_basis"] = "root_checkout_contains_candidate"
+        resolved["effective_mismatched_paths"] = []
+        return False, resolved
 
     mismatched_paths: list[str] = []
     for rel_path in effective_paths:
