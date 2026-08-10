@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -113,10 +113,10 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "d3be46a9debdbe312ca1367e7e6cb19d545995c20aed2f37972eb68231049265"
+    "sha256": "789f76923fd1fed92697131518864027307ef79a1093929a0bafc918368b01a6"
   },
   "member_link_module": {
     "path": "../member_link.py",
-    "sha256": "b919e7d26dc8718450556025ef295f4f4c54201e4cfd3600779cab6f635c48ae"
+    "sha256": "8d9206511e38a2591b33a864cb4655cfef6b64c2215a113fb4501feec273fca0"
   }
 }
