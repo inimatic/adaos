@@ -6197,6 +6197,7 @@ def test_memory_policy_auto_profile_waits_for_min_uptime(monkeypatch, tmp_path) 
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "300")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
     manager._last_start_at = 100.0
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: None)
 
     allowed, reason = manager._memory_policy_auto_profile_guard(now=250.0)
 
@@ -6238,6 +6239,19 @@ def test_memory_policy_auto_profile_is_blocked_while_hub_has_connected_members(m
 
     assert allowed is False
     assert reason == "subnet_members_connected:1"
+
+
+def test_memory_policy_auto_profile_fails_closed_when_hub_reliability_is_unavailable(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_AUTO_PROFILE_MIN_UPTIME_SEC", "0")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_runtime_reliability_payload", lambda timeout=1.0: {})
+
+    allowed, reason = manager._memory_policy_auto_profile_guard(now=401.0)
+
+    assert allowed is False
+    assert reason == "hub_runtime_reliability_unavailable"
 
 
 def test_memory_policy_auto_profile_can_ignore_browser_sessions(monkeypatch, tmp_path) -> None:

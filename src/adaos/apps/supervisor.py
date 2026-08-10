@@ -2902,6 +2902,15 @@ class SupervisorManager:
             age_text = "-" if browser_latest_age is None else f"{browser_latest_age:.1f}s"
             return True, f"browser_sessions_connected:{browser_total}:last_seen={age_text}"
         if not runtime_payload:
+            # Policy-triggered profiling is optional diagnostics.  A busy Hub can
+            # miss the bounded reliability preflight precisely while it still
+            # owns browser/member sessions, so treating an unavailable snapshot
+            # as "no live subnet" can turn transient event-loop lag into a full
+            # runtime restart.  Fail closed for network roles; explicit operator
+            # profiling still bypasses this policy-only guard.
+            role = str(self._sidecar_role() or "").strip().lower()
+            if role in {"hub", "member"}:
+                return True, f"{role}_runtime_reliability_unavailable"
             return False, None
         node = runtime_payload.get("node") if isinstance(runtime_payload.get("node"), dict) else {}
         role = str(node.get("role") or self._managed_transition_role or self._sidecar_role() or "").strip().lower()
