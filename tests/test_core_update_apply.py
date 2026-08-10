@@ -950,6 +950,23 @@ def test_detect_bootstrap_promotion_requirement_reports_changed_pyproject(tmp_pa
     assert "pyproject.toml" in payload["changed_paths"]
 
 
+def test_detect_bootstrap_promotion_ignores_windows_line_endings(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    current_root = tmp_path / "root"
+    candidate = tmp_path / "candidate"
+    for base in (current_root, candidate):
+        (base / "src" / "adaos" / "apps").mkdir(parents=True, exist_ok=True)
+    relative = Path("src/adaos/apps/supervisor.py")
+    (current_root / relative).write_bytes(b"def main():\r\n    return 0\r\n")
+    (candidate / relative).write_bytes(b"def main():\n    return 0\n")
+
+    payload = mod._detect_bootstrap_promotion_requirement(candidate, current_root)
+
+    assert payload["required"] is False
+    assert relative.as_posix() not in payload["changed_paths"]
+
+
 def test_bootstrap_critical_paths_are_shared_with_core_update_service() -> None:
     import adaos.apps.core_update_apply as apply_mod
     import adaos.services.core_update as core_mod

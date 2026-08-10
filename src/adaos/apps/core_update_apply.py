@@ -1079,9 +1079,21 @@ def _path_content_differs(left: Path, right: Path) -> bool:
     if left.is_dir() or right.is_dir():
         return left.is_dir() != right.is_dir()
     try:
-        return left.read_bytes() != right.read_bytes()
+        left_bytes = left.read_bytes()
+        right_bytes = right.read_bytes()
     except Exception:
         return True
+    if left_bytes == right_bytes:
+        return False
+    try:
+        left_text = left_bytes.decode("utf-8")
+        right_text = right_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    # A Windows working checkout can use CRLF while the detached candidate
+    # clone uses LF.  That is not a bootstrap change and must not force a root
+    # promotion which only rewrites line endings in the user's checkout.
+    return left_text.replace("\r\n", "\n") != right_text.replace("\r\n", "\n")
 
 
 def _detect_bootstrap_promotion_requirement(candidate_repo_dir: Path, repo_root: Path | None) -> dict[str, object]:
