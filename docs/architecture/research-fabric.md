@@ -2,9 +2,10 @@
 
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
-research control plane is provider-neutral; TLP execution and
-primary data now belong to a separate runner-provider skill. Distributed
-execution remains an ARF5 concern.
+research control plane is provider-neutral; TLP execution and primary data now
+belong to a separate runner-provider skill. Research-project authoring,
+autonomous TLP campaigns, and replication benchmarking remain target work.
+Distributed execution remains an optional ARF5 scale lane.
 
 Last reviewed: 2026-08-10.
 
@@ -56,6 +57,32 @@ pack, and aResearcher as a solution agent or workbench are governed by the
 11. Scenario help is a channel-neutral contract. A versioned README, Help
     modal, and conversational help/next-step intents all consume one
     workflow-aware projection rather than maintaining separate action advice.
+12. Builder is the only software-authoring and adaptation control plane for a
+    research project. A research template specializes Builder's existing
+    Prototype, Preview, Automation, Trial, and Publication lifecycle; neither
+    aResearcher nor a research scenario edits installed package sources.
+13. Human/LLM research design produces a versioned `ResearchPrototype`, not an
+    authoritative chat transcript. Human consensus accepts an exact digest;
+    Automation receives a bounded implementation handoff derived from that
+    accepted revision.
+14. Full autonomy is a delegated execution mode over the same contracts. A
+    signed `ResearchMandate` defines scope, budgets, tools, data access,
+    software-mutation authority, stop conditions, and escalation. It never
+    creates a privileged agent runtime or bypasses workflow gates.
+15. Autonomous exploration and confirmation are separate evidence families.
+    An agent may adapt hypotheses, analyses, and code inside the declared
+    exploratory envelope, but confirmatory evidence requires a newly locked
+    protocol and sealed evaluation resource.
+16. Completion is established by evidence coverage, validation, and terminal
+    workflow decisions, never by an LLM's final message. Negative,
+    inconclusive, and budget-exhausted outcomes are valid completions.
+17. Builder software publication and scientific result publication are
+    distinct. A `ResearchRelease` fixes claims, evidence, methods, provenance,
+    and attribution; a future essay is a read-only projection of that release.
+18. TLP is the transparent first harness for the complete mechanism. The next
+    evaluation family is a PaperBench-like replication benchmark with frozen
+    tasks, target claims, author/expert rubrics, contamination controls, and
+    comparable agent/process/cost metrics.
 
 ## Why `Research Fabric`
 
@@ -65,7 +92,8 @@ The term separates three concerns that should not share one name:
 | --- | --- |
 | AdaOS Research Fabric | Architecture and reusable runtime capabilities |
 | Research workbench | Human-facing native UI inside an AdaOS webspace |
-| aResearcher | Optional future assistant/persona that proposes and operates governed work |
+| Research project profile | Builder template and artifact profile for creating a study scenario and its owned runner skills |
+| aResearcher | Assistant/orchestrator that discusses, proposes, or autonomously operates work within a Research Mandate |
 
 `Research Runtime` is too execution-centric, `Research Workbench` is too
 UI-centric, and `Experiment Fabric` is too narrow for non-ML studies. The name
@@ -107,6 +135,19 @@ The fabric should make a study:
 - recoverable: attempts, heartbeats, cancellation, unknown outcomes, and
   checkpoints have durable meanings;
 - comparable: paired trials and declared contrasts are first-class;
+- authorable: notebooks, prose, code, and prior results can be ingested as
+  immutable source evidence and refined into an exact Research Prototype;
+- adaptive: an experiment campaign can express dependencies, branches,
+  budgets, stop rules, and follow-up proposals without becoming an opaque agent
+  scratchpad;
+- autonomously operable: after a human locks a Research Mandate, aResearcher
+  can plan, build, execute, review, and iterate within delegated authority;
+- falsifiable under autonomy: exploration cannot repeatedly consume the same
+  confirmatory holdout, and an agent cannot redefine success after unblinding;
+- communicable: claims, counterevidence, tables, figures, limitations, and
+  attribution can be fixed as a scientific release before narrative writing;
+- measurable: the same harness can score human-assisted and autonomous work at
+  target, experiment, claim, evidence, cost, and reproducibility levels;
 - inspectable: a native AdaOS view explains state and decisions while
   provider UIs remain available for specialist diagnostics;
 - extensible: TLP drives the first slice without making neural-network
@@ -120,7 +161,10 @@ The first framework does not:
 - replace MLflow, Ray, PyTorch, notebooks, or specialist analysis tools;
 - make SQL tables shared integration APIs;
 - promise secure execution of untrusted code in the current process sandbox;
-- make a language model an autonomous approval or publication authority;
+- give a language model authority outside a signed Research Mandate or let it
+  bypass validation, policy, evidence, and publication contracts;
+- autonomously publish research to an external journal, repository, or
+  community endpoint in the initial autonomous profile;
 - treat the historical TLP notebook results as confirmatory evidence;
 - put ordinary trial checkpoints in `.adaos/models` before promotion;
 - require PostgreSQL, a distributed cluster, or an object store for local use.
@@ -160,6 +204,42 @@ Exploration may search configurations within a declared budget. Confirmatory
 trials use an immutable enumerated plan. Exploration cannot silently add a
 comparison to the confirmatory family or consume a sealed test set.
 
+An autonomous loop does not weaken this rule. A result-dependent change to a
+hypothesis, estimator, exclusion, stop rule, implementation, or metric creates
+an exploratory successor. Promotion to confirmation binds a fresh immutable
+candidate and a sealed evaluation policy. If no independent confirmation
+resource remains, the final claim stays exploratory or inconclusive.
+
+### Autonomous does not mean ungoverned
+
+Human authority may be delegated in advance, but not omitted. Every unattended
+session binds an immutable Research Mandate and `AutonomyProfile`; every action
+is admitted by the intersection of workflow state, mandate, actor capability,
+risk class, budget, freshness, and executor readiness. A policy-approved action
+is still an approval decision with an exact target and evidence.
+
+The controller is a deterministic durable workflow. LLMs propose plans,
+interpret evidence, and select among admitted alternatives; they do not own
+leases, retries, state transitions, budget accounting, unblinding, or package
+activation. Missing authority or an unavailable safe continuation stops or
+escalates the session rather than expanding its permissions.
+
+### Conversation and agent memory are evidence, not truth
+
+Chat is the primary design surface, and an experiment journal is useful agent
+memory, but neither is canonical research state. Meaningful turns produce
+schema-valid candidate revisions, decisions, or evidence references. Bounded
+context packets carry exact source and artifact refs to LLM/Codex Runs; raw
+transcripts do not grant authority and are not copied as mutable project state.
+
+### Completion is evidence-gated
+
+An autonomous Run may claim success only when every required target is covered
+by accepted evidence, validators pass, and the workflow reaches a declared
+terminal decision. A polished report, high self-review score, or final agent
+message is insufficient. Failed, null, negative, and superseded paths remain in
+the research ledger so selection and publication bias can be inspected.
+
 ### Evidence is portable
 
 The final evidence bundle contains or references, by digest, all material
@@ -177,22 +257,33 @@ requests, and artifact references are likely core candidates. `TropicalPool`,
 ## Target Composition
 
 ```text
-TLP study scenario
+notebooks / prose / code / papers
         |
         v
-research-manager skill ---- native Research Workbench
+Builder research-project profile ---- canonical Builder conversation
+        |                               Prototype / Preview / Automation
+        |                               isolated Codex / Trial / Publication
+        v
+published study scenario + owned runner skill(s)
         |
-        +---- governed workflow / approval / evidence index
+        +---- aResearcher ---- Research Mandate / autonomous controller
+        |                        plan / review / decision proposals
+        v
+research-manager skill -------- native Research Workbench
+        |
+        +---- governed workflow / campaign / approval / evidence / claims
         +---- relational-storage capability binding
         +---- runner-provider port ------- TLP experiment/data-owner skill
         +---- experiment-tracker port ---- local tracker
         |                              `-- MLflow service skill
         +---- executor port ------------ local process runner
-                                       `-- Ray service skill / cluster
+        |                              `-- Ray service skill / cluster
+        `---- ResearchRelease ---------- future read-only writer skill
 
 AdaOS core supplies lifecycle, policy, identity, secrets, service discovery,
-generic storage/execution seams, artifacts, events, and projections. It does
-not supply TLP semantics.
+generic storage/execution seams, artifacts, conversations, governed workflows,
+events, and projections. It does not supply TLP semantics or a second
+agent-specific authority plane.
 ```
 
 The first package slice uses `research_manager_skill` and `tlp_research` as
@@ -229,9 +320,9 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The current ARF4 package set is `research_manager_skill` `0.8.1`,
+The current ARF4 package set is `research_manager_skill` `0.9.0`,
 `tlp_experiment_skill` `0.1.1`, `mlflow_tracker_skill` `0.2.2`, and
-`tlp_research` `0.3.1`. The earlier `0.7.0`/`0.2.1` set supplied the accepted
+`tlp_research` `0.3.3`. The earlier `0.7.0`/`0.2.1` set supplied the accepted
 E002 run; the current set preserves that immutable evidence while separating
 the reusable control plane from the TLP data/runner boundary. The TLP Desktop
 scenario provides a Single Experiment
@@ -275,20 +366,47 @@ contract `1.0` for new sessions.
 | Owner | Owns | Must not own |
 | --- | --- | --- |
 | AdaOS core | Skill/scenario lifecycle, workflow rails, identity, policy, secrets, service supervision, capability binding, generic run/attempt records, artifact refs, event envelopes | TLP protocols, statistical conclusions, MLflow schema, Ray scheduler state |
+| Builder | Source intake, Research Prototype revisions, Preview, implementation handoff, isolated Codex Runs, software Trial, package Publication, dependency locks | Scientific execution state, test unblinding, claim truth, live research data |
+| aResearcher | Human/LLM design dialogue, mandate-bound planning, candidate hypotheses/campaigns/analyses, admitted autonomous decisions, evidence-grounded synthesis | Direct source mutation, implicit permission growth, tracker/executor authority, external publication |
 | Research manager skill | Provider-neutral Study/Experiment model, protocol locks, analysis plan, trial/run/attempt identity, tracker journal, evidence manifests, claim review, workflow guidance | Domain runner code, primary datasets, provider internals, global DB credentials, accelerator scheduling |
 | Domain runner/data-owner skill | Domain preparation, primary data binding, execution descriptor, normalized output collection, owned-artifact verification | Research approvals, tracker authority, another skill's database |
 | Study scenario | Domain workflow and templates, inputs, required capabilities, study-specific views and actions | New installation semantics or private infrastructure |
 | Tracker provider | Parameter, metric, tag, and run-artifact ingestion and query | Protocol authority, approvals, claim truth |
 | Executor provider | Submission, scheduling, logs, status, cancellation, resource placement | Study state, statistical plan, tracker identity |
 | Model registry | Promoted, versioned model artifacts and serving readiness | Every intermediate training checkpoint |
+| Future writer skill | Read-only rendering of an accepted ResearchRelease into a versioned draft essay/report | Reanalysis, new claims, mutable tracker access, journal submission authority |
 
 ## Research Domain Model
 
 The research-manager skill owns versioned schemas for these concepts:
 
+`SourceBundle`
+: Content-addressed manifest of notebooks, prose, papers, repositories, data
+  references, and extracted metadata supplied to a research project. Trust,
+  license, sensitivity, origin, and exploratory/authoritative status are
+  explicit; notebook outputs are never silently promoted to observations.
+
+`ResearchPrototype`
+: Builder-owned design-time candidate containing the research brief,
+  hypotheses, campaign, analysis plan, capability requirements, assumptions,
+  and open questions. Acceptance fixes one digest for Automation and later
+  Study instantiation; chat remains linked provenance rather than the object.
+
 `Study`
 : Stable aggregate for a research question, owners, policy, budget, and
   lifecycle.
+
+`ResearchMandate`
+: Human- or policy-approved authority envelope for one assisted or autonomous
+  research session: objective, scope, source refs, allowed hypothesis and code
+  mutations, data-access policy, budgets, stop/escalation rules, output
+  contract, and exact `AutonomyProfile`.
+
+`ExperimentCampaign`
+: Versioned directed graph of experiments, dependencies, branch predicates,
+  evidence gates, resource budgets, stopping rules, and exploratory or
+  confirmatory families. The user-facing term may remain "experiment series";
+  the graph model prevents a series from being reduced to a mutable list.
 
 `Hypothesis`
 : Falsifiable statement with declared estimand or decision criterion.
@@ -330,9 +448,36 @@ The research-manager skill owns versioned schemas for these concepts:
 : Accepted, rejected, inconclusive, or follow-up-required decision with actor,
   policy, evidence bundle, and rationale.
 
+`ClaimSet`
+: Immutable synthesis projection over one or more Claim Decisions. Each claim
+  distinguishes predeclared, exploratory, computed, and interpreted content
+  and links supporting and contradicting evidence, uncertainty, limitations,
+  and unresolved alternatives. It introduces no second claim authority.
+
+`AgentDecision`
+: One versioned proposal and admitted outcome in an autonomous session,
+  including observed state, alternatives, rationale, confidence, mandate and
+  budget preconditions, selected action, validator evidence, and model/tool
+  provenance. An LLM note without this admission record cannot advance work.
+
+`ResearchRelease`
+: Content-addressed scientific result snapshot binding the Study/Campaign,
+  accepted ClaimSet, evidence, methods, software/environment/data identities,
+  generated tables/figures, negative results, deviations, attribution, and
+  release policy. It is distinct from Builder's software `ProjectRelease`.
+
+`DraftEssay`
+: Future versioned, read-only narrative projection from one ResearchRelease,
+  with section/sentence evidence links and LLM provenance. It may be a short
+  essay or generic article draft; journal-specific adaptation and external
+  submission are deferred.
+
 The model deliberately distinguishes scientific identity (`Trial`, `Run`) from
 infrastructure identity (`ExecutionAttempt`). This prevents a preemption or
-worker loss from inflating the sample count.
+worker loss from inflating the sample count. It also distinguishes design-time
+source (`ResearchPrototype`), live scientific state (`Study`/`Campaign`),
+software publication (`ProjectRelease`), and result publication
+(`ResearchRelease`) so none becomes a second mutable copy of another.
 
 ## Workflow
 
@@ -360,6 +505,216 @@ protocol in place.
 Test-set access is a governed effect. A test credential or data binding is
 released only after the configured prerequisites are satisfied. This makes
 test leakage an auditable policy violation rather than a notebook convention.
+
+## Research Project Authoring and Builder Integration
+
+Research starts in Builder when the required scenario, skills, and executable
+base do not yet exist. The target `research_study` project profile specializes
+the existing Builder lifecycle rather than introducing a research IDE or a
+second source manager:
+
+```text
+SourceBundle
+  -> deterministic notebook/document inventory
+  -> optional bounded source-assessment Run
+  -> research_study scenario Prototype and Preview
+  -> human + LLM Research Prototype revisions
+  -> accept exact Research Prototype digest
+  -> derive capability gaps and Automation handoff
+  -> isolated Codex implementation
+  -> software validation and CPU Trial
+  -> ProjectRelease and Workspace activation
+  -> instantiate Study and ExperimentCampaign from the accepted seed
+```
+
+The source-assessment Run may inventory notebook cells, imports, outputs,
+environment hints, duplicate implementations, likely data leakage, and code
+that could be extracted. It may not decide that an exploratory output is true
+or silently define the research direction. The Prototype LLM and human develop
+the question, competing hypotheses, analysis plan, and campaign through typed
+semantic patches whose diffs are visible in Preview.
+
+The Automation packet contains only the accepted design digest, selected
+source refs, capability requirements, allowed project paths, permissions,
+scientific invariants, acceptance tests, and bounded implementation context.
+Codex implements the experimental base; it does not receive authority to amend
+the scientific objective to fit the code or observed result.
+
+A published research scenario continues to evolve scientific state without
+Builder when the existing contracts can express the change. New parameters,
+experiments, campaign branches, and protocol amendments use Research Fabric.
+A missing metric, runner, schema, visualization, data adapter, or execution
+capability creates a typed `CapabilityGap` and a linked Builder Change against
+the exact installed ProjectRelease. After Trial/Publication, the autonomous or
+human-operated session may explicitly adopt the new package digest; historical
+runs retain their original software identities.
+
+The first implementation may use a scenario-rooted Builder project with one
+project-owned runner companion and ordinary installed dependencies. The target
+template catalogue should later describe composite roles explicitly so a
+research template selects `research_study` for the scenario and a compatible
+runner/data-owner template for newly required project-owned skills instead of
+scaffolding every companion from `skill_default`.
+
+## Autonomous Research Sessions
+
+`aResearcher` is an orchestrator above Research Fabric and Builder, not an
+alternate runtime. One `AutonomousResearchSession` binds a Study, exact
+Research Mandate, source and release refs, workflow generation, budget ledger,
+agent/model profiles, and terminal result. It survives process, model, and
+conversation changes without reconstructing authority from chat.
+
+### Autonomy profiles
+
+| Level | Admitted outcome |
+| --- | --- |
+| `A0_assisted` | LLM proposes; a human accepts each state-changing scientific or software decision |
+| `A1_execute` | The system executes and reconciles one already locked campaign without human turns |
+| `A2_adaptive_exploration` | The system creates and selects exploratory branches within a locked search, data, and budget envelope |
+| `A3_autonomous_engineering` | Capability gaps may create isolated Builder/Codex Changes and session-scoped Trial releases under policy approval |
+| `A4_autonomous_research` | The session may iterate through research, engineering, evidence review, ClaimSet, and ResearchRelease; an optional later writer may derive a DraftEssay candidate |
+| `A5_external_publication` | External submission or public dissemination; prohibited by the initial profile and requires a separate authority contract |
+
+An autonomy level is a ceiling, not a permission bundle. The mandate still
+declares exact allowed actions, paths, data, providers, dependencies, budgets,
+and escalation triggers. Raising the level or budget creates a new approved
+mandate revision; an agent cannot self-authorize it.
+
+### Durable autonomous loop
+
+```text
+mandate_locked
+  -> plan_candidate
+  -> scientific_validation
+  -> capability_check
+       -> capable
+       -> CapabilityGap -> Builder Change -> Codex -> Trial candidate
+  -> experiment_revision_locked
+  -> execute / reconcile
+  -> evidence_and_QC
+  -> deterministic_analysis
+  -> analyst_proposal
+  -> critic_and_policy_admission
+       -> next exploratory node
+       -> replication or ablation
+       -> promote fresh confirmatory candidate
+       -> stop rejected / inconclusive / exhausted / blocked
+       -> synthesize ClaimSet and ResearchRelease
+```
+
+The workflow service owns transitions, idempotency, leases, and recovery. The
+budget service accounts for model tokens, monetary cost, wall time, compute,
+trial count, storage, and external requests. The agent chooses only among
+currently admitted semantic actions and receives the updated projection after
+each decision. Repeated implementation failure, evidence mismatch, lack of a
+fresh holdout, risk expansion, or budget exhaustion terminates or escalates
+the session; it never relaxes a guard.
+
+### Adaptive search and confirmation firewall
+
+Autonomous exploration may use tree search, tournaments, ranking, or a linear
+agenda, but the search method is declared and its nodes are ordinary Campaign
+revisions with identities, costs, and evidence. Search objectives must include
+validity constraints and cannot be reduced to one leaderboard metric when the
+scientific claim is broader. Candidate selection records both successful and
+discarded branches so Goodhart effects and selection bias remain inspectable.
+
+Confirmation starts from one frozen candidate and predeclared analysis plan.
+Its evaluator receives a fresh or still sealed data binding and cannot expose
+that binding to planning, coding, or exploratory contexts. A result-dependent
+change after unblinding starts a new exploratory lineage. Sequential or
+adaptive confirmation is permitted only when its spending/stopping rule was
+locked before observations arrived.
+
+### Agent roles and context separation
+
+Planner, source analyst, Builder/Codex executor, experiment manager, analyst,
+critic, and writer are semantic roles, not a requirement for seven concurrent
+models. The baseline should use the smallest topology that passes evaluation.
+Separate immutable context packets prevent the same mutable narrative from
+serving simultaneously as hypothesis, implementation requirement, validation,
+claim decision, and prose.
+
+Multi-agent debate or parallel search is enabled only for naturally
+decomposable work and only when matched-budget evaluation shows a gain. A
+central validator/admission bottleneck remains even when planning is
+distributed, because independent agents can amplify rather than correct shared
+errors.
+
+## Scientific Synthesis and Communication
+
+Deterministic analyzers execute the locked Analysis Plan and emit typed results,
+tables, and figure data with evidence refs. An LLM may explain those outputs,
+identify contradictions, and propose follow-ups, but any post-hoc analysis is
+labelled exploratory. The analyst proposal and critic response precede human
+or mandate-authorized Claim Decisions.
+
+`ClaimSet` is the machine-readable bridge between evidence and communication.
+It keeps accepted, rejected, null, negative, and unresolved claims together;
+records supporting and contradicting evidence; and separates observations,
+computed results, interpretations, and external prior art. A fluent narrative
+cannot replace this layer.
+
+`ResearchRelease` is the stable object that a community can reproduce,
+criticize, or cite. It fixes:
+
+- the Study, Research Mandate, Campaign, protocols, and analyses;
+- accepted ClaimSet and all required Evidence Bundles;
+- source, package, environment, data, model, and agent/tool identities;
+- exact table/figure generators and output digests;
+- negative results, failed branches, exclusions, deviations, and limitations;
+- human, LLM, Codex, and tool contributions and approvals;
+- visibility, license, retention, embargo, and external-release policy.
+
+The future `research_writer_skill` consumes only an accepted ResearchRelease
+and creates a versioned `DraftEssay` in Markdown or another neutral format. It
+does not query live MLflow, rerun statistics, create claims, select a journal,
+or submit externally. If writing exposes a missing or contradictory fact, the
+writer creates a synthesis issue and returns to Claim Review; it cannot repair
+the record in prose. RO-Crate is a plausible future export mapping for a
+portable ResearchRelease, not AdaOS's internal authority.
+
+External feedback is imported as a versioned `ExternalReview` against an exact
+ResearchRelease. Comments may create a scientific FollowUpProposal or a
+Builder Issue, but do not mutate the published release. This closes the loop
+from community criticism to a new Research Prototype or Campaign revision.
+
+## Why AdaOS Has Structural Leverage for Autonomous Science
+
+AdaOS does not gain an advantage by choosing a permanently better LLM. Its
+advantage is the environment in which changing models must work:
+
+1. **One governance spine.** Human and autonomous operations use the same
+   workflow commands, expected generations, approvals, locks, and event
+   evidence; autonomy is a policy profile, not a parallel implementation.
+2. **Builder and science remain joined but distinct.** An agent can adapt real
+   experimental software through isolated Codex, validation, Trial, package
+   digest, and rollback without confusing a software success with scientific
+   evidence.
+3. **Evidence-gated completion.** Targets, runs, claims, tables, and reports
+   must resolve to immutable evidence. Agent self-report is diagnostic text,
+   not completion authority.
+4. **Scientific and infrastructure identity are separate.** Retries,
+   preemption, tracker replay, and package rebuilds cannot inflate samples or
+   rewrite experimental lineage.
+5. **Capability and data isolation are native.** Skills receive scoped
+   storage, secrets, tools, and execution bindings; owner-qualified data and
+   sealed evaluation can remain unavailable to planner and code-generation
+   contexts.
+6. **Durable long-horizon operation.** Runs, budgets, checkpoints, pending
+   interactions, unknown outcomes, and provider reconciliation survive model,
+   process, and conversation changes.
+7. **Provider neutrality with specialist observability.** Local/MLflow and
+   local/Ray can be compared under one semantic contract while their native UIs
+   remain diagnostic surfaces.
+8. **The product is benchmarkable.** The same task, tool surface, budgets,
+   model profiles, and rubrics can compare A0-A4, single/multi-agent topology,
+   and AdaOS versus an external baseline without changing scientific truth.
+
+These properties turn AdaOS into a research-agent harness and governance
+substrate. They do not prove that an agent has generated a novel or correct
+idea; they make its process measurable, interruptible, reproducible, and
+falsifiable.
 
 ## Core Capability Foundation and Gaps
 
@@ -599,13 +954,19 @@ Every provider record and emitted event should carry enough correlation to
 join the planes without using timestamps or display names:
 
 - `study_id` and `study_version`;
+- source-bundle and accepted Research Prototype digests;
+- Research Mandate, autonomy-profile, session, budget-ledger, and Agent Decision
+  identities where assistance or autonomy is enabled;
+- Experiment Campaign id/version and parent decision/branch refs;
 - `protocol_digest` and `analysis_plan_digest`;
 - `trial_group_id`, `trial_id`, and logical `run_id`;
 - `attempt_id` and provider job id;
 - `trace_id` and workflow instance/generation;
 - code/package, environment, dataset, split, and operator digests;
 - tracker provider and run id;
-- parent checkpoint or model artifact digest when applicable.
+- parent checkpoint or model artifact digest when applicable;
+- Builder Change/Run, ProjectRelease, ClaimSet, and ResearchRelease refs when
+  the research base or scientific result has crossed those gates.
 
 OpenTelemetry-compatible traces and OpenLineage-compatible dataset/job events
 are desirable adapters, but AdaOS ids and evidence manifests remain stable
@@ -625,6 +986,15 @@ without either collector.
 - Tracker export failure blocks evidence finalization; it does not create a
   successful empty bundle.
 - Provider deletion cannot delete an accepted AdaOS evidence bundle.
+- A timeout after an LLM or Codex mutation is `unknown` until the exact Run and
+  workspace generation are reconciled; recovery never repeats a possibly
+  completed change under a new identity.
+- Agent planning may be recomputed after interruption, but an already admitted
+  action, unblind, provider submission, package activation, or external request
+  is reconciled from durable state before another action is selected.
+- Model/provider nondeterminism is recorded. AdaOS requires reproducibility of
+  the accepted experiment and evidence, not bit-for-bit replay of hidden model
+  reasoning.
 
 ## TLP Reference Case
 
@@ -683,6 +1053,29 @@ comparison.
 The notebook remains exploratory provenance. Its current outputs do not pass
 this gate and are not imported as confirmatory trials.
 
+### Autonomous TLP acceptance
+
+TLP is also the first transparent autonomous-research harness. After the local
+scientific base is valid, a human should be able to supply the notebook,
+review, and research objective to a Builder `research_study` project, discuss
+and accept one Research Prototype and Research Mandate, then leave an A4-bounded
+session to:
+
+1. instantiate and execute an exploratory Campaign;
+2. identify a missing metric or implementation capability;
+3. create an isolated Builder/Codex change and validate a session candidate;
+4. continue without losing protocol, run, or evidence lineage;
+5. select and lock a fresh confirmatory candidate without test leakage;
+6. reach a positive, negative, inconclusive, exhausted, or blocked terminal
+   outcome through evidence gates;
+7. produce an independently verifiable ClaimSet and ResearchRelease;
+8. prepare the fixed input contract for a deferred DraftEssay writer.
+
+This proof measures workflow correctness, intervention rate, evidence
+coverage, leakage, invalid implementation rate, recovery, cost, and result
+reproducibility. It does not require TLP to beat MaxPool or the agent to discover
+a novel mechanism.
+
 ## Security and Trust
 
 The current process sandbox is an operational limit, not a hostile-code
@@ -691,17 +1084,72 @@ unattended, the executor needs stronger isolation, read-only input mounts,
 explicit writable outputs, network policy, resource quotas, secret scoping,
 and artifact scanning.
 
+Untrusted papers, notebooks, repositories, logs, tracker artifacts, and web
+content are also prompt-injection inputs. Source ingestion preserves bytes and
+provenance but supplies only normalized, labelled excerpts through bounded
+context packets. Source text cannot grant capabilities, change the Research
+Mandate, reveal sealed bindings, or override system/package policy.
+
+Autonomous Builder changes additionally require dependency allowlists, license
+and secret scanning, command/network policy, bounded writable paths, package
+diff and migration checks, and session-scoped activation. Public package or
+scientific release remains a separately authorized effect.
+
 Remote MLflow and Ray endpoints require authenticated service bindings, TLS as
 appropriate, allowlisted origins/routes, and least-privilege credentials.
 Research participants receive study actions, not raw database, tracker-admin,
 or cluster-admin access.
 
-## Generalization Gate
+## Replication Benchmark and Generalization Gate
 
-TLP may validate the framework, but it cannot by itself justify every core
-abstraction. Before promoting research-manager contracts into core, a second
-case should exercise different data and analysis shapes, for example a
-non-neural simulation, retrieval evaluation, or device experiment.
+TLP validates the transparent mechanism, but it cannot by itself establish
+competitive autonomous-research performance or justify every core abstraction.
+The next validation family is a PaperBench-like replication benchmark whose
+tasks are imported as immutable benchmark releases and executed through the
+same Research Fabric and Builder paths as TLP.
+
+Each benchmark task contains or references:
+
+- a paper/source snapshot, supplements, repository and data/environment refs;
+- an expert-curated `TargetClaimSet` and hierarchical rubric;
+- declared reproduction level and permitted source visibility/masking;
+- expected outputs/tolerances without revealing hidden evaluator evidence;
+- compute, time, tool, network, and model budgets;
+- contamination/cutoff metadata and an immutable evaluator version;
+- sandbox image or environment contract and licensing/release constraints.
+
+AdaOS distinguishes progressive task levels:
+
+| Level | Evaluation target |
+| --- | --- |
+| `R0_artifact_audit` | Identify whether supplied artifacts are sufficient and record ambiguities without execution |
+| `R1_original_reproduction` | Run the exact released code/data/environment path and compare target claims |
+| `R2_minimal_repair` | Apply separately classified compatibility fixes and repeat without methodological change |
+| `R3_independent_replication` | Reconstruct and implement the method independently from the admitted paper materials |
+| `R4_robustness` | Test declared sensitivity to seeds, platforms, variants, or additional data |
+| `R5_follow_up` | Propose and test a new, explicitly exploratory extension after replication evidence is fixed |
+
+Original, compatibility-repair, method-correction, and independent
+implementation tracks never share a mutable source tree or silently replace
+one another. A failure to reproduce is classified as reproduced,
+reproduced-with-repairs, partially reproduced, not reproduced, or indeterminate
+with explicit missing-artifact, environment, ambiguity, budget, or validity
+reasons; it is not automatically evidence that the source paper is false.
+
+The benchmark reports more than one final score: weighted target coverage,
+numerical fidelity, protocol and evidence match, valid/invalid result rate,
+claim calibration, reproducibility, intervention and clarification rate,
+elapsed/compute/model cost, safety violations, and report evidence coverage.
+AdaOS should export the task manifest, submitted ResearchRelease, evaluator
+version, per-target results, and complete cost/process evidence so results can
+be compared with PaperBench-like baselines rather than presented as an
+uncontrolled demonstration.
+
+At least one later task should exercise a materially different data and
+analysis shape, for example scientific simulation, retrieval evaluation, or
+device data. Before promoting research-manager contracts into core, the same
+candidate contract must survive TLP and multiple replication tasks without
+domain-specific exceptions.
 
 Promotion requires evidence that the candidate contract:
 
@@ -714,8 +1162,9 @@ Promotion requires evidence that the candidate contract:
 
 ## State-of-the-Art Alignment
 
-The target follows current research-infrastructure practice without adopting a
-monolithic platform:
+The target follows current research-infrastructure and autonomous-science
+practice without adopting a monolithic agent or confusing a research demo with
+reliable evidence:
 
 - typed tracking and remote tracking-server boundaries from
   [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) and its
@@ -731,11 +1180,58 @@ monolithic platform:
   [W3C PROV](https://www.w3.org/TR/prov-overview/),
   [OpenLineage](https://openlineage.io/docs/), and
   [OpenTelemetry](https://opentelemetry.io/docs/);
-- explicit protocols, held-out evaluation, evidence bundles, and human gates
-  before adding autonomous experiment-tree generation.
+- portable result-export compatibility informed by
+  [RO-Crate](https://www.researchobject.org/ro-crate/specification/1.3/index.html),
+  without making JSON-LD the internal governance model;
+- the end-to-end ideation, code mutation, experiment-tree, journal, writing,
+  and review loop demonstrated by
+  [The AI Scientist](https://www.nature.com/articles/s41586-026-10265-5),
+  while retaining its reported limitations: inconsistent workshop-level
+  quality, incorrect implementations, methodological weakness, and citation
+  hallucinations;
+- hypothesis generation, reflection, ranking, evolution, and expert feedback
+  demonstrated by
+  [Co-Scientist](https://www.nature.com/articles/s41586-026-10644-y), but
+  model roles remain optional topologies rather than new authorities;
+- scorable sandboxed software search and explicit quality objectives from
+  [Empirical Research Assistance](https://www.nature.com/articles/s41586-026-10658-6),
+  generalized with scientific validity constraints, holdouts, and evidence
+  rather than assuming one optimized score proves a claim;
+- target decomposition, author/expert rubrics, and judge calibration from
+  [PaperBench](https://openai.com/index/paperbench/), including process and
+  cost evidence rather than only aggregate replication score;
+- stagewise and end-to-end measurement from
+  [MLR-Bench](https://proceedings.neurips.cc/paper_files/paper/2025/hash/ab8dd000d6f87f40061a73f8bca7fae4-Abstract-Datasets_and_Benchmarks_Track.html),
+  whose reported high invalid/fabricated-result rate makes independent
+  experiment/evidence validation a mandatory gate;
+- long-horizon reliability metrics and failure categories from
+  [ResearchGym](https://arxiv.org/abs/2602.15112), especially impatience,
+  resource mismanagement, weak-hypothesis overconfidence, parallel-work
+  coordination, and context limits;
+- evidence-target workspaces and validation-gated completion from
+  [Paper-replication](https://arxiv.org/abs/2607.02134): each claim must link a
+  reconstruction, successful run, provenance, comparison, and report coverage,
+  and completion cannot depend on an agent's final message;
+- multi-domain hidden-target, raw-data, protocol/evidence-match evaluation from
+  [ResearchClawBench](https://arxiv.org/abs/2606.07591), used as a later
+  complement to PaperBench-like code/paper replication;
+- matched-budget topology selection rather than an assumed multi-agent benefit,
+  consistent with evidence that coordination can help decomposable tasks yet
+  amplify errors and harm sequential ones in
+  [controlled agent-scaling experiments](https://www.nature.com/articles/s42256-026-01268-y).
+
+The architectural inference is deliberate: current systems demonstrate that
+end-to-end autonomy is possible, but benchmark results still show a large
+capability-reliability gap. AdaOS therefore designs for A4 autonomy now while
+requiring typed targets, durable state, bounded authority, independent
+validators, fresh confirmation, and comparable evaluation before making an
+autonomous-science product claim.
 
 ## Related AdaOS Documents
 
+- [Builder](builder.md)
+- [Builder Conversational Development Architecture](builder-conversational-development.md)
+- [Scenario Guidance and Help Contract](scenario-guidance.md)
 - [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md)
 - [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
 - [Model Runtime and Registry](model-runtime-and-registry.md)

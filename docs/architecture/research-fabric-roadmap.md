@@ -5,9 +5,11 @@ Status: domain roadmap for the proposed AdaOS Research Fabric.
 Last reviewed: 2026-08-10.
 
 This roadmap sequences the implementation of the
-[AdaOS Research Fabric](research-fabric.md). TLP is the first reference case
-and conformance fixture. It is not a reason to put TLP-specific semantics into
-AdaOS core.
+[AdaOS Research Fabric](research-fabric.md). TLP is the first transparent
+reference case and conformance fixture for deterministic, assisted, and later
+autonomous research. A PaperBench-like replication suite follows TLP to
+measure autonomous performance on frozen external tasks. Neither case is a
+reason to put domain-specific semantics into AdaOS core.
 
 ## Outcome
 
@@ -17,8 +19,20 @@ lifecycle, run a locked and paired TLP study locally or on Ray, survive restart
 and provider failures, and export a portable evidence bundle from which the
 declared primary analysis can be reproduced.
 
-The outcome is infrastructure and evidence integrity. It does not predetermine
-that TLP will outperform MaxPool.
+The target then extends the same substrate so a user can give Builder notebooks
+and prose, develop and accept a typed Research Prototype with an LLM, let Codex
+adapt the experimental base through ordinary Builder Automation, publish the
+scenario and owned skills, and instantiate a governed Experiment Campaign.
+With an explicit Research Mandate, the same project can run unattended through
+exploration, bounded software adaptation, confirmation, ClaimSet, and
+ResearchRelease. A later writer may derive a neutral draft essay from that
+release, but external publication remains separately authorized.
+
+TLP proves the mechanism without requiring a positive TLP result. The later
+AdaOS Research Replication Benchmark (`ARRB`, working name) supplies frozen
+paper-replication tasks, target-level rubrics, matched budgets, and comparable
+scores so autonomous-science claims are measured rather than inferred from a
+single demonstration.
 
 ## Priority and Maturity Rules
 
@@ -66,6 +80,14 @@ scientific conclusion. A local demo is not production acceptance.
    ARF2 owns the minimum requirements proven by research.
 8. The Issue Tracker owns concrete implementation runs and evidence links; it
    does not redefine the architecture or mark gates complete by itself.
+9. [Builder](builder.md) and the
+   [Builder Roadmap](builder-roadmap.md) own the generic Project, Prototype,
+   Preview, Automation/Codex, Trial, Publication, source-capsule, and re-entry
+   contracts. This roadmap owns the `research_study` profile and scientific
+   artifacts that consume them.
+10. The LLM provider, agent topology, and model profile are replaceable. This
+    roadmap owns Research Mandate, autonomy, evaluation, and evidence semantics,
+    not a provider-specific autonomous-agent loop.
 
 ## Guardrails
 
@@ -79,7 +101,14 @@ scientific conclusion. A local demo is not production acceptance.
 - No confirmatory use of the test set before its workflow gate.
 - No acceptance based only on a dashboard screenshot or notebook output.
 - No promotion of TLP-specific entities into core.
-- No autonomous claim acceptance or publication in the first framework.
+- No autonomous action outside a signed Research Mandate, exact risk class,
+  budget, data-access policy, and workflow gate.
+- No use of one repeatedly observed holdout as fresh confirmatory evidence.
+- No completion based on an agent's final message or self-review score.
+- No direct mutation of installed packages by aResearcher; experimental-base
+  changes use Builder/Codex and exact candidate releases.
+- No automatic external paper, repository, or community publication in the
+  initial A4 profile.
 
 ## Current Baseline
 
@@ -98,6 +127,10 @@ scientific conclusion. A local demo is not production acceptance.
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
 | TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
+| Research authoring | Builder has template-based scenario/skill drafts, Prototype/Preview/Automation, companion skills, source snapshots, and isolated Codex | no first-class arbitrary user-file intake, composite research template, Research Prototype profile, or scientific handoff |
+| Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
+| Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
+| Replication evaluation | TLP supplies one internal transparent case | no frozen PaperBench-like task package, target rubric evaluator, matched-budget baseline, or benchmark release |
 
 ## Milestone Sequence
 
@@ -110,12 +143,16 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF3 | Logical runs and physical attempts are durable and provider-neutral | `validated-local`, including real CPU attempt integration | complete locally |
 | ARF4 | MLflow is a conforming optional tracker service skill | `validated-local` | complete locally |
 | ARF5 | Ray is a conforming optional executor service skill | `hypothesis` | later |
-| ARF6 | TLP passes the scientific and operational reference proof | `hypothesis` | later |
-| ARF7 | A second domain and operational hardening prove generality | `deferred` | long-term |
-| ARF8 | aResearcher adds governed agent assistance above the proven fabric | `deferred` | long-term |
+| ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
+| ARF7 | Builder turns attached research artifacts into an accepted, executable TLP Research Project | `hypothesis` | after/alongside ARF6 |
+| ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
+| ARF9 | ARRB measures replication on frozen PaperBench-like tasks and matched budgets | `hypothesis` | after autonomous TLP proof |
+| ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
 
 Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
-ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
+ARF1 through ARF8; it is not postponed until one late integration phase. ARF9
+changes the evaluation task, not the governance, Builder, execution, evidence,
+or release contracts proven by TLP.
 
 Delivery snapshot (2026-08-10): the published and locally activated packages
 are `research_manager_skill` `0.9.0`, `tlp_experiment_skill` `0.1.1`,
@@ -168,8 +205,9 @@ ownership.
 - [x] `[should]` `ARF0-07` Record the preliminary TLP notebook limitations and
   the clean-room protocol requirements without treating historical outputs as
   confirmatory evidence.
-- [x] `[deferred]` `ARF0-08` Do not select an autonomous research-agent design
-  before the deterministic framework and evidence gates exist.
+- [x] `[must]` `ARF0-08` Keep autonomous implementation behind deterministic
+  workflow and evidence gates while allowing the target mandate, evaluation,
+  and release contracts to be designed early.
 
 ## ARF0.5. Core Readiness
 
@@ -607,7 +645,7 @@ evidence analysis as the local provider.
 - [ ] `[could]` `ARF5-12` Add data locality and gang-placement optimizations
   after correctness and recovery evidence exists.
 
-## ARF6. TLP Reference Proof
+## ARF6. Deterministic TLP Scientific Reference Proof
 
 **Outcome:** TLP validates scientific reproducibility, provider portability,
 failure recovery, evidence integrity, and useful inspection across the full
@@ -617,11 +655,14 @@ fabric.
 required for their respective provider portability sub-gates, not for the
 first local scientific pilot.
 
-**Exit proof:** a clean install executes the locked paired study; the evidence
-verifier independently reconstructs the primary analysis; local and Ray runs
-have equivalent semantics; native AdaOS views and optional MLflow views resolve
-to the same identities; and a reviewer records an accepted, rejected,
-inconclusive, or follow-up decision without relying on notebook state.
+**Exit proof:** a clean install executes the locked paired study locally; the
+evidence verifier independently reconstructs the primary analysis; native
+AdaOS views resolve to the accepted identities; and a reviewer records an
+accepted, rejected, inconclusive, or follow-up decision without relying on
+notebook state. A claimed MLflow or Ray sub-gate additionally proves that its
+provider views/exports resolve to those identities and that provider changes
+preserve the declared semantics; these optional sub-gates do not block the
+local proof.
 
 ### Operator and package
 
@@ -684,91 +725,312 @@ inconclusive, or follow-up decision without relying on notebook state.
   profile and record numerical/performance portability limits.
 - [ ] `[should]` `ARF6-21` Compare local-tracker/local-executor results with
   MLflow/Ray normalized exports through provider conformance assertions.
-- [ ] `[could]` `ARF6-22` Generate a paper/report draft from the accepted
-  evidence manifest, with every table and figure linked to an analysis digest.
+- [ ] `[should]` `ARF6-22` Define the machine-readable ClaimSet and
+  ResearchRelease input required by later synthesis/writing, with every table
+  and figure linked to an analysis digest; do not implement the writer here.
 - [ ] `[deferred]` `ARF6-23` Do not import existing notebook outputs as
   confirmatory trials; retain them only as exploratory provenance.
 
-## ARF7. Generalization and Operational Hardening
+## ARF7. Research Project Authoring and Assisted TLP Design
 
-**Outcome:** the fabric is demonstrably general and operable beyond the TLP
-pilot before research-domain contracts are promoted into core.
+**Outcome:** Builder can turn attached notebooks, prose, and code into a
+versioned TLP Research Prototype, let a human and LLM reach explicit consensus,
+adapt the experimental base through isolated Codex, and publish an executable
+scenario plus owned runner skills through the ordinary lifecycle.
 
-**Admission gate:** ARF6 has a reproducible local proof and documented gaps.
+**Admission gate:** ARF4 contracts are locally valid. ARF7 implementation may
+proceed alongside ARF6, but its exit proof uses the canonical operator,
+data/split, protocol, and analysis contracts accepted by ARF6.
 
-**Exit proof:** a second non-TLP study uses the same stable contracts, backup
-and restore pass on a PostgreSQL-backed deployment, provider failure and load
-tests meet declared SLOs, and each proposed core promotion has compatibility
-evidence from both domains.
+**Exit proof:** starting from the original TLP notebook and review attached in
+Builder, a user selects the research project template, reviews a structured
+source inventory, discusses and accepts an exact Research Prototype/Campaign,
+starts Automation, inspects a CPU Trial, publishes the scenario and owned
+runner, and instantiates a Study whose seed refs match the accepted Prototype.
+No raw chat, notebook output, or direct Codex invocation becomes canonical
+research state.
 
-- [ ] `[must]` `ARF7-01` Select a second case with materially different data,
-  execution, and analysis shape, such as simulation, retrieval evaluation, or
-  a device experiment.
-- [ ] `[must]` `ARF7-02` Run the second case without changing candidate core
-  contracts; record which research-skill schemas legitimately remain
-  domain-specific.
-- [ ] `[must]` `ARF7-03` Review every proposed core promotion against two-case
-  reuse, provider conformance, migration ownership, and overlap with workflow,
-  model, artifact, event, and UI authorities.
-- [ ] `[must]` `ARF7-04` Exercise PostgreSQL backup, point-in-time or declared
-  restore policy, credential rotation, migration failure, and owner isolation
-  on a representative deployment.
-- [ ] `[must]` `ARF7-05` Define SLOs and run soak/load/failure tests for tracker
-  ingestion, scheduler reconciliation, artifact export, restart, and evidence
+### Source intake and project template
+
+- [ ] `[must]` `ARF7-01` Define `SourceBundle` with content digests, MIME/type,
+  origin, trust, sensitivity, license, redistribution, attachment-message refs,
+  and exploratory/authoritative classification.
+- [ ] `[must]` `ARF7-02` Add first-class Builder intake for bounded individual
+  files and directories, including `.ipynb` and UTF-8 text, with immutable
+  snapshots, size/count limits, antivirus/secret/archive checks, and no
+  requirement to copy private payloads into a published package.
+- [ ] `[must]` `ARF7-03` Extract notebook cell/source/output metadata,
+  dependency/environment hints, hidden-state warnings, and candidate code
+  regions deterministically where possible. Optional LLM/Codex source
+  assessment remains a typed candidate and cannot promote outputs to evidence.
+- [ ] `[must]` `ARF7-04` Add a `research_study` scenario/Builder profile with
+  Sources, Direction, Hypotheses, Campaign, Analysis, Capability Gaps, and
+  Implementation Brief views plus compact/long-content/invalid/unavailable
+  Preview fixtures.
+- [ ] `[must]` `ARF7-05` Add a project-owned research runner/data-owner skill
+  template and a composite template-role manifest. Reuse installed
+  `research_manager_skill`, tracker, and executor dependencies by exact version;
+  do not scaffold copies of shared services.
+
+### Research Prototype and consensus
+
+- [ ] `[must]` `ARF7-06` Define `ResearchPrototype` containing ResearchBrief,
+  HypothesisSet, ExperimentCampaign, AnalysisPlan, capability requirements,
+  assumptions, risks, open questions, source refs, and a deterministic digest.
+- [ ] `[must]` `ARF7-07` Define ExperimentCampaign as a validated DAG with
+  experiment dependencies, branch predicates, evidence gates, exploratory/
+  confirmatory families, budgets, stop rules, and cycle/conflict rejection.
+- [ ] `[must]` `ARF7-08` Add a research semantic-patch profile so the Prototype
+  LLM produces bounded operations against stable research refs; arbitrary prose
+  is never treated as an accepted scientific mutation.
+- [ ] `[must]` `ARF7-09` Project after each meaningful turn the agreed facts,
+  proposed changes, unresolved questions, assumptions, risks, and next legal
+  action. Consensus accepts one exact revision through the shared durable
+  Interaction/expected-generation path.
+- [ ] `[must]` `ARF7-10` Keep Builder conversation, inspected Research
+  Prototype, and paired scenario Preview as independent selections; changing
+  one must not silently retarget or mutate the others.
+
+### Automation, publication, and re-entry
+
+- [ ] `[must]` `ARF7-11` Extend Prototype-to-Automation handoff with accepted
+  research digests, source refs, scientific invariants, required observations,
+  permitted packages/paths, activity/binding mappings, acceptance tests, and a
+  bounded CPU Trial profile.
+- [ ] `[must]` `ARF7-12` Make isolated Codex materialize runner, data-owner,
+  scenario, schemas, migrations, observations, analyses, and tests from the
+  exact handoff. It may report ambiguity/blockers but cannot amend the accepted
+  objective or analysis to fit implementation results.
+- [ ] `[must]` `ARF7-13` Validate generated TLP code with ARF6 operator,
+  determinism, split, sealed-data, evidence, workflow, conversation, migration,
+  and package admission tests before Trial/Publication.
+- [ ] `[must]` `ARF7-14` Publish scenario and project-owned skills as one exact
+  ProjectRelease dependency lock and instantiate Study/Campaign seed state from
+  the accepted Research Prototype without retaining two mutable copies.
+- [ ] `[must]` `ARF7-15` Add scenario-to-Builder re-entry: a typed CapabilityGap
+  or defect creates a linked Issue/Change with Study/Campaign/Evidence and
+  installed-release refs. Ordinary condition or campaign edits stay in
+  Research Fabric and do not invoke Codex.
+- [ ] `[should]` `ARF7-16` Add source-grounded literature attachments and
+  citation links before autonomous retrieval; retrieved text remains untrusted
+  evidence with snapshot, license, quotation, and claim-link metadata.
+- [ ] `[should]` `ARF7-17` Measure source-to-prototype target coverage,
+  clarification/correction rate, unsupported assumptions, context sufficiency,
+  Codex handoff fidelity, Trial failures, elapsed time, and human interventions.
+
+## ARF8. Autonomous TLP Closed Loop and Scientific Release
+
+**Outcome:** after one human-approved Research Mandate, aResearcher may operate
+TLP unattended through adaptive exploration, bounded Builder/Codex adaptation,
+fresh confirmation, evidence review, ClaimSet, and ResearchRelease without
+becoming a privileged source of scientific truth.
+
+**Admission gate:** ARF7's exact authoring/handoff/re-entry path and the relevant
+ARF6 scientific gates are valid. Agent-generated code uses a digest-pinned,
+resource/network/secret-bounded execution environment; the local process
+adapter alone is not a hostile-code isolation claim.
+
+**Exit proof:** a frozen TLP task is run in A0 and A4 modes under matched
+scientific and resource contracts. The A4 session performs at least one real
+evidence-driven Campaign branch and one isolated experimental-base adaptation,
+survives restart and an unknown outcome, preserves the sealed confirmation
+boundary, reaches an honest terminal state, and exports an independently
+verifiable ResearchRelease. It neither exceeds its mandate nor requires a
+positive TLP result.
+
+### Mandate, controller, and budgets
+
+- [ ] `[must]` `ARF8-01` Define `ResearchMandate` and immutable revisions for
+  objective/scope, source refs, permitted hypothesis/protocol/code mutations,
+  data/unblind policy, provider/tool/network authority, output contract,
+  budgets, stops, escalations, actor, and expiry.
+- [ ] `[must]` `ARF8-02` Define `AutonomyProfile` A0-A5. Implement no higher
+  than A4; A5 external publication is denied by default and remains separately
+  authorized/deferred.
+- [ ] `[must]` `ARF8-03` Implement a durable
+  `AutonomousResearchSession` controller over governed workflow activities. It
+  selects only admitted semantic actions and never owns provider leases,
+  retries, state transitions, or package activation itself.
+- [ ] `[must]` `ARF8-04` Add a transactional budget ledger for model tokens and
+  cost, wall time, CPU/GPU/resource time, experiments, attempts, storage, and
+  external requests. Reservations, usage, release, exhaustion, and policy
+  expansion are durable and restart-safe.
+- [ ] `[must]` `ARF8-05` Define `AgentDecision` with observed generation,
+  alternatives, rationale, uncertainty, selected action, mandate/budget
+  preconditions, validators, result, and model/prompt/tool/context provenance.
+  LLM notes and experiment journals do not advance state.
+- [ ] `[must]` `ARF8-06` Define terminal decisions for accepted, rejected,
+  inconclusive, follow-up, budget-exhausted, blocked, unsafe, and insufficient-
+  confirmation outcomes. The controller must not optimize until positive.
+
+### Scientific and engineering autonomy
+
+- [ ] `[must]` `ARF8-07` Implement an exploration/confirmation firewall. The
+  planner and Builder contexts cannot obtain sealed data bindings; promotion
+  freezes candidate, implementation, protocol, AnalysisPlan, and stopping rule
+  before a fresh or still-hidden evaluator is released.
+- [ ] `[must]` `ARF8-08` Represent linear, branching, tree-search, and
+  tournament proposals as ordinary Campaign nodes with identity, parentage,
+  cost, evidence, selection/rejection rationale, and declared objective/
+  validity constraints.
+- [ ] `[must]` `ARF8-09` Let a typed CapabilityGap create an autonomous Builder
+  Change only when mandate policy admits the exact risk class, target packages,
+  paths, permissions, dependency policy, and Trial checks.
+- [ ] `[must]` `ARF8-10` Activate autonomous Builder outputs only as
+  session-scoped content-addressed Trial candidates with rollback and retention;
+  public/stable component promotion remains a separate decision.
+- [ ] `[must]` `ARF8-11` Reconcile uncertain LLM, Codex, provider submission,
+  package activation, unblind, and external-request outcomes before another
+  action is selected. Recovery must not duplicate side effects.
+- [ ] `[must]` `ARF8-12` Execute deterministic AnalysisPlan operations before
+  LLM interpretation. New result-dependent analyses and hypotheses are marked
+  exploratory and cannot rewrite the completed confirmatory family.
+- [ ] `[must]` `ARF8-13` Provide isolated planner, implementation, analyst,
+  critic, and writer context profiles with minimum necessary refs. One model may
+  fill several roles, but no mutable transcript acts as shared authority.
+- [ ] `[should]` `ARF8-14` Enable parallel/multi-agent planning only after a
+  matched-budget single-agent comparison shows benefit for a decomposable TLP
+  subtask; retain centralized validation/admission and measure coordination
+  overhead and error amplification.
+
+### Evidence, release, and evaluation
+
+- [ ] `[must]` `ARF8-15` Define ClaimSet as an immutable projection over Claim
+  Decisions with predeclared/exploratory/computed/interpreted status,
+  supporting and contradicting evidence, uncertainty, limitations, negative
+  results, and unresolved alternatives.
+- [ ] `[must]` `ARF8-16` Define and verify `ResearchRelease` separately from
+  Builder ProjectRelease. Bind mandate, campaign, claims, evidence, sources,
+  code/environment/data/model/agent identities, tables/figures, deviations,
+  attribution, license, and release policy.
+- [ ] `[must]` `ARF8-17` Gate autonomous completion on target/evidence coverage,
+  validation, and terminal workflow state rather than final response, report
+  fluency, or an LLM self-review score.
+- [ ] `[must]` `ARF8-18` Run TLP A0 versus A4 under matched task, tool, data,
+  model, and compute ceilings. Report scientific validity, evidence coverage,
+  leakage, invalid implementation/result rate, reproducibility, recovery,
+  cost, elapsed time, intervention/clarification rate, and terminal outcome.
+- [ ] `[must]` `ARF8-19` Threat-test prompt injection and authority escalation
+  through notebooks, papers, repositories, logs, tracker artifacts, citations,
+  and generated code; prove source text cannot change mandate, capabilities, or
+  sealed-data access.
+- [ ] `[should]` `ARF8-20` Add an `ExternalReview`/FollowUpProposal import path
+  against an exact ResearchRelease so criticism can create a new Campaign or
+  Builder Issue without mutating the release.
+- [ ] `[deferred]` `ARF8-21` Implement `research_writer_skill` only after
+  ClaimSet/ResearchRelease evidence is stable. It may create a neutral Markdown
+  DraftEssay with evidence links but cannot reanalyse, add claims, adapt to a
+  journal, or submit externally.
+- [ ] `[deferred]` `ARF8-22` Autonomous open-web literature exploration,
+  unrestricted dependency acquisition, public software promotion, model
+  promotion, and external scientific publication require separate later gates.
+
+## ARF9. AdaOS Research Replication Benchmark
+
+**Outcome:** a versioned PaperBench-like benchmark measures how well AdaOS and
+alternative agent configurations reconstruct and reproduce external research
+claims under matched task, tool, model, and resource contracts.
+
+**Admission gate:** ARF8 has one independently verified autonomous TLP release
+and frozen process metrics. The first benchmark release may start at R0-R2;
+R3-R5 require corresponding implementation and evaluator evidence.
+
+**Exit proof:** a frozen ARRB release contains multiple licensed computational
+research tasks and expert/author-reviewed target rubrics. At least two AdaOS
+autonomy profiles and one declared external or no-AdaOS baseline run every task
+under comparable budgets. Per-target, aggregate, cost, intervention, safety,
+and reproducibility evidence can be independently recomputed from an immutable
+benchmark result package.
+
+- [ ] `[must]` `ARF9-01` Define a versioned benchmark/task manifest with source
+  snapshots, paper/supplement/repository/data/environment refs, licenses,
+  visibility/masking, domain, difficulty, expected artifacts, budget, model/tool
+  policy, contamination/cutoff metadata, and evaluator version.
+- [ ] `[must]` `ARF9-02` Define expert-curated hierarchical `TargetClaimSet`
+  rubrics with weights, tolerances, evidence requirements, partial credit,
+  critical-failure overrides, report coverage, and hidden evaluator refs.
+- [ ] `[must]` `ARF9-03` Define R0 artifact audit, R1 original reproduction, R2
+  minimal compatibility repair, R3 independent replication, R4 robustness, and
+  R5 follow-up as separate task profiles and result families.
+- [ ] `[must]` `ARF9-04` Isolate original, compatibility-repair,
+  method-correction, and independent-implementation workspaces. Every patch is
+  classified and linked; one track cannot silently replace another.
+- [ ] `[must]` `ARF9-05` Record `ProtocolReconstruction`, `AmbiguityLog`,
+  per-target generated evidence, numerical comparison, successful/failed Runs,
+  provenance, and exact report locations before a target is complete.
+- [ ] `[must]` `ARF9-06` Classify results as reproduced,
+  reproduced-with-repairs, partially reproduced, not reproduced, or
+  indeterminate with explicit artifact/environment/ambiguity/budget/validity
+  reason; never infer paper invalidity from execution failure alone.
+- [ ] `[must]` `ARF9-07` Implement deterministic rubric checks where possible
+  and calibrated, versioned LLM/expert judging only for residual semantic
+  criteria. Measure judge agreement and prevent the research agent from seeing
+  hidden scoring evidence.
+- [ ] `[must]` `ARF9-08` Report weighted target coverage, numerical fidelity,
+  protocol/evidence match, claim calibration, invalid result rate,
+  reproducibility, intervention/clarification, time/compute/model cost, safety,
+  and report evidence coverage with uncertainty across repeated runs.
+- [ ] `[must]` `ARF9-09` Run matched A0-A4, model, and agent-topology ablations;
+  publish exact task/tool/budget/evaluator versions and normalized result
+  packages so improvements are attributable rather than anecdotal.
+- [ ] `[must]` `ARF9-10` Select the first tasks for public artifacts, manageable
+  local/stand compute, clear primary claims, safe data, durable licenses, and
+  evaluator feasibility. Do not copy PaperBench materials without compatible
+  licensing; compatibility means comparable contracts and metrics.
+- [ ] `[should]` `ARF9-11` Include progressive source/code masking and at least
+  one post-model-cutoff or privately held evaluation split to estimate
+  contamination and memorization effects.
+- [ ] `[should]` `ARF9-12` Include multiple domains and at least one non-neural
+  computational task so generalization is not inferred from another image-
+  classification study.
+- [ ] `[should]` `ARF9-13` Export benchmark tasks/results and ResearchReleases
+  in a portable profile, with an RO-Crate mapping after internal contract
   verification.
-- [ ] `[must]` `ARF7-06` Add access-control and audit evidence for study roles,
-  test unblinding, provider admin surfaces, secrets, and remote execution.
-- [ ] `[should]` `ARF7-07` Add content-addressed object/blob storage for large
-  artifacts with retention, quota, garbage collection, and accepted-evidence
+
+## ARF10. Generalization and Operational Hardening
+
+**Outcome:** TLP plus multiple replication domains demonstrate generality,
+security, scale, and operational reliability before research-domain contracts
+are promoted into core or autonomous operation is broadened.
+
+**Admission gate:** ARF9 has a reproducible benchmark release and documented
+contract/domain gaps.
+
+**Exit proof:** multiple non-TLP tasks use stable contracts, backup and restore
+pass on a PostgreSQL-backed deployment, provider/agent failure and load tests
+meet declared SLOs, autonomous security gates pass, and every proposed core
+promotion has cross-domain compatibility evidence.
+
+- [ ] `[must]` `ARF10-01` Review every proposed core promotion against TLP and
+  multiple replication cases, provider conformance, migration ownership, and
+  overlap with workflow, Builder, model, artifact, conversation, event, and UI
+  authorities.
+- [ ] `[must]` `ARF10-02` Exercise PostgreSQL backup/restore, credential
+  rotation, migration failure, owner isolation, and accepted-evidence
+  protection on a representative autonomous deployment.
+- [ ] `[must]` `ARF10-03` Define SLOs and run soak/load/failure tests for agent
+  decisions, budgets, Builder re-entry, tracker ingestion, scheduler
+  reconciliation, artifact/release export, restart, and verification.
+- [ ] `[must]` `ARF10-04` Add access-control and audit evidence for design,
+  autonomy mandates, study roles, unblinding, provider admin, secrets, remote
+  execution, candidate activation, and research release.
+- [ ] `[should]` `ARF10-05` Add content-addressed object/blob storage for large
+  artifacts with retention, quota, garbage collection, and accepted-release
   protection.
-- [ ] `[should]` `ARF7-08` Add OpenTelemetry-compatible trace export and
+- [ ] `[should]` `ARF10-06` Add OpenTelemetry-compatible traces and
   OpenLineage-compatible dataset/job events while preserving AdaOS identities
-  without those services.
-- [ ] `[should]` `ARF7-09` Add multi-user proposal/review concurrency only after
-  identity, authorization, expected-generation, and audit semantics pass the
-  owning architecture gates.
-- [ ] `[should]` `ARF7-10` Publish a provider compatibility matrix and recovery
-  playbook for supported SQLite/PostgreSQL, local/MLflow, and local/Ray
+  without those collectors.
+- [ ] `[should]` `ARF10-07` Add multi-user proposal/review/mandate concurrency
+  only after identity, authorization, expected-generation, conflict, and audit
+  semantics pass their owning architecture gates.
+- [ ] `[should]` `ARF10-08` Publish provider, model-profile, autonomy-profile,
+  and recovery compatibility matrices for supported storage/tracker/executor
   combinations.
-- [ ] `[could]` `ARF7-11` Add additional tracker or executor adapters to test
-  portability rather than to maximize integration count.
-- [ ] `[deferred]` `ARF7-12` Do not declare research-domain schemas stable core
-  ABI based on the TLP case alone.
-
-## ARF8. aResearcher Assistance Layer
-
-**Outcome:** agent assistance increases research throughput above a proven,
-deterministic, governed substrate without becoming an unreviewed source of
-scientific truth.
-
-**Admission gate:** ARF7 establishes two-domain reproducibility, budgets,
-access control, and measurable framework baselines.
-
-**Exit proof:** blinded evaluation shows that agent-assisted proposals and
-analyses improve declared quality/efficiency metrics without increased test
-leakage, unsupported claims, budget violations, or irreproducible evidence.
-
-- [ ] `[deferred]` `ARF8-01` Add `aResearcher` as a product/assistant surface
-  over Research Fabric APIs, not as a privileged alternate runtime.
-- [ ] `[deferred]` `ARF8-02` Add literature retrieval with source identity,
-  quotation limits, claim-to-source links, and snapshot provenance.
-- [ ] `[deferred]` `ARF8-03` Let agents propose hypotheses, protocols,
-  experiment trees, analyses, and follow-ups only as versioned candidates
-  subject to the same validation and approval gates as human proposals.
-- [ ] `[deferred]` `ARF8-04` Add independent planner, executor, analyst, and
-  critic roles only when evaluations show a benefit over a simpler single
-  assistant workflow.
-- [ ] `[deferred]` `ARF8-05` Enforce compute, cost, trial-count, time, data
-  access, and tool budgets before unattended exploration.
-- [ ] `[deferred]` `ARF8-06` Prevent the assistant from unblinding test data,
-  amending locked protocols, accepting claims, promoting models, or publishing
-  results without the configured human/policy authority.
-- [ ] `[deferred]` `ARF8-07` Evaluate proposal novelty, protocol validity,
-  execution success, analysis correctness, citation support, reproducibility,
-  and cost on frozen tasks with contamination controls.
-- [ ] `[deferred]` `ARF8-08` Generate narrative reports only from verified
-  evidence references and mark interpretations that are not direct protocol
-  outputs.
+- [ ] `[could]` `ARF10-09` Add tracker, executor, literature, repository, or
+  publication adapters only to test a named portability contract.
+- [ ] `[deferred]` `ARF10-10` Do not declare research-domain schemas stable core
+  ABI, expand A5 external authority, or claim autonomous scientific reliability
+  from TLP or one benchmark release alone.
 
 ## Cross-Cutting Evidence Matrix
 
@@ -780,6 +1042,11 @@ leakage, unsupported claims, budget violations, or irreproducible evidence.
 | Tracker | Provider conformance, outage/restart, normalized export verification |
 | Executor | Idempotent submit, unknown reconciliation, cancellation, checkpoint, fault injection |
 | Scientific | Locked protocol/analysis plan, paired trial manifest, QC/exclusions, independent recomputation |
+| Authoring | Immutable SourceBundle, Research Prototype diffs, exact consensus/Automation handoff, source-to-Study lineage |
+| Autonomy | Research Mandate, admitted Agent Decisions, budget ledger, exploration/confirmation isolation, escalation/terminal evidence |
+| Builder re-entry | CapabilityGap, exact installed base, bounded Codex context, tests, Trial candidate, adoption/rollback lineage |
+| Synthesis/release | ClaimSet coverage, contradicting/negative evidence, table/figure provenance, independently verified ResearchRelease |
+| Replication benchmark | Frozen task/rubric/evaluator, per-target evidence, matched budgets, repeated-run uncertainty, contamination controls |
 | UI | Native state/action contract tests; provider UI access and auth tests if enabled |
 | Stand | Environment identity, SLO/load/failure report, residual risks |
 | Production | Explicit human acceptance and rollback/recovery evidence |
@@ -800,15 +1067,31 @@ Research Fabric MVP is complete only when all of the following are true:
   `.adaos/research` state root, direct provider-schema access, or accidental
   test unblinding.
 
-ARF7 and ARF8 are not MVP requirements. ARF7 is the gate for broader platform
-claims and core promotion; ARF8 is the gate for an autonomous-assistance
-product claim.
+This is the **deterministic Research Fabric MVP**. It does not imply assisted or
+autonomous research readiness.
+
+The **Research Project Authoring MVP** additionally requires every ARF7 `must`
+item and its attachment-to-published-TLP acceptance story.
+
+The **Autonomous Research Preview** additionally requires every ARF8 `must`
+item, one matched A0/A4 TLP run, and an independently verified ResearchRelease.
+It is a bounded preview, not a claim of general autonomous scientific
+reliability.
+
+A **comparable autonomous-research claim** additionally requires a versioned
+ARRB release, matched baselines, repeated-run uncertainty, contamination and
+judge controls, and every ARF9 `must` item. Broader operational/core claims are
+blocked on ARF10. The deferred writer, journal adaptation, and A5 external
+publication are not prerequisites for deterministic or benchmark MVPs.
 
 ## Related Plans
 
+- [Builder Roadmap](builder-roadmap.md)
+- [Builder Conversational Development Architecture](builder-conversational-development.md)
 - [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
 - [Artifact Source, Package, and Activation Roadmap](artifact-source-package-activation-roadmap.md)
 - [Model Runtime Roadmap](model-runtime-roadmap.md)
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md)
 - [Projection Subscription Roadmap](projection-subscription-roadmap.md)
 - [Personalization, Identity, and Access Roadmap](personalization-identity-access-roadmap.md)
+- [Scenario Guidance and Help Contract](scenario-guidance.md)
