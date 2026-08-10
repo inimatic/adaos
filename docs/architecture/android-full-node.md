@@ -3,8 +3,8 @@
 Status: target architecture for an experimental proof of concept.
 
 Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
-member-protocol slice, the A7 bounded-runtime implementation, and a PoC7
-browser-mediated voice slice are implemented under
+member-protocol slice, the A7 bounded-runtime implementation, and a PoC8
+browser-mediated voice/dialog slice are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
@@ -12,7 +12,8 @@ browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
 over `/yws/desktop` and recovered after a forced process stop. The immutable
 `android_poc_v1` profile executes Weather, AdaOS Connect, Browsers, a local
-Voice Assistant, Notebook, subnet environment, and Taiga demo metrics
+Voice Assistant with a bounded dialog roster, Notebook, subnet environment,
+and Taiga demo metrics
 in-process. The browser has rendered persisted Notebook data, the editable
 subnet environment, the local Connect link, active browser sessions, bounded
 voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
@@ -465,16 +466,25 @@ The first vertical proof covers several paths rather than a synthetic page:
 - Browsers: control-channel registration -> bounded read-only session
   projection -> modal;
 - Voice Assistant: Android Chrome SpeechRecognition -> `dialog.user_message`
-  -> bounded local handler -> `data/voice_chat` -> browser speechSynthesis.
+  -> bounded local handler -> `data/voice_chat` plus `data/dialog` -> browser
+  speechSynthesis. `dialog.channel.select` and `dialog.agent.select` keep the
+  client selector, active channel, and active agent projection synchronized.
 
-The PoC7 voice path is intentionally browser-mediated. It uses Android's
+The PoC8 voice path is intentionally browser-mediated. It uses Android's
 browser-exposed speech services while `https://inimatic.com` is visible and
 requires the normal one-time microphone permission for that origin. It does
 not import `sounddevice`, upload WAV to an absent hub STT endpoint, keep the
 microphone open in the background, or claim wake-word support. The fixed local
 assistant currently handles greeting, node status, Weather, and explicit
 Notebook creation; the tail is limited to 32 messages and each input to 2,048
-characters.
+characters. Its fixed local roster contains AdaOS Mobile, Арсений, Ника, Мира,
+and Строитель. The selector and addressing by name are real and persist across
+runtime restarts, but every projected agent declares
+`implementation=android_local_bounded`, `model_backed=false`, and
+`full_runtime=false`. These are mobile facades over the same allowlisted local
+capabilities, not the desktop `conversation_companions` or Builder model/tool
+runtimes. Строитель can discuss the bounded mobile architecture and use the
+allowlisted commands; it cannot generate/install skills or start subprocesses.
 
 Before membership is configured, this document is local and standalone. After
 the phone joins a subnet, the existing member-link and webspace ownership rules
@@ -563,7 +573,7 @@ capabilities:
   complete `psutil` behavior;
 - secrets and long-lived key custody through Android Keystore;
 - files and uploads through app-private storage and the system picker;
-- foreground browser voice through Web Speech in the implemented PoC7 slice;
+- foreground browser voice through Web Speech in the implemented PoC8 slice;
 - future app-native/background audio through AudioRecord/AudioTrack and Android TTS;
 - future camera through CameraX or another native adapter;
 - future low-latency media through Android-native WebRTC or separately proven
@@ -585,7 +595,7 @@ Initial budgets for the AdaOS application process are:
 - bounded skill and projection caches;
 - no unbounded event, stream, log, note, or Yjs queues;
 - no service-skill child processes;
-- no eager import of disabled media, NLU, Builder, or model stacks.
+- no eager import of disabled media, NLU, full Builder, or model stacks.
 
 A steady state between 200 and 300 MiB is diagnostic evidence requiring
 optimization before widening the pilot. Measurements must separate the AdaOS
@@ -648,6 +658,8 @@ The implementation must preserve these invariants:
     tabs from an older generation cannot share cross-tab state with it.
 13. Browser voice requires an explicit origin-scoped microphone permission;
     local no-auth trust does not silently grant hardware permissions.
+14. A projected mobile dialog persona must expose its bounded implementation;
+    an agent name must not imply that the desktop model/tool runtime is active.
 
 ## Non-Goals for the First PoC
 
@@ -662,7 +674,7 @@ The first PoC does not include:
 - supervisor, realtime sidecar, core A/B slots, or self-update;
 - native/background microphone capture, wake word, camera, media server,
   WebRTC, or `aiortc`;
-- Rasa, Neural NLU, Builder, MCP, Codex, or model execution;
+- Rasa, Neural NLU, full Builder execution, MCP, Codex, or model execution;
 - background geolocation or other while-in-use Android permissions;
 - LAN exposure of the local API;
 - replacement of ReDevice.

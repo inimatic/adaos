@@ -322,8 +322,16 @@ the PoC.
   local authentication policy independent from hardware permission.
 - [x] `[should]` route explicit Weather, node-status, and Notebook commands to
   allowlisted in-process behavior.
+- [x] `[must]` publish the standard `data/dialog` active channel/agent shape and
+  the additive bounded mobile roster: AdaOS Mobile, Арсений, Ника, Мира, and
+  Строитель.
+- [x] `[must]` expose channel and agent selectors through the normal hosted
+  client, acknowledge `dialog.channel.select` and `dialog.agent.select`, and
+  persist the selected agent across a runtime restart.
+- [x] `[must]` support addressed turns such as `Арсений, ...` while marking all
+  mobile personas `model_backed=false` and `full_runtime=false`.
 - [ ] `[deferred]` background listening, wake word, app-native AudioRecord/TTS,
-  and arbitrary model-backed conversation.
+  arbitrary model-backed conversation, and full Builder skill generation.
 
 ### Taiga UI
 
@@ -368,6 +376,19 @@ and set `speechSynthesis.speaking=true`. The live materialization remained
 ready, displayed Browsers and Voice Assistant, and did not contain a recovery
 state. The debug APK is 22,464,755 bytes with SHA-256
 `0e8cb7a1f08d31d09607ef275982c17ce9483a1718bd6cd38b21ccf769488c3c`.
+
+PoC8 physical evidence (2026-08-10): APK `0.1.0-poc8` was installed over the
+same persisted data on the API 36 Samsung SM-F721N. The host suite passed
+12/12 and the physical restart/skill smoke verified the five-agent roster,
+explicit selection of Ника, Builder channel selection, addressed activation of
+Арсений, and selected-agent persistence after force-stop/restart. The hosted
+client's real Voice Assistant modal rendered General/Conversational/Builder,
+opened an `Ассистент` selector containing AdaOS Mobile, Арсений, Ника, Мира,
+and Строитель, and changed the live Yjs projection through its UI event path.
+The final state was `web_desktop`, materialization `ready`, active agent
+Арсений, no Recovery text, and no matching fatal/traceback entries in Logcat.
+The debug APK is 22,464,755 bytes with SHA-256
+`b338e718923f36a501ff26231329a0234689cd20b0f1f9e52560e086e21b967d`.
 
 ## Phase A6: Member Link
 
@@ -587,6 +608,9 @@ must not be copied into a mobile fork.
   it pre-emptively.
 - extend the local assistant only through allowlisted skill intents and add
   explicit confirmation for every mutating voice command.
+- route model-backed companions and Builder to an authenticated upstream Hub
+  before considering an on-phone model runtime; keep the bounded local facade
+  usable while that link is offline.
 
 ### Could follow only when demanded
 

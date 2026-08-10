@@ -15,9 +15,9 @@ Current scope:
 - the AdaOS `y-py` fork as a CPython 3.11 Android arm64 wheel;
 - a real `desktop` YDoc with a bounded SQLite snapshot/update YStore;
 - the verified, immutable `android_poc_v1` install profile;
-- fixed in-process Weather, AdaOS Connect, Browsers, local Voice Assistant,
-  Notebook, subnet environment, and Taiga demo-metrics handlers, with no
-  subprocess or runtime package install;
+- fixed in-process Weather, AdaOS Connect, Browsers, local Voice Assistant with
+  a bounded five-agent dialog roster, Notebook, subnet environment, and Taiga
+  demo-metrics handlers, with no subprocess or runtime package install;
 - fixed UI descriptors for Weather, AdaOS Connect, Browsers, Voice Assistant,
   Notebook, and the Taiga UI demo scenario;
 - browser-compatible home navigation: `desktop.webspace.go_home` restores the
@@ -25,7 +25,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC7 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC8 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -34,8 +34,12 @@ or bounded WebIO stream events. AdaOS Connect publishes an immediately usable
 LO link for the local browser and can provision the optional outbound member
 link with a Root URL and one-time join code. Browsers projects bounded active
 control sessions. Voice uses Android Chrome SpeechRecognition and
-speechSynthesis while the hosted client is open; the APK does not package
-`sounddevice`, background capture, or wake-word support.
+speechSynthesis while the hosted client is open. `data/dialog` projects AdaOS
+Mobile, Арсений, Ника, Мира, and Строитель; the hosted selector switches them
+through acknowledged control commands and the choice survives restart. These
+are explicitly bounded, non-model-backed mobile facades. The APK does not
+package `sounddevice`, background capture, wake-word support, an LLM, or the
+full Builder runtime.
 
 ## Build
 
@@ -63,7 +67,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc7-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc8-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -86,7 +90,8 @@ retained CRDT history exceeds the WebSocket library's 1 MiB default.
 browser should show the seven fixed apps, two widgets, and a green YJS status
 without login or a development token.
 `-VerifySkills` runs Weather offline/recovery, the AdaOS Connect LO path,
-Browsers registration, a local Voice Assistant turn, Notebook
+Browsers registration, the dialog roster/agent/channel paths, a local Voice
+Assistant turn, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.
 
@@ -110,7 +115,7 @@ against an existing deployed AdaOS subnet.
 
 ## Lifecycle and resource gate
 
-PoC7 does not request `largeHeap`. `/api/node/status` exposes a psutil-free
+PoC8 does not request `largeHeap`. `/api/node/status` exposes a psutil-free
 procfs PSS/RSS sampler and the declared bounds for the loopback server, YStore,
 member link, Notebook projection/content, and idempotency results. The current
 limits are 32 request threads with a backlog of 16, 64 YStore owner tasks, 128
@@ -150,3 +155,11 @@ fixed-skill smoke, projected one live Chrome endpoint, completed a local
 Voice Assistant turn, and kept the browser materialization ready. Chrome 149
 entered SpeechRecognition listening after the normal site microphone prompt;
 the rendered assistant reply exercised browser speechSynthesis.
+
+The PoC8 debug APK is 22,464,755 bytes with SHA-256
+`b338e718923f36a501ff26231329a0234689cd20b0f1f9e52560e086e21b967d`.
+On the same Samsung it passed Yjs/Notebook restart and the complete fixed-skill
+smoke, including selection of Ника, the Строитель channel, addressed Арсений,
+and selected-agent persistence. The deployed client modal showed all five
+agents in its selector; materialization remained ready and Logcat contained no
+matching fatal exception, traceback, or unsupported dialog command.
