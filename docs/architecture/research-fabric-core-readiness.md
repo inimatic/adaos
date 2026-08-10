@@ -3,7 +3,7 @@
 Status: ARF0.5 plus ARF2 through ARF4 implementation record. SQLite,
 PostgreSQL, relational lifecycle, execution ABI, local process,
 OCI-admission, bounded cross-skill invocation, and scenario-guidance paths are
-implemented; the current TLP package split is under local revalidation.
+implemented; the current TLP package split is published and validated locally.
 
 Last reviewed: 2026-08-10.
 
@@ -211,7 +211,7 @@ its runtime bucket, and publishes `prepare_attempt`, `collect_attempt`,
 `adaos.research.runner.v1`. An experiment records `data_owner_skill_id`; its
 ResearchSpace identity is `skill:<owner>/experiment:<experiment-id>`.
 
-Legacy TLP files are migrated by ownership: manager `0.8.0` excludes
+Legacy TLP files are migrated by ownership: manager `0.8.1` excludes
 `files/datasets`, while the TLP provider adopts the prior tree by hardlink or
 copy. The previous compatibility bucket is retained until retirement so
 rollback does not depend on destructive migration.
@@ -349,6 +349,19 @@ recovered by a strictly newer skill version, scenarios dispatch only skill
 routes declared by their package dependencies, repeated scenario installation
 reuses a healthy exact-version service runtime, and `adaos tests run` resolves
 suites and its working directory through `CTX.paths.repo_root()`.
+
+On 2026-08-10 the universal-control-plane split was published through the
+ordinary AdaOS lifecycle. `research_manager_skill` `0.8.1` and
+`tlp_experiment_skill` `0.1.1` passed install self-tests and activated in slot
+B without version drift. Manager migration copied `db` and `internal` from
+`v0.7`, excluded `files/datasets`, and retained the previous bucket for
+rollback. TLP activation adopted eight legacy STL-10 entries by hardlink into
+its `v0.1/data` owner bucket; `dataset_status` reported the binding ready, while
+the new manager bucket contained no dataset cache. `tlp_research` `0.3.1`
+passed clean native validation and seven scenario tests, installed all three
+declared dependencies, and triggered a Desktop semantic rebuild with 13
+widgets. Its live Russian voice projection resolved finalized E002 and returned
+the governed evidence-verification and tracker-inspection next actions.
 
 ## Preserved Boundaries
 

@@ -117,14 +117,15 @@ scientific conclusion. A local demo is not production acceptance.
 Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
 ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
 
-Delivery snapshot (2026-08-10): the release candidates are
-`research_manager_skill` `0.8.0`, `tlp_experiment_skill` `0.1.0`,
-`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.3.0`. The accepted E002
-result remains immutable from the earlier release. The current refactor adds
+Delivery snapshot (2026-08-10): the published and locally activated packages
+are `research_manager_skill` `0.8.1`, `tlp_experiment_skill` `0.1.1`,
+`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.3.1`. The accepted E002
+result remains immutable from the earlier release. The current packages add
 the runner/data-owner boundary, owner-qualified ResearchSpace projection,
 bounded cross-skill tool invocation, data migration, and channel-neutral
-scenario guidance. Publication and on-machine lifecycle evidence are recorded
-after the focused revalidation at the end of this implementation run.
+scenario guidance. Native package installation, scenario validation, package
+self-tests, Desktop rematerialization, migration, and guidance invocation all
+passed on the reference machine.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -548,6 +549,14 @@ profiles pass the generic condition validator, result fields are selected by
 declared analysis paths, and TLP data/artifact access is mediated by its owner
 provider. The scenario README and modal are equality-tested, while the same
 `describe_experiment` projection supplies state-sensitive text and speech.
+Published manager `0.8.1` and TLP provider `0.1.1` both passed native install
+self-tests in active slot B. Manager migration copied only `db` and `internal`
+and explicitly excluded `files/datasets`; TLP activation adopted eight STL-10
+entries by hardlink under its own runtime data root and reports the binding
+ready. Published scenario `0.3.1` passed clean validation and all seven package
+tests, then rematerialized the Desktop composition with 13 widgets. A live
+Russian voice projection for finalized E002 returned evidence verification
+and tracker inspection as the current next actions.
 The general contract is documented in
 [Scenario Guidance and Help Contract](scenario-guidance.md).
 

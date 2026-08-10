@@ -1,8 +1,8 @@
 # AdaOS Research Fabric
 
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
-implemented and under local revalidation by the TLP single-experiment
-vertical. The research control plane is provider-neutral; TLP execution and
+implemented and validated locally by the TLP single-experiment vertical. The
+research control plane is provider-neutral; TLP execution and
 primary data now belong to a separate runner-provider skill. Distributed
 execution remains an ARF5 concern.
 
@@ -229,9 +229,9 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The current ARF4 package set is `research_manager_skill` `0.8.0`,
-`tlp_experiment_skill` `0.1.0`, `mlflow_tracker_skill` `0.2.2`, and
-`tlp_research` `0.3.0`. The earlier `0.7.0`/`0.2.1` set supplied the accepted
+The current ARF4 package set is `research_manager_skill` `0.8.1`,
+`tlp_experiment_skill` `0.1.1`, `mlflow_tracker_skill` `0.2.2`, and
+`tlp_research` `0.3.1`. The earlier `0.7.0`/`0.2.1` set supplied the accepted
 E002 run; the current set preserves that immutable evidence while separating
 the reusable control plane from the TLP data/runner boundary. The TLP Desktop
 scenario provides a Single Experiment

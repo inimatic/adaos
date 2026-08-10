@@ -103,7 +103,7 @@ Both invoke the same skill operation used by the modal. Voice is therefore a ren
 
 ## TLP Reference
 
-`tlp_research` `0.3.0` is the first conformance package. Its README is shown in `tlp_research_help`; current guidance comes from `research_manager_skill.describe_experiment`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used.
+`tlp_research` `0.3.1` is the first published conformance package. Its README is shown in `tlp_research_help`; current guidance comes from `research_manager_skill.describe_experiment`. Russian and English deterministic intents cover “what can this scenario do?” and “what should I do next?”, including a voice story. No external LLM is used. The published package passed clean scenario validation, seven package tests, native installation, and Desktop rematerialization on 2026-08-10.
 
 ## Adoption Checklist
 
