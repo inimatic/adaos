@@ -1,0 +1,25 @@
+schema: "adaos.research.direction.v1"
+schema_version: "1.0.0"
+direction_id: "new_skill"
+title: "New Research Direction"
+status: "formulation"
+owner: "skill:new_skill"
+source_bundle_digest: null
+accepted_prototype_digest: null
+automation_brief_digest: null
+contracts:
+  runner: "adaos.research.runner.v1"
+  primary_data: "skill-owned"
+  tracker: "adaos.research.tracker.v1"
+implementation:
+  state: "pre_codex"
+  entrypoints: []
+  missing:
+    - "accepted ResearchPrototype"
+    - "digest-bound AutomationBrief"
+    - "domain experiment implementation"
+    - "runner conformance tests"
+constraints:
+  no_direction_scenario: true
+  no_notebook_output_as_evidence: true
+  no_undeclared_confirmatory_claims: true

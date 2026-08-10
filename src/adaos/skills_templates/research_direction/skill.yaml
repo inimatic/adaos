@@ -1,0 +1,79 @@
+name: "new_skill"
+version: "0.1.0"
+description: "Research direction package: governed experimental code and domain-owned primary data."
+supported_locales: ["en", "ru"]
+entry: "handlers/main.py"
+default_tool: "describe_direction"
+
+runtime:
+  python: "3.11"
+
+dependencies: []
+events:
+  subscribe: []
+  publish: []
+exports:
+  tools:
+    - describe_direction
+    - validate_research_prototype
+    - execution_readiness
+tools:
+  - name: describe_direction
+    description: "Return the typed research-direction descriptor and current implementation readiness."
+    entry: "handlers.main:describe_direction"
+    input_schema:
+      type: object
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, direction, readiness]
+  - name: validate_research_prototype
+    description: "Run domain-specific checks over a candidate ResearchPrototype without accepting it."
+    entry: "handlers.main:validate_research_prototype"
+    input_schema:
+      type: object
+      required: [prototype]
+      properties:
+        prototype: {type: object}
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, accepted, issues]
+  - name: execution_readiness
+    description: "Report whether Codex has implemented the experimental runner contract."
+    entry: "handlers.main:execution_readiness"
+    input_schema:
+      type: object
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [ok, ready, missing]
+
+research_direction:
+  schema: "adaos.research.direction.v1"
+  schema_version: "1.0.0"
+  owner: "skill:new_skill"
+  descriptor: "research.yaml"
+  primary_data_owner: "skill:new_skill"
+  runner_contract: "adaos.research.runner.v1"
+  pre_codex: true
+
+llm_hints:
+  description: "Research direction owned by new_skill. The shared research orchestrator governs intake and formulation."
+  aliases: ["research direction"]
+  primary_actions:
+    - id: new_skill.describe_direction
+      intent: new_skill.describe_direction
+      tool: describe_direction
+      side_effect_class: read_only
+      examples:
+        - "Describe this research direction"
+        - "What remains before this research can run?"
+  examples: []
+  owner_hints: ["skill:new_skill"]
+
+nlu_hints:
+  aliases: ["research direction"]
+  examples: []
+  slot_schemas: {}
+  entities: []

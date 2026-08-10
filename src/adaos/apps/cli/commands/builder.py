@@ -11,7 +11,7 @@ import typer
 from adaos.apps.cli.commands.dev import _resolve_dev_scenario_file, _scenario_validation_roots
 from adaos.apps.cli.commands.skill import _mgr
 from adaos.services.agent_context import get_ctx
-from adaos.services.builder import BuilderWorkbenchService, BuilderWorkspaceService
+from adaos.services.builder import BuilderProjectSourceService, BuilderWorkbenchService, BuilderWorkspaceService
 from adaos.services.node_config import displayable_path
 from adaos.services.scenario.validation import validate_scenario_path
 from adaos.services.root.service import (
@@ -235,6 +235,32 @@ def approval_profiles(
     """List Builder approval profiles used by preview/review policy."""
     service = BuilderWorkspaceService.from_context()
     _echo_approval_profiles(service.approval_profiles(), json_output)
+
+
+@app.command("source-add")
+def source_add(
+    artifact_id: str = typer.Argument(..., help="Builder project id."),
+    path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
+    kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
+    role: str = typer.Option("source", "--role", help="Source role such as notebook, review, paper, or source."),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Attach one immutable source to an existing Builder project."""
+    service = BuilderProjectSourceService.from_context()
+    result = service.add_path(path, kind=_normalize_artifact_kind(kind), project_id=artifact_id, role=role)
+    _echo_payload(result, json_output)
+
+
+@app.command("source-list")
+def source_list(
+    artifact_id: str = typer.Argument(..., help="Builder project id."),
+    kind: str = typer.Option("skill", "--kind", help="skill | scenario"),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON response."),
+) -> None:
+    """Show the current immutable SourceBundle for a Builder project."""
+    service = BuilderProjectSourceService.from_context()
+    result = {"ok": True, "bundle": service.current_bundle(_normalize_artifact_kind(kind), artifact_id)}
+    _echo_payload(result, json_output)
 
 
 @app.command("workbench-ensure")

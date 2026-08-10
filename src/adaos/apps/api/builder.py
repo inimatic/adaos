@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.requests import ClientDisconnect
 
 from adaos.apps.api.auth import require_token
 from adaos.services.builder import (
     BuilderAutomationService,
     BuilderProjectCatalogService,
+    BuilderProjectSourceService,
     BuilderWorkflowError,
     BuilderWorkflowService,
     BuilderWorkbenchService,
@@ -33,6 +36,10 @@ def _get_automation_service() -> BuilderAutomationService:
 
 def _get_project_catalog_service() -> BuilderProjectCatalogService:
     return BuilderProjectCatalogService.from_context()
+
+
+def _get_project_source_service() -> BuilderProjectSourceService:
+    return BuilderProjectSourceService.from_context()
 
 
 def _get_workflow_service() -> BuilderWorkflowService:
@@ -116,6 +123,78 @@ class BuilderWorkflowTransitionRequest(BaseModel):
 @router.get("/approval-profiles")
 def approval_profiles(service: BuilderWorkspaceService = Depends(_get_service)) -> dict[str, Any]:
     return {"ok": True, "profiles": service.approval_profiles()}
+
+
+@router.put("/projects/{kind}/{project_id}/sources/{filename:path}")
+async def add_project_source(
+    kind: str,
+    project_id: str,
+    filename: str,
+    request: Request,
+    role: str = "source",
+    service: BuilderProjectSourceService = Depends(_get_project_source_service),
+) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > service.max_source_bytes:
+                raise HTTPException(status_code=413, detail=f"source exceeds max size: {service.max_source_bytes} bytes")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid content-length") from None
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > service.max_source_bytes:
+                raise HTTPException(status_code=413, detail=f"source exceeds max size: {service.max_source_bytes} bytes")
+            chunks.append(bytes(chunk))
+    except ClientDisconnect as exc:
+        raise HTTPException(status_code=499, detail="upload client disconnected") from exc
+    try:
+        return service.add_bytes(
+            kind=kind,
+            project_id=project_id,
+            name=filename,
+            payload=b"".join(chunks),
+            media_type=request.headers.get("content-type"),
+            role=role,
+            origin={"kind": "builder_upload"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{kind}/{project_id}/sources")
+def get_project_sources(
+    kind: str,
+    project_id: str,
+    service: BuilderProjectSourceService = Depends(_get_project_source_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "state": service.get_state(kind, project_id), "bundle": service.current_bundle(kind, project_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/{kind}/{project_id}/sources/{digest}/content")
+def get_project_source_content(
+    kind: str,
+    project_id: str,
+    digest: str,
+    service: BuilderProjectSourceService = Depends(_get_project_source_service),
+) -> Response:
+    normalized = digest if digest.startswith("sha256:") else f"sha256:{digest}"
+    try:
+        bundle = service.current_bundle(kind, project_id)
+        source = next((item for item in bundle.get("sources") or [] if item.get("digest") == normalized), None)
+        if source is None:
+            raise FileNotFoundError("source is not a member of the current project SourceBundle")
+        return Response(content=service.read_source(normalized), media_type=str(source.get("media_type") or "application/octet-stream"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/draft")

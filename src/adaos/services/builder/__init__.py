@@ -10,10 +10,12 @@ from .prototype_runtime import PrototypeDataRuntime
 from .composition import extract_composition_slice
 from .conversational_prototype import validate_conversational_workflow_slice
 from .prototype_handoff import admit_automation_handoff, build_automation_handoff
+from .sources import BuilderProjectSourceService
 
 __all__ = [
     "BuilderAutomationService",
     "BuilderProjectCatalogService",
+    "BuilderProjectSourceService",
     "BuilderSemanticUIService",
     "BuilderWorkspaceService",
     "BuilderWorkbenchService",

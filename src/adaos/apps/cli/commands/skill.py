@@ -1591,11 +1591,28 @@ def run_handler(
 def run_tool(
     name: str,
     tool: Optional[str] = typer.Argument(None, help=_("cli.skill.run.tool_help")),
-    payload: str = typer.Option("{}", "--json", help=_("cli.skill.run.payload_cli_help")),
+    payload: Optional[str] = typer.Option(None, "--json", help=_("cli.skill.run.payload_cli_help")),
+    payload_file: Optional[Path] = typer.Option(
+        None,
+        "--json-file",
+        help="Path to a UTF-8 JSON payload; safer than inline JSON across shell boundaries",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
     timeout: Optional[float] = typer.Option(None, "--timeout", help=_("cli.skill.run.timeout_help")),
 ):
+    if payload is not None and payload_file is not None:
+        typer.secho("invalid payload: use either --json or --json-file, not both", fg=typer.colors.RED)
+        raise typer.Exit(1)
     try:
-        payload_obj = json.loads(payload or "{}")
+        payload_text = payload_file.read_text(encoding="utf-8-sig") if payload_file else payload or "{}"
+    except (OSError, UnicodeError) as exc:
+        typer.secho(f"invalid payload file: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    try:
+        payload_obj = json.loads(payload_text)
     except json.JSONDecodeError as exc:
         typer.secho(f"invalid payload: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1)

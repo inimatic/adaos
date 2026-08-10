@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.source_bundle.v1",
+  "title": "Builder SourceBundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schema_version", "project", "generation", "sources", "digest", "created_at"],
+  "properties": {
+    "schema": {"const": "adaos.builder.source_bundle.v1"},
+    "schema_version": {"const": "1.0.0"},
+    "project": {
+      "type": "object",
+      "required": ["kind", "id", "ref"],
+      "properties": {
+        "kind": {"enum": ["skill", "scenario"]},
+        "id": {"type": "string", "pattern": "^[a-z0-9_.-]+$"},
+        "ref": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "generation": {"type": "integer", "minimum": 0},
+    "sources": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "name", "digest", "size_bytes", "media_type", "role", "object_ref", "analysis", "origin", "ingested_at"],
+        "properties": {
+          "source_id": {"type": "string"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 240},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 1},
+          "media_type": {"type": "string", "minLength": 1},
+          "role": {"type": "string", "minLength": 1},
+          "object_ref": {"type": "string", "minLength": 1},
+          "analysis": {"type": "object"},
+          "origin": {"type": "object"},
+          "ingested_at": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "created_at": {"type": "string"}
+  }
+}

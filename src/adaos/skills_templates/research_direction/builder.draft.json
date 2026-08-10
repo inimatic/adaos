@@ -1,0 +1,39 @@
+{
+  "$schema": "../../abi/builder.draft.v1.schema.json",
+  "draft_id": "template.research_direction",
+  "task_id": "template",
+  "status": "draft",
+  "source": {"type": "template", "text": "Research direction skill project."},
+  "artifact": {
+    "kind": "skill",
+    "id": "new_skill",
+    "template_id": "research_direction",
+    "draft_root": ".",
+    "files": [
+      {"path": "skill.yaml", "role": "manifest", "required": true},
+      {"path": "research.yaml", "role": "research_descriptor", "required": true},
+      {"path": "handlers/main.py", "role": "handler", "required": true},
+      {"path": "README.md", "role": "doc", "required": true},
+      {"path": "tests/test_research_direction.py", "role": "test", "required": true}
+    ]
+  },
+  "metadata": {
+    "source_idea": "One research direction; formulate before starting Codex.",
+    "assumptions": [
+      "The shared research_orchestrator_skill owns pre-Codex stage orchestration.",
+      "The direction skill owns experimental code and primary data.",
+      "A generic Research Workbench may render the direction; no per-direction scenario is required."
+    ],
+    "risk_notes": ["Notebook outputs are untrusted source material.", "Execution remains unavailable until Automation acceptance."],
+    "expected_tests": ["tests/test_research_direction.py"],
+    "route_plan_required": true,
+    "human_review_required": true
+  },
+  "quality_gates": {
+    "schemas": ["skill.schema.json", "adaos.research.direction.v1"],
+    "tests": ["research direction descriptor and pre-Codex readiness"],
+    "previews": ["source inventory", "ResearchPrototype", "AutomationBrief"],
+    "requires_human_approval": ["prototype acceptance", "automation handoff", "new permissions", "external IO"]
+  },
+  "links": {}
+}
