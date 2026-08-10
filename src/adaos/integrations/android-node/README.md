@@ -18,6 +18,11 @@ Current scope:
 - fixed in-process Weather, AdaOS Connect, Browsers, local Voice Assistant with
   a bounded five-agent dialog roster, Notebook, subnet environment, and Taiga
   demo-metrics handlers, with no subprocess or runtime package install;
+- always-on offline Rasa NLU exported from the same promoted model used by
+  stationary AdaOS, with training kept off-device;
+- allowlisted member RPC to the canonical `conversation_companions` skill and
+  its Root-configured external LLM, plus low-confidence evidence forwarding to
+  the canonical LLM Teacher;
 - fixed UI descriptors for Weather, AdaOS Connect, Browsers, Voice Assistant,
   Notebook, and the Taiga UI demo scenario;
 - browser-compatible home navigation: `desktop.webspace.go_home` restores the
@@ -25,7 +30,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC8 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC9 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -36,10 +41,13 @@ link with a Root URL and one-time join code. Browsers projects bounded active
 control sessions. Voice uses Android Chrome SpeechRecognition and
 speechSynthesis while the hosted client is open. `data/dialog` projects AdaOS
 Mobile, Арсений, Ника, Мира, and Строитель; the hosted selector switches them
-through acknowledged control commands and the choice survives restart. These
-are explicitly bounded, non-model-backed mobile facades. The APK does not
-package `sounddevice`, background capture, wake-word support, an LLM, or the
-full Builder runtime.
+through acknowledged control commands and the choice survives restart. AdaOS
+Mobile and Builder remain bounded local implementations. Companion turns
+use the canonical Hub skill and external LLM when the authenticated member link
+is available, and expose `android_offline_fallback` otherwise. Prompts,
+profiles, tools, Teacher code, and LLM credentials are not copied into the APK.
+The APK does not package `sounddevice`, background capture, wake-word support,
+an LLM, or the full Builder runtime.
 
 ## Build
 
@@ -60,6 +68,18 @@ The checked-in Android wheel is pinned by
 workflow rebuilds it on Linux with Rust 1.72.1, NDK r27c, and 16 KB ELF segment
 alignment. Its standalone build entry point is `build-y-py-android.sh`.
 
+Before bumping a promoted Rasa model, train it on a stationary development
+node and export its inference state into the pinned Android bundle:
+
+```powershell
+py -3.11 export_rasa_mobile_bundle.py <promoted-model>.tar.gz app/src/main/python/adaos/android/bundle/rasa_mobile_bundle.json.gz
+```
+
+Update the model id, source hash, and bundle hash in
+`android_poc_v1.install.json`, then run `tests/test_portable_rasa.py`. Gradle
+copies the shared `src/adaos/services/nlu/portable_rasa.py` runtime into the APK;
+there is intentionally no separately maintained Android copy.
+
 If a bundled `webui.json` changes, regenerate the immutable Yjs seed first:
 
 ```powershell
@@ -67,7 +87,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc8-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc9-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -163,3 +183,14 @@ smoke, including selection of Ника, the Строитель channel, addresse
 and selected-agent persistence. The deployed client modal showed all five
 agents in its selector; materialization remained ready and Logcat contained no
 matching fatal exception, traceback, or unsupported dialog command.
+
+The PoC9 debug APK is 22,927,600 bytes with SHA-256
+`37b2960b07af51cc387072451886c17f278e5cf95a96ebcde15e76f1dba21e2b`.
+On the same Samsung it loaded the promoted Rasa 3.6.21 model with 27 intents,
+reported `rasa/always` and `training=off_device`, and classified `какая погода
+в Москве` as `weather.current` at confidence 0.8829258 without a Hub. The
+connected run routed an Арсений turn through the canonical companion skill and
+Root external LLM (`hub_skill_llm`, `used_llm=true`) and admitted a
+low-confidence turn to the canonical LLM Teacher. The Teacher's optional MCP
+evidence timed out in that diagnostic run, so final Teacher ledger completion
+remains an explicit follow-up rather than claimed evidence.

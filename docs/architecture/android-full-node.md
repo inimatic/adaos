@@ -3,8 +3,9 @@
 Status: target architecture for an experimental proof of concept.
 
 Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
-member-protocol slice, the A7 bounded-runtime implementation, and a PoC8
-browser-mediated voice/dialog slice are implemented under
+member-protocol slice, the A7 bounded-runtime implementation, the PoC8
+browser-mediated voice/dialog slice, and the PoC9 Rasa/remote-assistant slice
+are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
@@ -12,8 +13,8 @@ browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
 over `/yws/desktop` and recovered after a forced process stop. The immutable
 `android_poc_v1` profile executes Weather, AdaOS Connect, Browsers, a local
-Voice Assistant with a bounded dialog roster, Notebook, subnet environment,
-and Taiga demo metrics
+Voice Assistant with a bounded dialog roster, full offline Rasa NLU, Notebook,
+subnet environment, and Taiga demo metrics
 in-process. The browser has rendered persisted Notebook data, the editable
 subnet environment, the local Connect link, active browser sessions, bounded
 voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
@@ -23,6 +24,15 @@ a process restart and hub outage, and exchanged Yjs updates in both
 directions. A deployed-subnet run, Android Keystore custody, and the 2 GB
 device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
+
+PoC9 deliberately does not introduce Android-specific conversational models.
+The APK executes a deterministic inference representation exported from the
+same promoted Rasa training artifact used by stationary AdaOS. Training stays
+off-device. When a Hub is reachable, projected companions such as Арсений and
+Мира call the canonical `conversation_companions` skill, which in turn uses the
+normal Root external-LLM configuration. Low-confidence NLU turns are forwarded
+to the canonical LLM Teacher path. Prompts, profiles, tool policy, LLM keys,
+and Teacher logic are not copied into the APK.
 
 ## Purpose
 
@@ -65,6 +75,9 @@ optimize for learning rather than breadth.
 | Lifecycle owner | One user-started Android foreground `NodeService` |
 | Runtime processes | One Android process and one embedded Python runtime |
 | Skill execution | Curated in-process skills only |
+| NLU | Always-on, offline Rasa inference; training and promotion off-device |
+| Model-backed companions | Canonical Hub skills over an allowlisted member RPC |
+| LLM secrets | Hub/Root only; never packaged or projected by the phone |
 | Local API | `127.0.0.1:8777`, HTTP and WebSocket |
 | Browser UI | Hosted `https://inimatic.com`, deployment zone `LO` |
 | Default webspace | `desktop` with `web_desktop` as its home scenario |
@@ -116,8 +129,11 @@ flowchart LR
     R --> DB[(SQLite and app-private files)]
     R --> Y[(YDoc: desktop)]
     R --> K[Bundled in-process skills]
+    R --> N[Portable inference from promoted Rasa model]
     R --> L[Member link client]
-    L -->|outbound authenticated link| HUB[Remote AdaOS hub]
+    L -->|outbound authenticated link and allowlisted skill RPC| HUB[Remote AdaOS hub]
+    HUB --> C[Canonical companions and LLM Teacher]
+    C --> E[Root external LLM]
     B[Chrome: inimatic.com] -->|HTTP 127.0.0.1:8777| API[Local FastAPI listener]
     B -->|WS /ws and /yws/desktop| API
     API --> R
@@ -181,6 +197,7 @@ Enabled in the first useful browser slice:
 - local FastAPI routes required by the browser;
 - `/ws` events and `/yws/<webspace>` synchronization;
 - curated in-process skill loading;
+- inference-only Rasa NLU exported from the promoted stationary model;
 - outbound member-link client when membership is configured.
 
 Disabled:
@@ -188,7 +205,8 @@ Disabled:
 - `adaos-supervisor` and realtime sidecar;
 - service skills and skill subprocesses;
 - per-skill virtual environments and shell preparation;
-- Rasa, neural NLU, Builder, model runtimes, and MCP workers;
+- neural NLU training, Builder execution, embedded LLM runtimes, and MCP
+  workers;
 - audio capture, native TTS, media server, `sounddevice`, and `pyttsx3`;
 - `aiortc`, WebRTC, and media proxy paths;
 - core A/B slot promotion and self-update;
@@ -470,26 +488,63 @@ The first vertical proof covers several paths rather than a synthetic page:
   speechSynthesis. `dialog.channel.select` and `dialog.agent.select` keep the
   client selector, active channel, and active agent projection synchronized.
 
-The PoC8 voice path is intentionally browser-mediated. It uses Android's
+The voice path remains browser-mediated. It uses Android's
 browser-exposed speech services while `https://inimatic.com` is visible and
 requires the normal one-time microphone permission for that origin. It does
 not import `sounddevice`, upload WAV to an absent hub STT endpoint, keep the
-microphone open in the background, or claim wake-word support. The fixed local
-assistant currently handles greeting, node status, Weather, and explicit
-Notebook creation; the tail is limited to 32 messages and each input to 2,048
-characters. Its fixed local roster contains AdaOS Mobile, Арсений, Ника, Мира,
-and Строитель. The selector and addressing by name are real and persist across
-runtime restarts, but every projected agent declares
-`implementation=android_local_bounded`, `model_backed=false`, and
-`full_runtime=false`. These are mobile facades over the same allowlisted local
-capabilities, not the desktop `conversation_companions` or Builder model/tool
-runtimes. Строитель can discuss the bounded mobile architecture and use the
-allowlisted commands; it cannot generate/install skills or start subprocesses.
+microphone open in the background, or claim wake-word support. The local
+fallback handles greeting, node status, Weather, and explicit Notebook
+creation; the tail is limited to 32 messages and each input to 2,048
+characters. The fixed roster contains AdaOS Mobile, Арсений, Ника, Мира, and
+Строитель. Selection and addressing by name persist across runtime restarts.
+AdaOS Mobile and Строитель remain bounded local implementations. A selected
+`conversation_companions` persona is model-backed when the authenticated Hub
+link is ready: the phone invokes the canonical skill and projects its response,
+rather than maintaining a mobile copy of the persona. If that call is
+unavailable or times out, the turn remains usable through the explicit
+`android_offline_fallback` response source. The phone still cannot
+generate/install skills or start subprocesses.
 
 Before membership is configured, this document is local and standalone. After
 the phone joins a subnet, the existing member-link and webspace ownership rules
 govern convergence with the hub. Joining must not make the local browser depend
 on a routed Root browser path; LO remains usable during hub or WAN outage.
+
+## Canonical NLU and Dialogue Delegation
+
+PoC9 adds full offline NLU without adding a second model lineage. The
+off-device training command produces the normal Rasa model archive. Promotion
+then exports an immutable `adaos.rasa.mobile.v1` bundle containing the exact
+tokenizer, regex, vectorizer, logistic classifier, CRF, and synonym state
+needed for inference. The standard-library runtime which reads this bundle is
+shared source: Gradle copies `src/adaos/services/nlu/portable_rasa.py` into the
+APK at build time. There is no separately maintained Android implementation.
+
+Every phone dialog turn runs through Rasa (`mode=always`), including while the
+Hub and WAN are absent. `/api/node/status` publishes provider, mode, source
+model id/hash, Rasa version, training timestamp, intent count, and load state.
+Bundle promotion is rejected by tests if its hash/metadata changes or if fixed
+intent/entity probes differ from the canonical Rasa pipeline beyond the
+numeric serialization tolerance. Training, CRF fitting, and arbitrary model
+loading never run on Android.
+
+Dialogue execution is split by ownership, not duplicated by platform:
+
+- the phone owns speech mediation, local Rasa inference, dialog projection,
+  and an explicit bounded offline response;
+- the Hub owns `conversation_companions`, personas, profiles, prompt assembly,
+  tools, and the common `adaos.sdk.llm` client;
+- Root/Hub owns external-LLM configuration and secrets;
+- the canonical LLM Teacher consumes low-confidence
+  `nlp.intent.not_obtained` events forwarded by the member link.
+
+The member RPC is not a generic remote executor. Its allowlist contains only
+the public `conversation_companions` operations; requests carry the authenticated
+member identity, use bounded timeouts, and cannot invoke shell, installation,
+or arbitrary skill tools. Teacher delivery similarly allows only the named
+NLU feedback event. The optional Teacher MCP-evidence lookup may time out
+independently and must not be interpreted as failure of phone NLU or companion
+LLM execution.
 
 ## Member Connectivity
 
@@ -498,7 +553,7 @@ existing durable membership contract and member-link client described in
 [Member-Hub Connectivity](member-hub-connectivity.md). No inbound LAN listener
 is required for hub membership.
 
-The PoC5 Android profile implements:
+The PoC9 Android profile implements:
 
 - membership persistence in app-private storage;
 - credentials separate from the unauthenticated loopback listener;
@@ -506,7 +561,9 @@ The PoC5 Android profile implements:
 - semantic `offline`, `connecting`, `connected`, and expected-transition
   states;
 - local desktop availability while the upstream link is down;
-- Yjs and member snapshot convergence after reconnect.
+- Yjs and member snapshot convergence after reconnect;
+- bounded member-to-Hub RPC for canonical companion tools;
+- bounded forwarding of low-confidence NLU evidence to the canonical Teacher.
 
 AdaOS Connect accepts a Root URL and one-time join code, calls the existing
 join contract (with the compatibility endpoint as fallback), and persists the
@@ -573,7 +630,7 @@ capabilities:
   complete `psutil` behavior;
 - secrets and long-lived key custody through Android Keystore;
 - files and uploads through app-private storage and the system picker;
-- foreground browser voice through Web Speech in the implemented PoC8 slice;
+- foreground browser voice through Web Speech in the implemented PoC9 slice;
 - future app-native/background audio through AudioRecord/AudioTrack and Android TTS;
 - future camera through CameraX or another native adapter;
 - future low-latency media through Android-native WebRTC or separately proven
@@ -595,7 +652,8 @@ Initial budgets for the AdaOS application process are:
 - bounded skill and projection caches;
 - no unbounded event, stream, log, note, or Yjs queues;
 - no service-skill child processes;
-- no eager import of disabled media, NLU, full Builder, or model stacks.
+- no eager import of disabled media, neural training, full Builder, or LLM
+  model stacks.
 
 A steady state between 200 and 300 MiB is diagnostic evidence requiring
 optimization before widening the pilot. Measurements must separate the AdaOS
@@ -628,6 +686,7 @@ The Android status screen and notification expose only a compact state:
 - Yjs ready and default webspace;
 - member-link state;
 - active install profile and build version;
+- Rasa load state and promoted source-model identity;
 - current and peak memory sample;
 - last bounded error summary.
 
@@ -658,8 +717,13 @@ The implementation must preserve these invariants:
     tabs from an older generation cannot share cross-tab state with it.
 13. Browser voice requires an explicit origin-scoped microphone permission;
     local no-auth trust does not silently grant hardware permissions.
-14. A projected mobile dialog persona must expose its bounded implementation;
-    an agent name must not imply that the desktop model/tool runtime is active.
+14. A projected dialog persona must expose whether its response came from the
+    canonical Hub skill/LLM or the bounded Android offline fallback.
+15. Android and stationary nodes share one promoted Rasa model lineage and one
+    portable inference source; the APK must not train or maintain a forked NLU
+    dataset.
+16. Companion profiles, prompts, tools, Teacher logic, and LLM credentials
+    remain canonical Hub/Root assets and are never copied into the APK.
 
 ## Non-Goals for the First PoC
 
@@ -674,7 +738,8 @@ The first PoC does not include:
 - supervisor, realtime sidecar, core A/B slots, or self-update;
 - native/background microphone capture, wake word, camera, media server,
   WebRTC, or `aiortc`;
-- Rasa, Neural NLU, full Builder execution, MCP, Codex, or model execution;
+- on-device Rasa training, Neural NLU, full Builder execution, phone-local MCP
+  or Codex, and embedded LLM execution;
 - background geolocation or other while-in-use Android permissions;
 - LAN exposure of the local API;
 - replacement of ReDevice.

@@ -1,11 +1,12 @@
 # AdaOS Android Full Node Roadmap
 
 Status: active domain roadmap for an experimental proof of concept. The first
-A0/A1/A2/A3/A4/A5 vertical slice and the A6 member-protocol slice are running
-on a physical Android 16 arm64 phone. It renders `web_desktop` from native
-`y-py`, executes the fixed skill profile in-process, and maintains an outbound
-member link. A deployed-subnet acceptance run, Keystore custody, and the 2 GB
-device gate remain open.
+A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
+bounded-runtime implementation, and the PoC9 Rasa/remote-assistant extension
+are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
+native `y-py`, executes the fixed skill profile and offline Rasa inference
+in-process, and maintains an outbound member link. A deployed-subnet acceptance
+run, Keystore custody, and the physical 2 GB device gate remain open.
 
 Architecture owner: [AdaOS Android Full Node](android-full-node.md).
 
@@ -30,6 +31,12 @@ later can:
 9. survive Activity recreation and a controlled runtime restart without losing
    Yjs or Notebook state;
 10. remain within the initial memory gates without `largeHeap`.
+11. classify every dialog turn with the promoted Rasa model while fully
+    offline, with model training performed outside the phone;
+12. invoke the canonical Hub companion skill and its configured external LLM
+    for Арсений/Мира without copying their profiles or prompts into Android;
+13. forward low-confidence NLU evidence to the canonical LLM Teacher when the
+    Hub is reachable.
 
 Production distribution, arbitrary skill installation, media, phone-as-hub,
 and continuous unattended daemon operation are outside this proof.
@@ -328,10 +335,15 @@ the PoC.
 - [x] `[must]` expose channel and agent selectors through the normal hosted
   client, acknowledge `dialog.channel.select` and `dialog.agent.select`, and
   persist the selected agent across a runtime restart.
-- [x] `[must]` support addressed turns such as `Арсений, ...` while marking all
-  mobile personas `model_backed=false` and `full_runtime=false`.
+- [x] `[must]` support addressed turns such as `Арсений, ...` and expose the
+  actual response source instead of presenting a local facade as model-backed.
+- [x] `[must]` run the promoted Rasa model for every dialog turn, including
+  without Hub/WAN connectivity.
+- [x] `[must]` route companion turns through the canonical Hub
+  `conversation_companions` skill and common external-LLM client when online.
+- [x] `[must]` forward low-confidence Rasa turns to the canonical LLM Teacher.
 - [ ] `[deferred]` background listening, wake word, app-native AudioRecord/TTS,
-  arbitrary model-backed conversation, and full Builder skill generation.
+  phone-local LLM inference, and full Builder skill generation.
 
 ### Taiga UI
 
@@ -517,6 +529,76 @@ This closes the A7 implementation and high-memory lifecycle slice, not Gate
 A7 itself. The physical 2 GB run is still mandatory; API 26, API 30/31, API
 34, and a 16 KiB page-size target also remain as matrix evidence.
 
+## PoC9 Extension: Canonical Rasa, Companions, and Teacher
+
+Outcome: add useful conversational intelligence without creating independent
+Android and stationary product lines.
+
+- [x] `[must]` train only off-device and preserve one promoted Rasa source
+  model for stationary and Android delivery.
+- [x] `[must]` export a deterministic, inference-only Android bundle with the
+  source model id and SHA-256 recorded in the immutable install descriptor.
+- [x] `[must]` implement tokenizer, regex, vectorizer, logistic intent, CRF
+  entity, and synonym inference without unavailable Android native packages.
+- [x] `[must]` run Rasa on every phone dialog turn (`mode=always`) and retain
+  that complete NLU path while Hub/WAN connectivity is absent.
+- [x] `[must]` compare portable intent/entity results with canonical Rasa in
+  host promotion tests using a sub-ppm numeric tolerance.
+- [x] `[must]` copy the shared portable runtime source into the APK during the
+  Gradle build; do not maintain a second Android source file.
+- [x] `[must]` expose Rasa readiness, source identity, and training policy in
+  `/api/node/status`.
+- [x] `[must]` add a Hub-side member RPC allowlist containing only public
+  `conversation_companions` operations; arbitrary skill and shell calls stay
+  impossible.
+- [x] `[must]` keep companion profiles, prompts, tools, and external-LLM
+  credentials in their canonical Hub/Root owners.
+- [x] `[must]` dispatch low-confidence `nlp.intent.not_obtained` evidence from
+  the phone to the canonical LLM Teacher.
+- [x] `[must]` preserve an explicit local response when the Hub call is
+  unavailable and label it `android_offline_fallback`.
+- [ ] `[should]` promote Rasa bundles through signed release CI rather than a
+  manual export command.
+- [ ] `[should]` exercise the final artifact against a long-running deployed
+  Hub and capture successful Teacher ledger completion in addition to event
+  admission.
+- [ ] `[could]` make offline dialog generation richer. This is separate from
+  the already complete offline Rasa NLU path and must not fork companion
+  profiles or silently package a second LLM.
+
+Anti-drift gate:
+
+1. one canonical Rasa training archive is the source of both deployments;
+2. the Android bundle records that archive's id/hash and is reproducible;
+3. one shared portable runtime source is executed by host parity tests and
+   copied by Gradle;
+4. assistant and Teacher logic stays on Hub; Android implements transport and
+   offline degradation only;
+5. every physical response reports `nlu.model_id`, `response_source`, and
+   `used_llm`, making accidental divergence observable.
+
+PoC9 physical evidence (2026-08-10): APK `0.1.0-poc9` was installed over the
+persisted data on the API 36 Samsung SM-F721N. The final APK is 22,927,600
+bytes with SHA-256
+`37b2960b07af51cc387072451886c17f278e5cf95a96ebcde15e76f1dba21e2b`.
+CPython 3.11.14 loaded model `362b6f47acb743658d8cd4bb8f538a41`
+(`rasa 3.6.21`, 27 intents) in `rasa/always` mode. Status reported the promoted
+source SHA-256 and `training=off_device`; startup completed in 118 ms and the
+sampled process PSS was 88,028 KiB with a 99,890 KiB observed peak. The phone
+classified `какая погода в Москве` as `weather.current` at confidence
+0.8829258 while its Hub tunnel was absent, then returned the explicit local
+fallback response.
+
+In the connected physical run, an Арсений turn completed through
+`conversation_companions:talk` with `response_source=hub_skill_llm` and
+`used_llm=true`, proving use of the existing Root external-LLM configuration.
+A low-confidence mobile turn entered the canonical LLM Teacher; its optional
+MCP-evidence lookup timed out independently. The final Teacher ledger result
+was not captured, so that narrower acceptance item remains open. A stationary
+browser/Yjs restart also exposed pre-existing `y_py` cross-thread drop errors;
+that issue is not caused by portable NLU or member RPC and remains a separate
+reliability investigation.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -530,6 +612,7 @@ the phase which needs it is active.
 | SQLite / SQLAlchemy closure | A2 | prove app-private DB and selected sync paths | use pure-Python SQLAlchemy path; do not replace storage model |
 | `cryptography` | A6 | build/prove Android arm64 package | Android TLS/Keystore adapter behind existing contract |
 | `psutil` | A7 | isolate import and required metrics | Android diagnostics adapter |
+| Rasa model | PoC9 | export promoted artifact into portable inference data | reject promotion; never retrain on phone |
 | `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC7 browser voice | explicit native/background capability unavailable |
 
 The Android lock must be built from imports reached by the selected profile,
@@ -605,12 +688,13 @@ must not be copied into a mobile fork.
 - finish Android Keystore custody;
 - define battery, thermal, and long-duration soak budgets;
 - decide whether API 26 remains supportable from evidence rather than lowering
-  it pre-emptively.
+  it pre-emptively;
+- sign and publish the portable Rasa artifact in the normal release pipeline;
 - extend the local assistant only through allowlisted skill intents and add
-  explicit confirmation for every mutating voice command.
-- route model-backed companions and Builder to an authenticated upstream Hub
-  before considering an on-phone model runtime; keep the bounded local facade
-  usable while that link is offline.
+  explicit confirmation for every mutating voice command;
+- route Builder through a separately reviewed authenticated Hub contract;
+- keep the existing companion Hub path and bounded local fallback under
+  outage/latency testing before considering any on-phone LLM runtime.
 
 ### Could follow only when demanded
 
@@ -639,7 +723,7 @@ The roadmap is complete only when one evidence bundle identifies:
 
 - APK version, commit, signing mode, install descriptor id, and artifact hashes;
 - Python, Android, ABI, device RAM, page size, WebView/Chrome, and hub versions;
-- A0 through A7 gate results;
+- A0 through A7 gate results and the PoC9 NLU/dialog anti-drift checks;
 - local API, WS, YWS, and member-link state transitions;
 - screenshots or browser automation evidence for the selected scenarios and
   skills;
