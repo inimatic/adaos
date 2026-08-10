@@ -34,6 +34,15 @@ BOOTSTRAP_PATH = (
     / "bootstrap.py"
 )
 MEMBER_FIXTURE_PATH = BOOTSTRAP_PATH.parents[6] / "verify_member_link.py"
+ANDROID_PYTHON_ROOT = BOOTSTRAP_PATH.parents[2]
+PORTABLE_RASA_PATH = (
+    Path(__file__).parents[1]
+    / "src"
+    / "adaos"
+    / "services"
+    / "nlu"
+    / "portable_rasa.py"
+)
 
 
 def _post_json(url: str, payload: dict) -> tuple[int, dict]:
@@ -67,6 +76,7 @@ def _control_command(websocket, command_id: str, kind: str, payload: dict) -> tu
 
 
 def _load_bootstrap():
+    _install_portable_rasa_module()
     package_name = "_adaos_android_bootstrap_test"
     package = sys.modules.get(package_name)
     if package is None:
@@ -80,6 +90,36 @@ def _load_bootstrap():
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _install_portable_rasa_module() -> None:
+    """Expose only the shared inference module to the isolated Android host test."""
+
+    module_name = "adaos.services.nlu.portable_rasa"
+    if module_name in sys.modules:
+        return
+    packages = (
+        ("adaos", ANDROID_PYTHON_ROOT / "adaos"),
+        ("adaos.services", ANDROID_PYTHON_ROOT / "adaos" / "services"),
+        ("adaos.services.nlu", ANDROID_PYTHON_ROOT / "adaos" / "services" / "nlu"),
+    )
+    for package_name, package_path in packages:
+        if package_name in sys.modules:
+            continue
+        package = types.ModuleType(package_name)
+        package.__package__ = package_name
+        package.__path__ = [str(package_path)]
+        sys.modules[package_name] = package
+        parent_name, _, child_name = package_name.rpartition(".")
+        if parent_name and parent_name in sys.modules:
+            setattr(sys.modules[parent_name], child_name, package)
+
+    spec = importlib.util.spec_from_file_location(module_name, PORTABLE_RASA_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    setattr(sys.modules["adaos.services.nlu"], "portable_rasa", module)
 
 
 def _load_member_fixture():
