@@ -2,8 +2,9 @@
 
 Status: active domain roadmap for an experimental proof of concept. The first
 A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
-bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension, and
-the PoC11 routed-connectivity/voice half-duplex corrections
+bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
+the PoC11 routed-connectivity/voice half-duplex corrections, and the PoC13
+deployed-membership recovery corrections
 are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -309,7 +310,7 @@ the PoC.
   show a useful offline/degraded state when the optional upstream is unreachable.
 - [x] `[should]` split `Connect this phone` from canonical Hub-delegated `Add
   browser`, `Add Telegram`, and `Add node` actions.
-- [ ] `[should]` exercise one real Root-backed browser and node preparation flow
+- [x] `[should]` exercise one real Root-backed browser and node preparation flow
   against the deployed subnet after the corresponding Hub build is live.
 
 ### Browsers
@@ -424,13 +425,18 @@ member of an existing subnet.
   runtime is ready.
 - [x] `[must]` report `connecting`, `connected`, `offline`, and expected-stop
   states without blocking LO.
+- [x] `[must]` require an acknowledged hello and recent pong/activity before
+  reporting `connected`; reconnect after a bounded heartbeat timeout.
 - [x] `[must]` send the member identity and bounded local runtime/desktop
   contribution to the hub.
-- [x] `[must]` converge the allowed default webspace state after reconnect.
+- [x] `[must]` converge a bounded node-owned semantic snapshot after
+  reconnect without merging the phone's raw desktop YDoc into the Hub YDoc.
 - [x] `[must]` apply bounded exponential reconnect backoff and cancel it during
   an explicit service stop.
 - [x] `[should]` complete member onboarding through the bundled AdaOS Connect
   UI.
+- [x] `[must]` acknowledge join submission immediately and publish the final
+  result or precise Root error asynchronously through Yjs.
 - [ ] `[should]` move long-lived private-key custody to Android Keystore while
   retaining the existing membership contract at the AdaOS boundary.
 
@@ -449,9 +455,11 @@ hub outage, reconnected with bounded backoff, and exchanged Yjs updates in
 both directions. The temporary token never appeared in status/Yjs evidence
 and was removed by `disconnect & forget`. TLS uses the embedded Python
 standard-library client with system CA validation, avoiding an Android
-`cryptography` dependency in this slice. The A6 gate remains open only for a
-run against an existing deployed subnet and long-lived key migration to
-Android Keystore.
+`cryptography` dependency in this slice. PoC13 completed the deployed-subnet
+run against `sn_6acf0c01`: Root mTLS created and consumed a fresh one-time
+code, the phone connected over the public TLS Hub route without ADB reverse,
+and Hub logs ingested bounded `yjs.node_state` records for the stable Android
+node id. Long-lived key migration to Android Keystore remains open.
 
 ## Phase A7: Lifecycle and 2 GB Device Gate
 
@@ -671,6 +679,51 @@ Anti-drift rule: Android owns enrollment and projection only. Invitation
 generation, companion prompts/profiles, external LLM use, and Teacher behavior
 remain canonical Hub skills. The voice arbitration fix is in
 `adaos-client/main`, not in a mobile client fork.
+
+## PoC13 Extension: Deployed Root Join and Recovery
+
+Outcome: finish the real membership path and remove the two recovery failures
+found by the physical run.
+
+- [x] `[must]` let the Root join-code endpoint accept the Hub identity only
+  when it was verified and forwarded by the trusted TLS terminator.
+- [x] `[must]` create and consume a fresh regional Root code without exposing
+  the code or returned member token in logs, process arguments, Yjs, or status.
+- [x] `[must]` prove the phone uses
+  `https://ru.api.inimatic.com/hubs/sn_6acf0c01/ws/subnet` after removing the
+  temporary ADB reverse.
+- [x] `[must]` replace a member worker on explicit reconfiguration even when
+  the previous worker is alive but wedged in a native socket operation.
+- [x] `[must]` prevent an obsolete worker generation from overwriting the new
+  link state or failing its pending RPCs.
+- [x] `[must]` delegate a real remote Browser invitation and a companion turn
+  through the authenticated public member link.
+- [x] `[must]` serialize detached synchronous `y_py` replay for each Hub
+  webspace after a Windows `0xC0000005` exit coincided with two concurrent
+  `get_ydoc("desktop")` sessions.
+- [ ] `[should]` repeat the browser/companion pressure run after the stationary
+  Hub activates the serialized-YDoc core and retain a no-restart observation
+  window.
+
+PoC13 physical evidence (2026-08-10): debug APK `0.1.0-poc13` is 22,933,564
+bytes with SHA-256
+`b8a774ede4bcada42933194e3856beee595ae56435074389f9e3f5f2a541ff5c`.
+It contains CPython 3.11.14, portable Rasa 3.6.21 model
+`362b6f47acb743658d8cd4bb8f538a41`, install descriptor `1.7.1`, and the
+generation-aware member worker. On the Samsung SM-F721N (API 36), a fresh
+Root code produced a public TLS member route and `hello.ack=true`; a second
+join while connected completed with `connect_attempts=2`. AdaOS Connect
+returned `ready`, `source=hub_delegated`, and non-empty remote Browser link and
+code. Arseni returned `response_source=hub_skill_llm`, `used_llm=true`, and
+`llm_route=root_llm` with no route error. Root backend `0.1.172` reports commit
+`b808f83` after its successful blue-green deployment.
+
+The same pressure run reproduced the stationary Hub's pre-fix native exit:
+two concurrent sync `desktop` sessions were the final native operations and
+the process exited with Windows status `0xC0000005`. Host regression now runs
+all 35 Yjs document-store tests and proves three simultaneous sync readers
+enter native replay one at a time. Physical no-restart evidence remains open
+until that new core is active in the Hub A/B slot.
 
 ## Dependency Work Queue
 

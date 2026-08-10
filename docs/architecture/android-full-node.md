@@ -5,7 +5,8 @@ Status: target architecture for an experimental proof of concept.
 Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
 member-protocol slice, the A7 bounded-runtime implementation, the PoC8
 browser-mediated voice/dialog slice, the PoC9 Rasa/remote-assistant slice,
-and the PoC11 routed-connectivity/voice half-duplex corrections
+the PoC11 routed-connectivity/voice half-duplex corrections, and the PoC13
+deployed-membership recovery corrections
 are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
@@ -22,12 +23,13 @@ voice-chat turns, and the Taiga metrics table/tree/chart/selection from that
 profile. The outbound
 member client has also joined a protocol-compatible Root/Hub fixture, survived
 a process restart and hub outage, and exchanged Yjs updates in both
-directions. PoC11 additionally exercised the real regional Root route and the
-canonical Hub skills from the phone. Android Keystore custody and the 2 GB
-device gate remain owned by the
+directions. PoC13 additionally completed a fresh one-time-code join through
+the real regional Root route, canonical Hub invitations and companion LLM
+calls, and replacement of a wedged member worker. Android Keystore custody and
+the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC11 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC13 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -601,8 +603,12 @@ failure of phone NLU or companion LLM execution.
 
 The phone is member-first. It establishes outbound connectivity using the
 existing durable membership contract and member-link client described in
-[Member-Hub Connectivity](member-hub-connectivity.md). No inbound LAN listener
-is required for hub membership.
+[Member-Hub Connectivity](member-hub-connectivity.md). The connection
+terminates at the Hub's AdaOS API route `/hubs/<subnet_id>/ws/subnet`; it is
+not a connection to `adaos-supervisor`. A stationary node may use the
+supervisor as a local process watchdog for that API, but the supervisor is not
+part of the member protocol. No inbound LAN listener is required for hub
+membership.
 
 The PoC9 Android profile implements:
 
@@ -611,18 +617,25 @@ The PoC9 Android profile implements:
 - bounded reconnect with backoff;
 - semantic `offline`, `connecting`, `connected`, and expected-transition
   states;
+- an acknowledged hello plus pong/activity watchdog, so a dead Hub cannot
+  leave a stale `connected=true` projection indefinitely;
 - local desktop availability while the upstream link is down;
-- Yjs and member snapshot convergence after reconnect;
+- bounded semantic node-state convergence after reconnect;
 - bounded member-to-Hub RPC for canonical companion tools;
 - bounded forwarding of low-confidence NLU evidence to the canonical Teacher.
 
 AdaOS Connect's `Connect this phone` mode accepts a Root URL and one-time join
 code, calls the existing join contract (with the compatibility endpoint as
 fallback), and persists the resolved Hub URL, subnet id, and credential in a
-separate app-private member configuration. Once connected, the other modes
-call the canonical Hub `adaos_connect:prepare` tool to add a remote browser,
-Telegram endpoint, or another node. The secret is never projected into Yjs or
-status responses.
+separate app-private member configuration. Join validation is single-flight
+and asynchronous: the control WebSocket acknowledges `pending` immediately,
+then Yjs publishes `joined` or the precise Root error such as an expired or
+invalid code. Join-code expiry is an absolute epoch/UTC instant; UIs must
+render it with an explicit timezone rather than implying that the displayed
+wall-clock value is timezone-free. Once connected, the other modes call the
+canonical Hub `adaos_connect:prepare` tool to add a remote browser, Telegram
+endpoint, or another node. The secret is never projected into Yjs or status
+responses.
 
 Invitation preparation is asynchronous and single-flight on Android. The
 control WebSocket acknowledges immediately with `pending`; the bounded member
@@ -642,6 +655,40 @@ public forwarded request base; Android additionally canonicalizes public
 without consuming a new join code, and rejects an HTTPS join response that
 tries to return a plaintext Hub route. Localhost HTTP remains valid for the
 development fixture.
+
+Membership and webspaces are orthogonal. Joining adds the phone as a node; it
+does not create another Hub webspace row. The Hub projects the phone under
+`data.nodes/<node_id>` and node/infrastructure views should render that member
+from the node catalog. A separately addressable remote webspace requires an
+explicit webspace publication/ownership feature and is not implied by join.
+
+The local Android browser still synchronizes the complete local `desktop`
+YDoc. Across the member link, however, the phone sends only a bounded semantic
+`yjs.node_state` document owned by its stable node id. It never sends the raw
+local YDoc as a Hub-global `yjs.update`, and it ignores raw Hub YDoc updates.
+This prevents the Hub desktop and phone desktop from contaminating each other
+while preserving the UI-relevant node snapshot in `data.nodes/<node_id>`.
+
+Physical deployed-subnet acceptance on 2026-08-10 used the Hub AdaOS API for
+`sn_6acf0c01`, not the desktop supervisor. The Hub created a Root join code
+using its mTLS identity; Root consumed it once and returned
+`https://ru.api.inimatic.com/hubs/sn_6acf0c01`. With the temporary ADB reverse
+removed, the phone completed `hello.ack` over TLS and published bounded
+`yjs.node_state` records for `android-735eaebcdddb`. A second join while the
+first member worker was alive also completed, proving the PoC13 generation
+replacement path. The canonical Hub returned a ready remote-browser
+invitation through `adaos_connect:prepare`, and an Arseni turn reported
+`response_source=hub_skill_llm`, `used_llm=true`, and `llm_route=root_llm`.
+
+This run exposed two stationary-Hub defects which are not Android supervisor
+dependencies. Root's join-code endpoint originally ignored the verified mTLS
+identity forwarded by the TLS terminator; backend commit `b808f83` accepts
+that trusted identity and is deployed as Root `0.1.172`. The older Hub slot
+also exited on Windows with `0xC0000005` after two concurrent detached sync
+replays of the same `desktop` YStore. AdaOS now serializes the complete native
+`get_ydoc` lifetime per webspace with bounded waiting. The Android member
+remains locally ready and reconnects while the Hub supervisor restarts the
+AdaOS API, but the supervisor is still only a stationary lifecycle watchdog.
 
 The desktop supervisor and realtime sidecar are not required for the first
 member link. Android owns process lifetime and the Python runtime owns the live
@@ -792,6 +839,9 @@ The implementation must preserve these invariants:
     dataset.
 16. Companion profiles, prompts, tools, Teacher logic, and LLM credentials
     remain canonical Hub/Root assets and are never copied into the APK.
+17. Joining a subnet creates a node/member projection, not an implicit remote
+    webspace, and cross-node convergence uses bounded node-owned state rather
+    than raw desktop-YDoc merging.
 
 ## Phone-as-Hub Boundary
 
