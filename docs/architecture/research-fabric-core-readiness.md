@@ -1,10 +1,11 @@
 # Research Fabric Core Readiness
 
-Status: ARF0.5 plus ARF2/ARF3 implementation record. SQLite, PostgreSQL,
-relational lifecycle, execution ABI, local process, and OCI-admission paths
-are validated locally.
+Status: ARF0.5 plus ARF2 through ARF4 implementation record. SQLite,
+PostgreSQL, relational lifecycle, execution ABI, local process,
+OCI-admission, bounded cross-skill invocation, and scenario-guidance paths are
+implemented; the current TLP package split is under local revalidation.
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-10.
 
 This page records the narrow core foundation now consumed by the first
 Research Fabric skill. It is subordinate to the
@@ -42,6 +43,13 @@ can manage one complete experiment through the packaged Desktop scenario.
 8. Existing `OperationManager`, governed-workflow activities, model jobs, and
    the executor ABI are related but are not collapsed into a new global job
    manager in this slice.
+9. `skills.invoke` is a narrow SDK capability for one installed skill to call
+   another skill's public tool. It does not import target code, lend a data or
+   database handle, or bypass activation, schemas, timeouts, and target
+   capability checks.
+10. Scenario overview and next-action semantics use
+    `adaos.scenario.guidance.v1`; presentation adapters render one projection
+    for web, text, or voice.
 
 ## Existing Runtime Inventory and Disposition
 
@@ -68,7 +76,8 @@ The packaged ABI now includes:
 - `adaos.execution.spec.v1`;
 - `adaos.execution.attempt.v1`;
 - `adaos.execution.checkpoint.v1`;
-- `adaos.storage.blob.requirement.v1`.
+- `adaos.storage.blob.requirement.v1`;
+- `adaos.scenario.guidance.v1` in the scenario manifest ABI.
 
 Python domain types validate the same identities and serialize to those ABI
 payloads. The generic owner-reference validator is shared by storage, service
@@ -193,6 +202,42 @@ stable logical views, audit, and compatibility. This keeps database structure
 private and makes shared semantics reviewable. A later read-only analytical
 view capability may be added only with an explicit owner, consumer grants,
 lineage, revocation, and snapshot-consistency contract.
+
+The TLP reference applies the same rule to files, not only SQL. The generic
+`research_manager_skill` keeps governance metadata in its own relational
+binding. `tlp_experiment_skill` owns STL-10 files and attempt artifacts under
+its runtime bucket, and publishes `prepare_attempt`, `collect_attempt`,
+`verify_artifact`, and `dataset_status` through
+`adaos.research.runner.v1`. An experiment records `data_owner_skill_id`; its
+ResearchSpace identity is `skill:<owner>/experiment:<experiment-id>`.
+
+Legacy TLP files are migrated by ownership: manager `0.8.0` excludes
+`files/datasets`, while the TLP provider adopts the prior tree by hardlink or
+copy. The previous compatibility bucket is retained until retirement so
+rollback does not depend on destructive migration.
+
+## Cross-Skill Tool Invocation
+
+`adaos.sdk.skills.invoke(skill_id, operation_id, arguments, timeout=...)`
+requires the caller to declare `skills.invoke`. Target identifiers are
+validated, nesting is bounded, and the ordinary `SkillManager.run_tool` path
+retains activation, public-tool, input-schema, capability, and timeout
+enforcement. Invocation returns typed values only; it cannot return or reuse a
+relational SDK handle from the target context.
+
+Research Manager uses this path for runner-provider preparation, normalized
+output collection, dataset status, and owned-artifact verification. The
+tracker contract remains separate, so a runner/data owner cannot mutate
+research lifecycle or claim state.
+
+## Scenario Guidance
+
+The scenario manifest now has a bounded `guidance` descriptor for a safe
+relative README, localized overview, supported channels, Help modal, and one
+workflow-aware skill source. `adaos.sdk.scenarios.read_guidance` reads static
+help; `describe_guidance` resolves `$state` parameters and calls the declared
+source. The complete semantics and adoption checklist are in
+[Scenario Guidance and Help Contract](scenario-guidance.md).
 
 ## Execution Foundation
 

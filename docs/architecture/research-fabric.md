@@ -1,11 +1,12 @@
 # AdaOS Research Fabric
 
-Status: target architecture with ARF0.5 through ARF4 validated locally by the
-TLP single-experiment vertical. A real CPU runner, frozen tracker contract
-`1.0`, durable local reference provider, and conforming supervised MLflow
-provider are implemented. Distributed execution remains an ARF5 concern.
+Status: target architecture with every non-deferred ARF0.5 through ARF4 item
+implemented and under local revalidation by the TLP single-experiment
+vertical. The research control plane is provider-neutral; TLP execution and
+primary data now belong to a separate runner-provider skill. Distributed
+execution remains an ARF5 concern.
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-10.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -49,6 +50,12 @@ pack, and aResearcher as a solution agent or workbench are governed by the
 9. A relational binding is private to its owning skill. Cross-skill data is
    published by a specialized owner skill as typed APIs, projections, events,
    or governed logical views; consumers do not receive its SQL binding.
+10. A research manager stores governance metadata, not every domain's primary
+    data. Each experiment declares a data-owner skill and runner contract; the
+    resulting ResearchSpace is logically namespaced by owner and experiment.
+11. Scenario help is a channel-neutral contract. A versioned README, Help
+    modal, and conversational help/next-step intents all consume one
+    workflow-aware projection rather than maintaining separate action advice.
 
 ## Why `Research Fabric`
 
@@ -177,6 +184,7 @@ research-manager skill ---- native Research Workbench
         |
         +---- governed workflow / approval / evidence index
         +---- relational-storage capability binding
+        +---- runner-provider port ------- TLP experiment/data-owner skill
         +---- experiment-tracker port ---- local tracker
         |                              `-- MLflow service skill
         +---- executor port ------------ local process runner
@@ -196,11 +204,15 @@ otherwise describe roles, not a requirement to hard-code one provider.
 The implementation intentionally follows existing AdaOS extension points:
 
 - `research_manager_skill` is a normal service skill with
-  `storage.relational` and `execution.jobs` capabilities, lifecycle migrations,
-  tool entrypoints, a local typed tracker, and an evidence verifier;
+  `storage.relational`, `execution.jobs`, and bounded `skills.invoke`
+  capabilities, lifecycle migrations, provider-neutral experiment contracts,
+  a local typed tracker, and an evidence verifier;
+- `tlp_experiment_skill` is the TLP-specific owner of STL-10 primary data and
+  implements `adaos.research.runner.v1`; it prepares execution descriptors,
+  collects normalized outputs, and verifies its own artifacts;
 - `tlp_research` is a normal package-bound workflow scenario with immutable
   protocol, analysis-plan, trial-matrix, evidence-policy, and sanitized
-  exploratory-provenance fixtures;
+  exploratory-provenance fixtures, plus the shared Scenario Guidance contract;
 - skills acquire private databases through `adaos.sdk.data.relational`; owner,
   physical path, DSN, and administrator credentials are not skill inputs;
 - skills construct, submit, reconcile, and cancel immutable work through
@@ -217,10 +229,12 @@ Mutable research state remains inside the activated skill compatibility
 bucket. The scenario package contains definitions and fixtures, not a private
 database or copied notebook runtime.
 
-The locally validated ARF4 packages are `research_manager_skill` `0.7.0`,
-`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.2.1`. They were
-published, reinstalled, validated, tested, and executed through the normal
-AdaOS managers and CLI. The TLP Desktop scenario provides a Single Experiment
+The current ARF4 package set is `research_manager_skill` `0.8.0`,
+`tlp_experiment_skill` `0.1.0`, `mlflow_tracker_skill` `0.2.2`, and
+`tlp_research` `0.3.0`. The earlier `0.7.0`/`0.2.1` set supplied the accepted
+E002 run; the current set preserves that immutable evidence while separating
+the reusable control plane from the TLP data/runner boundary. The TLP Desktop
+scenario provides a Single Experiment
 Workbench for immutable condition revision, review/lock, bounded start,
 cancel/retry/reconcile, paired results, artifacts, and result finalization.
 Its `Conditions / Runs / Results / Evidence` segmented navigation is the first
@@ -228,6 +242,11 @@ main-area widget, so it stays at the top while the experiment command toolbar
 keeps the composition's bottom action area.
 Its Desktop presence does not weaken protocol, QC, unblind, analysis, or claim
 gates. Scenario calls are routed only to declared dependency tools.
+Help is now part of the top segmented navigation. Its modal renders the
+scenario README and current state guidance; the same deterministic projection
+is available in Russian and English text or voice through the admitted
+conversational package. See the
+[Scenario Guidance and Help Contract](scenario-guidance.md).
 
 The accepted control aggregate is E002. It ran the real STL-10 binary dataset
 on CPU for three epochs over a bounded 300-train/100-validation subset with
@@ -256,7 +275,8 @@ contract `1.0` for new sessions.
 | Owner | Owns | Must not own |
 | --- | --- | --- |
 | AdaOS core | Skill/scenario lifecycle, workflow rails, identity, policy, secrets, service supervision, capability binding, generic run/attempt records, artifact refs, event envelopes | TLP protocols, statistical conclusions, MLflow schema, Ray scheduler state |
-| Research manager skill | Study model, protocol locks, analysis plan, paired trial groups, test access, evidence manifests, claim review | Provider internals, global DB credentials, accelerator scheduling |
+| Research manager skill | Provider-neutral Study/Experiment model, protocol locks, analysis plan, trial/run/attempt identity, tracker journal, evidence manifests, claim review, workflow guidance | Domain runner code, primary datasets, provider internals, global DB credentials, accelerator scheduling |
+| Domain runner/data-owner skill | Domain preparation, primary data binding, execution descriptor, normalized output collection, owned-artifact verification | Research approvals, tracker authority, another skill's database |
 | Study scenario | Domain workflow and templates, inputs, required capabilities, study-specific views and actions | New installation semantics or private infrastructure |
 | Tracker provider | Parameter, metric, tag, and run-artifact ingestion and query | Protocol authority, approvals, claim truth |
 | Executor provider | Submission, scheduling, logs, status, cancellation, resource placement | Study state, statistical plan, tracker identity |

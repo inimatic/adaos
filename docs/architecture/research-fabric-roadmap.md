@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-10.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first reference case
@@ -88,15 +88,16 @@ scientific conclusion. A local demo is not production acceptance.
 | Skill/scenario lifecycle | Package, install, activate, service-skill supervision, A/B runtime buckets | useful implemented foundation |
 | Workflow governance | Versioned governed workflow plus explicit Experiment aggregate and package-bound lifecycle | E002 completed review/lock/start/reconcile/finalize and survived package/API/Desktop reload |
 | Core persistence | SQLite under `.adaos/state`; repositories remain SQLite-shaped | deliberately unchanged; legacy core repositories are outside ARF0.5 |
-| Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | research-manager migrations and restart rehydration validated locally |
+| Skill persistence | Versioned runtime `data/db`, `data/files`, and `data/internal` ownership | research-manager control metadata and TLP primary data have separate owner buckets and migrations |
 | Database capability | Negotiated `storage.relational` requirement/binding, owner migrations, backup/restore, retention, lifecycle SDK, and SQLite provider; legacy `SQL` remains | ARF2 local contract validated; legacy repositories deliberately unchanged |
 | PostgreSQL | Isolated database and least-privilege owner/login role per skill, bounded pools, health, credential refresh, backup/restore | ARF2 conformance validated locally on `postgres:16-alpine`; the login is exposed only to its owning service process |
 | Artifacts/models | Generic `ContentRef`, checkpoint ABI, and portable research evidence manifest; model promotion rules unchanged | E002 fixed a verified result, tracker export, and eight content-addressed artifact references |
 | Execution | Immutable spec/attempt/checkpoint ABI, bounded local process provider, and optional digest-pinned OCI provider | ARF3 core and E002 start/reconcile/result integration validated across restart |
 | Tracking | Frozen contract `1.0`, bounded durable journal/outbox, local reference provider, conforming supervised/external MLflow adapter | identity, outage/replay, acceptance/deletion, storage binding, remote auth, UI proxy, and browser matrices validated locally |
 | Distributed execution | No Ray provider | open |
-| Research domain | Versioned skill-owned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts and governed workflows | explicit `Study 1:N Experiment`, immutable revisions, and attempt-aware tracking implemented |
-| TLP | E002 conditions, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
+| Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
+| Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
+| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
 
 ## Milestone Sequence
 
@@ -116,17 +117,14 @@ scientific conclusion. A local demo is not production acceptance.
 Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
 ARF1 onward; it is not postponed until ARF6 and then integrated all at once.
 
-Delivery snapshot (2026-08-08): the native registry contains
-`research_manager_skill` `0.7.0`, `mlflow_tracker_skill` `0.2.2`, and
-`tlp_research` `0.2.1`. All three were published
-through the existing AdaOS lifecycle and the two skills were reinstalled from
-their release revisions with passing self-tests. Scenario validation and all
-five scenario tests passed. The final focused core/storage/execution/service-UI
-run through `adaos tests run` passed 71 tests with two environment-gated
-PostgreSQL skips in an isolated `ADAOS_BASE_DIR`; both skipped PostgreSQL cases
-then passed against a temporary `postgres:16-alpine` container. The live
-Desktop snapshot contains the installed TLP application and E002 Workbench
-after API restart.
+Delivery snapshot (2026-08-10): the release candidates are
+`research_manager_skill` `0.8.0`, `tlp_experiment_skill` `0.1.0`,
+`mlflow_tracker_skill` `0.2.2`, and `tlp_research` `0.3.0`. The accepted E002
+result remains immutable from the earlier release. The current refactor adds
+the runner/data-owner boundary, owner-qualified ResearchSpace projection,
+bounded cross-skill tool invocation, data migration, and channel-neutral
+scenario guidance. Publication and on-machine lifecycle evidence are recorded
+after the focused revalidation at the end of this implementation run.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -491,6 +489,26 @@ observations.
   lifecycle handling.
 - [x] `[could]` `ARF4-13` Embed the advanced MLflow UI in an iframe only after
   the governed same-origin/proxy path passes authentication and browser tests.
+- [x] `[must]` `ARF4-15` Separate the reusable research control plane from the
+  TLP runner and primary-data owner through `adaos.research.runner.v1`; the
+  manager stores logical provider/output references and does not read the
+  provider's private data binding.
+- [x] `[must]` `ARF4-16` Add bounded `skills.invoke` SDK mediation with an
+  explicit caller capability, ordinary target tool/schema/timeout checks,
+  target-identifier validation, and nesting protection.
+- [x] `[must]` `ARF4-17` Persist and project the experiment's
+  `data_owner_skill_id` as an owner-qualified ResearchSpace while retaining a
+  provider-neutral manager database for governance metadata.
+- [x] `[must]` `ARF4-18` Move legacy TLP primary data through skill lifecycle
+  migration: the manager excludes the former dataset subtree, the TLP owner
+  adopts it by hardlink or copy, and the old bucket is retained until its
+  runtime can be retired safely.
+- [x] `[should]` `ARF4-19` Define `adaos.scenario.guidance.v1` for a versioned
+  README, localized overview, Help modal, and workflow-aware next-action
+  source across web, text, and voice.
+- [x] `[should]` `ARF4-20` Implement the guidance contract in `tlp_research`
+  with deterministic EN/RU help and next-step intents, including a voice
+  story, without requiring an external LLM.
 - [ ] `[deferred]` `ARF4-14` Do not use MLflow Model Registry as the automatic
   AdaOS model-promotion authority; integrate promotion with the owning model
   runtime contract later.
@@ -523,6 +541,15 @@ content-addressed artifact references independently of MLflow. Because E002
 started before the freeze, its immutable session tag remains `1.0-rc1`; new
 sessions use contract `1.0` and historical evidence is not relabelled. MLflow
 therefore remains a query/projection provider rather than evidence authority.
+
+Universal-control-plane evidence (2026-08-10): TLP runner code no longer lives
+under `research_manager_skill`; arbitrary arm identifiers and execution
+profiles pass the generic condition validator, result fields are selected by
+declared analysis paths, and TLP data/artifact access is mediated by its owner
+provider. The scenario README and modal are equality-tested, while the same
+`describe_experiment` projection supplies state-sensitive text and speech.
+The general contract is documented in
+[Scenario Guidance and Help Contract](scenario-guidance.md).
 
 ## ARF5. Ray Executor Provider
 

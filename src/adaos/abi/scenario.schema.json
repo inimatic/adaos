@@ -142,6 +142,10 @@
       "$ref": "#/$defs/conversationalManifest",
       "description": "Optional git-versioned conversational package stored under conversational/manifest.yaml."
     },
+    "guidance": {
+      "$ref": "#/$defs/scenarioGuidance",
+      "description": "Channel-neutral scenario overview, README surface, and workflow-aware next-action projection."
+    },
     "prototype_runtime": {
       "$ref": "#/$defs/prototypeRuntime",
       "description": "Optional bounded executable Prototype artifacts. These files model disposable data, bindings, one conversational workflow slice, and representative states; they are not runtime implementation evidence."
@@ -202,6 +206,65 @@
       "required": ["manifest"],
       "properties": {
         "manifest": { "const": "conversational/manifest.yaml" }
+      },
+      "additionalProperties": false
+    },
+    "scenarioGuidance": {
+      "type": "object",
+      "required": ["schema", "readme", "overview", "presentation", "workflow"],
+      "properties": {
+        "schema": { "const": "adaos.scenario.guidance.v1" },
+        "readme": {
+          "type": "string",
+          "pattern": "^(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))[A-Za-z0-9_.-]+(?:[/\\\\][A-Za-z0-9_.-]+)*\\.md$"
+        },
+        "overview": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "presentation": {
+          "type": "object",
+          "required": ["channels", "modal_id"],
+          "properties": {
+            "channels": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "enum": ["web", "text", "voice"] }
+            },
+            "modal_id": { "$ref": "#/$defs/identifier" }
+          },
+          "additionalProperties": false
+        },
+        "workflow": {
+          "type": "object",
+          "required": ["state_source", "state_path", "actions_path"],
+          "properties": {
+            "state_source": {
+              "type": "object",
+              "required": ["kind", "name"],
+              "properties": {
+                "kind": { "const": "skill" },
+                "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*\\.[A-Za-z_][A-Za-z0-9_.-]*$" },
+                "params": { "type": "object", "additionalProperties": true }
+              },
+              "additionalProperties": false
+            },
+            "state_path": { "type": "string", "minLength": 1 },
+            "actions_path": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "conversational": {
+          "type": "object",
+          "required": ["help_intent", "next_steps_intent"],
+          "properties": {
+            "help_intent": { "type": "string", "minLength": 1 },
+            "next_steps_intent": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

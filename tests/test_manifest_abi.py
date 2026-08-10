@@ -641,6 +641,37 @@ def test_skill_and_scenario_schemas_accept_single_workflow_manifest() -> None:
     Draft7Validator(_load_schema("scenario.schema.json")).validate(scenario)
 
 
+def test_scenario_schema_accepts_channel_neutral_workflow_guidance() -> None:
+    scenario = {
+        "id": "guided_scenario",
+        "version": "0.1.0",
+        "guidance": {
+            "schema": "adaos.scenario.guidance.v1",
+            "readme": "README.md",
+            "overview": {"en": "A guided workflow.", "ru": "Сценарий с подсказками."},
+            "presentation": {
+                "channels": ["web", "text", "voice"],
+                "modal_id": "scenario_help",
+            },
+            "workflow": {
+                "state_source": {
+                    "kind": "skill",
+                    "name": "workflow_skill.describe",
+                    "params": {"aggregate_id": "$state.aggregateId"},
+                },
+                "state_path": "workflow.state",
+                "actions_path": "guidance.next_actions",
+            },
+            "conversational": {
+                "help_intent": "scenario.help",
+                "next_steps_intent": "scenario.next_steps",
+            },
+        },
+    }
+
+    Draft7Validator(_load_schema("scenario.schema.json")).validate(scenario)
+
+
 @pytest.mark.parametrize("manifest", ["workflows/main.json", "workflow.yaml", "WORKFLOW.json"])
 def test_manifest_schemas_reject_noncanonical_workflow_path(manifest: str) -> None:
     payload = {"name": "demo_skill", "version": "0.1.0", "workflow": {"manifest": manifest}}

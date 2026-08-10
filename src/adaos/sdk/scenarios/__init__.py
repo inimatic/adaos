@@ -9,6 +9,11 @@ from adaos.services.scenario.manager import ScenarioManager  # предпочт�
 from adaos.services.scenario import WebspaceScenarioRuntime
 from adaos.adapters.scenarios.git_repo import GitScenarioRepository
 from adaos.adapters.db import SqliteScenarioRegistry
+from adaos.sdk.scenarios.guidance import (
+    ScenarioGuidanceError,
+    describe_guidance,
+    read_guidance,
+)
 
 
 def _mgr():

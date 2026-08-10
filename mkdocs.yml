@@ -177,6 +177,7 @@ nav:
       - AdaOS Research Fabric: architecture/research-fabric.md
       - Research Fabric Roadmap: architecture/research-fabric-roadmap.md
       - Research Fabric Core Readiness: architecture/research-fabric-core-readiness.md
+      - Scenario Guidance and Help Contract: architecture/scenario-guidance.md
       - Projection Subscription Roadmap: architecture/projection-subscription-roadmap.md
       - Root MCP Foundation: architecture/root-mcp-foundation.md
       - Root MCP Roadmap: architecture/root-mcp-roadmap.md
