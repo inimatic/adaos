@@ -90,7 +90,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc12-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc13-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test

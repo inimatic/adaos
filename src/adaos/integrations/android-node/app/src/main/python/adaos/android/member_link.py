@@ -217,11 +217,12 @@ class _WebSocketClient:
     def close(self) -> None:
         if self.closed:
             return
-        try:
-            self._send_frame(0x8, struct.pack("!H", 1000))
-        except Exception:
-            pass
         self.closed = True
+        # ``close`` is also called from the configuration/join thread while
+        # the member worker may be blocked in recv or send.  A graceful frame
+        # would contend on ``_send_lock`` and can leave both threads waiting
+        # forever after a broken route.  Shutdown the socket first so every
+        # in-flight operation is interrupted deterministically.
         try:
             self.connection.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -283,6 +284,7 @@ class AndroidMemberLink:
         self._rpc_completed_total = 0
         self._rpc_failed_total = 0
         self._config = self._load_config()
+        self._worker_generation = 0
         if not self._config.get("enabled"):
             self._last_error = "not_configured"
 
@@ -315,17 +317,21 @@ class AndroidMemberLink:
         )
         temporary.replace(self.path)
 
-    def start(self) -> None:
+    def start(self, *, replace: bool = False) -> None:
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self._thread is not None and self._thread.is_alive() and not replace:
                 return
             self._stop.clear()
-            self._thread = threading.Thread(
+            self._worker_generation += 1
+            worker_generation = self._worker_generation
+            thread = threading.Thread(
                 target=self._run,
+                args=(worker_generation,),
                 name="adaos-android-member-link",
                 daemon=True,
             )
-            self._thread.start()
+            self._thread = thread
+        thread.start()
 
     def stop(self) -> None:
         self._stop.set()
@@ -383,7 +389,11 @@ class AndroidMemberLink:
         if connection is not None:
             connection.close()
         self._wake.set()
-        self.start()
+        # Configuration is an explicit recovery boundary.  A previous worker
+        # can be alive but wedged in a native socket operation; a generation
+        # replacement lets the new route connect immediately and makes the old
+        # worker harmless when it eventually unwinds.
+        self.start(replace=True)
         self._set_state("connecting", connected=False, error="")
         return self.snapshot()
 
@@ -677,8 +687,20 @@ class AndroidMemberLink:
                 "rpc_failed_total": self._rpc_failed_total,
             }
 
-    def _set_state(self, state: str, *, connected: bool, error: str) -> None:
+    def _set_state(
+        self,
+        state: str,
+        *,
+        connected: bool,
+        error: str,
+        worker_generation: int | None = None,
+    ) -> None:
         with self._lock:
+            if (
+                worker_generation is not None
+                and worker_generation != self._worker_generation
+            ):
+                return
             changed = (
                 self._state != state
                 or self._connected != connected
@@ -785,27 +807,44 @@ class AndroidMemberLink:
                 }
             )
 
-    def _run(self) -> None:
+    def _run(self, worker_generation: int) -> None:
         backoff = 1.0
         ever_connected = False
         while not self._stop.is_set():
             with self._lock:
+                if worker_generation != self._worker_generation:
+                    break
                 config = dict(self._config)
                 revision = self._config_revision
             if not config.get("enabled"):
-                self._set_state("offline", connected=False, error="not_configured")
+                self._set_state(
+                    "offline",
+                    connected=False,
+                    error="not_configured",
+                    worker_generation=worker_generation,
+                )
                 self._wake.wait(2.0)
                 self._wake.clear()
                 continue
             connection: _WebSocketClient | None = None
             try:
-                self._connect_attempts += 1
-                self._set_state("connecting", connected=False, error="")
+                with self._lock:
+                    if worker_generation != self._worker_generation:
+                        break
+                    self._connect_attempts += 1
+                self._set_state(
+                    "connecting",
+                    connected=False,
+                    error="",
+                    worker_generation=worker_generation,
+                )
                 connection = _WebSocketClient(
                     _websocket_url(str(config.get("hub_url") or "")),
                     str(config.get("token") or ""),
                 )
                 with self._lock:
+                    if worker_generation != self._worker_generation:
+                        raise ConnectionError("member_worker_replaced")
                     self._connection = connection
                 connection.send_json(
                     {
@@ -840,12 +879,19 @@ class AndroidMemberLink:
                 self._last_message_at = acknowledged_at
                 self._hello_ack_at = acknowledged_at
                 self._hello_ack_ok = True
-                self._set_state("connected", connected=True, error="")
+                self._set_state(
+                    "connected",
+                    connected=True,
+                    error="",
+                    worker_generation=worker_generation,
+                )
                 self._send_initial_state(connection)
                 last_ping = time.monotonic()
                 last_status = time.monotonic()
                 while not self._stop.is_set():
                     with self._lock:
+                        if worker_generation != self._worker_generation:
+                            raise ConnectionError("member_worker_replaced")
                         if revision != self._config_revision:
                             raise ConnectionError("member_configuration_changed")
                     while True:
@@ -909,20 +955,27 @@ class AndroidMemberLink:
                     ):
                         raise ConnectionError("hub_activity_timeout")
             except Exception as exc:
-                if not self._stop.is_set():
+                with self._lock:
+                    is_current_worker = worker_generation == self._worker_generation
+                if not self._stop.is_set() and is_current_worker:
                     self._set_state(
                         "offline",
                         connected=False,
                         error=f"{type(exc).__name__}:{str(exc)[:180]}",
+                        worker_generation=worker_generation,
                     )
             finally:
-                self._fail_pending_rpc("member_link_disconnected")
                 with self._lock:
+                    is_current_worker = worker_generation == self._worker_generation
                     if self._connection is connection:
                         self._connection = None
+                if is_current_worker:
+                    self._fail_pending_rpc("member_link_disconnected")
                 if connection is not None:
                     connection.close()
-            if self._stop.is_set():
+            with self._lock:
+                is_current_worker = worker_generation == self._worker_generation
+            if self._stop.is_set() or not is_current_worker:
                 break
             self._wake.wait(backoff)
             self._wake.clear()

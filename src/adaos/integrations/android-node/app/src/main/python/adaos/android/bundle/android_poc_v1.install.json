@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -117,6 +117,6 @@
   },
   "member_link_module": {
     "path": "../member_link.py",
-    "sha256": "8d9206511e38a2591b33a864cb4655cfef6b64c2215a113fb4501feec273fca0"
+    "sha256": "202145064d3dd4638b3dd917053fc11715c520d168e0ae0c0655afd3ca0c4417"
   }
 }

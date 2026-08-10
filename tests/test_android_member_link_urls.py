@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import queue
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -154,3 +156,56 @@ def test_local_yjs_change_queues_semantic_node_state_not_raw_update(
     assert queued["t"] == "_node_state.refresh"
     with pytest.raises(queue.Empty):
         link._outbound.get_nowait()
+
+
+def test_member_reconfigure_replaces_a_wedged_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    link = module.AndroidMemberLink(
+        tmp_path,
+        node_id="android-test",
+        local_subnet_id="local-test",
+        status_provider=lambda: {},
+        document_provider=lambda: {},
+        apply_yjs_update=lambda _update: True,
+        state_changed=lambda _state: None,
+    )
+    release = threading.Event()
+    generations: list[int] = []
+    generations_lock = threading.Lock()
+    first_thread: threading.Thread | None = None
+
+    def _wedged_run(worker_generation: int) -> None:
+        with generations_lock:
+            generations.append(worker_generation)
+        release.wait(2.0)
+
+    monkeypatch.setattr(link, "_run", _wedged_run)
+    try:
+        link.start()
+        deadline = time.monotonic() + 1.0
+        while len(generations) < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        first_thread = link._thread
+
+        link.configure(
+            hub_url="https://ru.api.inimatic.com/hubs/sn_test",
+            subnet_id="sn_test",
+            token="signed-member-token",
+            root_url="https://ru.api.inimatic.com",
+        )
+        deadline = time.monotonic() + 1.0
+        while len(generations) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert generations == [1, 2]
+        assert first_thread is not link._thread
+        assert link._worker_generation == 2
+        assert link.snapshot()["hub_url"] == "https://ru.api.inimatic.com/hubs/sn_test"
+    finally:
+        release.set()
+        if first_thread is not None:
+            first_thread.join(timeout=1.0)
+        if link._thread is not None:
+            link._thread.join(timeout=1.0)
