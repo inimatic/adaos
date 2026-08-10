@@ -63,7 +63,11 @@ jobs:
       - name: Test Android loopback runtime
         working-directory: .
         # This isolated bootstrap intentionally has no dependency on the full
-        # desktop AdaOS composition loaded by tests/conftest.py.
+        # desktop AdaOS composition loaded by tests/conftest.py. PYTHONPATH
+        # exposes only shared source imported by the packaged Android profile,
+        # including the canonical portable Rasa inference runtime.
+        env:
+          PYTHONPATH: src
         run: python -m pytest --noconftest -q tests/test_android_node_bootstrap.py
 
       - name: Build debug APK
