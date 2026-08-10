@@ -20,9 +20,9 @@ Current scope:
   demo-metrics handlers, with no subprocess or runtime package install;
 - always-on offline Rasa NLU exported from the same promoted model used by
   stationary AdaOS, with training kept off-device;
-- allowlisted member RPC to the canonical `conversation_companions` skill and
-  its Root-configured external LLM, plus low-confidence evidence forwarding to
-  the canonical LLM Teacher;
+- allowlisted member RPC to canonical `conversation_companions` and AdaOS
+  Connect tools, including the Root-configured external LLM, plus
+  low-confidence evidence forwarding to the canonical LLM Teacher;
 - fixed UI descriptors for Weather, AdaOS Connect, Browsers, Voice Assistant,
   Notebook, and the Taiga UI demo scenario;
 - browser-compatible home navigation: `desktop.webspace.go_home` restores the
@@ -30,16 +30,19 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC9 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC11 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
 the existing `/api/tools/call` contract; all visible state returns through Yjs
-or bounded WebIO stream events. AdaOS Connect publishes an immediately usable
-LO link for the local browser and can provision the optional outbound member
-link with a Root URL and one-time join code. Browsers projects bounded active
-control sessions. Voice uses Android Chrome SpeechRecognition and
-speechSynthesis while the hosted client is open. `data/dialog` projects AdaOS
+or bounded WebIO stream events. The native `Open AdaOS` action owns LO. AdaOS
+Connect separately enrolls this phone with a Root URL and one-time join code,
+then delegates remote browser, Telegram, and other-node invitations to the
+canonical Hub skill. Browsers projects bounded active control sessions. Voice
+uses half-duplex Android Chrome SpeechRecognition and speechSynthesis while
+the hosted client is open. Dialog work runs in one bounded background slot so
+a slow Hub/LLM response cannot starve control WebSocket keepalives.
+`data/dialog` projects AdaOS
 Mobile, Арсений, Ника, Мира, and Строитель; the hosted selector switches them
 through acknowledged control commands and the choice survives restart. AdaOS
 Mobile and Builder remain bounded local implementations. Companion turns
@@ -87,7 +90,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc9-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc11-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -109,7 +112,7 @@ retained CRDT history exceeds the WebSocket library's 1 MiB default.
 `-OpenBrowser` then launches the hosted client with explicit LO intent. The
 browser should show the seven fixed apps, two widgets, and a green YJS status
 without login or a development token.
-`-VerifySkills` runs Weather offline/recovery, the AdaOS Connect LO path,
+`-VerifySkills` runs Weather offline/recovery, AdaOS Connect member state,
 Browsers registration, the dialog roster/agent/channel paths, a local Voice
 Assistant turn, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against

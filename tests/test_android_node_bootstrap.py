@@ -303,9 +303,11 @@ def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
     try:
         assert bootstrap._skills is not None
         bootstrap._skills.member_link = member_link
-        bootstrap._skills.select_dialog_agent(
+        selected = bootstrap._skills.select_dialog_agent(
             {"agent_id": "agent:conversation_companions:arseni"}
         )
+        assert selected["active_agent"]["implementation"] == "hub_delegated"
+        assert selected["active_agent"]["model_backed"] is True
 
         result = bootstrap._skills.handle_dialog_message(
             {"text": "Why should one runtime stay canonical?", "webspace_id": "desktop"}
@@ -321,6 +323,69 @@ def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
         assert member_link.calls[0][1]["character_id"] == "arseni"
         assert member_link.events[0][0] == "nlp.intent.not_obtained"
         assert member_link.events[0][2] == "android.nlu.rasa"
+    finally:
+        bootstrap.stop()
+
+
+def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    bootstrap.start(str(tmp_path), "test", 0)
+
+    class FakeMemberLink:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict, float]] = []
+
+        def snapshot(self) -> dict:
+            return {
+                "configured": True,
+                "connected": True,
+                "state": "connected",
+                "root_url": "https://ru.api.inimatic.com",
+                "hub_url": "https://ru.api.inimatic.com/hubs/sn_test",
+                "subnet_id": "sn_test",
+                "transport_security": "tls",
+            }
+
+        def call_hub_tool(
+            self, tool: str, arguments: dict, *, timeout: float
+        ) -> dict:
+            self.calls.append((tool, arguments, timeout))
+            time.sleep(0.1)
+            return {
+                "ok": True,
+                "current": {
+                    "status": "ready",
+                    "summary": "Register a remote browser.",
+                    "link": "https://inimatic.com/?intent=connect.register&zone=ru",
+                    "qr_text": "https://inimatic.com/?intent=connect.register&zone=ru",
+                    "code": "PAIR1234",
+                },
+            }
+
+    member_link = FakeMemberLink()
+    try:
+        assert bootstrap._skills is not None
+        bootstrap._skills.member_link = member_link
+
+        started = time.monotonic()
+        result = bootstrap._skills._prepare_connect(
+            "browser", {"webspace_id": "desktop", "refresh": True}
+        )
+
+        assert time.monotonic() - started < 0.08
+        assert result["current"]["status"] == "pending"
+        worker = bootstrap._skills._connect_prepare_thread
+        assert worker is not None
+        worker.join(timeout=2)
+        result = bootstrap._skills._connect_current()
+        assert member_link.calls[0][0] == "adaos_connect:prepare"
+        assert member_link.calls[0][1]["mode"] == "browser"
+        assert result["current"]["status"] == "ready"
+        assert result["current"]["source"] == "hub_delegated"
+        assert result["current"]["link"].startswith("https://inimatic.com/")
+        assert result["current"]["connected"] is True
     finally:
         bootstrap.stop()
 
@@ -837,6 +902,34 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             open_timeout=2,
             close_timeout=2,
         ) as websocket:
+            original_dialog_handler = bootstrap._skills.handle_dialog_message
+
+            def _slow_dialog_handler(payload):
+                time.sleep(0.25)
+                return original_dialog_handler(payload)
+
+            bootstrap._skills.handle_dialog_message = _slow_dialog_handler
+            websocket.send(
+                json.dumps(
+                    {
+                        "ch": "events",
+                        "t": "cmd",
+                        "id": "dialog-keepalive-proof",
+                        "kind": "dialog.user_message",
+                        "payload": {"text": "hello", "webspace_id": "desktop"},
+                    }
+                )
+            )
+            websocket.send(json.dumps({"type": "ping"}))
+            pong_started = time.monotonic()
+            pong = json.loads(websocket.recv(timeout=1))
+            assert pong == {"type": "pong"}
+            assert time.monotonic() - pong_started < 0.2
+            dialog_ack = json.loads(websocket.recv(timeout=2))
+            assert dialog_ack["id"] == "dialog-keepalive-proof"
+            assert dialog_ack["data"]["accepted"] is True
+            bootstrap._skills.handle_dialog_message = original_dialog_handler
+
             ack, _ = _control_command(
                 websocket,
                 "weather-proof",
@@ -881,11 +974,10 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
                 {"mode": "browser", "refresh": True},
             )
             connect_current = ack["data"]["result"]["current"]
-            assert connect_current["status"] == "ready"
-            assert connect_current["degraded"] is False
-            assert connect_current["link"] == (
-                "https://inimatic.com/?zone=lo&try_local_hub=1"
-            )
+            assert connect_current["status"] == "offline"
+            assert connect_current["degraded"] is True
+            assert connect_current["link"] == ""
+            assert connect_current["error"] == "member_link_not_configured"
 
             ack, _ = _control_command(
                 websocket,
@@ -1056,7 +1148,7 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             snapshot = json.load(response)["snapshot"]
         assert snapshot["data"]["weather"]["current"]["source"] == "offline"
         assert snapshot["data"]["weather"]["current"]["request_id"] == "weather-offline-request"
-        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "ready"
+        assert snapshot["data"]["adaos_connect"]["current"]["status"] == "offline"
         assert snapshot["data"]["browsers"]["summary"]["value"] == 0
         assert any(
             item["from"] == "hub" and "локальный ассистент" in item["text"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import y_py as Y
 ROOT = Path(__file__).resolve().parent
 BOOTSTRAP = ROOT / "app/src/main/python/adaos/android/bootstrap.py"
 PYTHON_ROOT = BOOTSTRAP.parents[2]
+PORTABLE_RASA = ROOT.parents[1] / "services/nlu/portable_rasa.py"
 OUTPUT = ROOT / "app/src/main/python/adaos/android/bundle/web_desktop.seed.yjs.b64"
 SEED_CLIENT_ID = 0xADA05
 
@@ -27,6 +29,19 @@ def load_bootstrap():
     root = str(PYTHON_ROOT)
     if root not in sys.path:
         sys.path.insert(0, root)
+    # Gradle copies this shared module into its generated Python source tree.
+    # The host-side seed generator runs before that task, so load the exact
+    # canonical source under the packaged module name instead of maintaining a
+    # second Android copy.
+    if "adaos.services.nlu.portable_rasa" not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            "adaos.services.nlu.portable_rasa", PORTABLE_RASA
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("portable_rasa_import_failed")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
     return importlib.import_module("adaos.android.bootstrap")
 
 

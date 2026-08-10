@@ -46,6 +46,37 @@ def _websocket_url(base_url: str) -> str:
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
+def _canonical_root_url(value: str) -> str:
+    """Keep local development HTTP, but never use plaintext for public AdaOS Root."""
+
+    parsed = urlparse(str(value or "").strip().rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("member_root_url_invalid")
+    hostname = str(parsed.hostname or "").lower()
+    scheme = parsed.scheme
+    if scheme == "http" and (
+        hostname == "inimatic.com" or hostname.endswith(".inimatic.com")
+    ):
+        scheme = "https"
+    return urlunparse((scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _joined_hub_url(root_url: str, response_url: str) -> str:
+    """Do not accept a Root response which downgrades an HTTPS join to plaintext."""
+
+    root = urlparse(_canonical_root_url(root_url))
+    raw = str(response_url or "").strip().rstrip("/") or urlunparse(
+        (root.scheme, root.netloc, root.path, "", "", "")
+    )
+    joined = urlparse(raw)
+    if joined.scheme not in {"http", "https", "ws", "wss"} or not joined.netloc:
+        raise ValueError("member_hub_url_invalid")
+    scheme = joined.scheme
+    if root.scheme == "https" and scheme in {"http", "ws"}:
+        scheme = "https" if scheme == "http" else "wss"
+    return urlunparse((scheme, joined.netloc, joined.path.rstrip("/"), "", "", ""))
+
+
 def _read_exact(connection: socket.socket, length: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < length:
@@ -251,7 +282,20 @@ class AndroidMemberLink:
     def _load_config(self) -> dict[str, Any]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
+            if not isinstance(payload, dict):
+                return {}
+            hub = urlparse(str(payload.get("hub_url") or ""))
+            hostname = str(hub.hostname or "").lower()
+            if hub.scheme == "http" and (
+                hostname == "inimatic.com" or hostname.endswith(".inimatic.com")
+            ):
+                payload["hub_url"] = urlunparse(
+                    ("https", hub.netloc, hub.path.rstrip("/"), "", "", "")
+                )
+                payload.setdefault("root_url", f"https://{hub.netloc}")
+                payload["updated_at"] = time.time()
+                self._persist_config(payload)
+            return payload
         except (OSError, ValueError, TypeError):
             return {}
 
@@ -289,7 +333,14 @@ class AndroidMemberLink:
             thread.join(timeout=5)
         self._set_state("offline", connected=False, error="expected_stop")
 
-    def configure(self, *, hub_url: str, subnet_id: str, token: str) -> dict[str, Any]:
+    def configure(
+        self,
+        *,
+        hub_url: str,
+        subnet_id: str,
+        token: str,
+        root_url: str = "",
+    ) -> dict[str, Any]:
         hub = str(hub_url or "").strip().rstrip("/")
         subnet = str(subnet_id or "").strip()
         secret = str(token or "").strip()
@@ -306,6 +357,8 @@ class AndroidMemberLink:
             "token": secret,
             "updated_at": time.time(),
         }
+        if str(root_url or "").strip():
+            payload["root_url"] = _canonical_root_url(root_url)
         with self._lock:
             previous_identity = (
                 str(self._config.get("hub_url") or ""),
@@ -328,11 +381,8 @@ class AndroidMemberLink:
         return self.snapshot()
 
     def join(self, *, root_url: str, code: str) -> dict[str, Any]:
-        root = str(root_url or "").strip().rstrip("/")
+        root = _canonical_root_url(root_url)
         join_code = str(code or "").strip()
-        parsed = urlparse(root)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("member_root_url_invalid")
         if not join_code:
             raise ValueError("member_join_code_required")
         body = json.dumps(
@@ -362,13 +412,16 @@ class AndroidMemberLink:
                 errors.append(f"{endpoint}:{type(exc).__name__}")
         if response is None:
             raise RuntimeError("member_join_failed:" + ",".join(errors))
+        response_root = _canonical_root_url(str(response.get("root_url") or root))
+        hub_url = _joined_hub_url(root, str(response.get("hub_url") or root))
         result = self.configure(
-            hub_url=str(response.get("hub_url") or root),
+            hub_url=hub_url,
             subnet_id=str(response.get("subnet_id") or ""),
             token=str(response.get("token") or ""),
+            root_url=response_root,
         )
         result["joined"] = True
-        result["root_url"] = _redacted_url(str(response.get("root_url") or root))
+        result["root_url"] = _redacted_url(response_root)
         return result
 
     def disconnect(self, *, forget: bool = False) -> dict[str, Any]:
@@ -532,6 +585,7 @@ class AndroidMemberLink:
                 "connected": self._connected,
                 "state": self._state,
                 "hub_url": hub_url,
+                "root_url": _redacted_url(str(config.get("root_url") or "")),
                 "subnet_id": str(config.get("subnet_id") or self.local_subnet_id),
                 "token_present": bool(config.get("token")),
                 "transport_security": transport_security,

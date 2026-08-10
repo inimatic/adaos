@@ -58,7 +58,6 @@ _MAX_VOICE_MESSAGES = 32
 _MAX_VOICE_TEXT_CHARS = 2 * 1024
 _RASA_LOW_CONFIDENCE = 0.45
 _RASA_BUNDLE_PATH = Path(__file__).with_name("bundle") / "rasa_mobile_bundle.json.gz"
-_LOCAL_BROWSER_LINK = "https://inimatic.com/?zone=lo&try_local_hub=1"
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
 _NIKA_AGENT_ID = "agent:conversation_companions:nika"
@@ -258,6 +257,9 @@ class AndroidSkillRuntime:
         except Exception as exc:
             self._nlu_error = f"{type(exc).__name__}:{str(exc)[:200]}"
         self._lock = threading.RLock()
+        self._closed = False
+        self._connect_prepare_generation = 0
+        self._connect_prepare_thread: threading.Thread | None = None
         self._stream_revision = 0
         self._database = sqlite3.connect(
             str(Path(data_root) / "android-skills.sqlite3"),
@@ -329,9 +331,9 @@ class AndroidSkillRuntime:
         connect = _plain_at_path(snapshot, "data/adaos_connect")
         connect_current = connect.get("current") if isinstance(connect, dict) else {}
         connect_mode = (
-            str(connect_current.get("mode") or "browser")
+            str(connect_current.get("mode") or "member")
             if isinstance(connect_current, dict)
-            else "browser"
+            else "member"
         )
         updates["data/adaos_connect"] = self._connect_snapshot(connect_mode)
         voice_chat = _plain_at_path(snapshot, "data/voice_chat")
@@ -731,14 +733,24 @@ class AndroidSkillRuntime:
 
     def project_member_link(self, member_status: dict[str, Any]) -> dict[str, Any]:
         current = self._connect_current().get("current") or {}
-        selected_mode = str(current.get("mode") or "browser")
-        if bool(member_status.get("configured")):
-            selected_mode = "node"
+        selected_mode = str(current.get("mode") or "member")
+        if selected_mode not in {"member", "browser", "telegram", "node"}:
+            selected_mode = "member"
+        if (
+            bool(member_status.get("configured"))
+            and selected_mode == "node"
+            and str(current.get("source") or "") != "hub_delegated"
+        ):
+            # PoC9 used "node" for this phone's own member link. Migrate the
+            # persisted projection now that "node" means an invitation for a
+            # different node, matching the canonical AdaOS Connect skill.
+            selected_mode = "member"
         snapshot = self._connect_snapshot(selected_mode, member_status=member_status)
         self._set_paths(
             {
                 "data/adaos_connect": snapshot,
                 "data/subnet_env/current": self._subnet_snapshot(),
+                "data/dialog": self._dialog_snapshot(event="member_link_state"),
             }
         )
         return snapshot
@@ -819,7 +831,9 @@ class AndroidSkillRuntime:
             if self.member_link is not None
             else {}
         )
-        selected_mode = mode if mode in {"browser", "telegram", "node"} else "browser"
+        selected_mode = (
+            mode if mode in {"member", "browser", "telegram", "node"} else "member"
+        )
         configured = bool(member.get("configured"))
         connected = bool(member.get("connected"))
         state = str(member.get("state") or "offline")
@@ -827,35 +841,33 @@ class AndroidSkillRuntime:
         error = str(member.get("last_error") or "")
         if not configured:
             error = "member_link_not_configured"
-        if selected_mode == "browser":
-            state = "ready"
-            pending = False
-            error = ""
-            summary = (
-                "This phone already trusts its loopback browser. Open the LO link "
-                "or scan the QR code; AdaOS login and pairing are not required."
-            )
-        elif selected_mode == "telegram":
-            state = "unavailable"
-            pending = False
-            error = "telegram_not_in_android_mvp"
-            summary = "Telegram pairing is not included in the fixed Android MVP profile."
-        elif connected:
+        if selected_mode == "member" and connected:
             summary = f"Connected to {member.get('hub_url') or 'AdaOS Hub'}."
-        elif configured:
+        elif selected_mode == "member" and configured:
             summary = (
                 f"Member link is {state}; local AdaOS remains available."
                 + (f" {error}" if error else "")
             )
-        else:
+        elif selected_mode == "member":
             summary = "Enter Root URL and a one-time join code to connect this phone."
+        elif connected:
+            state = "ready"
+            pending = False
+            error = ""
+            target = {"browser": "browser", "telegram": "Telegram", "node": "node"}[
+                selected_mode
+            ]
+            summary = f"Request a remote {target} invitation from the connected Hub."
+        else:
+            pending = False
+            summary = "Connect this phone to a Hub before creating remote invitations."
         return {
             "current": {
                 "mode": selected_mode,
-                "status": "connected" if selected_mode == "node" and connected else state,
-                "degraded": selected_mode != "browser" and not connected,
+                "status": "connected" if selected_mode == "member" and connected else state,
+                "degraded": not connected,
                 "pending": pending,
-                "error": "" if selected_mode == "browser" or connected else error,
+                "error": "" if connected else error,
                 "summary": summary,
                 "summary_language": "text",
                 "request_id": request_id,
@@ -865,8 +877,8 @@ class AndroidSkillRuntime:
                 "expires_at_language": "text",
                 "expires_at_epoch": 0,
                 "expires_in_seconds": 0,
-                "qr_text": _LOCAL_BROWSER_LINK if selected_mode == "browser" else "",
-                "link": _LOCAL_BROWSER_LINK if selected_mode == "browser" else "",
+                "qr_text": "",
+                "link": "",
                 "link_language": "text",
                 "code": "",
                 "code_language": "text",
@@ -878,7 +890,10 @@ class AndroidSkillRuntime:
                 "windows_ps_language": "powershell",
                 "windows_cmd_command": "",
                 "windows_cmd_language": "bat",
-                "root_url": str(member.get("hub_url") or self._setting("member_root_url", "")),
+                "root_url": str(
+                    member.get("root_url") or self._setting("member_root_url", "")
+                ),
+                "hub_url": str(member.get("hub_url") or ""),
                 "join_code": "",
                 "subnet_id": str(member.get("subnet_id") or self.subnet_id),
                 "member_link_state": state,
@@ -887,28 +902,129 @@ class AndroidSkillRuntime:
                 "transport_security": str(member.get("transport_security") or "unconfigured"),
                 "connect_attempts": int(member.get("connect_attempts") or 0),
                 "reconnect_total": int(member.get("reconnect_total") or 0),
-                "zone_id": "lo" if selected_mode == "browser" else "",
-                "navigation_destination": (
-                    {
-                        "intent": "webspace.open",
-                        "zone": "lo",
-                        "webspace_id": "desktop",
-                        "try_local_hub": True,
-                    }
-                    if selected_mode == "browser"
-                    else {}
-                ),
+                "zone_id": "",
+                "navigation_destination": {},
+                "source": "android_member_link",
             }
         }
 
     def _connect_current(self) -> dict[str, Any]:
         current = _plain_at_path(self.store.snapshot_json(), "data/adaos_connect")
-        return current if isinstance(current, dict) else self._connect_snapshot("browser")
+        return current if isinstance(current, dict) else self._connect_snapshot("member")
 
     def _prepare_connect(self, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
-        snapshot = self._connect_snapshot(mode, str(payload.get("request_id") or ""))
+        selected_mode = str(mode or "member").strip().lower() or "member"
+        request_id = str(payload.get("request_id") or f"android-connect-{uuid.uuid4().hex}")
+        if selected_mode == "member":
+            snapshot = self._connect_snapshot("member", request_id)
+            self._set_paths({"data/adaos_connect": snapshot})
+            return snapshot
+        if selected_mode not in {"browser", "telegram", "node"}:
+            raise AndroidSkillError(f"adaos_connect_mode_invalid:{selected_mode}")
+        member = self.member_link.snapshot() if self.member_link is not None else {}
+        if not bool(member.get("connected")):
+            snapshot = self._connect_snapshot(selected_mode, request_id, member_status=member)
+            self._set_paths({"data/adaos_connect": snapshot})
+            return snapshot
+        with self._lock:
+            active = self._connect_prepare_thread
+            if active is not None and active.is_alive():
+                current = self._connect_current()
+                return current
+            self._connect_prepare_generation += 1
+            generation = self._connect_prepare_generation
+            arguments = {
+                "mode": selected_mode,
+                "webspace_id": str(payload.get("webspace_id") or "desktop"),
+                "refresh": bool(payload.get("refresh", True)),
+                "force_new": bool(payload.get("force_new", False)),
+                "renew": bool(payload.get("renew", False)),
+            }
+            worker = threading.Thread(
+                target=self._finish_connect_prepare,
+                args=(selected_mode, arguments, request_id, generation),
+                name="adaos-android-connect-prepare",
+                daemon=True,
+            )
+            self._connect_prepare_thread = worker
+        snapshot = self._connect_snapshot(selected_mode, request_id, member_status=member)
+        snapshot["current"].update(
+            {
+                "status": "pending",
+                "degraded": False,
+                "pending": True,
+                "error": "",
+                "summary": "The connected Hub is preparing this invitation.",
+                "source": "hub_delegated",
+            }
+        )
         self._set_paths({"data/adaos_connect": snapshot})
+        worker.start()
         return snapshot
+
+    def _finish_connect_prepare(
+        self,
+        selected_mode: str,
+        arguments: dict[str, Any],
+        request_id: str,
+        generation: int,
+    ) -> None:
+        error: Exception | None = None
+        result: Any = None
+        try:
+            if self.member_link is None:
+                raise AndroidSkillError("android_member_link_not_ready")
+            result = self.member_link.call_hub_tool(
+                "adaos_connect:prepare", arguments, timeout=45.0
+            )
+        except Exception as exc:
+            error = exc
+        with self._lock:
+            if self._closed or generation != self._connect_prepare_generation:
+                return
+            member = self.member_link.snapshot() if self.member_link is not None else {}
+            if error is None:
+                remote_current = (
+                    dict(result.get("current") or {}) if isinstance(result, dict) else {}
+                )
+                if not remote_current:
+                    error = AndroidSkillError("adaos_connect_hub_result_invalid")
+            if error is None:
+                remote_current.update(
+                    {
+                        "mode": selected_mode,
+                        "member_link_state": str(member.get("state") or "connected"),
+                        "connected": True,
+                        "configured": bool(member.get("configured")),
+                        "transport_security": str(
+                            member.get("transport_security") or "unconfigured"
+                        ),
+                        "root_url": str(
+                            member.get("root_url")
+                            or self._setting("member_root_url", "")
+                        ),
+                        "hub_url": str(member.get("hub_url") or ""),
+                        "subnet_id": str(member.get("subnet_id") or self.subnet_id),
+                        "source": "hub_delegated",
+                    }
+                )
+                snapshot = {"current": remote_current}
+            else:
+                snapshot = self._connect_snapshot(
+                    selected_mode, request_id, member_status=member
+                )
+                snapshot["current"].update(
+                    {
+                        "status": "error",
+                        "degraded": True,
+                        "pending": False,
+                        "error": f"{type(error).__name__}:{str(error)[:180]}",
+                        "summary": "The connected Hub could not create this invitation.",
+                        "source": "hub_delegated",
+                    }
+                )
+            self._connect_prepare_thread = None
+        self._set_paths({"data/adaos_connect": snapshot})
 
     def _set_member_root_url(self, arguments: dict[str, Any]) -> dict[str, Any]:
         root_url = str(arguments.get("root_url") or arguments.get("value") or "").strip()
@@ -926,7 +1042,7 @@ class AndroidSkillRuntime:
                 (root_url.rstrip("/"), _utc_now()),
             )
             self._database.commit()
-        snapshot = self._connect_snapshot("node")
+        snapshot = self._connect_snapshot("member")
         self._set_paths({"data/adaos_connect": snapshot})
         return snapshot
 
@@ -954,6 +1070,9 @@ class AndroidSkillRuntime:
             result = self.member_link.join(root_url=root_url, code=code)
         except (ValueError, RuntimeError) as exc:
             raise AndroidSkillError(str(exc)) from exc
+        joined_root_url = str(result.get("root_url") or root_url).strip()
+        if joined_root_url:
+            self._set_setting("member_root_url", joined_root_url.rstrip("/"))
         return self.project_member_link(result)
 
     def _disconnect_member(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -968,21 +1087,60 @@ class AndroidSkillRuntime:
             _DIALOG_AGENT_BY_ID.get(str(agent_id), _DIALOG_AGENT_BY_ID[_GENERAL_DIALOG_AGENT_ID])
         )
 
-    @staticmethod
-    def _dialog_agent_projection(agent: dict[str, Any]) -> dict[str, Any]:
+    def _member_link_connected(self) -> bool:
+        if self.member_link is None:
+            return False
+        snapshot = getattr(self.member_link, "snapshot", None)
+        if not callable(snapshot):
+            # Protocol fakes and older adapters which expose callable Hub RPC
+            # but no status projection are treated as an available link.
+            return callable(getattr(self.member_link, "call_hub_tool", None))
+        try:
+            return bool(snapshot().get("connected"))
+        except Exception:
+            return False
+
+    def _dialog_agent_projection(self, agent: dict[str, Any]) -> dict[str, Any]:
         projected = {
             key: copy.deepcopy(value)
             for key, value in agent.items()
             if key != "aliases"
         }
         projected["capabilities"] = list(projected.get("capabilities") or [])
+        hub_connected = self._member_link_connected()
+        hub_companion = (
+            str(projected.get("owner") or "") == "skill:conversation_companions"
+        )
+        if hub_companion and hub_connected:
+            implementation = "hub_delegated"
+            availability = "ready"
+            scope = "hub"
+            model_backed = True
+            capabilities = [
+                item
+                for item in projected["capabilities"]
+                if item != "local_companion"
+            ]
+            if "remote_llm" not in capabilities:
+                capabilities.append("remote_llm")
+            projected["capabilities"] = capabilities
+        elif hub_companion:
+            implementation = "android_offline_fallback"
+            availability = "degraded"
+            scope = "local"
+            model_backed = False
+        else:
+            implementation = "android_local_bounded"
+            availability = "ready"
+            scope = "local"
+            model_backed = False
         projected.update(
             {
-                "availability": "ready",
-                "implementation": "android_local_bounded",
-                "model_backed": False,
-                "full_runtime": False,
-                "scope": "local",
+                "availability": availability,
+                "implementation": implementation,
+                "model_backed": model_backed,
+                "full_runtime": hub_companion and hub_connected,
+                "scope": scope,
                 "voice_profile": {
                     "lang": "ru-RU",
                     "gender": projected.get("gender"),
@@ -1051,13 +1209,16 @@ class AndroidSkillRuntime:
                     "active_agent_icon": agent_projection.get("icon"),
                     "active_agent": agent_projection,
                     "active": channel_id == active_channel_id,
-                    "implementation": "android_local_bounded",
+                    "implementation": agent_projection.get(
+                        "implementation", "android_local_bounded"
+                    ),
                 }
             )
         active_projection = self._dialog_agent_projection(active_agent)
         active_channel = next(
             item for item in channels if item["id"] == active_channel_id
         )
+        hub_connected = self._member_link_connected()
         return {
             "schema": "adaos.dialog.android.v1",
             "active_channel_id": active_channel_id,
@@ -1066,13 +1227,16 @@ class AndroidSkillRuntime:
             "channels": channels,
             "agents": agents,
             "implementation": {
-                "id": "android_local_bounded",
-                "status": "ready",
-                "model_backed": False,
+                "id": "android_hub_delegated" if hub_connected else "android_local_bounded",
+                "status": "ready" if hub_connected else "degraded",
+                "model_backed": hub_connected,
                 "full_builder_runtime": False,
                 "limitations": [
-                    "bounded allowlisted intents only",
-                    "no LLM-backed free-form conversation",
+                    (
+                        "conversation companions run on the connected Hub"
+                        if hub_connected
+                        else "conversation companions use the bounded offline fallback"
+                    ),
                     "no skill generation or subprocess execution",
                 ],
             },
@@ -1698,5 +1862,7 @@ class AndroidSkillRuntime:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
+            self._connect_prepare_generation += 1
             self._database.commit()
             self._database.close()

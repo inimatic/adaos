@@ -183,14 +183,14 @@ def main() -> int:
         connect_result, _ = _command(
             websocket,
             "connect-smoke",
-            "adaos_connect.prepare.browser",
-            {"mode": "browser", "refresh": True},
+            "adaos_connect.prepare",
+            {"mode": "member", "refresh": True},
         )
         connect_current = connect_result.get("result", {}).get("current", {})
-        if connect_current.get("status") != "ready":
-            raise RuntimeError("AdaOS Connect did not publish its local-ready state")
-        if connect_current.get("link") != "https://inimatic.com/?zone=lo&try_local_hub=1":
-            raise RuntimeError("AdaOS Connect did not publish the local LO link")
+        if connect_current.get("status") not in {"offline", "connecting", "connected"}:
+            raise RuntimeError("AdaOS Connect did not publish member enrollment state")
+        if connect_current.get("link"):
+            raise RuntimeError("AdaOS Connect must not present LO as a remote invitation")
 
         registration, _ = _command(
             websocket,
@@ -394,7 +394,7 @@ def main() -> int:
                 "weather_error": weather_state.get("error") or "",
                 "weather_offline_recovered": True,
                 "subnet_env_round_trip": True,
-                "adaos_connect_local": True,
+                "adaos_connect_member_state": True,
                 "browsers_projection": True,
                 "voice_assistant_turn": True,
                 "dialog_roster": sorted(expected_agents),

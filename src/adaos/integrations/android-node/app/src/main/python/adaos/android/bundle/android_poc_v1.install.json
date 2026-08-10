@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.4.0",
+  "version": "1.6.0",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -46,7 +46,7 @@
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "b5def9a2c865b97cc38ae0dc7f08de5dca317f50947120a024d3f2d52bc7dbe1"
+          "sha256": "43ca8973dc103bd31a7e859747f98310925f4326b11c4d20af4dbe0d03ce6366"
         }
       ]
     },
@@ -83,9 +83,9 @@
     },
     {
       "id": "adaos_connect",
-      "version": "android-poc.2",
+      "version": "android-poc.3",
       "descriptor": "adaos_connect.webui.json",
-      "sha256": "bc644e68292112cec057a84426fb8e7f7cc89c10756333354b4968ce4d3f48af"
+      "sha256": "ed4b9378f5b4d3818a4968b1528c4aba6b6e99b7db19e110d40ae330a28abb21"
     },
     {
       "id": "browsers_skill",
@@ -113,10 +113,10 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "468cc7f9a3d62cc99f4e95da9ba2a888b0c81c70d8fec6f62d039fe45d31d87f"
+    "sha256": "d3be46a9debdbe312ca1367e7e6cb19d545995c20aed2f37972eb68231049265"
   },
   "member_link_module": {
     "path": "../member_link.py",
-    "sha256": "0d6bd7af49f3b3d271e82bc247ba0403e224f2f73a8e8bf04d33570f1c6c7256"
+    "sha256": "b919e7d26dc8718450556025ef295f4f4c54201e4cfd3600779cab6f635c48ae"
   }
 }

@@ -61,6 +61,7 @@ _member_link: AndroidMemberLink | None = None
 _install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
 _resource_sampler = AndroidResourceSampler()
+_dialog_command_slot = threading.BoundedSemaphore(1)
 
 
 class _LoopbackServer(ThreadingHTTPServer):
@@ -709,6 +710,49 @@ def _handle_control_message(peer: _WebSocketPeer, payload: bytes) -> None:
         return
     if message.get("ch") != "events" or message.get("t") != "cmd" or not message.get("id"):
         return
+    kind = str(message.get("kind") or "")
+    if kind in {"dialog.user_message", "voice.chat.user"}:
+        if not _dialog_command_slot.acquire(blocking=False):
+            response = {
+                "ch": "events",
+                "t": "ack",
+                "id": str(message["id"]),
+                "kind": kind,
+                "data": {
+                    "ok": False,
+                    "accepted": False,
+                    "error": "dialog_command_already_running",
+                },
+            }
+            peer.send(
+                0x1,
+                json.dumps(response, separators=(",", ":")).encode("utf-8"),
+            )
+            return
+        threading.Thread(
+            target=_run_dialog_control_message,
+            args=(peer, message),
+            name="adaos-android-dialog",
+            daemon=True,
+        ).start()
+        return
+    _execute_control_message(peer, message)
+
+
+def _run_dialog_control_message(
+    peer: _WebSocketPeer,
+    message: dict[str, Any],
+) -> None:
+    try:
+        _execute_control_message(peer, message)
+    finally:
+        _dialog_command_slot.release()
+
+
+def _execute_control_message(
+    peer: _WebSocketPeer,
+    message: dict[str, Any],
+) -> None:
     kind = str(message.get("kind") or "")
     request_payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
     data: dict[str, Any]

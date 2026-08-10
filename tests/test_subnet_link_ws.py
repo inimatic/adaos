@@ -209,3 +209,7 @@ def test_member_rpc_rejects_non_allowlisted_tools_before_context_access() -> Non
             arguments={"command": "whoami"},
             timeout=40,
         )
+
+
+def test_member_rpc_allows_canonical_adaos_connect_prepare() -> None:
+    assert "adaos_connect:prepare" in member_rpc.MEMBER_RPC_ALLOWED_TOOLS

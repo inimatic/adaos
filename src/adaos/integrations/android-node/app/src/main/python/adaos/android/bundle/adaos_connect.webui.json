@@ -15,7 +15,7 @@
         "schema": {
           "id": "adaos_connect_modal",
           "initialState": {
-            "adaosConnectMode": "browser"
+            "adaosConnectMode": "member"
           },
 					"layout": {
 						"type": "single",
@@ -35,16 +35,20 @@
               "inputs": {
                 "buttons": [
                   {
+                    "id": "member",
+                    "label": "Connect this phone"
+                  },
+                  {
                     "id": "browser",
-                    "label": "Join browser"
+                    "label": "Add browser"
                   },
                   {
                     "id": "telegram",
-                    "label": "Join telegram"
+                    "label": "Add Telegram"
                   },
                   {
                     "id": "node",
-                    "label": "Join node"
+                    "label": "Add node"
                   },
                   {
                     "id": "disconnect",
@@ -53,6 +57,22 @@
                 ]
               },
               "actions": [
+                {
+                  "on": "click:member",
+                  "type": "updateState",
+                  "params": {
+                    "adaosConnectMode": "member"
+                  }
+                },
+                {
+                  "on": "click:member",
+                  "type": "callHost",
+                  "target": "adaos_connect.prepare",
+                  "params": {
+                    "mode": "member",
+                    "refresh": true
+                  }
+                },
                 {
                   "on": "click:browser",
                   "type": "updateState",
@@ -149,7 +169,7 @@
                   }
                 }
               ],
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.adaosConnectMode === 'member'"
             },
             {
               "id": "adaos-connect-join-code-input",
@@ -186,7 +206,7 @@
                   }
                 }
               ],
-              "visibleIf": "$state.adaosConnectMode === 'node'"
+              "visibleIf": "$state.adaosConnectMode === 'member'"
             },
             {
               "id": "adaos-connect-summary",
@@ -373,8 +393,8 @@
   "ydoc_defaults": {
     "data/adaos_connect": {
       "current": {
-        "mode": "browser",
-        "summary": "Select Join browser, Join telegram, or Join node to generate connection data. Generation may take a few seconds and the panel will update automatically.",
+        "mode": "member",
+        "summary": "Connect this phone to a Hub with a Root URL and one-time code. After that, AdaOS Connect can create remote browser, Telegram, and node invitations through the canonical Hub skill.",
         "summary_language": "text",
         "expires_at": "",
         "expires_at_display": "",
@@ -395,6 +415,7 @@
         "windows_cmd_command": "",
         "windows_cmd_language": "bat",
         "root_url": "",
+        "hub_url": "",
         "join_code": "",
         "subnet_id": "",
         "member_link_state": "offline",
