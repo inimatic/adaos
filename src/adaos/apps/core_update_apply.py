@@ -723,7 +723,31 @@ def _force_remove_tree(path: Path) -> None:
             pass
         func(value)
 
-    shutil.rmtree(target, ignore_errors=False, onerror=_retry_with_writeable)
+    # Git pack indexes are briefly held open by Windows Search and antivirus
+    # immediately after a clone.  The onerror callback handles read-only
+    # attributes, while the outer retry handles those transient file handles.
+    # Keep the retry bounded and fail closed if metadata still survives.
+    delays = (0.0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0)
+    last_error: Exception | None = None
+    for attempt, delay in enumerate(delays):
+        if not target.exists():
+            return
+        if attempt and delay > 0.0:
+            time.sleep(delay)
+        try:
+            shutil.rmtree(target, ignore_errors=False, onerror=_retry_with_writeable)
+        except FileNotFoundError:
+            if not target.exists():
+                return
+            last_error = FileNotFoundError(str(target))
+        except (PermissionError, OSError) as exc:
+            last_error = exc
+        else:
+            return
+    if last_error is not None:
+        raise last_error
+    if target.exists():
+        raise RuntimeError(f"failed to remove directory tree: {target}")
 
 
 def _replace_slot_dir(prepared_slot: Path, slot_dir: Path) -> None:

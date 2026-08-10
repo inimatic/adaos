@@ -653,6 +653,30 @@ def test_strip_repo_vcs_metadata_removes_git_dir(tmp_path: Path) -> None:
     assert not git_dir.exists()
 
 
+def test_force_remove_tree_retries_transient_windows_file_lock(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    target = tmp_path / "repo" / ".git"
+    target.mkdir(parents=True)
+    (target / "pack.idx").write_text("pack", encoding="utf-8")
+    real_rmtree = mod.shutil.rmtree
+    calls = {"total": 0}
+
+    def flaky_rmtree(path, *args, **kwargs):
+        calls["total"] += 1
+        if calls["total"] < 3:
+            raise PermissionError("transient search-indexer lock")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(mod.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(mod.time, "sleep", lambda _delay: None)
+
+    mod._force_remove_tree(target)
+
+    assert calls["total"] == 3
+    assert not target.exists()
+
+
 def test_strip_repo_vcs_metadata_fails_closed_when_cleanup_survives(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
