@@ -228,6 +228,7 @@ class AndroidSkillRuntime:
         *,
         node_id: str,
         subnet_id: str,
+        default_node_label: str = "Android phone",
         desktop_application: dict[str, Any],
         desktop_catalog: dict[str, Any],
         desktop_installed: dict[str, Any],
@@ -239,6 +240,7 @@ class AndroidSkillRuntime:
         self.store = store
         self.node_id = node_id
         self.subnet_id = subnet_id
+        self.default_node_label = str(default_node_label or "Android phone").strip()
         self.desktop_application = copy.deepcopy(desktop_application)
         self.desktop_catalog = copy.deepcopy(desktop_catalog)
         self.desktop_installed = copy.deepcopy(desktop_installed)
@@ -674,9 +676,9 @@ class AndroidSkillRuntime:
             "node_id": self.node_id,
             "subnet_id": subnet_id,
             "role": "member",
-            "node_label": self._setting("node_label", "Android phone"),
+            "node_label": self._setting("node_label", self.default_node_label),
             "summary": (
-                f"{self._setting('node_label', 'Android phone')} is a local Android "
+                f"{self._setting('node_label', self.default_node_label)} is a local Android "
                 f"member of {subnet_id}; upstream link is {link_state}."
             ),
             "runtime_profile": "android_poc",
@@ -1523,6 +1525,7 @@ class AndroidSkillRuntime:
                     "_meta": {
                         "route_id": "voice_chat",
                         "runtime_profile": "android",
+                        "nlu_teacher_only": True,
                         "rasa_model_id": (
                             self._nlu_runtime.metadata.get("model_id")
                             if self._nlu_runtime is not None
@@ -1617,15 +1620,17 @@ class AndroidSkillRuntime:
             response_input = addressed_text or "привет"
         now = time.time()
         turn_id = uuid.uuid4().hex[:12]
+        response_text, used_llm = self._hub_dialog_response(
+            response_input,
+            active_agent,
+            webspace_id=webspace_id,
+        )
+        # Preserve interactive priority on the single member link: the Hub
+        # dialog RPC must be queued and completed before optional teacher work.
         teacher_dispatched = self._dispatch_nlu_teacher(
             text=text,
             nlu_result=nlu_result,
             request_id=f"mobile-{turn_id}",
-            webspace_id=webspace_id,
-        )
-        response_text, used_llm = self._hub_dialog_response(
-            response_input,
-            active_agent,
             webspace_id=webspace_id,
         )
         response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"

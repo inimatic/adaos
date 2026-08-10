@@ -5739,6 +5739,11 @@ class RouterService:
             if self._event_originates_from_remote_member(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            # A member may already own the interactive dialog RPC and publish
+            # this event only as evidence for the asynchronous LLM teacher.
+            # Do not start a second dialog fallback or append a duplicate reply.
+            if meta.get("nlu_teacher_only") is True:
+                return
             route_id = meta.get("route_id") or meta.get("route")
             if not isinstance(route_id, str) or not route_id.strip():
                 return

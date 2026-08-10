@@ -326,16 +326,19 @@ def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
         def __init__(self) -> None:
             self.events: list[tuple[str, dict, str]] = []
             self.calls: list[tuple[str, dict, float]] = []
+            self.order: list[str] = []
 
         def send_bus_event(
             self, event_type: str, payload: dict, *, source: str = ""
         ) -> bool:
+            self.order.append("teacher")
             self.events.append((event_type, payload, source))
             return True
 
         def call_hub_tool(
             self, tool: str, arguments: dict, *, timeout: float
         ) -> dict:
+            self.order.append("rpc")
             self.calls.append((tool, arguments, timeout))
             return {"message": "Canonical Hub companion response", "used_llm": True}
 
@@ -363,6 +366,8 @@ def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
         assert member_link.calls[0][1]["character_id"] == "arseni"
         assert member_link.events[0][0] == "nlp.intent.not_obtained"
         assert member_link.events[0][2] == "android.nlu.rasa"
+        assert member_link.events[0][1]["_meta"]["nlu_teacher_only"] is True
+        assert member_link.order == ["rpc", "teacher"]
     finally:
         bootstrap.stop()
 

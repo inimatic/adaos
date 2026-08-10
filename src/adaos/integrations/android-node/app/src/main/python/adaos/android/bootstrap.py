@@ -1488,7 +1488,12 @@ def _load_identity(data_root: Path) -> tuple[str, str]:
     return node_id, subnet_id
 
 
-def start(data_root: str, app_version: str, port: int = 8777) -> str:
+def start(
+    data_root: str,
+    app_version: str,
+    port: int = 8777,
+    device_label: str = "Android phone",
+) -> str:
     """Start the loopback runtime and return a JSON lifecycle payload."""
 
     bootstrap_started = time.perf_counter()
@@ -1501,6 +1506,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
         if _server is not None:
             return json.dumps(_snapshot(), sort_keys=True)
         _resource_sampler.reset()
+        normalized_device_label = str(device_label or "Android phone").strip()[:64]
         node_id, subnet_id = _load_identity(root)
         _install_descriptor = _load_verified_install_descriptor()
         _desktop_snapshot = _build_desktop_snapshot()
@@ -1521,6 +1527,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             _ystore,
             node_id=node_id,
             subnet_id=subnet_id,
+            default_node_label=normalized_device_label,
             desktop_application=copy.deepcopy(_desktop_snapshot["ui"]["application"]),
             desktop_catalog=copy.deepcopy(_desktop_snapshot["data"]["catalog"]),
             desktop_installed=copy.deepcopy(_desktop_snapshot["data"]["installed"]),
@@ -1546,6 +1553,7 @@ def start(data_root: str, app_version: str, port: int = 8777) -> str:
             "app_version": str(app_version),
             "node_id": node_id,
             "subnet_id": subnet_id,
+            "device_label": normalized_device_label,
             "started_at": started_at,
             "startup_duration_ms": int(
                 max(0.0, time.perf_counter() - bootstrap_started) * 1000
@@ -1688,7 +1696,7 @@ def _node_status() -> dict[str, Any]:
     member = _member_link_snapshot()
     connected = bool(member.get("connected"))
     effective_subnet_id = str(member.get("subnet_id") or runtime["subnet_id"])
-    node_label = "Android phone"
+    node_label = str(runtime.get("device_label") or "Android phone")
     if skills is not None:
         try:
             node_label = str(

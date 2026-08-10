@@ -11,6 +11,9 @@ import urllib.request
 from websockets.sync.client import connect
 
 
+_SMOKE_METADATA_PREFIX = "__adaos_android_smoke_metadata__:"
+
+
 def _post(base_url: str, payload: dict) -> dict:
     request = urllib.request.Request(
         f"{base_url}/api/tools/call",
@@ -78,6 +81,46 @@ def _verify_persisted_state(base_url: str, marker: str) -> None:
         raise RuntimeError("selected Android dialog agent did not survive restart")
 
 
+def _cleanup_persisted_state(base_url: str, marker: str) -> None:
+    notebook = _post(
+        base_url,
+        {"tool": "notebook_skill:get_notebook_snapshot", "arguments": {}},
+    )
+    original_label = "Android phone"
+    cleanup_ids: list[str] = []
+    for item in notebook.get("items") or []:
+        content = str(item.get("content") or "")
+        if content == marker:
+            cleanup_ids.append(str(item.get("id") or ""))
+            continue
+        if not content.startswith(_SMOKE_METADATA_PREFIX):
+            continue
+        try:
+            metadata = json.loads(content[len(_SMOKE_METADATA_PREFIX) :])
+        except (TypeError, ValueError):
+            continue
+        if str(metadata.get("marker") or "") != marker:
+            continue
+        original_label = str(metadata.get("original_node_label") or original_label)
+        cleanup_ids.append(str(item.get("id") or ""))
+    _post(
+        base_url,
+        {
+            "tool": "subnet_env:set_node_label",
+            "arguments": {"node_label": original_label},
+        },
+    )
+    for note_id in cleanup_ids:
+        if note_id:
+            _post(
+                base_url,
+                {
+                    "tool": "notebook_skill:delete_note",
+                    "arguments": {"note_id": note_id},
+                },
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("run", "verify"))
@@ -86,6 +129,7 @@ def main() -> int:
     arguments = parser.parse_args()
     if arguments.mode == "verify":
         _verify_persisted_state(arguments.base_url, arguments.marker)
+        _cleanup_persisted_state(arguments.base_url, arguments.marker)
         print(json.dumps({"ok": True, "mode": "verify", "marker": arguments.marker}))
         return 0
 
@@ -134,6 +178,26 @@ def main() -> int:
     )
     if not subnet.get("node_id") or not subnet.get("subnet_id"):
         raise RuntimeError("subnet_env snapshot is incomplete")
+    _post(
+        arguments.base_url,
+        {
+            "tool": "notebook_skill:create_note",
+            "arguments": {
+                "content": _SMOKE_METADATA_PREFIX
+                + json.dumps(
+                    {
+                        "marker": arguments.marker,
+                        "original_node_label": str(
+                            subnet.get("node_label") or "Android phone"
+                        ),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            },
+            "idempotency_key": f"android-smoke-metadata:{arguments.marker}",
+        },
+    )
 
     ws_url = arguments.base_url.replace("http://", "ws://") + "/ws"
     with connect(ws_url, origin="https://inimatic.com", open_timeout=5, close_timeout=2) as websocket:

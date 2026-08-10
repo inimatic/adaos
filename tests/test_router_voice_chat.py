@@ -354,6 +354,80 @@ async def test_voice_chat_not_obtained_uses_skill_fallback(monkeypatch) -> None:
     assert "suppress_teacher_bridge" not in event_payload["_meta"]
 
 
+async def test_voice_chat_teacher_only_evidence_skips_duplicate_dialog_fallback(
+    monkeypatch,
+) -> None:
+    bus = LocalEventBus()
+    calls: list[object] = []
+    replies: list[Event] = []
+
+    class _SkillCtx:
+        def get(self):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def clear(self):
+            return None
+
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(
+                node_id="hub-local",
+                root_settings=SimpleNamespace(llm=SimpleNamespace(allow_nlu_teacher=True)),
+            ),
+            paths=SimpleNamespace(skills_workspace_dir=lambda: Path(".")),
+            skill_ctx=_SkillCtx(),
+            skills_repo=None,
+            sql=None,
+            git=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None)
+    )
+    monkeypatch.setattr(
+        router_service_module,
+        "SkillManager",
+        lambda **_kwargs: SimpleNamespace(
+            run_tool=lambda *_args, **_kwargs2: calls.append(object())
+        ),
+    )
+    monkeypatch.setattr(
+        router_service_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: object()
+    )
+    bus.subscribe("io.out.chat.append", lambda event: replies.append(event))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    bus.publish(
+        Event(
+            type="nlp.intent.not_obtained",
+            source="android.nlu.rasa",
+            ts=1.0,
+            payload={
+                "text": "unmapped mobile utterance",
+                "reason": "low_confidence",
+                "_meta": {
+                    "route_id": "voice_chat",
+                    "webspace_id": "desktop",
+                    "nlu_teacher_only": True,
+                },
+            },
+        )
+    )
+
+    await bus.wait_for_idle(timeout=1.0)
+    assert calls == []
+    assert replies == []
+
+
 async def test_voice_chat_not_obtained_prefers_skill_fallback_before_teacher(monkeypatch) -> None:
     bus = LocalEventBus()
     calls: list[dict[str, object]] = []

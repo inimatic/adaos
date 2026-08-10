@@ -1,6 +1,7 @@
 package dev.adaos.androidnode
 
 import android.content.Context
+import android.os.Build
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import org.json.JSONObject
@@ -28,7 +29,13 @@ class PythonHost(context: Context) {
                 }
                 val payload = Python.getInstance()
                     .getModule("adaos.android.bootstrap")
-                    .callAttr("start", dataRoot.absolutePath, BuildConfig.VERSION_NAME)
+                    .callAttr(
+                        "start",
+                        dataRoot.absolutePath,
+                        BuildConfig.VERSION_NAME,
+                        8777,
+                        deviceLabel(),
+                    )
                     .toString()
                 val parsed = JSONObject(payload)
                 callback(
@@ -64,5 +71,15 @@ class PythonHost(context: Context) {
                 callback(Result.failure(error))
             }
         }
+    }
+
+    private fun deviceLabel(): String {
+        val manufacturer = Build.MANUFACTURER.trim().replaceFirstChar { it.uppercase() }
+        val model = Build.MODEL.trim()
+        return listOf(manufacturer, model)
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .joinToString(" ")
+            .ifBlank { "Android phone" }
     }
 }
