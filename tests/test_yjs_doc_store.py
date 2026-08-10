@@ -349,6 +349,57 @@ async def test_ystore_backup_to_disk_compacts_runtime_log(monkeypatch) -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_sync_get_ydoc_serializes_native_replay_per_webspace(monkeypatch) -> None:
+    webspace_id = _webspace_id("serialized-threaded-readers")
+    store = get_ystore_for_webspace(webspace_id)
+    original_apply_updates = store.apply_updates
+    probe_lock = threading.Lock()
+    start_barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+    active = 0
+    max_active = 0
+
+    async def _observed_apply_updates(ydoc: Y.YDoc) -> None:
+        nonlocal active, max_active
+        with probe_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            # This executes in each worker's private event loop.  The delay
+            # makes an unguarded implementation overlap reliably.
+            await asyncio.sleep(0.05)
+            await original_apply_updates(ydoc)
+        finally:
+            with probe_lock:
+                active -= 1
+
+    monkeypatch.setattr(store, "apply_updates", _observed_apply_updates)
+    try:
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, "flag", True)
+
+        def _reader() -> None:
+            try:
+                start_barrier.wait(timeout=2.0)
+                with get_ydoc(webspace_id, read_only=True) as ydoc:
+                    assert ydoc.get_map("data").get("flag") is True
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_reader, name=f"serialized-reader-{idx}") for idx in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        assert not [thread.name for thread in threads if thread.is_alive()]
+        assert not errors
+        assert max_active == 1
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_backup_to_disk_compacts_prefix_when_concurrent_append(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
     webspace_id = _webspace_id("backup-prefix-compact")

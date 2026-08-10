@@ -158,6 +158,7 @@ def _resolve_yjs_write_owner() -> str:
 
 _SYNC_GET_YDOC_GUARD_LOCK = threading.RLock()
 _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE: dict[str, int] = {}
+_SYNC_GET_YDOC_SESSION_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _sync_get_ydoc_max_active_per_webspace() -> int:
@@ -208,6 +209,52 @@ def _release_sync_get_ydoc_slot(key: str | None) -> None:
             _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE.pop(key, None)
         else:
             _SYNC_GET_YDOC_ACTIVE_BY_WEBSPACE[key] = active - 1
+
+
+def _acquire_sync_get_ydoc_session(
+    webspace_id: str,
+    *,
+    timeout_s: float,
+) -> tuple[str | None, threading.Lock]:
+    """Reserve and serialize a detached sync YDoc session per webspace.
+
+    ``y_py`` documents are native objects.  Replaying the same cached YStore
+    from several worker threads at once has caused process-level access
+    violations on Windows, which Python cannot catch.  Keep the existing
+    bounded waiter guard, but let accepted callers run one at a time for a
+    given webspace.  Locks remain cached just like the corresponding YStores;
+    removing an unlocked entry would race a waiter that already references it.
+    """
+    slot_key = _acquire_sync_get_ydoc_slot(webspace_id)
+    key = str(webspace_id or "default")
+    with _SYNC_GET_YDOC_GUARD_LOCK:
+        session_lock = _SYNC_GET_YDOC_SESSION_LOCKS.setdefault(key, threading.Lock())
+    try:
+        if timeout_s > 0:
+            acquired = session_lock.acquire(timeout=timeout_s)
+        else:
+            session_lock.acquire()
+            acquired = True
+    except BaseException:
+        _release_sync_get_ydoc_slot(slot_key)
+        raise
+    if not acquired:
+        _release_sync_get_ydoc_slot(slot_key)
+        _log.warning(
+            "sync get_ydoc timed out waiting for webspace session webspace=%s timeout_s=%s owner=%s",
+            key,
+            timeout_s,
+            _sync_get_ydoc_owner_label(),
+        )
+        raise RuntimeError("sync_get_ydoc_session_timeout")
+    return slot_key, session_lock
+
+
+def _release_sync_get_ydoc_session(slot_key: str | None, session_lock: threading.Lock) -> None:
+    try:
+        session_lock.release()
+    finally:
+        _release_sync_get_ydoc_slot(slot_key)
 
 
 def _sync_get_ydoc_operation_timeout_s() -> float:
@@ -550,10 +597,23 @@ def get_ydoc(
     """
     _log.debug("get_ydoc enter webspace=%s", webspace_id)
     session_started = time.perf_counter()
-    ystore = get_ystore_for_webspace(webspace_id)
-    ydoc = Y.YDoc()
     operation_timeout_s = _sync_get_ydoc_operation_timeout_s()
-    owner_for_session = _resolve_yjs_write_owner()
+    wait_started = time.perf_counter()
+    sync_slot_key, sync_session_lock = _acquire_sync_get_ydoc_session(
+        webspace_id,
+        timeout_s=operation_timeout_s,
+    )
+    _record_doc_timing(timings, "session_wait", wait_started, prefix=timing_prefix)
+    try:
+        # Create native objects only after this worker owns the webspace
+        # session.  Their complete lifetime, including final flush and stop,
+        # therefore stays outside concurrent sync replay for the same store.
+        ystore = get_ystore_for_webspace(webspace_id)
+        ydoc = Y.YDoc()
+        owner_for_session = _resolve_yjs_write_owner()
+    except BaseException:
+        _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
+        raise
 
     async def _load() -> bytes | None:
         stage_started = time.perf_counter()
@@ -583,11 +643,10 @@ def get_ydoc(
             _record_doc_timing(timings, "encode_state_vector", stage_started, prefix=timing_prefix)
             return None
 
-    sync_slot_key = _acquire_sync_get_ydoc_slot(webspace_id)
     try:
         before = _run_blocking(_load(), timeout_s=operation_timeout_s)
     except BaseException:
-        _release_sync_get_ydoc_slot(sync_slot_key)
+        _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
         raise
     tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]
     try:
@@ -667,7 +726,7 @@ def get_ydoc(
                 pass
             _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
             _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
-            _release_sync_get_ydoc_slot(sync_slot_key)
+            _release_sync_get_ydoc_session(sync_slot_key, sync_session_lock)
 
 
 @asynccontextmanager
