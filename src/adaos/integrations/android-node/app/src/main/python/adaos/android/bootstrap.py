@@ -33,6 +33,7 @@ _ALLOWED_ORIGINS = {
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _MAX_WEBSOCKET_MESSAGE_BYTES = 4 * 1024 * 1024
 _MAX_INBOUND_YJS_UPDATE_BYTES = 512 * 1024
+_WEBSOCKET_SEND_TIMEOUT_SECONDS = 1.0
 _MAX_YJS_UPDATES = 512
 _MAX_YJS_JOURNAL_BYTES = 8 * 1024 * 1024
 _MAX_LOOPBACK_REQUEST_THREADS = 32
@@ -154,6 +155,43 @@ class _WebSocketPeer:
         self.name = ""
         self.send_lock = threading.Lock()
         self.closed = False
+        self._configure_send_timeout()
+
+    def _configure_send_timeout(self) -> None:
+        """Bound writes without changing the blocking timeout used by reads."""
+
+        try:
+            if platform.system() == "Windows":
+                timeout: int | bytes = max(
+                    1,
+                    int(_WEBSOCKET_SEND_TIMEOUT_SECONDS * 1000),
+                )
+            else:
+                seconds = int(_WEBSOCKET_SEND_TIMEOUT_SECONDS)
+                microseconds = int(
+                    (_WEBSOCKET_SEND_TIMEOUT_SECONDS - seconds) * 1_000_000
+                )
+                timeout = struct.pack("ll", seconds, microseconds)
+            self.connection.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_SNDTIMEO,
+                timeout,
+            )
+        except (AttributeError, OSError, TypeError, struct.error):
+            # Some test doubles and embedded socket implementations don't
+            # expose SO_SNDTIMEO. Their send failure is still handled below.
+            pass
+
+    def _abort_locked(self) -> None:
+        self.closed = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.connection.close()
+        except OSError:
+            pass
 
     def send(self, opcode: int, payload: bytes = b"") -> None:
         if self.closed:
@@ -165,7 +203,7 @@ class _WebSocketPeer:
             try:
                 self.connection.sendall(frame)
             except OSError:
-                self.closed = True
+                self._abort_locked()
 
     def close(self, code: int | None = None, reason: str = "") -> None:
         with self.send_lock:
@@ -183,14 +221,7 @@ class _WebSocketPeer:
                     )
                 except OSError:
                     pass
-            try:
-                self.connection.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                self.connection.close()
-            except OSError:
-                pass
+            self._abort_locked()
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import importlib.util
 import json
+import socket
 import sqlite3
 import sys
 import threading
@@ -584,6 +585,38 @@ def test_loopback_sentinel_admits_inimatic_cors_and_private_network(tmp_path: Pa
             assert "x-adaos-trace-id" in allowed_headers
     finally:
         bootstrap.stop()
+
+
+def test_android_websocket_peer_aborts_after_bounded_send_failure() -> None:
+    bootstrap = _load_bootstrap()
+
+    class TimeoutSocket:
+        def __init__(self) -> None:
+            self.options: list[tuple[int, int, object]] = []
+            self.shutdown_called = False
+            self.close_called = False
+
+        def setsockopt(self, level: int, option: int, value: object) -> None:
+            self.options.append((level, option, value))
+
+        def sendall(self, payload: bytes) -> None:
+            raise TimeoutError("stale websocket peer")
+
+        def shutdown(self, how: int) -> None:
+            self.shutdown_called = True
+
+        def close(self) -> None:
+            self.close_called = True
+
+    connection = TimeoutSocket()
+    peer = bootstrap._WebSocketPeer(connection, "yjs")
+
+    peer.send(0x2, b"update")
+
+    assert any(option == socket.SO_SNDTIMEO for _, option, _ in connection.options)
+    assert peer.closed is True
+    assert connection.shutdown_called is True
+    assert connection.close_called is True
 
 
 def test_android_member_join_reconnect_and_node_owned_yjs_projection(tmp_path: Path) -> None:
