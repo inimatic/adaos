@@ -3017,6 +3017,13 @@ class SupervisorManager:
         last_restart_at = float(self._memory_critical_restart_last_at or 0.0)
         if last_restart_at > 0.0 and (current_time - last_restart_at) < cooldown_sec:
             return None
+        if last_restart_at >= critical_since:
+            # A restart already happened during this uninterrupted low-memory
+            # episode. Repeating it cannot reclaim memory owned by other
+            # processes and causes an avoidable Hub recovery loop. A healthy
+            # sample clears ``critical_since`` above, allowing one new restart
+            # if a later, distinct episode occurs.
+            return None
         subnet_live, subnet_reason = self._memory_live_subnet_state()
         return {
             "reason": "supervisor.memory.critical_pressure",

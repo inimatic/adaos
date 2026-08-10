@@ -6476,6 +6476,42 @@ def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeyp
     assert second["subnet_reason"] == "subnet_members_connected:2"
 
 
+def test_critical_memory_restart_runs_once_per_continuous_pressure_episode(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES", "64")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC", "20")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_RESTART_COOLDOWN_SEC", "30")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 9988
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._desired_running = True
+    manager._stopping = False
+    manager._memory_last_available_bytes = 32
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024)
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
+    monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
+
+    assert manager._memory_critical_restart_decision(now=100.0) is None
+    assert manager._memory_critical_restart_decision(now=121.0) is not None
+    manager._memory_critical_restart_last_at = 121.0
+    assert manager._memory_critical_restart_decision(now=300.0) is None
+
+    manager._memory_last_available_bytes = 128
+    assert manager._memory_critical_restart_decision(now=301.0) is None
+    manager._memory_last_available_bytes = 32
+    assert manager._memory_critical_restart_decision(now=400.0) is None
+    assert manager._memory_critical_restart_decision(now=421.0) is not None
+
+
 def test_spawn_runtime_locked_prefers_active_slot_manifest(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
