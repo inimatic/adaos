@@ -89,7 +89,22 @@ class BootstrapLifecycleCoordinator:
                 found = task
         if len(live_tasks) != len(self._boot_tasks):
             self._boot_tasks = live_tasks
-        return found
+        if found is not None:
+            return found
+        # Bootstrap resources such as the hub-root bridge are process-wide.
+        # A second composition root must observe the existing owner even when
+        # it has a different coordinator instance (for example during runtime
+        # promotion).  Looking only in the local registry permits two tasks
+        # with the same name to open competing transports.
+        try:
+            for task in asyncio.all_tasks():
+                if not task.done() and task.get_name() == task_name:
+                    return task
+        except RuntimeError:
+            # No running loop: callers that merely inspect lifecycle state
+            # should still get the local-registry result above.
+            pass
+        return None
 
     def start_task_once(
         self,
@@ -115,12 +130,44 @@ class BootstrapLifecycleCoordinator:
         coro_factory: Callable[[], Awaitable[Any]],
     ) -> tuple[asyncio.Task[Any], bool]:
         """Replace a named task and return ``(new_task, cancelled_previous)``."""
-        existing = self.find_live_task(task_name)
-        cancelled_previous = existing is not None
-        if existing is not None:
+        current = asyncio.current_task()
+        previous: list[asyncio.Task[Any]] = []
+        try:
+            previous = [
+                task
+                for task in asyncio.all_tasks()
+                if task is not current and not task.done() and task.get_name() == task_name
+            ]
+        except RuntimeError:
+            existing = self.find_live_task(task_name)
+            previous = [existing] if existing is not None and existing is not current else []
+        cancelled_previous = bool(previous)
+        for existing in previous:
             existing.cancel()
-            self._boot_tasks = [task for task in self._boot_tasks if task is not existing]
-        task = asyncio.create_task(coro_factory(), name=task_name)
+        if previous:
+            previous_set = set(previous)
+            self._boot_tasks = [task for task in self._boot_tasks if task not in previous_set]
+
+        async def _replace_after_previous_owner_stops() -> Any:
+            if previous:
+                # Never overlap two owners of the same process-wide resource.
+                # Transport teardown is already bounded by its owning service;
+                # this outer bound prevents a stuck teardown from blocking the
+                # lifecycle forever while still refusing an unsafe overlap.
+                done, pending = await asyncio.wait(previous, timeout=10.0)
+                if pending:
+                    raise RuntimeError(
+                        f"previous lifecycle owner did not stop task_name={task_name} "
+                        f"pending={len(pending)}"
+                    )
+                for old in done:
+                    try:
+                        old.exception()
+                    except (asyncio.CancelledError, Exception):
+                        pass
+            return await coro_factory()
+
+        task = asyncio.create_task(_replace_after_previous_owner_stops(), name=task_name)
         self._boot_tasks.append(task)
         return task, cancelled_previous
 

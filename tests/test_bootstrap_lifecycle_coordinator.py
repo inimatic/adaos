@@ -63,13 +63,25 @@ async def test_lifecycle_coordinator_starts_named_task_once_and_resets() -> None
 async def test_lifecycle_coordinator_replaces_and_tracks_tasks() -> None:
     lifecycle = BootstrapLifecycleCoordinator()
     release = asyncio.Event()
+    old_stopped = asyncio.Event()
+    replacement_started = asyncio.Event()
 
     async def _worker() -> None:
+        try:
+            await release.wait()
+        finally:
+            old_stopped.set()
+
+    async def _replacement() -> None:
+        assert old_stopped.is_set()
+        replacement_started.set()
         await release.wait()
 
     old = lifecycle.start_task_once("bootstrap-worker", _worker)
-    replacement, cancelled_previous = lifecycle.replace_task("bootstrap-worker", _worker)
+    await asyncio.sleep(0)
+    replacement, cancelled_previous = lifecycle.replace_task("bootstrap-worker", _replacement)
     await asyncio.gather(old, return_exceptions=True)
+    await asyncio.wait_for(replacement_started.wait(), timeout=1.0)
 
     assert cancelled_previous is True
     assert old.cancelled()
@@ -81,6 +93,27 @@ async def test_lifecycle_coordinator_replaces_and_tracks_tasks() -> None:
     assert lifecycle.boot_tasks.count(external) == 1
 
     await lifecycle.stop()
+
+
+async def test_lifecycle_coordinator_observes_process_wide_named_owner() -> None:
+    first_lifecycle = BootstrapLifecycleCoordinator()
+    second_lifecycle = BootstrapLifecycleCoordinator()
+    release = asyncio.Event()
+    starts = 0
+
+    async def _worker() -> None:
+        nonlocal starts
+        starts += 1
+        await release.wait()
+
+    first = first_lifecycle.start_task_once("process-wide-bootstrap-worker", _worker)
+    await asyncio.sleep(0)
+    second = second_lifecycle.start_task_once("process-wide-bootstrap-worker", _worker)
+
+    assert second is first
+    assert starts == 1
+
+    await first_lifecycle.stop()
 
 
 async def test_boot_coordinator_uses_agent_context_bus() -> None:
