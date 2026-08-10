@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import importlib.util
 import json
 import sqlite3
@@ -288,7 +289,8 @@ def test_android_ystore_structurally_compacts_bloated_history_on_restart(
                 runtime.pop(transaction, f"http_repair_{index}")
             runtime.set(transaction, "retained_value", "semantic state")
         assert store.apply_update(bytes(Y.encode_state_as_update(client)))
-        del client
+        del transaction, runtime, client
+        gc.collect()
         semantic_before = store.snapshot_json()
         source_bytes = store.stats()["snapshot_bytes"]
         generation_before = store.stats()["generation"]
@@ -347,6 +349,8 @@ def test_android_yws_rejects_oversized_client_history_with_recovery_reason(
             assert raised.value.rcvd is not None
             assert raised.value.rcvd.code == 1009
             assert "inbound_yws_update_payload_blocked" in raised.value.rcvd.reason
+            del transaction, client
+            gc.collect()
     finally:
         bootstrap.stop()
 
@@ -643,6 +647,8 @@ def test_native_yws_ystore_completes_diff_sync_and_persists_yjs_state(tmp_path: 
                 time.sleep(0.02)
             else:
                 raise AssertionError("Yjs update was not persisted")
+        del transaction, document
+        gc.collect()
     finally:
         bootstrap.stop()
 
@@ -675,6 +681,8 @@ def test_native_yws_ystore_completes_diff_sync_and_persists_yjs_state(tmp_path: 
             assert sync_type == 1
             Y.apply_update(restored, merged_update)
             assert json.loads(restored.get_map("runtime").to_json())["restart_probe"] == "persisted"
+        del restored
+        gc.collect()
     finally:
         bootstrap.stop()
 
