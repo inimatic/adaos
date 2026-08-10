@@ -400,6 +400,52 @@ async def test_sync_get_ydoc_serializes_native_replay_per_webspace(monkeypatch) 
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_detached_async_and_sync_ydoc_replay_share_one_session(monkeypatch) -> None:
+    webspace_id = _webspace_id("serialized-mixed-readers")
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, "flag", True)
+
+        original_apply_updates = store.apply_updates
+        probe_lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        async def _observed_apply_updates(ydoc: Y.YDoc) -> None:
+            nonlocal active, max_active
+            with probe_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                await asyncio.sleep(0.05)
+                await original_apply_updates(ydoc)
+            finally:
+                with probe_lock:
+                    active -= 1
+
+        monkeypatch.setattr(store, "apply_updates", _observed_apply_updates)
+
+        async def _async_reader() -> None:
+            async with async_read_ydoc(webspace_id, prefer_live_room=False) as ydoc:
+                assert ydoc.get_map("data").get("flag") is True
+
+        def _sync_reader() -> None:
+            with get_ydoc(webspace_id, read_only=True) as ydoc:
+                assert ydoc.get_map("data").get("flag") is True
+
+        await asyncio.gather(
+            _async_reader(),
+            _async_reader(),
+            asyncio.to_thread(_sync_reader),
+        )
+
+        assert max_active == 1
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_backup_to_disk_compacts_prefix_when_concurrent_append(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
     webspace_id = _webspace_id("backup-prefix-compact")

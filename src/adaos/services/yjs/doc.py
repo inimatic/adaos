@@ -257,6 +257,39 @@ def _release_sync_get_ydoc_session(slot_key: str | None, session_lock: threading
         _release_sync_get_ydoc_slot(slot_key)
 
 
+async def _acquire_async_get_ydoc_session(
+    webspace_id: str,
+    *,
+    timeout_s: float,
+) -> threading.Lock:
+    """Serialize detached async replay with sync worker-thread replay.
+
+    The cached YStore is shared by the main event loop and synchronous worker
+    loops.  Acquiring the same threading lock with a non-blocking poll keeps
+    the event loop responsive and, unlike ``run_in_executor(lock.acquire)``,
+    cannot leak an acquired lock when the awaiting task is cancelled.
+    """
+    key = str(webspace_id or "default")
+    with _SYNC_GET_YDOC_GUARD_LOCK:
+        session_lock = _SYNC_GET_YDOC_SESSION_LOCKS.setdefault(key, threading.Lock())
+    deadline = time.monotonic() + timeout_s if timeout_s > 0 else None
+    while not session_lock.acquire(blocking=False):
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _log.warning(
+                    "async get_ydoc timed out waiting for detached webspace session "
+                    "webspace=%s timeout_s=%s",
+                    key,
+                    timeout_s,
+                )
+                raise RuntimeError("async_get_ydoc_session_timeout")
+            await asyncio.sleep(min(0.01, remaining))
+        else:
+            await asyncio.sleep(0.01)
+    return session_lock
+
+
 def _sync_get_ydoc_operation_timeout_s() -> float:
     raw = str(os.getenv("ADAOS_YJS_SYNC_GET_YDOC_OPERATION_TIMEOUT_S") or "").strip()
     if not raw:
@@ -797,12 +830,22 @@ async def async_get_ydoc(
         except Exception:
             _log.debug("failed to apply live-room admission YJS primary-doc governance webspace=%s", webspace_id, exc_info=True)
     ydoc = room.ydoc if use_live_room else Y.YDoc()
+    detached_session_lock: threading.Lock | None = None
     if use_live_room:
         _set_doc_timing(timings, "ystore_start", 0.0, prefix=timing_prefix)
         _set_doc_timing(timings, "ystore_apply_updates", 0.0, prefix=timing_prefix)
     else:
+        detached_session_lock = await _acquire_async_get_ydoc_session(
+            webspace_id,
+            timeout_s=_sync_get_ydoc_operation_timeout_s(),
+        )
         stage_started = time.perf_counter()
-        await ystore.start()
+        try:
+            await ystore.start()
+        except BaseException:
+            detached_session_lock.release()
+            detached_session_lock = None
+            raise
         _record_doc_timing(timings, "ystore_start", stage_started, prefix=timing_prefix)
     try:
         if not use_live_room:
@@ -979,16 +1022,20 @@ async def async_get_ydoc(
                 _set_doc_timing(timings, "ystore_write_update", 0.0, prefix=timing_prefix)
                 _set_doc_timing(timings, "room_update", 0.0, prefix=timing_prefix)
     finally:
-        if use_live_room:
-            _set_doc_timing(timings, "ystore_stop", 0.0, prefix=timing_prefix)
-        else:
-            stage_started = time.perf_counter()
-            try:
-                ystore.stop()
-            except Exception:
-                pass
-            _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
-        _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
+        try:
+            if use_live_room:
+                _set_doc_timing(timings, "ystore_stop", 0.0, prefix=timing_prefix)
+            else:
+                stage_started = time.perf_counter()
+                try:
+                    ystore.stop()
+                except Exception:
+                    pass
+                _record_doc_timing(timings, "ystore_stop", stage_started, prefix=timing_prefix)
+            _record_doc_timing(timings, "total", session_started, prefix=timing_prefix)
+        finally:
+            if detached_session_lock is not None:
+                detached_session_lock.release()
 
 
 @asynccontextmanager
