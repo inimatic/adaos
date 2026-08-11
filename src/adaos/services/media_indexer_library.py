@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.media_core import (
@@ -105,6 +105,59 @@ def resolve_media_indexer_resource_by_name(filename: str) -> MediaResource:
 def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str, Any]]:
     resource = resolve_media_indexer_resource_by_name(filename)
     return resource.path, _resource_payload(resource)
+
+
+def iter_media_indexer_resources(*, limit: int | None = None) -> Iterator[MediaResource]:
+    """Yield legacy media-indexer entries as normalized media resources.
+
+    This is a compatibility adapter for cataloging skills. It preserves the
+    resolver semantics used by playback routes while hiding legacy
+    ``metadata.json`` / ``playback.sqlite3`` details behind ``MediaResource``.
+    """
+
+    max_items = int(limit) if limit is not None else None
+    if max_items is not None and max_items <= 0:
+        return
+
+    seen: set[tuple[str, str]] = set()
+    yielded = 0
+
+    for payload, metadata in _iter_playback_index_payloads():
+        try:
+            roots = _candidate_index_roots(metadata, payload)
+            if not roots:
+                continue
+            resource = _resource_from_payload(payload, metadata, roots)
+        except (FileNotFoundError, OSError, PermissionError, ValueError):
+            continue
+        key = (resource.source, resource.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield resource
+        yielded += 1
+        if max_items is not None and yielded >= max_items:
+            return
+
+    metadata = _latest_index_metadata()
+    if not metadata:
+        return
+    for payload in _iter_payloads(metadata):
+        try:
+            roots = _candidate_index_roots(metadata, payload)
+            if not roots:
+                continue
+            resource = _resource_from_payload(payload, metadata, roots)
+        except (FileNotFoundError, OSError, PermissionError, ValueError):
+            continue
+        key = (resource.source, resource.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield resource
+        yielded += 1
+        if max_items is not None and yielded >= max_items:
+            return
 
 
 def _candidate_index_roots(metadata: dict[str, Any], payload: dict[str, Any]) -> list[Path]:
@@ -275,6 +328,32 @@ def _lookup_playback_index(
         except (OSError, sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
             continue
     return None, sidecar_available
+
+
+def _iter_playback_index_payloads() -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    for metadata_path in _metadata_candidates():
+        path = metadata_path.with_name(MEDIA_INDEXER_PLAYBACK_INDEX)
+        if not path.exists():
+            continue
+        try:
+            connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1.0)
+            try:
+                root_row = connection.execute(
+                    "SELECT value FROM meta WHERE key = 'indexed_directory' LIMIT 1"
+                ).fetchone()
+                metadata = {"indexed_directory": str(root_row[0] if root_row else "")}
+                try:
+                    rows = connection.execute("SELECT payload_json FROM items ORDER BY name").fetchall()
+                except sqlite3.Error:
+                    rows = connection.execute("SELECT payload_json FROM items").fetchall()
+                for row in rows:
+                    payload = json.loads(str(row[0] or "{}"))
+                    if isinstance(payload, dict):
+                        yield payload, metadata
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+            continue
 
 
 def _metadata_candidates() -> list[Path]:

@@ -35,6 +35,7 @@ the core media plane.
 
 Skills should use `adaos.sdk.io.media`:
 
+- `list_media_resources(...)`
 - `publish_media_file(...)`
 - `media_content_path(...)`
 - `media_resource_content_path(...)`
@@ -45,6 +46,12 @@ Skills should use `adaos.sdk.io.media`:
 Skills should not import `adaos.services.media_library` or
 `adaos.services.media_indexer_library` unless they are implementing a core-owned
 compatibility adapter.
+
+`list_media_resources(source='all')` is the discovery boundary for cataloging
+skills. It returns descriptors from the shared Media Server store and legacy
+media-indexer compatibility adapter. The caller is still responsible for
+deduplication, domain metadata, playlists, watch history, and any product-level
+catalog state.
 
 ## Compatibility Rules
 

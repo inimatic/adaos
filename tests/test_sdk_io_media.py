@@ -173,3 +173,35 @@ def test_sdk_io_media_exposes_resource_descriptor_helpers():
         sdk_media.media_indexer_content_path("c" * 32, browser=False)
         == f"/api/node/media-indexer/content/{'c' * 32}"
     )
+
+
+def test_sdk_io_media_lists_normalized_resources(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+    from adaos.services import media_core, media_indexer_library
+
+    server_clip = tmp_path / "server.mp4"
+    indexer_song = tmp_path / "indexer.mp3"
+    server_clip.write_bytes(b"server")
+    indexer_song.write_bytes(b"indexer")
+    server_resource = media_core.media_resource_from_path(
+        server_clip,
+        source="media_server",
+        resource_id=server_clip.name,
+    )
+    indexer_resource = media_core.media_resource_from_path(
+        indexer_song,
+        source="media_indexer",
+        resource_id="e" * 32,
+        playback_id="e" * 32,
+    )
+    monkeypatch.setattr(sdk_media, "iter_media_store_resources", lambda: iter([server_resource]))
+    monkeypatch.setattr(media_indexer_library, "iter_media_indexer_resources", lambda: iter([indexer_resource]))
+
+    items = sdk_media.list_media_resources(source="all")
+
+    assert {item["source"] for item in items} == {"media_server", "media_indexer"}
+    assert all(item["schema"] == "adaos.media.resource.v1" for item in items)
+    assert sdk_media.list_media_resources(source="media_store")[0]["source"] == "media_server"
+    assert sdk_media.list_media_resources(source="media_indexer", limit=1)[0]["resource_id"] == "e" * 32
+    with pytest.raises(ValueError, match="unsupported_media_source"):
+        sdk_media.list_media_resources(source="catalog")

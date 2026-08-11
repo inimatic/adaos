@@ -215,6 +215,10 @@ Canonical descriptor shape:
 
 Skill-facing helpers:
 
+- `list_media_resources(source='media_server', include_internal=False, limit=None)`
+  returns normalized `adaos.media.resource.v1` descriptors from core-backed
+  producers. Use `source='all'` to discover the shared Media Server store plus
+  compatibility media-indexer entries without importing service internals.
 - `publish_media_file(path, content_ref, namespace='media', variant='media', mime='image/jpeg')`
   copies a generated or prepared file into the shared Media Server store and
   returns a `adaos.media.resource.v1` descriptor plus legacy URL fields.

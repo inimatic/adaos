@@ -18,6 +18,7 @@ __all__ = [
     "browser_media_descriptor",
     "cached_image_variant",
     "media_indexer_content_path",
+    "list_media_resources",
     "media_resource_content_path",
     "media_resource_descriptor",
     "publish_media_file",
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from .media import (
         browser_media_descriptor,
         cached_image_variant,
+        list_media_resources,
         media_indexer_content_path,
         media_resource_content_path,
         media_resource_descriptor,
@@ -80,6 +82,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         "browser_media_descriptor",
         "cached_image_variant",
         "media_indexer_content_path",
+        "list_media_resources",
         "media_resource_content_path",
         "media_resource_descriptor",
         "publish_media_file",
@@ -87,6 +90,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         from .media import (
             browser_media_descriptor,
             cached_image_variant,
+            list_media_resources,
             media_indexer_content_path,
             media_resource_content_path,
             media_resource_descriptor,
@@ -96,6 +100,7 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         return {
             "browser_media_descriptor": browser_media_descriptor,
             "cached_image_variant": cached_image_variant,
+            "list_media_resources": list_media_resources,
             "media_indexer_content_path": media_indexer_content_path,
             "media_resource_content_path": media_resource_content_path,
             "media_resource_descriptor": media_resource_descriptor,

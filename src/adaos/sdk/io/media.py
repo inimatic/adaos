@@ -13,6 +13,8 @@ from urllib.parse import quote, urlparse, urlunparse
 from adaos.services.agent_context import get_ctx
 from adaos.services.media_core import (
     MEDIA_STORE_SKILL_NAME,
+    MediaResource,
+    iter_media_store_resources,
     media_indexer_content_path as _core_media_indexer_content_path,
     media_resource_content_path as _core_media_resource_content_path,
     media_resource_descriptor as _core_media_resource_descriptor,
@@ -133,6 +135,54 @@ def media_resource_descriptor(
         source_path=source_path,
         metadata=metadata,
     )
+
+
+def list_media_resources(
+    source: str = "media_server",
+    *,
+    include_internal: bool = False,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return normalized media resource descriptors from core-backed sources.
+
+    Skills use this as the stable SDK surface for cataloging and playback
+    planning. Product semantics stay in the skill; the SDK only exposes source
+    adapters as ``adaos.media.resource.v1`` dictionaries.
+    """
+
+    source_norm = str(source or "media_server").strip().lower() or "media_server"
+    if source_norm in {"media", "media_store", "mediaserver"}:
+        source_norm = "media_server"
+    if source_norm in {"indexer", "media_indexer_skill"}:
+        source_norm = "media_indexer"
+    if source_norm not in {"all", "media_server", "media_indexer"}:
+        raise ValueError("unsupported_media_source")
+
+    max_items = int(limit) if limit is not None else None
+    if max_items is not None and max_items <= 0:
+        return []
+
+    resources: list[MediaResource] = []
+
+    if source_norm in {"all", "media_server"}:
+        try:
+            resources.extend(iter_media_store_resources())
+        except Exception:
+            if source_norm == "media_server":
+                return []
+    if source_norm in {"all", "media_indexer"}:
+        try:
+            from adaos.services.media_indexer_library import iter_media_indexer_resources
+
+            resources.extend(iter_media_indexer_resources())
+        except Exception:
+            if source_norm == "media_indexer":
+                return []
+
+    resources.sort(key=lambda item: (item.modified_ts, item.source, item.name), reverse=True)
+    if max_items is not None:
+        resources = resources[:max_items]
+    return [item.to_public_dict(include_internal=include_internal) for item in resources]
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -354,6 +404,7 @@ __all__ = [
     "direct_media_base_urls",
     "direct_media_content_urls",
     "image_fingerprint",
+    "list_media_resources",
     "media_content_path",
     "media_content_url",
     "media_indexer_content_path",
