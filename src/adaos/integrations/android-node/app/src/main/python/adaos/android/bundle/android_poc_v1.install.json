@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -42,11 +42,11 @@
       "files": [
         {
           "path": "web_desktop.seed.json",
-          "sha256": "cffd1cd571b7ec9539a286d9d47581324cdc310d821caf1ebf26d6c4992cdb97"
+          "sha256": "66e86c7731dc3c16c7dd3a241209ade091bee37b841dd2ec286f62105bf33f70"
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "43ca8973dc103bd31a7e859747f98310925f4326b11c4d20af4dbe0d03ce6366"
+          "sha256": "5c9dfb81a08834a287afb844758c0adfc96271ee2de550eace52bef71332ebd2"
         }
       ]
     },
@@ -56,7 +56,7 @@
       "files": [
         {
           "path": "taiga_ui_demo_scenario.scenario.json",
-          "sha256": "837e55e3b11346dc598b61fdfecfb0dd0e84829b5c62df47b40905d475e287fa"
+          "sha256": "e9644dce571aacb334a03fb4ee3516233867b65604948815fe53346e68073d4e"
         }
       ]
     }
@@ -66,44 +66,44 @@
       "id": "web_desktop_skill",
       "version": "android-poc.1",
       "descriptor": "web_desktop_skill.webui.json",
-      "sha256": "db08ec9ad1149e8bcda325063f21b73a3c632f6d155c7fe05f01ae30af1ff258"
+      "sha256": "1d03996e0080d55da0be09bb94f85620cfd6d3a55ca80fc6b69a2a1ff8fa2c44"
     },
     {
       "id": "subnet_env",
       "version": "android-poc.1",
       "builtin": true,
       "descriptor": "subnet_env.webui.json",
-      "sha256": "ef729f55fb5e31c2e408176655f0f8e1cabe8b178518a374bbc762b6b4941fc8"
+      "sha256": "a3e7580bd5399c1adc30882fd5197f6579e0b418b16f149b88dc672ea7520bcd"
     },
     {
       "id": "weather_skill",
       "version": "android-poc.1",
       "descriptor": "weather_skill.webui.json",
-      "sha256": "772f2bead0f8b28da5c4adf310c65412eaab945916046533324679826ee96871"
+      "sha256": "54e2b6853034ecd5dc9d575b1f77171a733e1d6a861fd14d30bdb41a23d423d5"
     },
     {
       "id": "adaos_connect",
       "version": "android-poc.3",
       "descriptor": "adaos_connect.webui.json",
-      "sha256": "ed4b9378f5b4d3818a4968b1528c4aba6b6e99b7db19e110d40ae330a28abb21"
+      "sha256": "cc86d947a424b447d45ea52d3ad78ef2f1a781ee4eb6b80d6159b30616b8d519"
     },
     {
       "id": "browsers_skill",
       "version": "android-poc.1",
       "descriptor": "browsers_skill.webui.json",
-      "sha256": "9c01a1c657d6a4a0367a2e614ff20e6b523f0c09f6442c2ca171962ebe848eed"
+      "sha256": "05c75e62c14cbddc815c13bd93b01e3a465af8edc749f7a231cb2a06548dd9ff"
     },
     {
       "id": "voice_assistant",
       "version": "android-poc.2",
       "descriptor": "voice_assistant.webui.json",
-      "sha256": "bcbb3da0a2ce13710bc216e75087900c16f4090a21d94d7b79a0f2f8909e208d"
+      "sha256": "d8e5230a3905eba05d98f3de98be4b96121078a5a7e54111163408c4ebfd389e"
     },
     {
       "id": "notebook_skill",
       "version": "android-poc.1",
       "descriptor": "notebook_skill.webui.json",
-      "sha256": "3aa9b25caf265636a7723f1874daf58c6cee62d2edebb2e725f24b2e8fdc176e"
+      "sha256": "333712297f241f9e3d0c2945ee8ff7c098222306d2e4ae9c9b9155e4c9b0b73a"
     },
     {
       "id": "demo_metrics_skill",
