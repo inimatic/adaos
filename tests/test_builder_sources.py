@@ -144,3 +144,31 @@ def test_builder_source_api_uploads_lists_and_reads_current_bundle(tmp_path: Pat
         content=b"12345",
     )
     assert too_large.status_code == 413
+
+
+def test_builder_artifact_api_streams_only_manifest_resolved_content(monkeypatch, tmp_path: Path) -> None:
+    artifact = tmp_path / "review.pdf"
+    artifact.write_bytes(b"%PDF-1.7\npreview")
+
+    def _resolve(skill_id: str, group_id: str, artifact_id: str) -> dict[str, object]:
+        assert (skill_id, group_id, artifact_id) == ("tlp_direction", "part0", "artifact-abcd")
+        return {
+            "artifact_id": artifact_id,
+            "path": artifact.name,
+            "native_path": str(artifact),
+            "media_type": "application/pdf",
+        }
+
+    monkeypatch.setattr(builder_api.artifact_context, "resolve", _resolve)
+    app = FastAPI()
+    app.include_router(builder_api.router, prefix="/api/builder")
+    app.dependency_overrides[require_token] = lambda: None
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/builder/projects/skill/tlp_direction/artifacts/part0/artifact-abcd/content"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content == artifact.read_bytes()

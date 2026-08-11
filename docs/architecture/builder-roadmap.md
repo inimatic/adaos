@@ -1869,6 +1869,17 @@ Architecture owner:
 - [x] `[must]` Pass the Research Fabric ARF7.1 reference proof from shared
   Research Workbench through Project/direction creation, local TLP artifact
   intake, exact formulation acceptance, and unopened scoped Codex session.
+- [x] `[must]` Add schema-declared one-shot query-to-state addressing for an
+  entity-specific first paint. Research Workbench uses it for the exact target
+  skill while the reactive `data/builder/selection` projection remains the
+  canonical, subsequently editable selection.
+- [x] `[must]` Add an authenticated, manifest-resolved DEV artifact content
+  endpoint and reusable PDF document renderer. Markdown and text continue to
+  use their existing renderers; clients receive logical artifact addresses,
+  not native filesystem paths.
+- [x] `[must]` Make runtime action approval publication use the asynchronous
+  Pending Actions room owner. A live-room thread handoff failure must never
+  suppress the global review affordance.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,
   localized categories, free tags, deployment scopes, and an advanced raw
   component view.

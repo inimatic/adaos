@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from starlette.requests import ClientDisconnect
 
 from adaos.apps.api.auth import require_token
+from adaos.sdk.developer import artifact_context
 from adaos.services.builder import (
     BuilderAutomationService,
     BuilderProjectCatalogService,
@@ -195,6 +196,30 @@ def get_project_source_content(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/projects/skill/{skill_id}/artifacts/{group_id}/{artifact_id}/content")
+def get_skill_artifact_content(
+    skill_id: str,
+    group_id: str,
+    artifact_id: str,
+    download: bool = False,
+) -> FileResponse:
+    """Stream one manifest-admitted DEV artifact without exposing a native path."""
+
+    try:
+        resolved = artifact_context.resolve(skill_id, group_id, artifact_id)
+    except artifact_context.ArtifactContextError as exc:
+        message = str(exc)
+        status = 404 if "was not found" in message or "is missing" in message else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+    filename = str(resolved.get("path") or artifact_id)
+    return FileResponse(
+        str(resolved["native_path"]),
+        media_type=str(resolved.get("media_type") or "application/octet-stream"),
+        filename=filename if download else None,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.post("/draft")

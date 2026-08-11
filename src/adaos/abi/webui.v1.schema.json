@@ -621,6 +621,7 @@
         "ui.jsonViewer",
         "item.textEditor",
         "item.codeViewer",
+        "item.documentViewer",
         "item.details",
         "input.commandBar",
         "input.fileUpload",
@@ -1004,6 +1005,16 @@
           "type": "object",
           "additionalProperties": true,
           "description": "Local page/modal state defaults applied only for keys that are not already set."
+        },
+        "initialStateSource": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Reactive, explicitly mapped runtime state source."
+        },
+        "initialStateQuery": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "One-shot, explicitly mapped URL query values applied on first paint."
         },
         "autoActions": {
           "type": "array",

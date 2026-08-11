@@ -243,6 +243,24 @@ project-picker contents. The hardened published set is
 `0.2.60`, and AdaOS client `0.0.310`. These are ARF7.1 usability and
 identity-consistency requirements, not ARF7.2 Codex realization.
 
+ARF7.1 reliability and review hardening (2026-08-11) makes artifact intake a
+bounded `local_write` declared in the released tool manifest, so a normal
+Workbench upload does not enter the destructive/filesystem approval class.
+The generic approval gate now publishes through the asynchronous live-room
+owner; genuinely high-risk operations therefore appear in the global Pending
+Actions surface instead of failing with
+`sync_get_ydoc_live_room_requires_owner_handoff`. Discussion uses a split
+focus-detail layout: chat remains primary and a compact, typed consensus
+projection derived from the current ResearchPrototype or accepted
+AutomationBrief remains visible alongside it. Direction diagnostics move to a
+title-adjacent Details modal. Manifested Markdown/text/PDF artifacts open in a
+bounded modal; PDF bytes are streamed by an authenticated Builder artifact
+endpoint and native paths never enter the browser contract. Builder handoff
+combines the canonical Yjs selection with a declared one-shot URL address, so
+the exact direction skill is visible on first paint without making query state
+authoritative. Route tunnelling no longer invents the historical `8788`
+fallback; it uses runtime topology/state candidates only.
+
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
 published-package reinstall, repeated service restart, AdaOS API restart, and
@@ -976,6 +994,18 @@ not substitute for this operator path.
   orchestrator/template components through ordinary AdaOS lifecycle, update
   help/next-step text so every instruction names a visible control, and verify
   the flow from a clean focused direction without private DEV state.
+- [x] `[must]` `ARF7.1-20b` Keep ordinary direction-owned artifact attachment
+  inside declared `local_write`; publish genuine runtime approvals through the
+  asynchronous Pending Actions live-room owner and prove the global review
+  surface can observe them.
+- [x] `[must]` `ARF7.1-20c` Keep a human-readable consensus beside Discussion,
+  move auxiliary direction diagnostics behind an explicit Details control,
+  and provide authenticated modal preview for manifested Markdown, text, and
+  PDF artifacts without exposing native paths.
+- [x] `[must]` `ARF7.1-20d` Address the exact Builder target on first paint
+  through a schema-declared one-shot query mapping, then converge on the
+  canonical Yjs selection; never keep URL query state authoritative after
+  initial addressing.
 
 #### Non-blocking follow-ons
 

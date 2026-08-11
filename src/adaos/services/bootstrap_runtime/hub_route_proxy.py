@@ -498,6 +498,8 @@ def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
         return (0.5, 1.2)
     if re.match(r"^/api/skills/[^/]+/files/", path_norm):
         return (3.0, 300.0)
+    if re.match(r"^/api/builder/projects/skill/[^/]+/artifacts/[^/]+/[^/]+/content$", path_norm):
+        return (3.0, 300.0)
     if path_norm.startswith("/api/media/files/"):
         return (3.0, 300.0)
     if path_norm == "/api/tools/call":
