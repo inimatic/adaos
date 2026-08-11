@@ -660,6 +660,36 @@ def test_member_snapshot_changed_rebuilds_shared_workspaces_with_rate_limit(monk
     assert calls == [("desktop", "subnet_member_snapshot_sync", "member_runtime_snapshot")]
 
 
+def test_member_snapshot_material_fingerprint_includes_skill_interfaces(monkeypatch) -> None:
+    from adaos.services.registry import subnet_directory as directory_module
+
+    catalog = {
+        "apps": [{"id": "slideshow"}],
+        "widgets": [],
+        "registry": {"modals": {"folders": {"schema": {"id": "folders"}}}},
+        "interfaces": {
+            "slideshow_skill": {
+                "views": {"slideshow_skill.folders": {"surfaces": ["modal"]}},
+            }
+        },
+    }
+
+    class _Directory:
+        def get_node(self, _node_id: str):
+            return {"runtime_projection": {"snapshot": {"desktop_catalog": catalog}}}
+
+    monkeypatch.setattr(directory_module, "get_directory", lambda: _Directory())
+    before = webspace_runtime_module._member_snapshot_desktop_material_fingerprint("member-1")
+    catalog["interfaces"]["slideshow_skill"]["views"]["slideshow_skill.folders"]["params"] = {
+        "folder": {"type": "string"},
+    }
+    after = webspace_runtime_module._member_snapshot_desktop_material_fingerprint("member-1")
+
+    assert before
+    assert after
+    assert before != after
+
+
 def test_member_access_reactivated_forces_rebuild_even_when_material_fingerprint_is_unchanged(monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
     key = "member-1\0desktop"

@@ -126,9 +126,25 @@ def _snapshot_fingerprint(snapshot: dict[str, Any]) -> str:
         },
         "slots": _normalize_snapshot_material(slots),
         "capacity": _compact_snapshot_catalog(capacity, ("io", "skills", "scenarios")),
-        "desktop_catalog": _compact_snapshot_catalog(
-            desktop_catalog,
-            ("apps", "widgets", "modals", "webio", "ydoc_defaults"),
+        # Catalog identifiers alone are not enough: a skill can keep the same
+        # modal id while adding routes, implemented views, actions, or receiver
+        # contracts.  Those changes must invalidate the hub-side projection.
+        # Normalize volatile timestamps recursively so regular heartbeats still
+        # stay cheap and do not create rebuild loops.
+        "desktop_catalog": _normalize_snapshot_material(
+            {
+                key: desktop_catalog.get(key)
+                for key in (
+                    "apps",
+                    "widgets",
+                    "registry",
+                    "resources",
+                    "interfaces",
+                    "webio",
+                    "ydoc_defaults",
+                )
+                if desktop_catalog.get(key) is not None
+            }
         ),
     }
     try:

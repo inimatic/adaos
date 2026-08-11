@@ -659,6 +659,7 @@ def _member_snapshot_desktop_material_fingerprint(node_id: str) -> str:
         "widgets": catalog.get("widgets") if isinstance(catalog.get("widgets"), list) else [],
         "registry": catalog.get("registry") if isinstance(catalog.get("registry"), Mapping) else {},
         "resources": catalog.get("resources") if isinstance(catalog.get("resources"), Mapping) else {},
+        "interfaces": catalog.get("interfaces") if isinstance(catalog.get("interfaces"), Mapping) else {},
         "webio": catalog.get("webio") if isinstance(catalog.get("webio"), Mapping) else {},
         "ydoc_defaults": catalog.get("ydoc_defaults") if isinstance(catalog.get("ydoc_defaults"), Mapping) else {},
     }

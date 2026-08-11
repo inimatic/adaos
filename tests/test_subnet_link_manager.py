@@ -226,6 +226,64 @@ def test_update_member_snapshot_publishes_only_material_changes(monkeypatch) -> 
     assert payload["snapshot_update"]["state"] == "succeeded"
 
 
+def test_update_member_snapshot_detects_modal_contract_changes(monkeypatch) -> None:
+    fake_bus = _FakeBus()
+    fake_directory = _FakeDirectory()
+    monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))
+    monkeypatch.setattr("adaos.services.registry.subnet_directory.get_directory", lambda: fake_directory)
+
+    manager = mod.HubLinkManager()
+    manager._links["member-1"] = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    base_modal = {
+        "schema": {"id": "folders", "widgets": []},
+        "source": "skill:slideshow_skill",
+    }
+    snapshot = {
+        "captured_at": 100.0,
+        "node_id": "member-1",
+        "role": "member",
+        "ready": True,
+        "desktop_catalog": {
+            "apps": [{"id": "slideshow"}],
+            "widgets": [],
+            "registry": {"modals": {"folders": base_modal}, "widgets": {}},
+        },
+    }
+
+    first = asyncio.run(manager.update_member_snapshot("member-1", snapshot=snapshot))
+    typed_modal = {
+        **base_modal,
+        "implements": ["slideshow_skill.folders"],
+        "schema": {
+            **base_modal["schema"],
+            "interface": {
+                "schema": "adaos.ui.modal.interface.v1",
+                "routes": {"folders": {"view": "slideshow_skill.folders"}},
+                "defaultRoute": "folders",
+            },
+        },
+    }
+    second = asyncio.run(
+        manager.update_member_snapshot(
+            "member-1",
+            snapshot={
+                **snapshot,
+                "captured_at": 101.0,
+                "desktop_catalog": {
+                    **snapshot["desktop_catalog"],
+                    "registry": {"modals": {"folders": typed_modal}, "widgets": {}},
+                },
+            },
+        )
+    )
+
+    changed_events = [event for event in fake_bus.events if event.type == "subnet.member.snapshot.changed"]
+    assert first["changed"] is True
+    assert second["changed"] is True
+    assert len(changed_events) == 2
+    assert len(fake_directory.calls) == 2
+
+
 def test_update_member_snapshot_ignores_update_status_volatile_fields(monkeypatch) -> None:
     fake_bus = _FakeBus()
     fake_directory = _FakeDirectory()
