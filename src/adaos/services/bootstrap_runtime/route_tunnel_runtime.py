@@ -1838,20 +1838,6 @@ class NatsRouteTunnelRuntime:
                     )
                     token_local = os.getenv("ADAOS_TOKEN", "") or None
 
-                try:
-                    from urllib.parse import urlparse
-
-                    u0 = urlparse(bases[0])
-                    h0 = u0.hostname or "127.0.0.1"
-                    p0 = u0.port
-                    scheme0 = u0.scheme or "http"
-                    alt_port_raw = os.getenv("ADAOS_TARGET_PORT") or os.getenv("ADAOS_CORE_PORT") or ""
-                    alt_port = int(alt_port_raw) if alt_port_raw.strip() else 8788
-                    if (p0 in (None, 8777)) and alt_port and alt_port != p0:
-                        bases.append(f"{scheme0}://{h0}:{alt_port}")
-                except Exception:
-                    pass
-
                 h2: dict[str, str] = {}
                 if token_local:
                     h2["X-AdaOS-Token"] = str(token_local)
@@ -3742,21 +3728,6 @@ class NatsRouteTunnelRuntime:
                                         ctx=service.ctx,
                                     )
                                     token_local = os.getenv("ADAOS_TOKEN", "") or None
-
-                                # Add optional target/core port fallback for local setups.
-                                try:
-                                    from urllib.parse import urlparse
-
-                                    u0 = urlparse(bases[0])
-                                    h0 = u0.hostname or "127.0.0.1"
-                                    p0 = u0.port
-                                    scheme0 = u0.scheme or "http"
-                                    alt_port_raw = os.getenv("ADAOS_TARGET_PORT") or os.getenv("ADAOS_CORE_PORT") or ""
-                                    alt_port = int(alt_port_raw) if alt_port_raw.strip() else 8788
-                                    if (p0 in (None, 8777)) and alt_port and alt_port != p0:
-                                        bases.append(f"{scheme0}://{h0}:{alt_port}")
-                                except Exception:
-                                    pass
 
                                 url = f"{bases[0]}{path}{search}"
                                 if _route_verbose and path not in ("/api/node/status", "/api/ping"):
