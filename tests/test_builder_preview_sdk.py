@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from adaos.sdk.builder import preview
+from adaos.services.builder.workbench import _preview_state_projection
 
 
 class _Workbench:
@@ -114,4 +115,23 @@ def test_navigation_link_uses_shared_sdk_and_preserves_preview_expectations(monk
         "expected_scenario_id": "recipes",
         "expected_revision": "003",
         "preview_stage": "prototype",
+    }
+
+
+def test_skill_preview_state_keeps_component_presentation_context() -> None:
+    projected = _preview_state_projection(
+        {
+            "selected_component_ref": "skill:tlp_research",
+            "selected_component_id": "tlp_research",
+            "presentation": {"presentation": "scenario:research_workbench"},
+            "bindings": {"direction_ref": "skill:tlp_research"},
+            "unrelated": "must-not-leak",
+        }
+    )
+
+    assert projected == {
+        "selected_component_ref": "skill:tlp_research",
+        "selected_component_id": "tlp_research",
+        "presentation": {"presentation": "scenario:research_workbench"},
+        "bindings": {"direction_ref": "skill:tlp_research"},
     }

@@ -175,6 +175,10 @@ def _preview_state_projection(value: Any) -> dict[str, Any]:
             "status",
             "phase",
             "updated_at",
+            "selected_component_ref",
+            "selected_component_id",
+            "presentation",
+            "bindings",
         )
         if key in state
     }

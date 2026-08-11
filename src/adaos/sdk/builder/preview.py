@@ -188,6 +188,7 @@ def select_project(
         bindings = _plain(presentation.get("bindings"))
         preview_state = {
             "selected_component_ref": f"skill:{project_id}",
+            "selected_component_id": project_id,
             "presentation": presentation,
             "bindings": {
                 key: (f"skill:{project_id}" if value == "skill:self" else value)

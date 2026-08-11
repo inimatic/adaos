@@ -99,6 +99,40 @@ def list_sessions(*, project_id: str | None = None, limit: int = 500) -> list[di
     return result
 
 
+def bind(session_id: str, builder_webspace_id: str) -> dict[str, Any]:
+    """Select a session for one Builder host without mutating Project scope."""
+
+    session = get(session_id)
+    webspace_id = str(builder_webspace_id or "").strip()
+    if not webspace_id or any(char in webspace_id for char in ("/", "\\", "\0")):
+        raise DevelopmentSessionError("builder_webspace_id is invalid")
+    bindings_root = (_state_root() / "bindings").resolve()
+    binding_path = (bindings_root / f"{webspace_id}.json").resolve()
+    if binding_path.parent != bindings_root:
+        raise DevelopmentSessionError("Builder binding path escapes state root")
+    payload = {
+        "schema": "adaos.builder.development_session_binding.v1",
+        "builder_webspace_id": webspace_id,
+        "session_id": session["session_id"],
+        "project_ref": session["project_ref"],
+        "focus_ref": session["focus"]["ref"],
+        "bound_at": _now(),
+    }
+    atomic_write_json(binding_path, payload)
+    return {"ok": True, "binding": payload, "session": session}
+
+
+def binding_for(builder_webspace_id: str) -> dict[str, Any] | None:
+    webspace_id = str(builder_webspace_id or "").strip()
+    if not webspace_id or any(char in webspace_id for char in ("/", "\\", "\0")):
+        raise DevelopmentSessionError("builder_webspace_id is invalid")
+    path = (_state_root() / "bindings" / f"{webspace_id}.json").resolve()
+    if not path.is_file():
+        return None
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    return dict(value) if isinstance(value, Mapping) else None
+
+
 def create(
     project_id: str,
     *,
@@ -200,4 +234,4 @@ def create(
     return {"ok": True, "idempotent": False, "session": get(token)}
 
 
-__all__ = ["DevelopmentSessionError", "create", "get", "list_sessions", "validate"]
+__all__ = ["DevelopmentSessionError", "bind", "binding_for", "create", "get", "list_sessions", "validate"]

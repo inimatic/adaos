@@ -91,6 +91,8 @@ def test_project_manifest_lists_by_profile_and_resolves_entrypoint(project_space
     presentation = compositions.resolve_presentation("skill:tlp_direction")
 
     assert created["ref"] == "project:tlp_research"
+    assert created["manifest_digest"].startswith("sha256:")
+    assert listed[0]["manifest_digest"] == created["manifest_digest"]
     assert listed[0]["primary_ref"] == "skill:tlp_direction"
     assert presentation == {
         "source": "project",
@@ -169,6 +171,11 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     assert session["artifact_inputs"][0]["access"] == "read-only"
     assert session["artifact_inputs"][0]["manifest_digest"].startswith("sha256:")
     assert repeated["idempotent"] is True
+
+    bound = development_sessions.bind(session["session_id"], "desktop")
+    restored = development_sessions.binding_for("desktop")
+    assert bound["binding"]["focus_ref"] == "skill:tlp_direction"
+    assert restored == bound["binding"]
 
 
 def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:

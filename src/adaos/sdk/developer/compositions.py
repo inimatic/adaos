@@ -8,6 +8,7 @@ skill/scenario component checkouts.  This module addresses the additive
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import shutil
 from collections.abc import Mapping, Sequence
@@ -108,7 +109,15 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
 def get(project_id: str) -> dict[str, Any]:
     root = resolve_root(project_id)
     payload = _read(root / "project.yaml")
-    return {**payload, "ref": f"project:{payload['id']}", "source_path": str(root)}
+    manifest_digest = "sha256:" + hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        **payload,
+        "ref": f"project:{payload['id']}",
+        "manifest_digest": manifest_digest,
+        "source_path": str(root),
+    }
 
 
 def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
@@ -134,6 +143,7 @@ def list_projects(*, profile: str | None = None, limit: int = 500) -> list[dict[
                 "tags": list(project["catalog"]["tags"]),
                 "primary_ref": primary["ref"],
                 "source_path": str(manifest_path.parent.resolve()),
+                "manifest_digest": get(str(project["id"]))["manifest_digest"],
             }
         )
         if len(result) >= maximum:
