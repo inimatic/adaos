@@ -19,7 +19,7 @@ from adaos.apps.api.auth import require_token
 from adaos.services.observe import attach_http_trace_headers
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
-from adaos.services.pending_actions import list_pending_actions, publish_pending_action
+from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
 from adaos.services.runtime_lifecycle import is_accepting_new_work
 from adaos.services.skill.manager import SkillManager
 from adaos.adapters.db import SqliteSkillRegistry
@@ -692,14 +692,14 @@ def _pending_action_approval(action: Dict[str, Any], action_risk: Dict[str, Any]
     return None
 
 
-def _find_runtime_action_pending_action(
+async def _find_runtime_action_pending_action(
     *,
     webspace_id: str,
     action_id: str,
     domain_ref: Dict[str, Any],
 ) -> Dict[str, Any] | None:
     try:
-        snapshot = list_pending_actions(webspace_id=webspace_id, include_terminal=True)
+        snapshot = await list_pending_actions_async(webspace_id=webspace_id, include_terminal=True)
     except Exception:
         _log.debug("failed to inspect runtime action pending actions", exc_info=True)
         return None
@@ -716,7 +716,7 @@ def _find_runtime_action_pending_action(
     return None
 
 
-def _ensure_runtime_action_pending_action(
+async def _ensure_runtime_action_pending_action(
     *,
     body: "ToolCall",
     skill_name: str,
@@ -738,13 +738,17 @@ def _ensure_runtime_action_pending_action(
         local_node_id=local_node_id,
     )
     action_id = _runtime_action_pending_action_id(domain_ref)
-    existing = _find_runtime_action_pending_action(webspace_id=webspace_id, action_id=action_id, domain_ref=domain_ref)
+    existing = await _find_runtime_action_pending_action(
+        webspace_id=webspace_id,
+        action_id=action_id,
+        domain_ref=domain_ref,
+    )
     if existing:
         return existing
     risk_class = str(action_risk.get("risk_class") or "runtime").strip() or "runtime"
     tool_name = str(body.tool or "").strip()
     try:
-        return publish_pending_action(
+        return await publish_pending_action_async(
             ctx=ctx or get_ctx(),
             webspace_id=webspace_id,
             action_id=action_id,
@@ -775,7 +779,11 @@ def _ensure_runtime_action_pending_action(
     except ValueError as exc:
         if "already exists" not in str(exc):
             raise
-        existing = _find_runtime_action_pending_action(webspace_id=webspace_id, action_id=action_id, domain_ref=domain_ref)
+        existing = await _find_runtime_action_pending_action(
+            webspace_id=webspace_id,
+            action_id=action_id,
+            domain_ref=domain_ref,
+        )
         if existing:
             return existing
         raise
@@ -816,17 +824,15 @@ async def _enforce_runtime_action_gate(
     pending_action: Dict[str, Any] = {}
     pending_action_error = ""
     try:
-        pending_action = await anyio.to_thread.run_sync(
-            lambda: _ensure_runtime_action_pending_action(
-                body=body,
-                skill_name=skill_name,
-                public_tool=public_tool,
-                payload=payload,
-                action_risk=action_risk,
-                target_node_id=target_node_id,
-                local_node_id=local_node_id,
-                ctx=ctx,
-            )
+        pending_action = await _ensure_runtime_action_pending_action(
+            body=body,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            payload=payload,
+            action_risk=action_risk,
+            target_node_id=target_node_id,
+            local_node_id=local_node_id,
+            ctx=ctx,
         )
         approval = _pending_action_approval(pending_action, action_risk)
         if approval:

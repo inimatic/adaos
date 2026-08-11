@@ -51,16 +51,11 @@ def _fake_ctx() -> SimpleNamespace:
 def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, object]]:
     published: list[dict[str, object]] = []
 
-    def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
+    async def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
         return {"by_id": {}, "active_items": [], "active": []}
 
-    def _publish_pending_action(**kwargs) -> dict[str, object]:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:  # pragma: no cover - assertion path for sync-in-event-loop regressions
-            raise AssertionError("runtime pending action publish must be offloaded from the event loop")
+    async def _publish_pending_action(**kwargs) -> dict[str, object]:
+        assert asyncio.get_running_loop().is_running()
         published.append(dict(kwargs))
         return {
             "id": kwargs.get("action_id") or "pa.runtime.test",
@@ -70,8 +65,8 @@ def _patch_runtime_approval_pending_actions(monkeypatch) -> list[dict[str, objec
             "domain_ref": kwargs.get("domain_ref"),
         }
 
-    monkeypatch.setattr(tool_bridge_module, "list_pending_actions", _list_pending_actions)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+    monkeypatch.setattr(tool_bridge_module, "list_pending_actions_async", _list_pending_actions)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", _publish_pending_action)
     return published
 
 
@@ -570,7 +565,7 @@ def test_call_tool_allows_operator_ui_device_control_without_pending_action(
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", _publish_pending_action)
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -710,7 +705,7 @@ def test_call_tool_allows_notebook_upload_attachment_without_approval(monkeypatc
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("notebook uploads must not require approval")))
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("notebook uploads must not require approval")))
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -932,10 +927,10 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
         calls.append("run_sync")
         return func(*args, **kwargs)
 
-    def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
+    async def _list_pending_actions(*, webspace_id: str | None = None, include_terminal: bool = True) -> dict[str, object]:
         return {"by_id": pending_by_id, "active_items": [], "active": []}
 
-    def _publish_pending_action(**kwargs) -> dict[str, object]:
+    async def _publish_pending_action(**kwargs) -> dict[str, object]:
         action = {
             "id": kwargs.get("action_id") or "pa.runtime.test",
             "kind": kwargs.get("kind"),
@@ -951,8 +946,8 @@ def test_call_tool_allows_approved_runtime_pending_action_retry(monkeypatch) -> 
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "list_pending_actions", _list_pending_actions)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", _publish_pending_action)
+    monkeypatch.setattr(tool_bridge_module, "list_pending_actions_async", _list_pending_actions)
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", _publish_pending_action)
 
     body = tool_bridge_module.ToolCall(
         tool="files_skill:write_file",
@@ -1009,7 +1004,7 @@ def test_call_tool_keeps_prompt_project_selection_local_and_approval_free(monkey
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("selection must not require approval")))
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("selection must not require approval")))
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
@@ -1117,7 +1112,7 @@ def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
-    monkeypatch.setattr(tool_bridge_module, "publish_pending_action", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("file save must not require approval")))
+    monkeypatch.setattr(tool_bridge_module, "publish_pending_action_async", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("file save must not require approval")))
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
