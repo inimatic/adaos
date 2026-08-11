@@ -626,6 +626,7 @@ async def upload_skill_file(
     filename: str,
     request: Request,
     purpose: str | None = None,
+    expected_size_bytes: int | None = None,
     ctx: AgentContext = Depends(get_ctx),
 ):
     metadata = request_upload_metadata(request.headers)
@@ -642,6 +643,7 @@ async def upload_skill_file(
             purpose=purpose,
             content_type=metadata.get("content_type"),
             max_bytes=max_bytes,
+            expected_size_bytes=expected_size_bytes,
         )
     except ClientDisconnect as exc:
         raise HTTPException(status_code=499, detail="upload client disconnected") from exc

@@ -113,6 +113,7 @@ async def store_skill_upload(
     purpose: str | None = None,
     content_type: str | None = None,
     max_bytes: int | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     target_dir = skill_upload_dir(skills_root, skill_name, purpose=purpose)
     relative = safe_upload_relative_path(filename)
@@ -136,6 +137,10 @@ async def store_skill_upload(
                     raise ValueError(f"upload exceeds max size: {limit} bytes")
                 digest.update(chunk)
                 await fh.write(chunk)
+        if expected_size_bytes is not None and total != int(expected_size_bytes):
+            raise ValueError(
+                f"upload size mismatch: expected {int(expected_size_bytes)} bytes, received {total} bytes"
+            )
         os.replace(tmp, target)
     finally:
         try:

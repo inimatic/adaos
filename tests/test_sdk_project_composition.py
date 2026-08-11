@@ -136,6 +136,29 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
         artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
 
 
+def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    source = tmp_path / "review.md"
+    source.write_text("{}", encoding="utf-8")
+    first = artifact_context.add_path("tlp_direction", "part0", source, role="review")
+    source.write_text("Complete critical review", encoding="utf-8")
+
+    replaced = artifact_context.add_path(
+        "tlp_direction",
+        "part0",
+        source,
+        role="review",
+        replace_existing=True,
+    )
+    group = artifact_context.get_group("tlp_direction", "part0")
+
+    assert replaced["replaced"] is True
+    assert replaced["previous_artifact"]["digest"] == first["artifact"]["digest"]
+    assert len(group["items"]) == 1
+    assert group["items"][0]["digest"] == replaced["artifact"]["digest"]
+    assert Path(group["root_path"], "review.md").read_text(encoding="utf-8") == "Complete critical review"
+
+
 def test_private_local_checkpoint_binds_code_and_keeps_artifacts_separate(project_space, tmp_path: Path, monkeypatch) -> None:
     skill_root = _skill(project_space["skills"], "tlp_direction")
     (skill_root / "handlers").mkdir()

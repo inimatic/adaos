@@ -133,6 +133,7 @@ async def add_project_source(
     filename: str,
     request: Request,
     role: str = "source",
+    expected_size_bytes: int | None = None,
     service: BuilderProjectSourceService = Depends(_get_project_source_service),
 ) -> dict[str, Any]:
     content_length = request.headers.get("content-length")
@@ -152,6 +153,11 @@ async def add_project_source(
             chunks.append(bytes(chunk))
     except ClientDisconnect as exc:
         raise HTTPException(status_code=499, detail="upload client disconnected") from exc
+    if expected_size_bytes is not None and size != int(expected_size_bytes):
+        raise HTTPException(
+            status_code=400,
+            detail=f"upload size mismatch: expected {int(expected_size_bytes)} bytes, received {size} bytes",
+        )
     try:
         return service.add_bytes(
             kind=kind,

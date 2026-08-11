@@ -145,6 +145,15 @@ def test_builder_source_api_uploads_lists_and_reads_current_bundle(tmp_path: Pat
     )
     assert too_large.status_code == 413
 
+    mismatched = client.put(
+        "/api/builder/projects/skill/tlp_direction_skill/sources/truncated.md",
+        params={"expected_size_bytes": 100},
+        content=b"{}",
+        headers={"content-type": "text/markdown"},
+    )
+    assert mismatched.status_code == 400
+    assert "expected 100 bytes, received 2 bytes" in mismatched.json()["detail"]
+
 
 def test_builder_artifact_api_streams_only_manifest_resolved_content(monkeypatch, tmp_path: Path) -> None:
     artifact = tmp_path / "review.pdf"

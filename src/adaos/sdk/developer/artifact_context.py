@@ -186,6 +186,7 @@ def add_path(
     sensitivity: str = "unknown",
     license_id: str | None = None,
     publication: str = "private",
+    replace_existing: bool = False,
 ) -> dict[str, Any]:
     source = Path(source_path).expanduser().resolve()
     if not source.is_file():
@@ -223,14 +224,19 @@ def add_path(
         existing_digest = next((entry for entry in manifest["items"] if entry["digest"] == digest), None)
         if existing_digest:
             return {"ok": True, "idempotent": True, "artifact": dict(existing_digest), "group": get_group(skill_id, token)}
-        if any(entry["path"] == safe_name for entry in manifest["items"]):
+        existing_path = next((entry for entry in manifest["items"] if entry["path"] == safe_name), None)
+        if existing_path and not replace_existing:
             raise ArtifactContextError(f"artifact path {safe_name!r} already exists with different content")
         root.mkdir(parents=True, exist_ok=True)
+        previous_payload = (root / safe_name).read_bytes() if existing_path and (root / safe_name).is_file() else None
         atomic_write_bytes(root / safe_name, payload)
         updated = {
             **manifest,
             "generation": int(manifest["generation"]) + 1,
-            "items": [*manifest["items"], item],
+            "items": [
+                item if existing_path and entry["path"] == safe_name else entry
+                for entry in manifest["items"]
+            ] if existing_path else [*manifest["items"], item],
             "updated_at": _now(),
         }
         updated.pop("digest", None)
@@ -239,10 +245,19 @@ def add_path(
             _write(root / "manifest.yaml", updated)
         except Exception:
             copied = root / safe_name
-            if copied.is_file() and _digest_bytes(copied.read_bytes()) == digest:
+            if previous_payload is not None:
+                atomic_write_bytes(copied, previous_payload)
+            elif copied.is_file() and _digest_bytes(copied.read_bytes()) == digest:
                 copied.unlink()
             raise
-    return {"ok": True, "idempotent": False, "artifact": item, "group": get_group(skill_id, token)}
+    return {
+        "ok": True,
+        "idempotent": False,
+        "replaced": bool(existing_path),
+        "previous_artifact": dict(existing_path) if existing_path else None,
+        "artifact": item,
+        "group": get_group(skill_id, token),
+    }
 
 
 def resolve(skill_id: str, group_id: str, artifact_id: str) -> dict[str, Any]:

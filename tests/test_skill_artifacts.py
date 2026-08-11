@@ -102,3 +102,22 @@ async def test_store_skill_upload_rejects_oversized_payload(tmp_path: Path) -> N
             chunks=chunks(),
             max_bytes=3,
         )
+
+
+@pytest.mark.anyio
+async def test_store_skill_upload_rejects_tunnel_size_mismatch_without_persisting(tmp_path: Path) -> None:
+    async def chunks():
+        yield b"{}"
+
+    with pytest.raises(ValueError, match="expected 35660 bytes, received 2 bytes"):
+        await store_skill_upload(
+            skills_root=tmp_path / "skills",
+            skill_name="demo_skill",
+            filename="review.md",
+            chunks=chunks(),
+            purpose="research",
+            expected_size_bytes=35660,
+        )
+
+    upload_dir = skill_upload_dir(tmp_path / "skills", "demo_skill", purpose="research")
+    assert not (upload_dir / "review.md").exists()
