@@ -177,7 +177,29 @@ def select_project(
     title = str(metadata.get("title") or metadata.get("name") or project_id).strip() or project_id
     description = str(metadata.get("description") or "").strip()
     service = _service()
-    if kind != "scenario":
+    presentation: dict[str, Any] | None = None
+    preview_scenario_id = project_id
+    preview_state: dict[str, Any] = {}
+    if kind == "skill":
+        from adaos.sdk.developer import compositions
+
+        presentation = _plain(compositions.resolve_presentation(f"skill:{project_id}"))
+        preview_scenario_id = str(presentation.get("presentation") or "scenario:skill_preview").removeprefix("scenario:")
+        bindings = _plain(presentation.get("bindings"))
+        preview_state = {
+            "selected_component_ref": f"skill:{project_id}",
+            "presentation": presentation,
+            "bindings": {
+                key: (f"skill:{project_id}" if value == "skill:self" else value)
+                for key, value in bindings.items()
+            },
+        }
+        service.set_active_draft(
+            source_webspace_id=source,
+            active_draft_id=None,
+            runtime_scenario_id=preview_scenario_id,
+            persist_projection=not ensure_ready,
+        )
         binding = _plain(
             service.set_selected_project(
                 source_webspace_id=source,
@@ -188,14 +210,42 @@ def select_project(
                 persist_projection=False,
             )
         )
-        result = {
-            "ok": True,
-            "selected": True,
-            "object_type": kind,
-            "object_id": project_id,
-            "source_webspace_id": source,
-            "binding": binding,
-        }
+        ensured: dict[str, Any] | None = None
+        deferred_to_event = bool(ensure_ready and publish_event)
+        if ensure_ready and not deferred_to_event:
+            effective_wait = bool(wait_for_rebuild or not _has_running_loop())
+            ensured_value, scheduled = _complete(
+                service.ensure_dev_webspace(
+                    source,
+                    active_draft_id=None,
+                    runtime_scenario_id=preview_scenario_id,
+                    preview_state=preview_state,
+                    wait_for_rebuild=effective_wait,
+                )
+            )
+            ensured = (
+                {"ok": True, "scheduled": True, "dev_webspace_id": dev_webspace_id(source)}
+                if scheduled
+                else _plain(ensured_value)
+            )
+        elif deferred_to_event:
+            ensured = {
+                "ok": True,
+                "scheduled": True,
+                "via": BUILDER_PREVIEW_DESIRED,
+                "runtime_scenario_id": preview_scenario_id,
+                "dev_webspace_id": str(
+                    binding.get("preview_webspace_id") or binding.get("dev_webspace_id") or ""
+                ).strip(),
+            }
+        preview_id = str(
+            (ensured or {}).get("preview_webspace_id")
+            or (ensured or {}).get("dev_webspace_id")
+            or binding.get("preview_webspace_id")
+            or binding.get("dev_webspace_id")
+            or dev_webspace_id(source)
+            or ""
+        ).strip()
         if publish_event:
             from adaos.sdk.data.events import publish
 
@@ -212,7 +262,34 @@ def select_project(
                 },
                 source="sdk.builder.preview",
             )
-        return result
+            publish(
+                BUILDER_PREVIEW_DESIRED,
+                {
+                    "source_webspace_id": source,
+                    "preview_webspace_id": preview_id,
+                    "object_type": "scenario",
+                    "object_id": preview_scenario_id,
+                    "scenario_id": preview_scenario_id,
+                    "preview_state": preview_state,
+                    "reconciled": False,
+                    "wait_for_rebuild": False,
+                },
+                source="sdk.builder.preview",
+            )
+        return {
+            "ok": bool(binding.get("ok", True)),
+            "selected": True,
+            "object_type": kind,
+            "object_id": project_id,
+            "source_webspace_id": source,
+            "dev_webspace_id": preview_id,
+            "preview_webspace_id": preview_id,
+            "runtime_scenario_id": preview_scenario_id,
+            "presentation": presentation,
+            "preview_state": preview_state,
+            "binding": binding,
+            "ensure": ensured,
+        }
 
     binding = _plain(
         service.set_active_draft(
@@ -556,7 +633,7 @@ def navigation_link(
         expected_scenario_id=(
             str(target.get("object_id") or "").strip() or None
             if object_type == "scenario"
-            else None
+            else str(binding.get("runtime_scenario_id") or "").strip() or None
         ),
         expected_revision=str(target.get("revision") or "").strip() or None,
         preview_stage=str(target.get("stage") or "").strip() or None,

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.project.v1",
+  "title": "AdaOS distributable project source manifest",
+  "type": "object",
+  "required": ["schema", "kind", "id", "version", "profiles", "components", "entrypoints", "catalog", "lifecycle"],
+  "properties": {
+    "schema": {"const": "adaos.project.v1"},
+    "kind": {"const": "project"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+    "profiles": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 160}},
+    "components": {
+      "type": "object",
+      "required": ["owned", "dependencies"],
+      "properties": {
+        "owned": {
+          "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true,
+          "items": {
+            "type": "object", "required": ["ref", "role"],
+            "properties": {
+              "ref": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+              "role": {"enum": ["primary", "supporting"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "dependencies": {
+          "type": "array", "maxItems": 200,
+          "items": {
+            "type": "object", "required": ["ref"],
+            "properties": {
+              "ref": {"type": "string", "pattern": "^(project|skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+              "version": {"type": ["string", "null"], "maxLength": 80}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "entrypoints": {
+      "type": "array", "maxItems": 50,
+      "items": {
+        "type": "object", "required": ["id", "presentation", "bindings"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,79}$"},
+          "presentation": {"type": "string", "pattern": "^scenario:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+          "default": {"type": "boolean"},
+          "bindings": {"type": "object", "maxProperties": 50, "additionalProperties": {"type": ["string", "number", "boolean", "null"]}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "catalog": {
+      "type": "object", "required": ["title", "description", "categories", "tags"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "description": {"type": "string", "maxLength": 4000},
+        "categories": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}},
+        "tags": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 80}}
+      },
+      "additionalProperties": false
+    },
+    "lifecycle": {
+      "type": "object", "required": ["uninstall"],
+      "properties": {
+        "uninstall": {
+          "type": "object", "required": ["components", "runtime_data", "source_artifacts"],
+          "properties": {
+            "components": {"enum": ["remove_if_unreferenced", "retain"]},
+            "runtime_data": {"enum": ["retain", "remove"]},
+            "source_artifacts": {"enum": ["retain", "remove"]}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 300}
+  },
+  "additionalProperties": false
+}

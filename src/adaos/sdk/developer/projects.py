@@ -107,6 +107,12 @@ def _root(kind: str, project_id: str, *, required: bool = True) -> Path:
     return candidate
 
 
+def resolve_root(kind: str, project_id: str, *, required: bool = True) -> Path:
+    """Resolve an exact component source root through the active CTX snapshot."""
+
+    return _root(kind, project_id, required=required)
+
+
 def _manifest_path(kind: ProjectKind, root: Path) -> Path | None:
     names = ("skill.yaml",) if kind == "skill" else ("scenario.yaml",)
     return next((root / name for name in names if (root / name).is_file()), None)
@@ -408,13 +414,26 @@ def list_templates(kind: str) -> list[dict[str, Any]]:
     default = service._default_template_name(plural)
     user_names = [name for name in service._collect_templates(workspace) if not name.startswith((".", "_"))]
     builtin_names = [name for name in service._collect_templates(builtin) if not name.startswith((".", "_"))]
-    items = [{"id": default, "label": "Default", "source": "builtin", "kind": normalized_kind}]
-    items.extend({"id": name, "label": f"{name} (workspace)", "source": "workspace", "kind": normalized_kind} for name in user_names)
-    items.extend(
-        {"id": name, "label": f"{name} (builtin)", "source": "builtin", "kind": normalized_kind}
-        for name in builtin_names
-        if name != default
-    )
+    def item(name: str, source: str) -> dict[str, Any]:
+        parent = builtin if source == "builtin" else workspace
+        manifest_name = "skill.yaml" if normalized_kind == "skill" else "scenario.yaml"
+        manifest = _read_manifest(parent / name / manifest_name)
+        description = str(manifest.get("description") or "").strip()
+        version = str(manifest.get("version") or "").strip()
+        suffix = "builtin" if source == "builtin" else "workspace"
+        return {
+            "id": name,
+            "label": "Default" if name == default and source == "builtin" else f"{name} ({suffix})",
+            "source": source,
+            "kind": normalized_kind,
+            "version": version,
+            "description": description,
+            "search_text": " ".join(part for part in (name, version, description, suffix) if part),
+        }
+
+    ordered_builtin = [default, *(name for name in builtin_names if name != default)]
+    items = [item(name, "builtin") for name in ordered_builtin]
+    items.extend(item(name, "workspace") for name in user_names if name not in set(ordered_builtin))
     return items
 
 

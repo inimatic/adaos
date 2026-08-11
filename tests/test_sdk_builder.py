@@ -202,17 +202,27 @@ def test_preview_facade_uses_explicit_service_topology(monkeypatch) -> None:
     assert opened["source_webspace_id"] == "dev1-builder"
 
 
-def test_preview_facade_persists_skill_context_without_changing_preview(monkeypatch) -> None:
+def test_preview_facade_resolves_skill_presentation_without_reusing_stale_preview(monkeypatch) -> None:
     service = _PreviewService()
     monkeypatch.setattr(preview, "_service", lambda: service)
+    monkeypatch.setattr(
+        "adaos.sdk.developer.compositions.resolve_presentation",
+        lambda _ref: {
+            "source": "project",
+            "presentation": "scenario:research_workbench",
+            "bindings": {"direction_ref": "skill:self"},
+        },
+    )
 
     result = preview.select_project("skill", "builder_skill", publish_event=False)
 
     assert result["selected"] is True
     assert result["object_type"] == "skill"
     assert result["object_id"] == "builder_skill"
-    assert service.active_drafts == []
-    assert service.ensure_calls == []
+    assert result["runtime_scenario_id"] == "research_workbench"
+    assert result["preview_state"]["bindings"]["direction_ref"] == "skill:builder_skill"
+    assert service.active_drafts[0]["runtime_scenario_id"] == "research_workbench"
+    assert service.ensure_calls[0]["runtime_scenario_id"] == "research_workbench"
     assert service.selections[0]["object_type"] == "skill"
     assert service.selections[0]["object_id"] == "builder_skill"
 

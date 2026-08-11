@@ -58,6 +58,14 @@ research_direction:
   runner_contract: "adaos.research.runner.v1"
   pre_codex: true
 
+presentations:
+  - id: research-workbench
+    scenario: research_workbench
+    contract: adaos.research.direction.v1
+    default: true
+    bindings:
+      direction_ref: skill:self
+
 llm_hints:
   description: "Research direction owned by new_skill. The shared research orchestrator governs intake and formulation."
   aliases: ["research direction"]

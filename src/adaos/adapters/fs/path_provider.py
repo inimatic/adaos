@@ -150,6 +150,11 @@ class PathProvider:
     def dev_scenarios_dir(self) -> Path:
         return (self.dev_dir() / "scenarios").resolve()
 
+    def dev_projects_dir(self) -> Path:
+        """Declarative multi-component projects in the active DEV snapshot."""
+
+        return (self.dev_dir() / "projects").resolve()
+
     def tmp_dir(self) -> Path:
         return (self.base / "tmp").resolve()
 

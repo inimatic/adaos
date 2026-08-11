@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.development_session.v1",
+  "title": "AdaOS Builder development-session policy",
+  "type": "object",
+  "required": ["schema", "session_id", "project_ref", "base_release", "focus", "targets", "context_members", "artifact_inputs", "scratch", "handoff", "status", "created_at", "created_by"],
+  "properties": {
+    "schema": {"const": "adaos.builder.development_session.v1"},
+    "session_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$"},
+    "project_ref": {"type": "string", "pattern": "^project:[a-z0-9][a-z0-9_.-]{0,127}$"},
+    "base_release": {"type": ["object", "null"]},
+    "focus": {"type": "object", "required": ["ref"], "properties": {"ref": {"$ref": "#/$defs/componentRef"}}, "additionalProperties": false},
+    "targets": {
+      "type": "object", "required": ["primary", "secondary"],
+      "properties": {
+        "primary": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/$defs/target"}},
+        "secondary": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/target"}}
+      },
+      "additionalProperties": false
+    },
+    "context_members": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/contextMember"}},
+    "artifact_inputs": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/artifactInput"}},
+    "scratch": {
+      "type": "object", "required": ["owner", "access", "path"],
+      "properties": {"owner": {"const": "session"}, "access": {"const": "read-write"}, "path": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    },
+    "handoff": {
+      "type": "object", "required": ["automation_brief_digest", "research_prototype_digest", "artifact_manifest_digests", "prohibited_actions"],
+      "properties": {
+        "automation_brief_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "research_prototype_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifact_manifest_digests": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+        "prohibited_actions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
+    },
+    "status": {"enum": ["ready", "active", "stale", "closed"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "created_by": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "componentRef": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
+    "target": {
+      "type": "object", "required": ["ref", "access", "context", "source_path"],
+      "properties": {"ref": {"$ref": "#/$defs/componentRef"}, "access": {"const": "read-write"}, "context": {"const": "full"}, "source_path": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    },
+    "contextMember": {
+      "type": "object", "required": ["ref", "relation", "access", "context"],
+      "properties": {"ref": {"$ref": "#/$defs/componentRef"}, "relation": {"enum": ["presentation", "dependency", "project"]}, "access": {"const": "read-only"}, "context": {"enum": ["none", "contract", "docs", "paths", "full"]}, "paths": {"type": "array", "items": {"type": "string"}}},
+      "additionalProperties": false
+    },
+    "artifactInput": {
+      "type": "object", "required": ["ref", "access", "manifest_digest", "root_path"],
+      "properties": {"ref": {"type": "string", "pattern": "^artifact://skill/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}, "access": {"const": "read-only"}, "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "root_path": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
