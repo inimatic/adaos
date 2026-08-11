@@ -3068,6 +3068,34 @@ async def test_voice_chat_snapshot_request_does_not_publish_uncached_empty_histo
     assert seen_stream == []
 
 
+async def test_voice_chat_snapshot_handler_ignores_unrelated_receiver_before_logging(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(router_service_module, "get_ctx", lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")))
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    debug_calls: list[tuple[object, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        router._vlog,
+        "debug",
+        lambda message, *args, **_kwargs: debug_calls.append((message, args)),
+    )
+
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=1.0,
+            payload={"receiver": "notebook_skill.notes", "webspace_id": "desktop"},
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+
+    assert not any(message == "voice_chat.snapshot requested type=%s receiver=%s" for message, _args in debug_calls)
+
+
 async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(monkeypatch) -> None:
     bus = LocalEventBus()
     monkeypatch.setattr(

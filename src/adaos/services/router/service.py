@@ -3773,6 +3773,8 @@ class RouterService:
             if not isinstance(payload, dict):
                 return
             receiver = str(payload.get("receiver") or "").strip()
+            if receiver != "voice_chat.messages":
+                return
             try:
                 self._vlog.debug(
                     "voice_chat.snapshot requested type=%s receiver=%s",
@@ -3781,8 +3783,6 @@ class RouterService:
                 )
             except Exception:
                 pass
-            if receiver != "voice_chat.messages":
-                return
             if ev.type == "webio.stream.subscription.changed":
                 action = str(payload.get("action") or "").strip().lower()
                 if action == "unsubscribed":
