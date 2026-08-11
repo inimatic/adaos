@@ -853,7 +853,11 @@ def record_hub_root_transport_event(
         state["last_summary"] = str(summary or "")
         if err:
             state["last_error"] = err
-        if evt in {"attempt", "connect_try", "reconnect_requested"}:
+        # ``reconnect_requested`` is control intent. The bridge records a
+        # concrete ``attempt``/``connect_try`` when it actually opens the
+        # transport, so counting both makes every healthy reconnect look like
+        # two attempts followed by one connect and falsely marks it unstable.
+        if evt in {"attempt", "connect_try"}:
             state["attempt_seq"] = int(state.get("attempt_seq") or 0) + 1
             state["last_attempt_at"] = ts
         if evt in {"connected", "ready", "reconnected"}:
@@ -896,7 +900,7 @@ def _hub_root_transport_assessment(history: list[dict[str, Any]], *, now_ts: flo
             continue
         event = str(item.get("event") or "").strip().lower()
         if ts >= threshold_15m:
-            if event in {"attempt", "connect_try", "reconnect_requested"}:
+            if event in {"attempt", "connect_try"}:
                 attempts_15m += 1
             if event in connect_events:
                 connects_15m += 1

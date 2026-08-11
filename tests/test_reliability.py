@@ -77,6 +77,43 @@ def _reset_state() -> None:
     reset_reliability_runtime_state()
 
 
+def test_hub_root_transport_assessment_does_not_double_count_reconnect_intent() -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+
+    assessment = reliability._hub_root_transport_assessment(
+        [
+            {"ts": 100.0, "event": "reconnect_requested"},
+            {"ts": 101.0, "event": "attempt", "transport": "tcp"},
+            {"ts": 102.0, "event": "connected", "transport": "tcp"},
+        ],
+        now_ts=103.0,
+    )
+
+    assert assessment["attempts_15m"] == 1
+    assert assessment["connects_15m"] == 1
+    assert assessment["failures_15m"] == 0
+    assert assessment["state"] == "stable"
+
+
+def test_hub_root_transport_attempt_sequence_counts_network_attempts_only(monkeypatch) -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+    _reset_state()
+    clock = {"now": 100.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    reliability.record_hub_root_transport_event(event="reconnect_requested")
+    clock["now"] = 101.0
+    reliability.record_hub_root_transport_event(event="attempt", transport="tcp")
+    clock["now"] = 102.0
+    reliability.record_hub_root_transport_event(event="connected", transport="tcp")
+
+    snapshot = reliability.hub_root_transport_strategy_snapshot(now_ts=103.0)
+    assert snapshot["attempt_seq"] == 1
+    assert snapshot["assessment"]["attempts_15m"] == 1
+    assert snapshot["assessment"]["connects_15m"] == 1
+    assert snapshot["assessment"]["state"] == "stable"
+
+
 def test_runtime_event_loop_lag_snapshot_records_blocked_samples(monkeypatch) -> None:
     reliability = importlib.import_module("adaos.services.reliability")
     _reset_state()
