@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import types
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -4872,6 +4873,95 @@ def test_yws_guard_rejects_multi_client_reconnect_storm(monkeypatch) -> None:
     assert storm["guard"]["quarantined_total"] == 2
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     _clear_yws_guard_state()
+
+
+def test_yws_guard_admits_planned_update_reconnect_burst_when_route_is_ready(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_RECENT_OPEN_10S", 2)
+    monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_planned_transition_snapshot",
+        lambda **_kwargs: {
+            "active": False,
+            "recently_completed": True,
+            "suppress_reconnect_guard": True,
+            "reason": "planned_transition_completion_grace",
+            "marker": "target-1|succeeded|validate|100",
+        },
+    )
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_route_dependency_snapshot",
+        lambda **_kwargs: {"ready": True, "reason": "route_signal_ready"},
+    )
+
+    # Simulate pressure left by three tabs reconnecting together at cutover.
+    for dev_id in ("dev-a", "dev-b", "dev-c"):
+        key = gateway_module._yws_guard_client_history_key("desktop", dev_id)
+        gateway_module._YWS_CLIENT_ATTEMPT_HISTORY[key] = deque([time.time(), time.time()])
+    webspace_key = gateway_module._yws_guard_quarantine_key("desktop")
+    gateway_module._YWS_GUARD_QUARANTINE_UNTIL[webspace_key] = time.time() + 600.0
+    gateway_module._YWS_GUARD_INCIDENTS[webspace_key] = {"count": 1.0, "last_at": time.time()}
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-c")
+
+    assert reason == ""
+    assert diag["planned_transition_recovery_allowed"] is True
+    assert diag["planned_transition_cleared_total"] >= 2
+    assert diag["route_dependency"]["ready"] is True
+    assert not gateway_module._YWS_GUARD_QUARANTINE_UNTIL
+    assert not gateway_module._YWS_CLIENT_ATTEMPT_HISTORY
+    assert gateway_module._YWS_GUARD_DIAG["planned_transition_recovery_total"] == 1
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_planned_update_does_not_bypass_active_session_limit(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    _clear_yws_guard_state()
+    monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 2)
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_planned_transition_snapshot",
+        lambda **_kwargs: {
+            "active": True,
+            "recently_completed": False,
+            "suppress_reconnect_guard": True,
+            "reason": "planned_transition_active",
+            "marker": "target-1|restarting|launch",
+        },
+    )
+    gateway_module._ACTIVE_YWS_CONNECTIONS["desktop"] = [object(), object()]
+
+    reason, diag = gateway_module._yws_guard_reject_reason("desktop", "dev-c")
+
+    assert reason == "active_limit"
+    assert diag["planned_transition_recovery_allowed"] is True
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    _clear_yws_guard_state()
+
+
+def test_yws_guard_does_not_count_planned_transition_attempts(monkeypatch) -> None:
+    _clear_yws_guard_state()
+    gateway_module._YWS_GUARD_DIAG.clear()
+    monkeypatch.setattr(
+        gateway_module,
+        "_yws_guard_planned_transition_snapshot",
+        lambda **_kwargs: {
+            "suppress_reconnect_guard": True,
+            "marker": "target-1|succeeded|validate|100",
+        },
+    )
+
+    gateway_module._record_yws_guard_attempt("desktop", "dev-a")
+
+    assert not gateway_module._YWS_CLIENT_ATTEMPT_HISTORY
+    assert gateway_module._YWS_GUARD_DIAG["planned_transition_attempt_ignored_total"] == 1
 
 
 def test_yws_guard_reject_hold_follows_guard_quarantine_ttl(monkeypatch) -> None:

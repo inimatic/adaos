@@ -130,6 +130,21 @@ transport-only `/ws` and `/yws` handoff as ready.
   child and owner cancellation semantics. It also proves that a fragmented
   `PUB` payload crosses the sidecar byte-for-byte even when legacy sidecar NATS
   ping configuration is present. Live soak after deployment remains open.
+- A planned warm cutover is now a bounded YWS guard exception, not a reconnect
+  storm. While the persisted update transition is active, and for 120 seconds
+  after successful completion by default, reconnect attempts and short
+  sessions are excluded from storm accounting. Admission still requires a
+  live route (or an already-active YWS session) and never bypasses the active
+  session limit. The grace/max-age values and current transition evidence are
+  exposed in the Yjs balancer snapshot. Operators can tune them with
+  `ADAOS_YWS_GUARD_PLANNED_TRANSITION_GRACE_S` and
+  `ADAOS_YWS_GUARD_PLANNED_TRANSITION_MAX_AGE_S`.
+- Browser lifecycle policy now retains control and YWS capabilities during
+  `root_promotion_pending` only when the authoritative snapshot is fresh and
+  both runtime readiness and sidecar/root-route continuity are confirmed. The
+  update badge remains the transition surface; availability does not fall
+  through to generic `Recovering` solely because of this planned handoff. Any
+  stale or degraded dependency still fails closed.
 - Code and tests now keep realtime sidecar enabled by default for hub runtimes;
   `ADAOS_REALTIME_ENABLE=0` or `HUB_REALTIME_ENABLE=0` is the explicit opt-out.
 - Yjs materialization fallback is now explicitly bounded and degraded-aware.
