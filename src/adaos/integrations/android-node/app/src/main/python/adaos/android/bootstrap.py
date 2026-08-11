@@ -288,27 +288,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path in {"/api/ping", "/healthz"}:
-            runtime = _snapshot()
-            self._json(
-                200,
-                {
-                    "ok": True,
-                    "node_id": runtime["node_id"],
-                    "subnet_id": runtime["subnet_id"],
-                    "runtime_profile": "android_poc",
-                    "runtime": {"transition_role": "active"},
-                    "environment": {
-                        "platform": "android",
-                        "local_api": True,
-                        "local_auth_required": False,
-                        "voice": {
-                            "stt": "browser_speech_recognition",
-                            "tts": "browser_speech_synthesis",
-                            "assistant": "android_local",
-                        },
-                    },
-                },
-            )
+            status_code, payload = _loopback_ping_payload()
+            if status_code != 200:
+                self.close_connection = True
+            self._json(status_code, payload)
             return
         if path == "/api/node/status":
             self._json(200, _node_status())
@@ -1661,6 +1644,41 @@ def status() -> str:
 def _snapshot() -> dict[str, Any]:
     with _lock:
         return dict(_runtime)
+
+
+def _loopback_ping_payload() -> tuple[int, dict[str, Any]]:
+    runtime = _snapshot()
+    if not runtime:
+        return 503, {
+            "ok": False,
+            "node_id": "",
+            "subnet_id": "",
+            "node_state": "stopped",
+            "runtime_profile": "android_poc",
+            "runtime": {"transition_role": "stopped"},
+            "environment": {
+                "platform": "android",
+                "local_api": False,
+                "local_auth_required": False,
+            },
+        }
+    return 200, {
+        "ok": True,
+        "node_id": runtime["node_id"],
+        "subnet_id": runtime["subnet_id"],
+        "runtime_profile": "android_poc",
+        "runtime": {"transition_role": "active"},
+        "environment": {
+            "platform": "android",
+            "local_api": True,
+            "local_auth_required": False,
+            "voice": {
+                "stt": "browser_speech_recognition",
+                "tts": "browser_speech_synthesis",
+                "assistant": "android_local",
+            },
+        },
+    }
 
 
 def _node_status() -> dict[str, Any]:

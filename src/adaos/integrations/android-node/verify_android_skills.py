@@ -47,6 +47,16 @@ def _command(websocket, command_id: str, kind: str, payload: dict) -> tuple[dict
     raise RuntimeError(f"command was not acknowledged: {kind}")
 
 
+def _recv_event(websocket, kind: str, *, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        remaining = max(0.1, deadline - time.monotonic())
+        message = json.loads(websocket.recv(timeout=remaining))
+        if message.get("kind") == kind:
+            return message
+    raise RuntimeError(f"event was not delivered: {kind}")
+
+
 def _snapshot(base_url: str) -> dict:
     return _materialization(base_url)["snapshot"]
 
@@ -342,9 +352,7 @@ def main() -> int:
         )
         if not skill_demo.get("ok"):
             raise RuntimeError("Taiga skill event was rejected")
-        skill_event = json.loads(websocket.recv(timeout=5))
-        if skill_event.get("kind") != "webio.stream.desktop.demo_metrics.events":
-            raise RuntimeError("Taiga skill event was not delivered")
+        _recv_event(websocket, "webio.stream.desktop.demo_metrics.events")
 
         taiga, _ = _command(
             websocket,
@@ -445,8 +453,22 @@ def main() -> int:
         raise RuntimeError("Android dialog roster projection is incomplete")
     if dialog.get("active_agent", {}).get("label") != "Арсений":
         raise RuntimeError("Android active dialog agent projection is incomplete")
-    if dialog.get("implementation", {}).get("model_backed") is not False:
-        raise RuntimeError("Android dialog capability boundary is not explicit")
+    implementation = dialog.get("implementation") or {}
+    if implementation.get("full_builder_runtime") is not False:
+        raise RuntimeError("Android Builder capability boundary is not explicit")
+    expected_model_backed = {
+        "android_hub_delegated": True,
+        "android_local_bounded": False,
+    }
+    implementation_id = implementation.get("id")
+    if (
+        implementation_id not in expected_model_backed
+        or implementation.get("model_backed")
+        is not expected_model_backed[implementation_id]
+    ):
+        raise RuntimeError(
+            f"Android dialog capability boundary is inconsistent: {implementation}"
+        )
     _verify_persisted_state(arguments.base_url, arguments.marker)
     print(
         json.dumps(

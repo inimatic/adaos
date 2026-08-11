@@ -134,11 +134,14 @@ class MainActivity : Activity() {
     }
 
     private fun startNode() {
+        NodeLifecycleStore.setDesiredRunning(this, true)
         val intent = Intent(this, NodeService::class.java).setAction(NodeService.ACTION_START)
+            .putExtra(NodeService.EXTRA_START_REASON, NodeService.START_REASON_USER)
         startForegroundService(intent)
     }
 
     private fun stopNode() {
+        NodeLifecycleStore.setDesiredRunning(this, false)
         startService(Intent(this, NodeService::class.java).setAction(NodeService.ACTION_STOP))
     }
 
@@ -159,6 +162,7 @@ class MainActivity : Activity() {
             status.port?.let { "LO http://127.0.0.1:$it" },
             status.dataRoot?.let { "Data $it" },
             "APK ${BuildConfig.VERSION_NAME}",
+            NodeLifecycleStore.summary(this),
         ).joinToString("\n")
         openButton.isEnabled = status.phase == NodePhase.READY
     }

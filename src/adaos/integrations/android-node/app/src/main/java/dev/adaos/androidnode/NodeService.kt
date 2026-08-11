@@ -13,6 +13,7 @@ import android.util.Log
 class NodeService : Service() {
     private lateinit var pythonHost: PythonHost
     private var stopping = false
+    private var stopReason = STOP_REASON_SYSTEM_DESTROY
 
     override fun onCreate() {
         super.onCreate()
@@ -24,17 +25,21 @@ class NodeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand action=${intent?.action} startId=$startId")
         if (intent?.action == ACTION_STOP) {
-            stopRuntime()
+            NodeLifecycleStore.setDesiredRunning(this, false)
+            stopRuntime(STOP_REASON_USER, "Node stopped by user")
             return START_NOT_STICKY
         }
 
         startForeground(NOTIFICATION_ID, notification("Starting embedded Python"))
         val current = NodeStateStore.snapshot()
         if (current.phase == NodePhase.STARTING || current.phase == NodePhase.READY) {
-            return START_NOT_STICKY
+            return START_STICKY
         }
 
         stopping = false
+        val startReason = intent?.getStringExtra(EXTRA_START_REASON)
+            ?: if (intent == null) START_REASON_STICKY_RESTART else START_REASON_USER
+        NodeLifecycleStore.recordStart(this, startReason)
         publish(NodeStatus(NodePhase.STARTING, "Starting embedded Python"))
         pythonHost.start(filesDir.resolve("adaos")) { result ->
             result.fold(
@@ -45,6 +50,11 @@ class NodeService : Service() {
                 },
                 onFailure = { error ->
                     Log.e(TAG, "AdaOS Python bootstrap failed", error)
+                    NodeLifecycleStore.recordStop(
+                        this,
+                        STOP_REASON_BOOTSTRAP_FAILED,
+                        error.message ?: error.javaClass.simpleName,
+                    )
                     publish(
                         NodeStatus(
                             NodePhase.FAILED,
@@ -56,7 +66,7 @@ class NodeService : Service() {
                 },
             )
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -64,25 +74,32 @@ class NodeService : Service() {
         val phase = NodeStateStore.snapshot().phase
         if (!stopping && phase != NodePhase.STOPPED && phase != NodePhase.FAILED) {
             pythonHost.stop { }
-            publish(NodeStatus.stopped("Android stopped the service"))
+            val detail = "Android stopped the service; sticky restart remains requested"
+            NodeLifecycleStore.recordStop(this, STOP_REASON_SYSTEM_DESTROY, detail)
+            publish(NodeStatus.stopped(detail))
         }
         super.onDestroy()
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        stopRuntime()
+        stopRuntime(
+            STOP_REASON_PLATFORM_TIMEOUT,
+            "Android foreground-service timeout (type=$fgsType)",
+        )
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun stopRuntime() {
+    private fun stopRuntime(reason: String, requestedDetail: String) {
         if (stopping) return
-        Log.i(TAG, "stopRuntime requested")
+        Log.i(TAG, "stopRuntime requested reason=$reason")
         stopping = true
+        stopReason = reason
         publish(NodeStatus(NodePhase.STOPPING, "Flushing and stopping Python"))
         pythonHost.stop { result ->
             val detail = result.exceptionOrNull()?.message?.let { "Stopped with warning: $it" }
-                ?: "Node is stopped"
+                ?: requestedDetail
+            NodeLifecycleStore.recordStop(this, stopReason, detail)
             publish(NodeStatus.stopped(detail))
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -140,6 +157,15 @@ class NodeService : Service() {
     companion object {
         const val ACTION_START = "dev.adaos.androidnode.action.START"
         const val ACTION_STOP = "dev.adaos.androidnode.action.STOP"
+        const val EXTRA_START_REASON = "start_reason"
+        const val START_REASON_USER = "user"
+        const val START_REASON_BOOT = "boot_completed"
+        const val START_REASON_PACKAGE_REPLACED = "package_replaced"
+        const val START_REASON_STICKY_RESTART = "sticky_restart"
+        private const val STOP_REASON_USER = "user"
+        private const val STOP_REASON_PLATFORM_TIMEOUT = "platform_timeout"
+        private const val STOP_REASON_SYSTEM_DESTROY = "system_destroy"
+        private const val STOP_REASON_BOOTSTRAP_FAILED = "bootstrap_failed"
         private const val CHANNEL_ID = "adaos_node_runtime"
         private const val NOTIFICATION_ID = 1701
         private const val TAG = "AdaOSNodeService"

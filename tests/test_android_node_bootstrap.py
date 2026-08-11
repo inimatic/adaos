@@ -315,6 +315,21 @@ def test_android_stop_drains_inflight_status_requests_without_traceback(
     assert server_failures == []
     assert bootstrap._node_status()["node_state"] == "stopped"
     assert bootstrap._node_status()["ready"] is False
+    ping_status, ping = bootstrap._loopback_ping_payload()
+    assert ping_status == 503
+    assert ping == {
+        "ok": False,
+        "node_id": "",
+        "subnet_id": "",
+        "node_state": "stopped",
+        "runtime_profile": "android_poc",
+        "runtime": {"transition_role": "stopped"},
+        "environment": {
+            "platform": "android",
+            "local_api": False,
+            "local_auth_required": False,
+        },
+    }
 
 
 def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
