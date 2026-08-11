@@ -386,7 +386,7 @@ conversational package. See the
 The published authoring set is `research_orchestrator_skill` `0.2.0`,
 `research_workbench` `0.0.3`, `builder_sdk_control_skill` `0.1.59`, generic
 `skill_preview` `0.0.1`, Builder scenario `0.2.60`, and AdaOS client
-`0.0.309`. The earlier precursor's
+`0.0.310`. The earlier precursor's
 common Research view inside Builder is no longer the product boundary.
 Portfolio, focus, intake, dialogue, and acceptance belong to Workbench;
 Builder retains Project SDK, scoped source development, Codex, Trial, and

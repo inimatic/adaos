@@ -240,7 +240,7 @@ on the isolated skill process to own live UI state. Its renderer tolerates
 legacy singleton collection shapes without losing the project header or
 project-picker contents. The hardened published set is
 `research_orchestrator_skill` `0.2.0`, `research_workbench` `0.0.3`, Builder
-`0.2.60`, and AdaOS client `0.0.309`. These are ARF7.1 usability and
+`0.2.60`, and AdaOS client `0.0.310`. These are ARF7.1 usability and
 identity-consistency requirements, not ARF7.2 Codex realization.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
