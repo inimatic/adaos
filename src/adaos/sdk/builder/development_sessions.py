@@ -90,15 +90,22 @@ def list_sessions(*, project_id: str | None = None, limit: int = 500) -> list[di
     root = _state_root()
     if not root.is_dir():
         return []
-    result: list[dict[str, Any]] = []
-    for path in sorted(root.glob("*/session.json"), key=lambda item: item.parent.name.lower()):
+    result: list[tuple[str, int, str, dict[str, Any]]] = []
+    for path in root.glob("*/session.json"):
         value = get(path.parent.name)
         if project_id and value["project_ref"] != f"project:{project_id}":
             continue
-        result.append(value)
-        if len(result) >= max(1, min(int(limit), 5000)):
-            break
-    return result
+        result.append(
+            (
+                str(value.get("created_at") or ""),
+                int(path.stat().st_mtime_ns),
+                str(value["session_id"]),
+                value,
+            )
+        )
+    result.sort(key=lambda item: item[:3])
+    bounded = max(1, min(int(limit), 5000))
+    return [item[3] for item in result[-bounded:]]
 
 
 def bind(session_id: str, builder_webspace_id: str) -> dict[str, Any]:

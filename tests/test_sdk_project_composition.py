@@ -239,6 +239,17 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     )
     assert repeated_expansion["request"]["request_id"] == expansion["request"]["request_id"]
 
+    later = development_sessions.create(
+        "tlp_research",
+        automation_brief_digest="sha256:" + "4" * 64,
+        research_prototype_digest="sha256:" + "5" * 64,
+        artifact_groups=["part0"],
+        context_members=[{"ref": "scenario:research_workbench", "relation": "presentation"}],
+        prohibited_actions=["Do not run experiments."],
+        session_id="dev_0000_lexically_earlier",
+    )
+    assert development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"] == later["session"]["session_id"]
+
 
 def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
