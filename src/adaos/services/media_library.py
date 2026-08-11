@@ -3,120 +3,53 @@ from __future__ import annotations
 import base64
 import heapq
 import json
-import mimetypes
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import quote
 
-from adaos.services.agent_context import get_ctx
+from adaos.services.media_core import (
+    MEDIA_RUNTIME_SCOPE,
+    MEDIA_STORAGE_SUBPATH,
+    MEDIA_STORE_SKILL_NAME,
+    ROOT_MEDIA_RELAY_CHUNK_BYTES,
+    ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES,
+    ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES,
+    SUPPORTED_MEDIA_EXTENSIONS,
+    guess_media_type,
+    media_resource_from_path,
+    media_store_dir,
+    media_store_file_path,
+    media_store_runtime_env,
+    sanitize_media_filename,
+)
 from adaos.services.media_capability import member_browser_direct_foundation
 from adaos.services.router.media_routes import resolve_media_route_intent
-from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
 
 
-MEDIA_SKILL_NAME = "mediaserver"
-MEDIA_STORAGE_SUBPATH = "data/files"
-ROOT_ROUTED_MEDIA_BODY_LIMIT_BYTES = 2 * 1024 * 1024
-MEDIA_RUNTIME_SCOPE = "media_server"
-ROOT_MEDIA_RELAY_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
-# Keep chunks below the default 1 MiB NATS payload limit after base64/json overhead.
-ROOT_MEDIA_RELAY_CHUNK_BYTES = 512 * 1024
+MEDIA_SKILL_NAME = MEDIA_STORE_SKILL_NAME
 MEDIA_LIBRARY_DEFAULT_PAGE_SIZE = 50
 MEDIA_LIBRARY_MAX_PAGE_SIZE = 100
 MEDIA_LIBRARY_MAX_OFFSET = 10_000
-SUPPORTED_VIDEO_EXTENSIONS = {
-    ".mp4",
-    ".webm",
-    ".ogv",
-    ".ogg",
-    ".mov",
-    ".m4v",
-    ".mkv",
-    ".avi",
-    ".wmv",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-}
-_MEDIA_TYPE_OVERRIDES = {
-    ".mkv": "video/x-matroska",
-    ".m4v": "video/mp4",
-    ".ogv": "video/ogg",
-    ".wmv": "video/x-ms-wmv",
-    ".avi": "video/x-msvideo",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-}
+SUPPORTED_VIDEO_EXTENSIONS = SUPPORTED_MEDIA_EXTENSIONS
 
 
-def media_runtime_env() -> SkillRuntimeEnvironment:
-    ctx = get_ctx()
-    env = SkillRuntimeEnvironment(
-        skills_root=Path(ctx.paths.skills_dir()),
-        skill_name=MEDIA_SKILL_NAME,
-    )
-    env.ensure_base()
-    return env
+def media_runtime_env():
+    return media_store_runtime_env()
 
 
 def media_video_dir() -> Path:
-    path = media_runtime_env().files_dir()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def sanitize_media_filename(filename: str) -> str:
-    raw = str(filename or "").strip()
-    if not raw:
-        raise ValueError("empty_filename")
-    if "\x00" in raw:
-        raise ValueError("invalid_filename")
-    if "/" in raw or "\\" in raw:
-        raise ValueError("path_separators_not_allowed")
-    if raw in {".", ".."}:
-        raise ValueError("invalid_filename")
-    name = Path(raw).name
-    if name != raw:
-        raise ValueError("path_traversal_not_allowed")
-    suffix = Path(name).suffix.lower()
-    if not suffix:
-        raise ValueError("missing_extension")
-    if suffix not in SUPPORTED_VIDEO_EXTENSIONS:
-        raise ValueError(f"unsupported_extension:{suffix}")
-    return name
+    return media_store_dir()
 
 
 def media_file_path(filename: str) -> Path:
-    name = sanitize_media_filename(filename)
-    return media_video_dir() / name
-
-
-def guess_media_type(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    if suffix in _MEDIA_TYPE_OVERRIDES:
-        return _MEDIA_TYPE_OVERRIDES[suffix]
-    guessed, _enc = mimetypes.guess_type(filename)
-    if guessed:
-        return guessed
-    return "application/octet-stream"
+    return media_store_file_path(filename)
 
 
 def _media_item_from_path(path: Path, stat: Any) -> dict[str, Any]:
-    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-    return {
-        "name": path.name,
-        "size_bytes": int(stat.st_size),
-        "mime_type": guess_media_type(path.name),
-        "modified_at": modified.isoformat(),
-        "content_path": f"/api/node/media/files/content/{quote(path.name)}",
-        "_modified_ts": float(stat.st_mtime),
-    }
+    return media_resource_from_path(
+        path,
+        source="media_server",
+        resource_id=path.name,
+    ).to_public_dict(include_internal=True)
 
 
 def iter_media_files() -> Iterator[dict[str, Any]]:
@@ -124,7 +57,7 @@ def iter_media_files() -> Iterator[dict[str, Any]]:
     for path in root.iterdir():
         if not path.is_file():
             continue
-        if path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+        if path.suffix.lower() not in SUPPORTED_MEDIA_EXTENSIONS:
             continue
         try:
             stat = path.stat()

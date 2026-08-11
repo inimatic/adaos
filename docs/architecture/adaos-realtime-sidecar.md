@@ -89,8 +89,9 @@ Managed autostart / runtime boundary:
   websocket listeners for the current transport-only scope when sidecar mode is
   enabled and listeners are ready
 - endpoint media content can be proxied through an explicitly enabled,
-  read-only sidecar HTTP listener for `/api/node/media/files/content/{filename}`
-  and `/media/files/content/{filename}`
+  read-only sidecar HTTP listener for `/api/node/media/files/content/{filename}`,
+  `/media/files/content/{filename}`, and the legacy media-indexer playback
+  routes backed by the core media resource gateway
 - browser `/ws` and `/yws` session semantics still terminate in the runtime;
   full Yjs room/session authority is not part of the current sidecar contract
 - WebRTC direct channels are still negotiated by the runtime/browser transport
@@ -100,8 +101,8 @@ Managed autostart / runtime boundary:
   in [Browser-Hub Lifecycle Authority](browser-hub-lifecycle.md); browsers wait
   on that event stream instead of polling sidecar, supervisor, and runtime
 - the media proxy does not expose the full hub API to the LAN; it serves only
-  token-protected, already-published media files from AdaOS media storage and
-  supports `GET`, `HEAD`, and byte `Range` requests
+  token-protected media resources resolved by the core media plane and supports
+  `GET`, `HEAD`, and byte `Range` requests
 
 ## Why this split
 

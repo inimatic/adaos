@@ -32,9 +32,13 @@ def test_media_indexer_resolver_accepts_payload_alias_root(monkeypatch, tmp_path
     monkeypatch.setattr(media_indexer_library, "_metadata_candidates", lambda: [metadata_path])
 
     resolved, payload = media_indexer_library.resolve_media_indexer_content("a" * 32)
+    resource = media_indexer_library.resolve_media_indexer_resource("a" * 32)
 
     assert resolved == clip.resolve()
     assert payload["mime_type"] == "audio/mpeg"
+    assert payload["content_path"] == f"/api/node/media-indexer/content/{'a' * 32}"
+    assert resource.source == "media_indexer"
+    assert resource.to_public_dict()["routed_content_path"] == f"/media/media-indexer/content/{'a' * 32}"
 
 
 def test_media_indexer_resolver_prefers_compact_playback_index(monkeypatch, tmp_path):
@@ -70,6 +74,9 @@ def test_media_indexer_resolver_prefers_compact_playback_index(monkeypatch, tmp_
     monkeypatch.setattr(media_indexer_library, "_metadata_candidates", lambda: [metadata_path])
 
     resolved, payload = media_indexer_library.resolve_media_indexer_content("b" * 32)
+    resource = media_indexer_library.resolve_media_indexer_resource("b" * 32)
 
     assert resolved == clip.resolve()
     assert payload["mime_type"] == "video/mp4"
+    assert resource.id == "b" * 32
+    assert resource.content_path == f"/api/node/media-indexer/content/{'b' * 32}"

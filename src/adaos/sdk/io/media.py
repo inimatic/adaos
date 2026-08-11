@@ -11,9 +11,21 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 from adaos.services.agent_context import get_ctx
-from adaos.services.media_library import MEDIA_SKILL_NAME, media_file_path, sanitize_media_filename
+from adaos.services.media_core import (
+    MEDIA_STORE_SKILL_NAME,
+    media_indexer_content_path as _core_media_indexer_content_path,
+    media_resource_content_path as _core_media_resource_content_path,
+    media_resource_descriptor as _core_media_resource_descriptor,
+    media_store_content_path,
+    media_store_file_path,
+    sanitize_media_filename,
+)
 from adaos.services.runtime_paths import current_base_dir
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+
+MEDIA_SKILL_NAME = MEDIA_STORE_SKILL_NAME
+media_file_path = media_store_file_path
 
 
 def image_fingerprint(path: str | Path) -> str:
@@ -74,13 +86,53 @@ def cached_image_variant(
 def media_content_url(filename: str, *, api_token: str | None = None, browser: bool = False) -> str:
     token = str(api_token or _api_token() or "").strip()
     query = f"?token={quote(token)}" if token else ""
-    prefix = "/media" if browser else "/api/node/media"
-    return f"{prefix}/files/content/{quote(filename)}{query}"
+    return f"{media_store_content_path(filename, browser=browser)}{query}"
 
 
 def media_content_path(filename: str, *, browser: bool = True) -> str:
-    prefix = "/media" if browser else "/api/node/media"
-    return f"{prefix}/files/content/{quote(filename)}"
+    return media_store_content_path(filename, browser=browser)
+
+
+def media_indexer_content_path(playback_id: str, *, browser: bool = True) -> str:
+    return _core_media_indexer_content_path(playback_id, browser=browser)
+
+
+def media_resource_content_path(
+    resource_id: str,
+    *,
+    source: str = "media_server",
+    browser: bool = True,
+) -> str:
+    return _core_media_resource_content_path(resource_id, source=source, browser=browser)
+
+
+def media_resource_descriptor(
+    *,
+    resource_id: str,
+    source: str,
+    name: str,
+    mime_type: str,
+    size_bytes: int,
+    modified_at: str = "",
+    content_path: str = "",
+    routed_content_path: str = "",
+    playback_id: str = "",
+    source_path: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _core_media_resource_descriptor(
+        resource_id=resource_id,
+        source=source,
+        name=name,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        modified_at=modified_at,
+        content_path=content_path,
+        routed_content_path=routed_content_path,
+        playback_id=playback_id,
+        source_path=source_path,
+        metadata=metadata,
+    )
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -233,29 +285,45 @@ def publish_media_file(
     if not target.exists() or target.stat().st_size != source.stat().st_size:
         shutil.copyfile(source, target)
     direct_urls = direct_media_content_urls(target.name, api_token=api_token)
-    return {
-        "ok": True,
-        "filename": target.name,
-        "path": str(target),
-        "url": media_content_url(target.name, api_token=api_token),
-        "node_url": media_content_url(target.name, api_token=api_token),
-        "browser_url": media_content_url(target.name, api_token=api_token, browser=True),
-        "content_path": media_content_path(target.name, browser=False),
-        "browser_path": media_content_path(target.name, browser=True),
-        "direct_urls": direct_urls,
-        "content_url_candidates": [*direct_urls, media_content_url(target.name, api_token=api_token)],
-        "mime": mime,
-        "size_bytes": int(target.stat().st_size),
-        "content_ref": content_ref,
-        "route": "node_media_file",
-        "browser_route": "hub_browser_media",
-        "delivery": {
-            "schema_version": "media-delivery.v1",
-            "preferred_route": "hub_direct_http" if direct_urls else "node_media_file",
-            "fallback_route": "root_relay_inline",
-            "direct_candidate_count": len(direct_urls),
-        },
-    }
+    size_bytes = int(target.stat().st_size)
+    descriptor = media_resource_descriptor(
+        resource_id=target.name,
+        source="media_server",
+        name=target.name,
+        mime_type=mime,
+        size_bytes=size_bytes,
+        content_path=media_content_path(target.name, browser=False),
+        routed_content_path=media_content_path(target.name, browser=True),
+        source_path=str(target),
+        metadata={"content_ref": content_ref, "namespace": safe_namespace, "variant": safe_variant},
+    )
+    descriptor.update(
+        {
+            "ok": True,
+            "filename": target.name,
+            "path": str(target),
+            "url": media_content_url(target.name, api_token=api_token),
+            "node_url": media_content_url(target.name, api_token=api_token),
+            "browser_url": media_content_url(target.name, api_token=api_token, browser=True),
+            "content_path": media_content_path(target.name, browser=False),
+            "browser_path": media_content_path(target.name, browser=True),
+            "direct_urls": direct_urls,
+            "content_url_candidates": [*direct_urls, media_content_url(target.name, api_token=api_token)],
+            "mime": mime,
+            "mime_type": mime,
+            "size_bytes": size_bytes,
+            "content_ref": content_ref,
+            "route": "node_media_file",
+            "browser_route": "hub_browser_media",
+            "delivery": {
+                "schema_version": "media-delivery.v1",
+                "preferred_route": "hub_direct_http" if direct_urls else "node_media_file",
+                "fallback_route": "root_relay_inline",
+                "direct_candidate_count": len(direct_urls),
+            },
+        }
+    )
+    return descriptor
 
 
 def browser_media_descriptor(media: dict[str, Any], *, content_ref: str | None = None) -> dict[str, Any]:
@@ -288,6 +356,9 @@ __all__ = [
     "image_fingerprint",
     "media_content_path",
     "media_content_url",
+    "media_indexer_content_path",
+    "media_resource_content_path",
+    "media_resource_descriptor",
     "publish_media_file",
     "source_image_cache_dir",
 ]

@@ -17,6 +17,9 @@ __all__ = [
     "stream_variable_publish",
     "browser_media_descriptor",
     "cached_image_variant",
+    "media_indexer_content_path",
+    "media_resource_content_path",
+    "media_resource_descriptor",
     "publish_media_file",
     "stt_listen",
     "tts_speak",
@@ -36,7 +39,14 @@ __all__ = [
 
 if TYPE_CHECKING:
     from .out import chat_append, say, media_route, telegram_photo, stream_publish, stream_variable_publish
-    from .media import browser_media_descriptor, cached_image_variant, publish_media_file
+    from .media import (
+        browser_media_descriptor,
+        cached_image_variant,
+        media_indexer_content_path,
+        media_resource_content_path,
+        media_resource_descriptor,
+        publish_media_file,
+    )
     from .voice import stt_listen, tts_speak
     from .endpoint_audio import (
         build_capture_command,
@@ -66,12 +76,29 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
             "stream_publish": stream_publish,
             "stream_variable_publish": stream_variable_publish,
         }[name]
-    if name in ("browser_media_descriptor", "cached_image_variant", "publish_media_file"):
-        from .media import browser_media_descriptor, cached_image_variant, publish_media_file
+    if name in (
+        "browser_media_descriptor",
+        "cached_image_variant",
+        "media_indexer_content_path",
+        "media_resource_content_path",
+        "media_resource_descriptor",
+        "publish_media_file",
+    ):
+        from .media import (
+            browser_media_descriptor,
+            cached_image_variant,
+            media_indexer_content_path,
+            media_resource_content_path,
+            media_resource_descriptor,
+            publish_media_file,
+        )
 
         return {
             "browser_media_descriptor": browser_media_descriptor,
             "cached_image_variant": cached_image_variant,
+            "media_indexer_content_path": media_indexer_content_path,
+            "media_resource_content_path": media_resource_content_path,
+            "media_resource_descriptor": media_resource_descriptor,
             "publish_media_file": publish_media_file,
         }[name]
     if name in ("stt_listen", "tts_speak"):

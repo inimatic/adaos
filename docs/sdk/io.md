@@ -186,6 +186,53 @@ Today the router-owned route contract lives under `data.media.route`:
 - a minimal route intent with capability/ability hints, which the router normalizes
 - a precomputed route contract, which the router re-targets to the destination webspace and republishes as browser-visible state
 
+## Media Resource SDK
+
+SDK module: `adaos.sdk.io.media`
+
+Skills should use the SDK media helpers instead of importing core services.
+The core-owned media plane is intentionally limited to resource descriptors,
+safe content paths, publication into the shared Media Server store, and playback
+delivery contracts. Catalog semantics such as albums, similarity search,
+transcription, playlists, and enrichment belong to skills.
+
+Canonical descriptor shape:
+
+```json
+{
+  "schema": "adaos.media.resource.v1",
+  "id": "clip.mp4",
+  "resource_id": "clip.mp4",
+  "source": "media_server",
+  "name": "clip.mp4",
+  "size_bytes": 42000,
+  "mime_type": "video/mp4",
+  "modified_at": "2026-08-11T10:00:00+00:00",
+  "content_path": "/api/node/media/files/content/clip.mp4",
+  "routed_content_path": "/media/files/content/clip.mp4"
+}
+```
+
+Skill-facing helpers:
+
+- `publish_media_file(path, content_ref, namespace='media', variant='media', mime='image/jpeg')`
+  copies a generated or prepared file into the shared Media Server store and
+  returns a `adaos.media.resource.v1` descriptor plus legacy URL fields.
+- `media_content_path(filename, browser=True)` returns the safe Media Server
+  content path for an already published filename.
+- `media_resource_content_path(resource_id, source='media_server', browser=True)`
+  builds a content path for a known core source. Current core sources are
+  `media_server` and compatibility `media_indexer`.
+- `media_indexer_content_path(playback_id, browser=True)` builds the legacy
+  media-indexer playback path without making a skill depend on
+  `adaos.services.media_indexer_library`.
+- `media_resource_descriptor(...)` builds a normalized descriptor when a skill
+  owns the catalog/search semantics but wants to publish browser-safe media
+  rows into Yjs/WebIO.
+
+Compatibility: `media_indexer` remains a legacy producer of `MediaResource`
+descriptors through `playback_id`. It is not the canonical media catalog.
+
 ## Voice (local mock)
 
 - `io.voice.stt.listen(timeout='20s')`

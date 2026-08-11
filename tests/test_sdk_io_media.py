@@ -42,6 +42,9 @@ def test_sdk_io_media_creates_cached_variant_and_publish_descriptor(monkeypatch,
     assert second == variant
     assert second_cached is True
     assert descriptor["ok"] is True
+    assert descriptor["schema"] == "adaos.media.resource.v1"
+    assert descriptor["source"] == "media_server"
+    assert descriptor["id"] == descriptor["filename"]
     assert descriptor["browser_route"] == "hub_browser_media"
     assert descriptor["browser_path"].startswith("/media/files/content/")
     assert descriptor["node_url"].startswith("/api/node/media/files/content/")
@@ -148,3 +151,25 @@ def test_sdk_io_media_can_check_cached_variant_without_creating(tmp_path):
     assert cached is False
     assert variant.parent == source.parent / ".adaos-thumbs"
     assert not variant.exists()
+
+
+def test_sdk_io_media_exposes_resource_descriptor_helpers():
+    from adaos.sdk.io import media as sdk_media
+
+    descriptor = sdk_media.media_resource_descriptor(
+        resource_id="clip-1",
+        source="media_center",
+        name="clip.mp4",
+        mime_type="video/mp4",
+        size_bytes=42,
+        content_path="/api/node/media/files/content/clip.mp4",
+    )
+
+    assert descriptor["schema"] == "adaos.media.resource.v1"
+    assert descriptor["resource_id"] == "clip-1"
+    assert descriptor["source"] == "media_center"
+    assert sdk_media.media_resource_content_path("clip.mp4", source="media_server") == "/media/files/content/clip.mp4"
+    assert (
+        sdk_media.media_indexer_content_path("c" * 32, browser=False)
+        == f"/api/node/media-indexer/content/{'c' * 32}"
+    )

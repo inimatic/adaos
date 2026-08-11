@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import json
-import mimetypes
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.media_core import (
+    SUPPORTED_MEDIA_EXTENSIONS,
+    MediaResource,
+    guess_media_type,
+    media_indexer_content_path,
+    media_resource_from_path,
+    media_store_content_path,
+    resolve_external_media_payload_target,
+    validate_playback_id,
+)
 
 
 MEDIA_INDEXER_SKILL_NAME = "media_indexer_skill"
@@ -15,55 +24,17 @@ MEDIA_INDEXER_STATE_METADATA_REL = Path("internal") / "faiss" / "metadata.json"
 MEDIA_INDEXER_WORKSPACE_METADATA_REL = Path("data") / "internal" / "media_indexer" / "faiss" / "metadata.json"
 MEDIA_INDEXER_PLAYBACK_INDEX = "playback.sqlite3"
 SUPPORTED_INDEXER_MEDIA_EXTENSIONS = {
-    ".mp4",
-    ".webm",
-    ".ogv",
-    ".ogg",
-    ".mov",
-    ".m4v",
-    ".mkv",
-    ".avi",
-    ".wmv",
-    ".mp3",
-    ".wav",
-    ".flac",
-    ".m4a",
-    ".aac",
-    ".opus",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-}
-_MIME_OVERRIDES = {
-    ".mkv": "video/x-matroska",
-    ".m4v": "video/mp4",
-    ".ogv": "video/ogg",
-    ".wmv": "video/x-ms-wmv",
-    ".avi": "video/x-msvideo",
-    ".mp3": "audio/mpeg",
-    ".m4a": "audio/mp4",
-    ".flac": "audio/flac",
-    ".opus": "audio/ogg",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
+    *SUPPORTED_MEDIA_EXTENSIONS,
 }
 _METADATA_CACHE: dict[str, Any] = {"key": None, "value": {}}
 
 
 def guess_indexer_media_type(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    if suffix in _MIME_OVERRIDES:
-        return _MIME_OVERRIDES[suffix]
-    guessed, _encoding = mimetypes.guess_type(filename)
-    return guessed or "application/octet-stream"
+    return guess_media_type(filename)
 
 
-def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any]]:
-    normalized = str(playback_id or "").strip().lower()
-    if not normalized or len(normalized) > 128 or not all(ch in "0123456789abcdef" for ch in normalized):
-        raise ValueError("invalid_playback_id")
+def resolve_media_indexer_resource(playback_id: str) -> MediaResource:
+    normalized = validate_playback_id(playback_id)
 
     indexed, sidecar_available = _lookup_playback_index(playback_id=normalized)
     if indexed is not None:
@@ -71,7 +42,7 @@ def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any
         roots = _candidate_index_roots(metadata, payload)
         if not roots:
             raise FileNotFoundError("media_indexer_directory_missing")
-        return _resolve_payload_target(payload, roots)
+        return _resource_from_payload(payload, metadata, roots, playback_id_hint=normalized)
     if sidecar_available:
         raise FileNotFoundError("media_indexer_item_not_found")
 
@@ -85,12 +56,17 @@ def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any
         roots = _candidate_index_roots(metadata, payload)
         if not roots:
             raise FileNotFoundError("media_indexer_directory_missing")
-        return _resolve_payload_target(payload, roots)
+        return _resource_from_payload(payload, metadata, roots, playback_id_hint=normalized)
 
     raise FileNotFoundError("media_indexer_item_not_found")
 
 
-def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str, Any]]:
+def resolve_media_indexer_content(playback_id: str) -> tuple[Path, dict[str, Any]]:
+    resource = resolve_media_indexer_resource(playback_id)
+    return resource.path, _resource_payload(resource)
+
+
+def resolve_media_indexer_resource_by_name(filename: str) -> MediaResource:
     raw = str(filename or "").strip()
     name = Path(raw).name
     if not name or name != raw or name in {".", ".."} or "\x00" in name or "/" in raw or "\\" in raw:
@@ -102,7 +78,7 @@ def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str
         roots = _candidate_index_roots(metadata, payload)
         if not roots:
             raise FileNotFoundError("media_indexer_directory_missing")
-        return _resolve_payload_target(payload, roots)
+        return _resource_from_payload(payload, metadata, roots)
     if sidecar_available:
         raise FileNotFoundError("media_indexer_item_not_found")
 
@@ -121,9 +97,14 @@ def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str
         roots = _candidate_index_roots(metadata, payload)
         if not roots:
             raise FileNotFoundError("media_indexer_directory_missing")
-        return _resolve_payload_target(payload, roots)
+        return _resource_from_payload(payload, metadata, roots)
 
     raise FileNotFoundError("media_indexer_item_not_found")
+
+
+def resolve_media_indexer_content_by_name(filename: str) -> tuple[Path, dict[str, Any]]:
+    resource = resolve_media_indexer_resource_by_name(filename)
+    return resource.path, _resource_payload(resource)
 
 
 def _candidate_index_roots(metadata: dict[str, Any], payload: dict[str, Any]) -> list[Path]:
@@ -176,18 +157,62 @@ def _norm_part(value: str) -> str:
     return str(value or "").replace("\\", "/").strip().casefold()
 
 
-def _resolve_payload_target(payload: dict[str, Any], indexed_roots: list[Path]) -> tuple[Path, dict[str, Any]]:
-    raw_path = str(payload.get("full_path") or "").strip()
-    if not raw_path:
-        raise FileNotFoundError("media_indexer_item_missing_path")
-    target = Path(raw_path).expanduser().resolve()
-    if target.suffix.lower() not in SUPPORTED_INDEXER_MEDIA_EXTENSIONS:
-        raise ValueError("unsupported_extension")
-    if not any(_is_relative_to(target, root) for root in indexed_roots):
-        raise PermissionError("path_outside_indexed_directory")
-    if not target.exists() or not target.is_file():
-        raise FileNotFoundError("media_file_not_found")
-    return target, payload
+def _resource_from_payload(
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+    indexed_roots: list[Path],
+    *,
+    playback_id_hint: str | None = None,
+) -> MediaResource:
+    try:
+        target = resolve_external_media_payload_target(payload, indexed_roots)
+    except FileNotFoundError as exc:
+        if str(exc) == "media_item_missing_path":
+            raise FileNotFoundError("media_indexer_item_missing_path") from exc
+        raise
+    raw_playback_id = str(payload.get("playback_id") or playback_id_hint or "").strip().lower()
+    playback_id = validate_playback_id(raw_playback_id) if raw_playback_id else ""
+    name = str(payload.get("real_file_name") or "").strip() or target.name
+    payload_mime = str(payload.get("mime_type") or "").strip()
+    node_content_path = (
+        media_indexer_content_path(playback_id, browser=False)
+        if playback_id
+        else media_store_content_path(name, browser=False)
+    )
+    browser_content_path = (
+        media_indexer_content_path(playback_id, browser=True)
+        if playback_id
+        else media_store_content_path(name, browser=True)
+    )
+    return media_resource_from_path(
+        target,
+        source="media_indexer",
+        resource_id=playback_id or name,
+        name=name,
+        mime_type=payload_mime or guess_indexer_media_type(name),
+        playback_id=playback_id,
+        content_path=node_content_path,
+        routed_content_path=browser_content_path,
+        source_path=str(payload.get("full_path") or target),
+        metadata={
+            "payload": dict(payload),
+            "indexed_directory": str(metadata.get("indexed_directory") or ""),
+            "provider": MEDIA_INDEXER_SKILL_NAME,
+        },
+    )
+
+
+def _resource_payload(resource: MediaResource) -> dict[str, Any]:
+    raw_payload = resource.metadata.get("payload") if isinstance(resource.metadata, dict) else {}
+    payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+    payload.setdefault("playback_id", resource.playback_id)
+    payload.setdefault("real_file_name", resource.name)
+    payload.setdefault("full_path", str(resource.path))
+    payload.setdefault("mime_type", resource.mime_type)
+    payload.setdefault("content_path", resource.content_path)
+    payload.setdefault("routed_content_path", resource.routed_content_path)
+    payload.setdefault("source", resource.source)
+    return payload
 
 
 def _latest_index_metadata() -> dict[str, Any]:
@@ -293,11 +318,3 @@ def _iter_payloads(metadata: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(payload, dict):
                 payloads.append(payload)
     return payloads
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-        return True
-    except ValueError:
-        return False

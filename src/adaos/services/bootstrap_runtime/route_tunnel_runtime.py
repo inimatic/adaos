@@ -1921,38 +1921,6 @@ class NatsRouteTunnelRuntime:
                     except Exception:
                         pass
 
-            def _parse_media_range(range_header: str | None, size_bytes: int) -> tuple[int, int] | None:
-                raw = str(range_header or "").strip()
-                if not raw.lower().startswith("bytes="):
-                    return None
-                spec = raw[6:].strip()
-                if not spec or "," in spec:
-                    return None
-                start_s, _sep, end_s = spec.partition("-")
-                if not _sep:
-                    return None
-                try:
-                    if start_s and end_s:
-                        start = int(start_s)
-                        end = int(end_s)
-                    elif start_s:
-                        start = int(start_s)
-                        end = size_bytes - 1
-                    elif end_s:
-                        suffix_len = int(end_s)
-                        if suffix_len <= 0:
-                            return None
-                        start = max(0, size_bytes - suffix_len)
-                        end = size_bytes - 1
-                    else:
-                        return None
-                except Exception:
-                    return None
-                if start < 0 or end < start or start >= size_bytes:
-                    return None
-                end = min(end, size_bytes - 1)
-                return (start, end)
-
             async def _route_media_reply_file(
                 key: str,
                 *,
@@ -1960,14 +1928,20 @@ class NatsRouteTunnelRuntime:
                 method: str,
                 request_headers: dict[str, Any] | None,
             ) -> None:
-                from adaos.services.media_library import ROOT_MEDIA_RELAY_CHUNK_BYTES, guess_media_type
+                from adaos.services.media_core import (
+                    ROOT_MEDIA_RELAY_CHUNK_BYTES,
+                    guess_media_type,
+                    media_content_response_parts,
+                    parse_media_range,
+                )
 
                 stat = target.stat()
                 total_size = int(stat.st_size)
                 headers_in = request_headers if isinstance(request_headers, dict) else {}
                 range_header = str(headers_in.get("range") or headers_in.get("Range") or "").strip()
-                range_spec = _parse_media_range(range_header or None, total_size)
-                if range_header and range_spec is None:
+                try:
+                    range_spec = parse_media_range(range_header or None, size=total_size)
+                except Exception:
                     await _route_reply(
                         key,
                         {
@@ -1982,21 +1956,14 @@ class NatsRouteTunnelRuntime:
                     await _route_reply(key, {"t": "media_http_end", "total_bytes": 0, "truncated": False})
                     return
 
-                start = 0
-                end = total_size - 1
-                status = 200
-                if range_spec is not None:
-                    start, end = range_spec
-                    status = 206
-                length = max(0, end - start + 1)
-                headers = {
-                    "content-type": guess_media_type(target.name),
-                    "content-length": str(length),
-                    "accept-ranges": "bytes",
-                    "content-disposition": f'inline; filename="{target.name}"',
-                }
-                if status == 206:
-                    headers["content-range"] = f"bytes {start}-{end}/{total_size}"
+                status, _reason, headers, start, end = media_content_response_parts(
+                    filename=target.name,
+                    mime_type=guess_media_type(target.name),
+                    size=total_size,
+                    byte_range=range_spec,
+                    lower_case_headers=True,
+                )
+                length = int(headers.get("content-length") or 0)
                 await _route_reply(
                     key,
                     {

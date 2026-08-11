@@ -49,10 +49,16 @@ from adaos.services.media_library import (
     media_file_path,
     media_snapshot,
 )
+from adaos.services.media_core import (
+    MediaResource,
+    file_range_iter,
+    media_content_response_parts,
+    media_resource_from_path,
+    parse_media_range,
+)
 from adaos.services.media_indexer_library import (
-    guess_indexer_media_type,
-    resolve_media_indexer_content,
-    resolve_media_indexer_content_by_name,
+    resolve_media_indexer_resource,
+    resolve_media_indexer_resource_by_name,
 )
 from adaos.services.node_config import set_node_names as save_node_names_config
 from adaos.services.reliability import (
@@ -6026,40 +6032,31 @@ async def node_yjs_restore(webspace_id: str) -> dict[str, Any]:
     return result
 
 
-def _parse_media_indexer_range(raw: str | None, *, size: int) -> tuple[int, int] | None:
-    value = str(raw or "").strip().lower()
-    if not value:
-        return None
-    if not value.startswith("bytes=") or "," in value:
-        raise ValueError("unsupported_range")
-    spec = value[6:].strip()
-    start_raw, sep, end_raw = spec.partition("-")
-    if not sep:
-        raise ValueError("invalid_range")
-    if start_raw == "":
-        suffix = int(end_raw)
-        if suffix <= 0:
-            raise ValueError("invalid_range")
-        start = max(0, size - suffix)
-        end = size - 1
-    else:
-        start = int(start_raw)
-        end = int(end_raw) if end_raw else size - 1
-    if size <= 0 or start < 0 or end < start or start >= size:
-        raise ValueError("invalid_range")
-    return start, min(end, size - 1)
-
-
-def _file_range_iter(path: Path, *, start: int, end: int, chunk_size: int = 256 * 1024):
-    with path.open("rb") as handle:
-        handle.seek(start)
-        remaining = max(0, end - start + 1)
-        while remaining > 0:
-            chunk = handle.read(min(chunk_size, remaining))
-            if not chunk:
-                break
-            remaining -= len(chunk)
-            yield chunk
+def _stream_media_resource(resource: MediaResource, request: Request) -> StreamingResponse | Response:
+    target = resource.path
+    size = int(target.stat().st_size)
+    try:
+        byte_range = parse_media_range(request.headers.get("range"), size=size)
+    except Exception:
+        return Response(
+            status_code=416,
+            content=b"range_not_satisfiable",
+            headers={"Content-Range": f"bytes */{size}"},
+            media_type="text/plain",
+        )
+    status_code, _reason, headers, start, end = media_content_response_parts(
+        filename=resource.name or target.name,
+        mime_type=resource.mime_type,
+        size=size,
+        byte_range=byte_range,
+        include_content_type=False,
+    )
+    return StreamingResponse(
+        file_range_iter(target, start=start, end=end),
+        status_code=status_code,
+        media_type=resource.mime_type,
+        headers=headers,
+    )
 
 
 @router.get("/media-indexer/content/{playback_id}")
@@ -6075,7 +6072,7 @@ async def media_indexer_file_content(
         x_adaos_token=x_adaos_token,
     )
     try:
-        target, payload = resolve_media_indexer_content(playback_id)
+        resource = resolve_media_indexer_resource(playback_id)
     except ValueError as exc:
         _raise_400(str(exc))
     except PermissionError as exc:
@@ -6083,36 +6080,7 @@ async def media_indexer_file_content(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    size = int(target.stat().st_size)
-    try:
-        byte_range = _parse_media_indexer_range(request.headers.get("range"), size=size)
-    except Exception:
-        return Response(
-            status_code=416,
-            content=b"range_not_satisfiable",
-            headers={"Content-Range": f"bytes */{size}"},
-            media_type="text/plain",
-        )
-    start = 0
-    end = max(0, size - 1)
-    status_code = 200
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "private, max-age=3600",
-        "Content-Disposition": f'inline; filename="{target.name}"',
-    }
-    if byte_range is not None:
-        start, end = byte_range
-        status_code = 206
-        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    headers["Content-Length"] = str(max(0, end - start + 1) if size > 0 else 0)
-    media_type = str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name)
-    return StreamingResponse(
-        _file_range_iter(target, start=start, end=end),
-        status_code=status_code,
-        media_type=media_type,
-        headers=headers,
-    )
+    return _stream_media_resource(resource, request)
 
 
 @router.get("/media/files", dependencies=[Depends(require_token)])
@@ -6288,37 +6256,31 @@ async def media_file_content(
         target = media_file_path(filename)
     except ValueError as exc:
         try:
-            target, payload = resolve_media_indexer_content_by_name(filename)
+            resource = resolve_media_indexer_resource_by_name(filename)
         except ValueError:
             _raise_400(str(exc))
         except PermissionError as idx_exc:
             raise HTTPException(status_code=403, detail=str(idx_exc))
         except FileNotFoundError:
             _raise_400(str(exc))
-        return FileResponse(
-            path=target,
-            media_type=str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name),
-            filename=target.name,
-        )
+        return _stream_media_resource(resource, request)
     if not target.exists() or not target.is_file():
         try:
-            target, payload = resolve_media_indexer_content_by_name(filename)
+            resource = resolve_media_indexer_resource_by_name(filename)
         except ValueError as exc:
             _raise_400(str(exc))
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc))
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="media_file_not_found")
-        return FileResponse(
-            path=target,
-            media_type=str(payload.get("mime_type") or "") or guess_indexer_media_type(target.name),
-            filename=target.name,
-        )
-    return FileResponse(
-        path=target,
-        media_type=guess_media_type(target.name),
-        filename=target.name,
+        return _stream_media_resource(resource, request)
+    resource = media_resource_from_path(
+        target,
+        source="media_server",
+        resource_id=target.name,
+        mime_type=guess_media_type(target.name),
     )
+    return _stream_media_resource(resource, request)
 
 
 @router.get("/members", dependencies=[Depends(require_token)])

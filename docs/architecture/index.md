@@ -73,6 +73,7 @@ Current target-state control-plane extensions are documented in:
 - [Operational Event Model Reference Plan](operational-event-model-reference-plan.md): top-level coverage gates, required contract shapes, review checklist, and completion definition for implementing the event model correctly
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md): master implementation order across communication, runtime contracts, Yjs shape, client adapters, platform emitters, and skill pilots
 - [Event Management](event-management.md): current event envelope and local-bus primer subordinate to the operational event model
+- [Media Core Boundary](media-core-boundary.md): core media plane versus skill-owned catalog/search/product semantics, current Media Server adapter, and media-indexer compatibility rules
 - [Roadmap Inventory and Authority Map](roadmap-inventory.md): ownership rules and index for cross-domain, MVP, domain, and execution planning
 - [Model Runtime and Registry](model-runtime-and-registry.md): target model execution, artifact registry, local/remote backend, session, and job architecture for neural and external model-backed skills
 - [Model Runtime Roadmap](model-runtime-roadmap.md): implementation checklist for landing core model infrastructure first, then migrating Neural NLU and face vision pilots
