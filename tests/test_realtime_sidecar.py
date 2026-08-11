@@ -744,6 +744,9 @@ def test_realtime_sidecar_route_tunnel_ws_bases_return_path_specific_listener_wh
             assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/ws?token=x") == [
                 f"ws://127.0.0.1:{ws_proxy_port}"
             ]
+            assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/ws/subnet") == [
+                f"ws://127.0.0.1:{ws_proxy_port}"
+            ]
             assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/yws?token=x") == [
                 f"ws://127.0.0.1:{yws_proxy_port}"
             ]
@@ -848,6 +851,47 @@ def test_realtime_sidecar_route_proxy_relays_local_websocket_payload(
                 await client.send("hello-through-sidecar")
                 echoed = await asyncio.wait_for(client.recv(), timeout=1.0)
                 assert echoed == "hello-through-sidecar"
+        finally:
+            await server.close()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_realtime_sidecar_route_proxy_relays_subnet_member_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_port = _free_port()
+    ws_proxy_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(runtime_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
+
+    async def _run() -> None:
+        websockets = pytest.importorskip("websockets")
+        upstream_paths: list[str] = []
+
+        async def _echo(websocket, _path=None):
+            request = getattr(websocket, "request", None)
+            upstream_paths.append(
+                str(getattr(websocket, "path", None) or getattr(request, "path", None) or _path or "")
+            )
+            async for message in websocket:
+                await websocket.send(message)
+
+        upstream = await websockets.serve(_echo, "127.0.0.1", runtime_port, max_size=None, compression=None)
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        await server.start()
+        try:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_proxy_port}/ws/subnet?token=dev",
+                max_size=None,
+            ) as client:
+                await client.send("member-hello")
+                assert await asyncio.wait_for(client.recv(), timeout=1.0) == "member-hello"
+            assert upstream_paths == ["/ws/subnet?token=dev"]
         finally:
             await server.close()
             upstream.close()

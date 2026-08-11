@@ -2886,9 +2886,8 @@ class RealtimeSidecarServer:
             default_path=upstream_path,
         )
         requested_path_only = str(urlparse(requested_path).path or "").strip() or upstream_path
-        path_allowed = requested_path_only == upstream_path or (
-            str(kind or "").strip().lower() == "yws"
-            and requested_path_only.startswith(upstream_path.rstrip("/") + "/")
+        path_allowed = requested_path_only == upstream_path or requested_path_only.startswith(
+            upstream_path.rstrip("/") + "/"
         )
         if not path_allowed:
             with contextlib.suppress(Exception):
