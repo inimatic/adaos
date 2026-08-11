@@ -81,8 +81,12 @@ rematerialized with both desired and observed scenario equal to
 Builder opens at:
 
 ```text
-https://inimatic.com/?intent=webspace.open&zone=ru&subnet_id=sn_6acf0c01&webspace_id=desktop&space_kind=workspace&expected_scenario_id=builder
+https://inimatic.com/?intent=webspace.open&zone=ru&subnet_id=sn_6acf0c01&webspace_id=desktop-dev&space_kind=workspace&expected_scenario_id=builder&builder_object_type=skill&builder_object_id=tlp_research_direction&builder_object_ref=skill%3Atlp_research_direction&builder_object_title=TLP+paired+experiment+research+direction
 ```
+
+The `builder_object_*` fields are a one-shot first-paint address. They prevent
+an old Builder selection from flashing or remaining selected while the durable
+Yjs projection catches up; the Development Session binding remains canonical.
 
 Builder's return link, preview, and QR derive from the same Navigation SDK
 destination:
@@ -98,11 +102,12 @@ portfolio rows/focus bindings, not additional Desktop applications.
 
 | Component | Release | Registry commit |
 | --- | --- | --- |
-| `research_orchestrator_skill` | `0.1.0` | `63c148cd72293abc546b917ac109a01116570529` |
+| `research_orchestrator_skill` | `0.4.0` | `6076b07d871ea27231d59dfbc2fb0378eb10debb` |
 | `builder_sdk_control_skill` | `0.1.59` | `c0a79590be010f3be2213869bf140f00b68664db` |
-| `research_workbench` | `0.0.1` | `d532bc58f7678227e00119c776ad2f8b9fdc0a69` |
+| `research_workbench` | `0.0.5` | `97afd9e08cdd0b5d5c5f975d404a3bec70a4b6d8` |
 | `skill_preview` | `0.0.1` | `25b7324eacdf4c6573b030d198fdfc0f3cd01548` |
-| `builder` | `0.2.59` | `41506da55aa6a5a4a0f69c1177d9e4d754a7b39a` |
+| `builder` | `0.2.61` | `1813fbdb774b2b28c59b19dbf8abd22082458f3e` |
+| AdaOS client | `0.0.311` | `7ae0fd5c63f1f36655be46308af74a2c4637b420` |
 
 Both skills were activated from workspace releases. The Desktop projection was
 rebuilt and all three desktop scenarios were discoverable from workspace.
@@ -136,6 +141,44 @@ is copied between versions while transient upload staging is excluded.
 Builder validation retains its pre-existing non-addressable invalidation-tag
 warnings. They did not invalidate the scenario and are not specific to the
 research path.
+
+## 2026-08-11 Workbench and handoff hardening receipt
+
+The TLP walkthrough exposed several integration failures that are now covered
+by framework contracts rather than direction-specific workarounds:
+
+- artifact intake declares `local_write` in the skill manifest, so copying an
+  uploaded file into the owning direction skill is not misclassified as an
+  arbitrary filesystem operation;
+- genuinely governed actions publish Pending Actions through the asynchronous
+  live-room owner path; the former sync owner-handoff failure is removed;
+- `tlp_research_03` successfully consumed the exact failed staging upload as
+  `artifact-7c6c9aa6fe3335f5e272`, bound it to `part0`, and removed the obsolete
+  staging copy after the manifested copy and digest were durable;
+- Discussion renders the accepted/draft AutomationBrief as a compact consensus
+  beside the chat, while direction status moved into a details modal;
+- manifested Markdown and text artifacts use existing native renderers; PDF
+  content is streamed through an authenticated artifact endpoint into the
+  reusable `item.documentViewer`, without exposing a native host path;
+- artifact media types are resolved deterministically for Markdown, text,
+  notebooks, JSON/YAML, and PDF instead of depending on the Windows MIME
+  registry;
+- Builder applies declared URL state once before live state, then yields to the
+  durable projection. A checked live handoff resolved `webspace_id=desktop-dev`,
+  `builder_object_type=skill`, and
+  `builder_object_id=tlp_research_direction`, with `codex_started=false`;
+- the obsolete hard-coded port `8788` was removed from route-tunnel fallback.
+  The observed 58-second 502 was a stale routing candidate, not a crash in the
+  research skill. Runtime endpoints now come from CTX/topology state.
+
+The installed `research_orchestrator_skill 0.4.0` passed its package tests and
+activated in slot B. Workbench `0.0.5` validated cleanly and executed through
+the ordinary scenario command. A local API restart imported the active skill,
+and live calls verified `get_direction`, `get_consensus`, Markdown preview,
+artifact streaming, and the addressed Builder handoff. The relevant isolated
+AdaOS SDK suite passed 61 tests; the broader tool-bridge/routing/Builder suite
+had already passed 135 tests, and the client production build plus 27 focused
+browser tests passed.
 
 ## Why this is stronger than attaching the original Markdown to Codex
 

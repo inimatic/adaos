@@ -23,6 +23,16 @@ from adaos.services.builder.sources import _source_analysis
 _GROUP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _ARTIFACT_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _MAX_BYTES = 128 * 1024 * 1024
+_DETERMINISTIC_MEDIA_TYPES = {
+    ".ipynb": "application/x-ipynb+json",
+    ".json": "application/json",
+    ".markdown": "text/markdown",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+}
 
 
 class ArtifactContextError(SdkError):
@@ -56,6 +66,21 @@ def _safe_name(value: str) -> str:
     if any(ord(char) < 32 for char in name):
         raise ArtifactContextError("artifact name contains control characters")
     return name[:240]
+
+
+def media_type_for_name(name: str, declared: str | None = None) -> str:
+    """Resolve stable artifact media types independently of the host registry."""
+
+    explicit = str(declared or "").strip().lower()
+    if explicit and explicit != "application/octet-stream":
+        return explicit
+    suffix = Path(str(name or "")).suffix.lower()
+    return str(
+        _DETERMINISTIC_MEDIA_TYPES.get(suffix)
+        or mimetypes.guess_type(str(name or ""))[0]
+        or explicit
+        or "application/octet-stream"
+    )
 
 
 def _root(skill_id: str, group_id: str) -> Path:
@@ -176,7 +201,7 @@ def add_path(
     artifact_id = f"artifact-{digest.removeprefix('sha256:')[:20]}"
     if not _ARTIFACT_RE.fullmatch(artifact_id):
         raise ArtifactContextError("generated artifact id is invalid")
-    media = str(media_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream")
+    media = media_type_for_name(safe_name, media_type)
     item = {
         "artifact_id": artifact_id,
         "path": safe_name,

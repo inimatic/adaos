@@ -214,9 +214,10 @@ def get_skill_artifact_content(
         status = 404 if "was not found" in message or "is missing" in message else 400
         raise HTTPException(status_code=status, detail=message) from exc
     filename = str(resolved.get("path") or artifact_id)
+    media_type = artifact_context.media_type_for_name(filename, str(resolved.get("media_type") or ""))
     return FileResponse(
         str(resolved["native_path"]),
-        media_type=str(resolved.get("media_type") or "application/octet-stream"),
+        media_type=media_type,
         filename=filename if download else None,
         content_disposition_type="attachment" if download else "inline",
     )

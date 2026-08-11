@@ -126,6 +126,7 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
 
     assert first["idempotent"] is False
     assert second["idempotent"] is True
+    assert first["artifact"]["media_type"] == "text/markdown"
     assert Path(resolved["native_path"]).read_text(encoding="utf-8") == "A careful review"
     assert bundle["sources"][0]["artifact_ref"].startswith("artifact://skill/tlp_direction/part0/")
     assert (skill_root / "artifacts" / "part0" / "manifest.yaml").is_file()

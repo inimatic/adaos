@@ -156,7 +156,7 @@ def test_builder_artifact_api_streams_only_manifest_resolved_content(monkeypatch
             "artifact_id": artifact_id,
             "path": artifact.name,
             "native_path": str(artifact),
-            "media_type": "application/pdf",
+            "media_type": "application/octet-stream",
         }
 
     monkeypatch.setattr(builder_api.artifact_context, "resolve", _resolve)
