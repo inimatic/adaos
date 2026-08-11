@@ -383,9 +383,10 @@ is available in Russian and English text or voice through the admitted
 conversational package. See the
 [Scenario Guidance and Help Contract](scenario-guidance.md).
 
-The published authoring set is `research_orchestrator_skill` `0.1.0`,
-`research_workbench` `0.0.1`, `builder_sdk_control_skill` `0.1.59`, generic
-`skill_preview` `0.0.1`, and Builder scenario `0.2.59`. The earlier precursor's
+The published authoring set is `research_orchestrator_skill` `0.2.0`,
+`research_workbench` `0.0.3`, `builder_sdk_control_skill` `0.1.59`, generic
+`skill_preview` `0.0.1`, Builder scenario `0.2.60`, and AdaOS client
+`0.0.309`. The earlier precursor's
 common Research view inside Builder is no longer the product boundary.
 Portfolio, focus, intake, dialogue, and acceptance belong to Workbench;
 Builder retains Project SDK, scoped source development, Codex, Trial, and
@@ -569,14 +570,27 @@ Research starts in the shared Research Workbench, not in a generic Builder
 modal. The Workbench maintains a portfolio/list projection and one selected
 direction in user-session focus. Creating a direction asks for minimal identity
 metadata, calls Builder SDK to create a local Project plus its primary
-`research_direction` skill, and immediately focuses that Project. The skill is
-the research identity and future code/runner owner; the Project is the
-declarative distribution definition.
+`research_direction` skill, closes and clears the creation modal, and refreshes
+the portfolio. Selection is an explicit second action: the new direction is not
+focused from raw form input because Builder SDK may canonicalize its identity.
+The skill is the research identity and future code/runner owner; the Project is
+the declarative distribution definition.
+
+Portfolio and direction detail are mutually exclusive full-width Workbench
+layouts. `selectedDirectionId` is the only local focus authority. A paired
+Builder selection may be offered as navigation context, but it must never
+overwrite Workbench focus or cause a delayed identity switch. Identity-bearing
+data sources clear their previous value while another direction is loading, so
+the UI cannot temporarily present one direction under another direction's
+heading. The detail layout exposes Overview, Artifacts, Discussion,
+Development, Activity, and Help. Discussion is the durable human/LLM consensus
+surface over the selected direction and its manifested artifacts.
 
 ```text
 Research Workbench: create direction
   -> Builder SDK creates local Project + primary direction skill
-  -> select Project/direction in focus
+  -> clear/close creation modal and refresh portfolio
+  -> user selects the canonical Project/direction identity
   -> add ordinary files under artifacts/part0
   -> validate manifest and form immutable SourceBundle selection
   -> deterministic notebook/document inventory
@@ -587,7 +601,7 @@ Research Workbench: create direction
      prototype, and target policy (no Forge upload)
   -> emit immutable AutomationBrief and Builder Development Session
      (Codex has not started)
-  -> user opens the linked Project in Builder
+  -> user opens the linked Project in a named Builder window
   -> isolated Codex implementation
   -> software validation and CPU Trial
   -> ProjectRelease and Workspace activation
@@ -629,6 +643,18 @@ contracts/docs. Acceptance is optimistic and idempotent, rejects stale input,
 and explicitly records `codex_started=false`. Codex later implements the
 experimental base from this handoff; it cannot amend the scientific objective
 or silently mutate a dependency outside the admitted development scope.
+
+Opening Builder durably binds the Development Session, opens a reusable named
+browser window, and emits `builder.context.selected` through the API host in
+the same UI action chain. The host process projects the canonical Project
+selection into the live Builder Yjs document; an isolated skill process is not
+treated as the UI-state authority. The Builder header and project picker must
+therefore be projections of that same selection event. WebUI
+consumers defensively normalize legacy singleton `actions`, `buttons`,
+`widgets`, and `layout.areas`, while newly published schemas remain valid
+`adaos.webui.v1` arrays. This compatibility boundary prevents one malformed
+one-element projection from hiding project identity or producing an empty
+picker.
 
 A published research scenario continues to evolve scientific state without
 Builder when the existing contracts can express the change. New parameters,

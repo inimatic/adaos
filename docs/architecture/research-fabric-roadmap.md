@@ -229,6 +229,20 @@ digests, session scope, navigation destinations, registry commits, and test
 commands are recorded in
 [Research Project pre-Codex walkthrough](research-project-pre-codex-walkthrough.md).
 
+ARF7.1 operator hardening (2026-08-11) makes portfolio and selected-direction
+detail independent full-width Workbench layouts. New direction creation is a
+reset-on-success modal, canonical selection occurs from the refreshed
+portfolio, and Workbench focus is no longer derived from delayed Builder
+context. Discussion is the explicit artifact-aware human/LLM consensus tab.
+Builder opens in a reusable named window and consumes a canonical
+`builder.context.selected` event projected by the API host rather than relying
+on the isolated skill process to own live UI state. Its renderer tolerates
+legacy singleton collection shapes without losing the project header or
+project-picker contents. The hardened published set is
+`research_orchestrator_skill` `0.2.0`, `research_workbench` `0.0.3`, Builder
+`0.2.60`, and AdaOS client `0.0.309`. These are ARF7.1 usability and
+identity-consistency requirements, not ARF7.2 Codex realization.
+
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
 published-package reinstall, repeated service restart, AdaOS API restart, and
@@ -929,7 +943,10 @@ not substitute for this operator path.
 - [x] `[must]` `ARF7.1-14` Open the linked session in Builder with the correct
   Project/title/target already selected. Builder Artifacts shows the same
   manifested source files and Development shows the exact scope; no duplicate
-  upload or formulation state is created.
+  upload or formulation state is created. The Workbench action uses a named
+  browser window and an API-host `builder.context.selected` projection, so a
+  delayed worker event cannot replace either Workbench focus or Builder
+  identity.
 - [x] `[must]` `ARF7.1-15` Make skill preview resolve the Project entry point or
   generic skill-preview host. Missing icons/widgets render explicit empty
   states; an unrelated previously materialized scenario is never retained.

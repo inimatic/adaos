@@ -277,6 +277,11 @@ def select_project(
                 },
                 source="sdk.builder.preview",
             )
+        host_projection = (
+            _publish_host_selection(service, source)
+            if publish_event
+            else {"ok": True, "skipped": "event_publication_disabled"}
+        )
         return {
             "ok": bool(binding.get("ok", True)),
             "selected": True,
@@ -290,6 +295,7 @@ def select_project(
             "preview_state": preview_state,
             "binding": binding,
             "ensure": ensured,
+            "host_projection": host_projection,
         }
 
     binding = _plain(
@@ -374,6 +380,11 @@ def select_project(
             },
             source="sdk.builder.preview",
         )
+    host_projection = (
+        _publish_host_selection(service, source)
+        if publish_event
+        else {"ok": True, "skipped": "event_publication_disabled"}
+    )
     return {
         "ok": bool(binding.get("ok", True)),
         "selected": True,
@@ -384,7 +395,29 @@ def select_project(
         "preview_webspace_id": preview_id,
         "binding": binding,
         "ensure": ensured,
+        "host_projection": host_projection,
     }
+
+
+def _publish_host_selection(service: Any, source_webspace_id: str) -> dict[str, Any]:
+    """Best-effort seed of shared Builder projection storage.
+
+    Builder selection events remain the fan-out contract. A skill tool may run
+    outside the API process, however, so this synchronous write only shortens
+    first paint when the runtime can reach shared Yjs storage; it does not make
+    the worker authoritative for live UI state. Interactive callers also emit
+    ``builder.context.selected`` through the API host, whose event subscriber
+    performs the canonical live-room projection idempotently.
+    """
+
+    try:
+        return _plain(service.publish_projection_sync(source_webspace_id))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "builder_host_projection_failed",
+            "detail": str(exc),
+        }
 
 
 def select_target(

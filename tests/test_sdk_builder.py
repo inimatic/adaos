@@ -119,6 +119,7 @@ class _PreviewService:
         self.selections: list[dict] = []
         self.ensure_calls: list[dict] = []
         self.preview_targets: list[dict] = []
+        self.projection_calls: list[str] = []
 
     def set_active_draft(self, **kwargs):
         self.active_drafts.append(kwargs)
@@ -161,6 +162,14 @@ class _PreviewService:
 
     def open_dev_webspace(self, source_webspace_id, *, base_url=None):
         return {"ok": True, "source_webspace_id": source_webspace_id, "base_url": base_url}
+
+    def publish_projection_sync(self, source_webspace_id):
+        self.projection_calls.append(source_webspace_id)
+        return {
+            "ok": True,
+            "published_webspaces": [source_webspace_id],
+            "snapshot": {"selection": {"object_id": "builder"}},
+        }
 
 
 def test_preview_facade_selects_and_ensures_scenario(monkeypatch) -> None:
@@ -246,6 +255,8 @@ def test_preview_facade_never_blocks_event_driven_selection_on_rebuild(monkeypat
 
     assert result["ensure"]["scheduled"] is True
     assert service.ensure_calls == []
+    assert service.projection_calls == ["desktop"]
+    assert result["host_projection"]["published_webspaces"] == ["desktop"]
     desired = next(payload for topic, payload in events if topic == "builder.preview.desired")
     assert desired["reconciled"] is False
     assert desired["wait_for_rebuild"] is False
