@@ -53,6 +53,9 @@ media-indexer compatibility adapter. The caller is still responsible for
 deduplication, domain metadata, playlists, watch history, and any product-level
 catalog state.
 
+The first product slice using this boundary is documented in
+[Media Center MVP](media-center-mvp.md).
+
 ## Compatibility Rules
 
 The legacy `/api/node/media-indexer/content/{playback_id}` and
