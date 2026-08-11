@@ -318,12 +318,12 @@ def _set_doc_timing(timings: dict[str, float] | None, key: str, value: float, *,
     return round(float(value), 3)
 
 
-async def _discard_corrupt_ystore_state(ystore: Any, webspace_id: str, exc: BaseException) -> None:
+async def _discard_corrupt_ystore_state(ystore: Any, webspace_id: str, exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
         raise exc
     discard = getattr(ystore, "discard_corrupt_state", None)
     if not callable(discard):
-        return
+        return {}
     try:
         result = discard(delete_snapshot=True)
         if inspect.isawaitable(result):
@@ -334,8 +334,24 @@ async def _discard_corrupt_ystore_state(ystore: Any, webspace_id: str, exc: Base
             type(exc).__name__,
             json.dumps(result if isinstance(result, dict) else {}, ensure_ascii=True, sort_keys=True)[:1000],
         )
+        return dict(result) if isinstance(result, dict) else {}
     except Exception:
         _log.warning("failed to discard corrupt YStore state webspace=%s", webspace_id, exc_info=True)
+        return {}
+
+
+async def _fresh_ydoc_after_corrupt_replay(ystore: Any, webspace_id: str, exc: BaseException) -> Y.YDoc:
+    """Drop a partially mutated native doc and replay only recovered state."""
+
+    await _discard_corrupt_ystore_state(ystore, webspace_id, exc)
+    recovered = Y.YDoc()
+    try:
+        await ystore.apply_updates(recovered)
+    except BaseException as replay_exc:
+        if not _is_empty_ystore(replay_exc):
+            await _discard_corrupt_ystore_state(ystore, webspace_id, replay_exc)
+        recovered = Y.YDoc()
+    return recovered
 
 
 def _is_empty_ystore(exc: BaseException) -> bool:
@@ -722,6 +738,7 @@ def get_ydoc(
         raise
 
     async def _load() -> bytes | None:
+        nonlocal ydoc
         stage_started = time.perf_counter()
         await ystore.start()
         _record_doc_timing(timings, "ystore_start", stage_started, prefix=timing_prefix)
@@ -732,8 +749,9 @@ def get_ydoc(
         except BaseException as exc:
             _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
             if not _is_empty_ystore(exc):
-                # Treat corrupted updates as "no state"; start from empty doc.
-                await _discard_corrupt_ystore_state(ystore, webspace_id, exc)
+                # Y.apply_update may mutate a document before raising. Never
+                # continue with that partially applied native object.
+                ydoc = await _fresh_ydoc_after_corrupt_replay(ystore, webspace_id, exc)
         if read_only:
             return None
         stage_started = time.perf_counter()
@@ -929,8 +947,9 @@ async def async_get_ydoc(
             except BaseException as exc:
                 _record_doc_timing(timings, "ystore_apply_updates", stage_started, prefix=timing_prefix)
                 if not _is_empty_ystore(exc):
-                    # Treat corrupted updates as "no state"; start from empty doc.
-                    await _discard_corrupt_ystore_state(ystore, webspace_id, exc)
+                    # Y.apply_update may leave orphaned native items behind.
+                    # Replace the doc before projection/writeback.
+                    ydoc = await _fresh_ydoc_after_corrupt_replay(ystore, webspace_id, exc)
         before = None
         persist_before = None
         tracked_load_mark_roots = [str(name or "").strip() for name in (load_mark_roots or ()) if str(name or "").strip()]

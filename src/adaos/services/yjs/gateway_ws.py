@@ -6232,6 +6232,22 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             "seed_from_scenario",
                             ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
                         )
+                        if bool((seed_result or {}).get("fresh_ydoc_required")):
+                            # The first room doc was partially mutated by a
+                            # corrupt replay. Recreate the native owner before
+                            # any projection/encoding and retry against the
+                            # recovered durable base (or an empty store).
+                            room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
+                            room._webspace_id = webspace_id
+                            room._thread_id = threading.get_ident()
+                            room._loop = asyncio.get_running_loop()
+                            seed_kwargs["ydoc"] = room.ydoc
+                            recovered_seed = await _await_bootstrap_step(
+                                "seed_after_corrupt_replay",
+                                ensure_webspace_seeded_from_scenario(ystore, **seed_kwargs),
+                            )
+                            seed_result = dict(recovered_seed or {})
+                            seed_result["room_recreated_after_corrupt_replay"] = True
                         if bootstrap_materialization is not None:
                             materialized_update, materialized_result = await _await_bootstrap_step(
                                 "apply_materialized_payload",
@@ -8426,6 +8442,10 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             except Exception:
                 pass
         return
+    # Recover a failed shared server before reconnect-storm admission. If the
+    # guard rejects this particular socket, the next admitted attempt still
+    # finds a live YWS owner instead of waiting out the full quarantine.
+    await start_y_server()
     _record_yws_guard_attempt(
         webspace_id,
         dev_id,
@@ -8489,8 +8509,6 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             guard_diag.get("client_open_15s"),
         )
     _ylog.info("yws connection open webspace=%s dev=%s attempt=%s client_attempt=%s", webspace_id, dev_id, attempt_id, client_attempt_id or None)
-    await start_y_server()
-
     adapter: YWebsocket = FastAPIWebsocketAdapter(websocket, path=webspace_id)
     try:
         room_ref = await _acquire_yws_room(webspace_id, dev_id, yws_attempt_id=attempt_id)
@@ -8874,6 +8892,11 @@ async def process_events_command(
                         "yjs_post_skipped": True,
                         "yjs_guard_reason": "direct_yws_disabled",
                     }
+                # The events channel is authoritative and may remain healthy
+                # after the shared YWS task fails. Use registration as a
+                # recovery opportunity even while YWS admission is backing
+                # off a reconnecting client.
+                await start_y_server()
                 guard_reason, guard_diag = _yws_guard_reject_reason(captured_ws, captured_device)
                 if guard_reason:
                     _log.warning(
@@ -8889,7 +8912,6 @@ async def process_events_command(
                         "yjs_post_skipped": True,
                         "yjs_guard_reason": guard_reason,
                     }
-                await start_y_server()
                 await _update_device_presence(captured_ws, captured_device)
                 # Sync webspace listing directly to the live room's YDoc.
                 # This ensures the frontend sees data.webspaces immediately.

@@ -448,6 +448,13 @@ async def ensure_webspace_seeded_from_scenario(
             target_doc = Y.YDoc()
     finally:
         result["apply_updates_ms"] = round((time.perf_counter() - apply_started) * 1000.0, 3)
+    if apply_updates_failed and ydoc is not None:
+        # y_py can mutate a supplied YDoc before a replay panic is raised. The
+        # native object is not safe for projection or encoding afterwards.
+        # Its owner (the YRoom factory) must replace it and retry against the
+        # recovered store.
+        result["fresh_ydoc_required"] = True
+        return _finish("corrupt_replay_requires_fresh_doc")
     try:
         before_state_vector = None if apply_updates_failed else Y.encode_state_vector(target_doc)
     except Exception:

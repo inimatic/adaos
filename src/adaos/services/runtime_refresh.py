@@ -111,6 +111,7 @@ def refresh_skill_runtime(
     disable_during_migration: bool = False,
     operation_id: str | None = None,
     retry_deactivated: bool = False,
+    defer_webspace_rebuild: bool = False,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -236,13 +237,15 @@ def refresh_skill_runtime(
         payload["data_migration"] = dict(getattr(runtime, "data_migration", None) or {})
         _record_stage(payload, "prepare", ok=True, version=version, slot=slot)
         try:
-            active_slot = mgr.activate_for_space(
-                skill_name,
-                version=version,
-                slot=slot,
-                space="default",
-                webspace_id=target_webspace,
-            )
+            activation_kwargs: dict[str, Any] = {
+                "version": version,
+                "slot": slot,
+                "space": "default",
+                "webspace_id": target_webspace,
+            }
+            if defer_webspace_rebuild:
+                activation_kwargs["defer_webspace_rebuild"] = True
+            active_slot = mgr.activate_for_space(skill_name, **activation_kwargs)
         except Exception as exc:
             message = f"runtime activation failed after skill update: {exc}"
             payload["failed_stage"] = "activate"

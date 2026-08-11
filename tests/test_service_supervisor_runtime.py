@@ -53,9 +53,38 @@ def test_service_supervisor_runtime_forces_discovery_on_skill_activation(monkeyp
     fake = _FakeSupervisor()
     monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
 
-    asyncio.run(runtime_module._on_skill_activated({"skill_name": "service_skill"}))
+    async def _run() -> None:
+        await runtime_module._on_skill_activated({"skill_name": "service_skill"})
+        await runtime_module._wait_for_activation_restarts()
+
+    asyncio.run(_run())
 
     assert fake.discovery_forces == [True]
+    assert fake.events == [("restart", "service_skill")]
+
+
+def test_service_activation_restart_does_not_block_event_handler(monkeypatch) -> None:
+    fake = _FakeSupervisor()
+    restart_started = asyncio.Event()
+    release_restart = asyncio.Event()
+
+    async def _restart(name: str) -> None:
+        restart_started.set()
+        await release_restart.wait()
+        fake.events.append(("restart", name))
+
+    fake.restart = _restart  # type: ignore[method-assign]
+    monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+
+    async def _run() -> None:
+        await runtime_module._on_skill_activated({"skill_name": "service_skill"})
+        await restart_started.wait()
+        assert fake.events == []
+        release_restart.set()
+        await runtime_module._wait_for_activation_restarts()
+
+    asyncio.run(_run())
+
     assert fake.events == [("restart", "service_skill")]
 
 

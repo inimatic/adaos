@@ -643,11 +643,65 @@ class AdaosMemoryYStore(BaseYStore):
         removes the unusable runtime and persisted base so the next write starts
         a clean history.
         """
-        released = await self.evict_runtime_state()
+        base_snapshot = b""
+        base_metadata = b""
+        base_timestamp = time.time()
+        base_state_vector: bytes | None = None
+        preserve_base = False
+        with self._lock:
+            # If replay reached the first entry, the durable base itself was
+            # accepted and only a later runtime diff is corrupt. Preserve that
+            # last known-good checkpoint instead of deleting the complete
+            # webspace. The caller will replay it into a fresh YDoc.
+            preserve_base = bool(
+                self._base_snapshot_present
+                and self._updates
+                and int(self._last_apply_update_total or 0) >= 1
+            )
+            if preserve_base:
+                base_snapshot, base_metadata, base_timestamp = self._updates[0]
+                base_snapshot = bytes(base_snapshot or b"")
+                base_metadata = bytes(base_metadata or b"")
+                base_state_vector = bytes(self._base_state_vector or b"") or None
+            released_entries, released_bytes = self._clear_runtime_state_locked()
+            if preserve_base and base_snapshot:
+                self._updates = [(base_snapshot, base_metadata, base_timestamp)]
+                self._base_snapshot_present = True
+                self._loaded_from_disk = True
+                self._generation = 1
+                self._base_state_vector = base_state_vector
+                self._last_disk_load_mode = "recovered_base_after_corrupt_tail"
+                self._last_disk_snapshot_bytes = len(base_snapshot)
+                released_entries = max(0, released_entries - 1)
+                released_bytes = max(0, released_bytes - len(base_snapshot))
+        released = {
+            "released_update_entries": int(released_entries),
+            "released_update_bytes": int(released_bytes),
+        }
         removed_snapshot = False
-        if delete_snapshot:
+        persisted_base_bytes = 0
+        path = ystore_path_for_webspace(self.path)
+        if preserve_base and base_snapshot:
+            persisted_base_bytes = await anyio.to_thread.run_sync(
+                _persist_snapshot,
+                path,
+                base_snapshot,
+            )
+            if base_state_vector is None:
+                try:
+                    base_state_vector = await anyio.to_thread.run_sync(
+                        _decode_state_vector_from_snapshot,
+                        base_snapshot,
+                    )
+                except Exception:
+                    base_state_vector = None
+            with self._lock:
+                if self._base_snapshot_present and self._updates and self._updates[0][0] == base_snapshot:
+                    self._base_state_vector = bytes(base_state_vector or b"") or None
+                    self._persisted_generation = int(self._generation)
+                    self._persisted_snapshot_bytes = int(persisted_base_bytes or len(base_snapshot))
+        elif delete_snapshot:
             try:
-                path = ystore_path_for_webspace(self.path)
                 if path.exists():
                     path.unlink()
                     removed_snapshot = True
@@ -655,15 +709,18 @@ class AdaosMemoryYStore(BaseYStore):
                 _log.warning("failed to remove corrupt YStore snapshot for webspace=%s", self.path, exc_info=True)
         with self._lock:
             self._loaded_from_disk = True
-            self._last_disk_load_mode = "discarded_corrupt_state"
-            self._last_disk_snapshot_bytes = 0
-            self._persisted_snapshot_bytes = 0
-            self._persisted_generation = 0
-            self._base_state_vector = None
+            if not preserve_base:
+                self._last_disk_load_mode = "discarded_corrupt_state"
+                self._last_disk_snapshot_bytes = 0
+                self._persisted_snapshot_bytes = 0
+                self._persisted_generation = 0
+                self._base_state_vector = None
         return {
             "ok": True,
             "webspace_id": self.path,
             "snapshot_deleted": removed_snapshot,
+            "base_snapshot_preserved": bool(preserve_base and base_snapshot),
+            "base_snapshot_bytes": len(base_snapshot) if preserve_base else 0,
             **released,
         }
 

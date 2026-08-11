@@ -244,7 +244,7 @@ def test_bootstrap_trusts_matching_ready_marker_without_reprojection(monkeypatch
     assert store.write_calls == 0
 
 
-def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
+def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
     class _PanicAfterPartialApplyStore(_FakeStore):
         def __init__(self) -> None:
             super().__init__()
@@ -292,14 +292,13 @@ def test_bootstrap_reprojects_provided_doc_after_partial_apply_failure(monkeypat
         )
     )
 
-    assert result["mode"] == "scenario_projection"
+    assert result["mode"] == "corrupt_replay_requires_fresh_doc"
     assert result["apply_updates_error"].startswith("RuntimeError:")
     assert result["apply_updates_discarded_partial_state"] is True
+    assert result["fresh_ydoc_required"] is True
     assert result["apply_updates_corrupt_state_discard"] == {"ok": True, "snapshot_deleted": True}
     assert store.discard_calls == 1
-    assert store.write_calls == 1
-    assert dict(provided_doc.get_map("ui").get("application") or {})["desktop"]["pageSchema"]["id"] == "fresh-todo"
-    assert dict(provided_doc.get_map("data").get("catalog") or {})["apps"] == [{"id": "fresh-app"}]
+    assert store.write_calls == 0
 
 
 def test_bootstrap_seed_fallback_projects_compat_seed_without_effective_writes(monkeypatch) -> None:

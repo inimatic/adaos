@@ -521,6 +521,11 @@ def _run_migration_sync(
                 require_active_version=bool(candidate.get("workspace_version")),
                 disable_during_migration=False,
                 retry_deactivated=bool(candidate.get("deactivated")),
+                # A core migration can activate dozens of skills. Rebuilding
+                # the same webspace after every activation creates an update
+                # storm and races YStore compaction. The worker performs one
+                # authoritative rebuild after the complete batch below.
+                defer_webspace_rebuild=True,
             )
             entry["runtime_refresh"] = refresh
             if bool(refresh.get("skipped")) or bool(refresh.get("deactivated")):

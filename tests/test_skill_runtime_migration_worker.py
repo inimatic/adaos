@@ -201,6 +201,7 @@ def test_explicit_quarantine_recovery_retries_once_and_clears_status(monkeypatch
     assert len(refresh_calls) == 1
     assert refresh_calls[0]["ensure_installed"] is False
     assert refresh_calls[0]["retry_deactivated"] is True
+    assert refresh_calls[0]["defer_webspace_rebuild"] is True
 
 
 def test_noop_migration_skips_webspace_rebuild(monkeypatch):

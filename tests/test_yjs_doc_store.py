@@ -349,6 +349,52 @@ async def test_ystore_backup_to_disk_compacts_runtime_log(monkeypatch) -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_async_get_ydoc_replaces_partial_doc_and_preserves_good_base(monkeypatch) -> None:
+    webspace_id = _webspace_id("corrupt-tail")
+    store = get_ystore_for_webspace(webspace_id)
+    original_apply_update = ystore_module.Y.apply_update
+    base_doc = Y.YDoc()
+    with base_doc.begin_transaction() as txn:
+        base_doc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+    base_update = Y.encode_state_as_update(base_doc)
+    bad_update = b"bad-tail-update"
+    partially_mutated_docs: list[object] = []
+
+    def _apply_update(ydoc: Y.YDoc, update: bytes) -> None:
+        if bytes(update) == bad_update:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "partial_tail", True)
+            partially_mutated_docs.append(ydoc)
+            raise RuntimeError("bad yjs tail")
+        original_apply_update(ydoc, update)
+
+    monkeypatch.setattr(ystore_module.Y, "apply_update", _apply_update)
+
+    try:
+        store._loaded_from_disk = True
+        store._updates = [(base_update, b"", 1.0), (bad_update, b"", 2.0)]
+        store._base_snapshot_present = True
+
+        async with async_get_ydoc(webspace_id) as ydoc:
+            assert partially_mutated_docs
+            assert ydoc is not partially_mutated_docs[0]
+            assert ydoc.get_map("ui").get("current_scenario") == "web_desktop"
+            assert ydoc.get_map("ui").get("partial_tail") is None
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("ui").set(txn, "recovered", True)
+
+        snapshot = store.runtime_snapshot()
+        assert snapshot["last_disk_load_mode"] == "recovered_base_after_corrupt_tail"
+        assert snapshot["update_log_entries"] == 2
+
+        async with async_get_ydoc(webspace_id, read_only=True) as ydoc:
+            assert ydoc.get_map("ui").get("current_scenario") == "web_desktop"
+            assert ydoc.get_map("ui").get("recovered") is True
+            assert ydoc.get_map("ui").get("partial_tail") is None
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_sync_get_ydoc_serializes_native_replay_per_webspace(monkeypatch) -> None:
     webspace_id = _webspace_id("serialized-threaded-readers")
     store = get_ystore_for_webspace(webspace_id)

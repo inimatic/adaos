@@ -13,6 +13,8 @@ from adaos.services.skill.service_supervisor import get_service_supervisor
 _log = logging.getLogger("adaos.skill.service.runtime")
 _RUNTIME_RECOVERY_KIND = "runtime.recovery.service_supervisor_failure"
 _RUNTIME_RECOVERY_RESPONSE_TOPIC = "runtime.recovery.service_supervisor.response"
+_ACTIVATION_RESTART_PENDING: dict[str, str] = {}
+_ACTIVATION_RESTART_TASK: asyncio.Task[None] | None = None
 
 
 def _text(value: Any) -> str:
@@ -185,6 +187,68 @@ async def _restart_if_service(skill_name: str | None, *, reason: str, force_disc
         return False
 
 
+async def _drain_activation_restarts() -> None:
+    """Restart activated service skills without holding the event publisher.
+
+    Core runtime migration emits one ``skills.activated`` event per skill. A
+    service restart may wait for process termination and health checks, so
+    awaiting it directly in the subscription handler can stall the main event
+    loop for tens of seconds. Keep one serialized background owner and fold
+    duplicate activations for the same skill into its pending batch.
+    """
+
+    global _ACTIVATION_RESTART_TASK
+    force_discovery = True
+    try:
+        # Give activations emitted in the same bus turn a chance to coalesce.
+        await asyncio.sleep(0)
+        while _ACTIVATION_RESTART_PENDING:
+            pending = list(_ACTIVATION_RESTART_PENDING.items())
+            _ACTIVATION_RESTART_PENDING.clear()
+            for skill_name, reason in pending:
+                await _restart_if_service(
+                    skill_name,
+                    reason=reason,
+                    force_discovery=force_discovery,
+                )
+                force_discovery = False
+    finally:
+        current = asyncio.current_task()
+        if _ACTIVATION_RESTART_TASK is current:
+            _ACTIVATION_RESTART_TASK = None
+        if _ACTIVATION_RESTART_PENDING and _ACTIVATION_RESTART_TASK is None:
+            _ACTIVATION_RESTART_TASK = asyncio.create_task(
+                _drain_activation_restarts(),
+                name="adaos-service-activation-restarts",
+            )
+
+
+def _schedule_activation_restart(skill_name: str | None, *, reason: str) -> asyncio.Task[None] | None:
+    global _ACTIVATION_RESTART_TASK
+    token = _text(skill_name)
+    if not token:
+        return None
+    _ACTIVATION_RESTART_PENDING[token] = str(reason or "skills.activated")
+    task = _ACTIVATION_RESTART_TASK
+    if task is None or task.done():
+        task = asyncio.create_task(
+            _drain_activation_restarts(),
+            name="adaos-service-activation-restarts",
+        )
+        _ACTIVATION_RESTART_TASK = task
+    return task
+
+
+async def _wait_for_activation_restarts() -> None:
+    """Test/diagnostic barrier for the background activation owner."""
+
+    while True:
+        task = _ACTIVATION_RESTART_TASK
+        if task is None:
+            return
+        await asyncio.shield(task)
+
+
 async def _stop_if_service(skill_name: str | None, *, reason: str) -> bool:
     if not skill_name:
         return False
@@ -331,7 +395,7 @@ async def _on_runtime_recovery_response(evt: Any) -> None:
 
 @subscribe("skills.activated")
 async def _on_skill_activated(payload: Dict[str, Any]) -> None:
-    await _restart_if_service(payload.get("skill_name"), reason="skills.activated", force_discovery=True)
+    _schedule_activation_restart(payload.get("skill_name"), reason="skills.activated")
 
 
 @subscribe("skills.rolledback")

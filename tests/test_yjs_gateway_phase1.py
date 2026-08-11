@@ -1813,6 +1813,47 @@ def test_get_room_uses_manifest_defaults_for_room_seed(monkeypatch) -> None:
     gateway_module._YROOM_LIFECYCLE.clear()
 
 
+def test_get_room_replaces_native_doc_after_corrupt_replay(monkeypatch) -> None:
+    webspace_id = "gateway-room-corrupt-replay"
+    ensure_workspace(webspace_id)
+    fake_store = _FakeYStore()
+    seeded_docs: list[object] = []
+
+    async def _fake_seed(_ystore, **kwargs):  # noqa: ANN001
+        seeded_docs.append(kwargs["ydoc"])
+        if len(seeded_docs) == 1:
+            return {
+                "mode": "corrupt_replay_requires_fresh_doc",
+                "fresh_ydoc_required": True,
+            }
+        return {
+            "mode": "scenario_projection",
+            "scenario_id": kwargs["default_scenario_id"],
+        }
+
+    class _Scheduler:
+        async def ensure_every(self, **kwargs) -> None:  # noqa: ARG002
+            return None
+
+    monkeypatch.setattr(gateway_module, "get_ystore_for_webspace", lambda _webspace_id: fake_store)
+    monkeypatch.setattr(gateway_module, "ensure_webspace_seeded_from_scenario", _fake_seed)
+    monkeypatch.setattr(gateway_module, "get_scheduler", lambda: _Scheduler())
+    monkeypatch.setattr(gateway_module, "attach_room_observers", lambda _webspace_id, _ydoc: None)
+
+    server = gateway_module.WorkspaceWebsocketServer(auto_clean_rooms=False)
+    monkeypatch.setattr(server, "start_room", lambda _room: asyncio.sleep(0))
+    gateway_module._YROOM_LIFECYCLE.clear()
+    room = asyncio.run(server.get_room(webspace_id))
+
+    assert len(seeded_docs) == 2
+    assert seeded_docs[0] is not seeded_docs[1]
+    assert room.ydoc is seeded_docs[1]
+
+    asyncio.run(gateway_module._release_room_refs(webspace_id, room))
+    server.rooms.pop(webspace_id, None)
+    gateway_module._YROOM_LIFECYCLE.clear()
+
+
 def test_get_room_bootstraps_from_materialized_payload_without_semantic_rebuild(monkeypatch) -> None:
     webspace_id = "gateway-room-materialized"
     ensure_workspace(webspace_id)
@@ -3863,8 +3904,10 @@ def test_device_register_skips_yjs_post_steps_when_yws_guard_is_active(monkeypat
     monkeypatch.setattr(gateway_module, "_YWS_MAX_ACTIVE_PER_WEBSPACE", 1)
     monkeypatch.setattr(gateway_module, "_make_publish_bus", lambda *args, **kwargs: (lambda topic, extra=None: published.append((topic, extra))))
 
+    server_start_calls: list[str] = []
+
     async def _fake_start_y_server() -> None:
-        raise AssertionError("device.register guard should avoid YRoom startup")
+        server_start_calls.append("start")
 
     async def _fake_update_device_presence(_webspace_id: str, _device_id: str) -> None:
         raise AssertionError("device.register guard should avoid YDoc writes")
@@ -3904,6 +3947,7 @@ def test_device_register_skips_yjs_post_steps_when_yws_guard_is_active(monkeypat
         "yjs_post_skipped": True,
         "yjs_guard_reason": "active_limit",
     }
+    assert server_start_calls == ["start"]
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._YWS_GUARD_QUARANTINE_UNTIL.clear()
 
@@ -4583,7 +4627,7 @@ def test_yws_impl_aborts_when_room_ready_times_out(monkeypatch) -> None:
     assert room_info["last_wait_timeout_yws_attempt_id"] == attempts["last_room_timeout_attempt_id"]
 
 
-def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypatch) -> None:
+def test_yws_impl_recovers_server_before_rejecting_room_when_active_limit_is_hit(monkeypatch) -> None:
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     gateway_module._YWS_OPEN_HISTORY.clear()
@@ -4617,8 +4661,10 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
         async def close(self, code: int = 1000, reason: str | None = None) -> None:
             self.closed = (code, str(reason or ""))
 
-    async def _start_y_server_must_not_run() -> None:
-        raise AssertionError("guard should reject before starting/acquiring Yjs room")
+    server_start_calls: list[str] = []
+
+    async def _start_y_server() -> None:
+        server_start_calls.append("start")
 
     from adaos.services import access_links
 
@@ -4628,7 +4674,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
         "touch_browser_session",
         lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
     )
-    monkeypatch.setattr(gateway_module, "start_y_server", _start_y_server_must_not_run)
+    monkeypatch.setattr(gateway_module, "start_y_server", _start_y_server)
     monkeypatch.setattr(gateway_module, "_publish_runtime_event", lambda topic, payload=None, source="yjs.gateway": events.append((topic, payload)))
     close_existing_calls: list[tuple[object, ...]] = []
 
@@ -4643,6 +4689,7 @@ def test_yws_impl_rejects_before_room_acquire_when_active_limit_is_hit(monkeypat
 
     assert websocket.accepted is True
     assert websocket.closed == (1013, "yws_guard_active_limit")
+    assert server_start_calls == ["start"]
     assert close_existing_calls == []
     assert touched[0]["connection_state"] == "yws_guard_active_limit"
     assert events[0][0] == "browser.session.changed"
