@@ -29,18 +29,33 @@ from adaos.domain.relational_storage import (
 )
 
 
-def _binding_id(provider_id: str, owner_ref: str, logical_name: str) -> str:
+def _binding_id(
+    provider_id: str,
+    owner_ref: str,
+    logical_name: str,
+    *,
+    scope_identity: str | None = None,
+) -> str:
+    identity = {
+        "capability": "storage.relational",
+        "provider_id": provider_id,
+        "owner_ref": owner_ref,
+        "logical_name": logical_name,
+    }
+    if scope_identity:
+        identity["scope_identity"] = scope_identity
     payload = json.dumps(
-        {
-            "capability": "storage.relational",
-            "provider_id": provider_id,
-            "owner_ref": owner_ref,
-            "logical_name": logical_name,
-        },
+        identity,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     return f"relbind.{hashlib.sha256(payload).hexdigest()}"
+
+
+def _local_scope_identity(scope_root: Path) -> str:
+    """Return a private, deterministic identity for one local runtime target."""
+
+    return os.path.normcase(str(Path(scope_root).expanduser().resolve()))
 
 
 def _sqlite_timeout_s() -> float:
@@ -102,7 +117,12 @@ class SQLiteRelationalStorageProvider:
             target.relative_to(root)
         except ValueError as exc:  # pragma: no cover - guarded by logical-name validation
             raise RelationalStorageIsolationError("SQLite binding escaped its owner scope") from exc
-        binding_id = _binding_id(self.capabilities.provider_id, owner, logical)
+        binding_id = _binding_id(
+            self.capabilities.provider_id,
+            owner,
+            logical,
+            scope_identity=_local_scope_identity(root),
+        )
         binding = RelationalStorageBinding(
             binding_id=binding_id,
             provider_id=self.capabilities.provider_id,
@@ -140,6 +160,35 @@ class SQLiteRelationalStorageProvider:
                         "the active SQLite build does not provide required JSON support"
                     ) from exc
         return binding
+
+    def assert_scope(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+        scope_root: Path,
+    ) -> None:
+        binding.assert_owner(owner_ref)
+        if binding.provider_id != self.capabilities.provider_id:
+            raise RelationalStorageIsolationError("binding belongs to another provider")
+        root = Path(scope_root).expanduser().resolve()
+        expected_id = _binding_id(
+            self.capabilities.provider_id,
+            binding.owner_ref,
+            binding.logical_name,
+            scope_identity=_local_scope_identity(root),
+        )
+        expected_target = (root / f"{binding.logical_name}.db").resolve()
+        with self._lock:
+            registered_target = self._targets.get(binding.binding_id)
+        if registered_target is None:
+            raise RelationalStorageIsolationError(
+                "binding is not registered in this provider process; acquire it again"
+            )
+        if binding.binding_id != expected_id or registered_target != expected_target:
+            raise RelationalStorageIsolationError(
+                "binding does not belong to the current skill runtime scope"
+            )
 
     @staticmethod
     def _create_engine(target: Path) -> Engine:
@@ -409,6 +458,29 @@ class PostgreSQLRelationalStorageProvider:
             if binding_id not in self._engines:
                 self._engines[binding_id] = self._create_binding_engine(target_url, role_name)
         return binding
+
+    def assert_scope(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+        scope_root: Path,
+    ) -> None:
+        del scope_root
+        binding.assert_owner(owner_ref)
+        if binding.provider_id != self.capabilities.provider_id:
+            raise RelationalStorageIsolationError("binding belongs to another provider")
+        expected_id = _binding_id(
+            self.capabilities.provider_id,
+            binding.owner_ref,
+            binding.logical_name,
+        )
+        with self._lock:
+            registered = binding.binding_id in self._targets
+        if binding.binding_id != expected_id or not registered:
+            raise RelationalStorageIsolationError(
+                "binding does not belong to the current skill runtime scope"
+            )
 
     def _create_binding_engine(self, target_url: URL, role_name: str) -> Engine:
         engine = create_engine(

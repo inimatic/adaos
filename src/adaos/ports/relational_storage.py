@@ -27,6 +27,14 @@ class RelationalStorageProvider(Protocol):
         scope_root: Path,
     ) -> RelationalStorageBinding: ...
 
+    def assert_scope(
+        self,
+        binding: RelationalStorageBinding,
+        *,
+        owner_ref: str,
+        scope_root: Path,
+    ) -> None: ...
+
     def transaction(
         self,
         binding: RelationalStorageBinding,

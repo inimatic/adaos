@@ -238,8 +238,14 @@ class RelationalStorageService:
         return RelationalDatabase(self, binding)
 
     def assert_current_owner(self, binding: RelationalStorageBinding) -> str:
-        owner_ref, _ = self._current_owner()
+        owner_ref, current = self._current_owner()
         binding.assert_owner(owner_ref)
+        data_root = resolve_skill_data_root(self._ctx, current)
+        self._broker.provider_for(binding).assert_scope(
+            binding,
+            owner_ref=owner_ref,
+            scope_root=data_root / "db",
+        )
         return owner_ref
 
     @contextmanager

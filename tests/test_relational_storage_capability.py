@@ -41,6 +41,16 @@ def _activate_skill(
     return source
 
 
+def _activate_skill_at(ctx, name: str, source: Path) -> Path:
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "skill.yaml").write_text(
+        f"name: {name}\nversion: 0.1.0\ncapabilities:\n  - storage.relational\n",
+        encoding="utf-8",
+    )
+    assert ctx.skill_ctx.set(name, source)
+    return source
+
+
 def test_relational_storage_is_exported_from_public_data_sdk() -> None:
     from adaos.sdk.data import (
         RelationalStorageRequirements as PublicRequirements,
@@ -141,6 +151,40 @@ def test_sqlite_binding_uses_runtime_data_db_and_is_redacted(_autocontext) -> No
     assert "password" not in encoded
     assert str(target).lower() not in encoded
     assert "://" not in encoded
+
+
+def test_sqlite_bindings_isolate_stable_and_dev_runtime_scopes(_autocontext) -> None:
+    ctx = _autocontext
+    skill_name = "dual_scope_skill"
+    dev_skills_root = Path(ctx.paths.base_dir()) / "dev" / "skills"
+    ctx.paths.dev_skills_dir = lambda: dev_skills_root
+    stable_source = _activate_skill_at(
+        ctx,
+        skill_name,
+        Path(ctx.paths.skills_dir()) / skill_name,
+    )
+    stable = database("main")
+    stable.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
+    stable.execute("INSERT INTO notes(id, body) VALUES (1, 'stable')")
+
+    dev_source = _activate_skill_at(
+        ctx,
+        skill_name,
+        dev_skills_root / skill_name,
+    )
+    dev = database("main")
+    dev.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
+    dev.execute("INSERT INTO notes(id, body) VALUES (1, 'dev')")
+
+    assert stable.binding.binding_id != dev.binding.binding_id
+    assert dev.scalar("SELECT body FROM notes WHERE id = 1") == "dev"
+    with pytest.raises(RelationalStorageIsolationError, match="runtime scope"):
+        stable.scalar("SELECT body FROM notes WHERE id = 1")
+
+    assert ctx.skill_ctx.set(skill_name, stable_source)
+    assert database("main").scalar("SELECT body FROM notes WHERE id = 1") == "stable"
+    with pytest.raises(RelationalStorageIsolationError, match="runtime scope"):
+        dev.scalar("SELECT body FROM notes WHERE id = 1")
 
 
 def test_transaction_rolls_back_and_named_parameters_are_portable(_autocontext) -> None:

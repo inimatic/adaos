@@ -23,6 +23,29 @@ def test_blob_broker_keeps_local_binding_opaque_and_owner_scoped(tmp_path: Path)
     assert broker.service_uri(binding, owner_ref="skill:fixture") == (tmp_path / "artifacts").resolve().as_uri()
 
 
+def test_local_blob_bindings_are_distinct_per_runtime_scope(tmp_path: Path) -> None:
+    broker = BlobStorageBroker((LocalBlobStorageProvider(),))
+    requirements = BlobStorageRequirements(locality="any")
+    first = broker.bind(
+        owner_ref="skill:fixture",
+        logical_name="artifacts",
+        requirements=requirements,
+        scope_root=tmp_path / "stable",
+    )
+    second = broker.bind(
+        owner_ref="skill:fixture",
+        logical_name="artifacts",
+        requirements=requirements,
+        scope_root=tmp_path / "dev",
+    )
+
+    assert first.binding_id != second.binding_id
+    assert broker.service_uri(first, owner_ref=first.owner_ref) != broker.service_uri(
+        second,
+        owner_ref=second.owner_ref,
+    )
+
+
 def test_blob_broker_prefers_provisioned_object_binding_without_exposing_uri(tmp_path: Path) -> None:
     broker = BlobStorageBroker(
         (

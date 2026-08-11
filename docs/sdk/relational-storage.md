@@ -94,8 +94,11 @@ own explicit provider variants and conformance tests.
 - The capability gate is checked when the handle is acquired.
 - `owner_ref` is derived from the active skill; it is never a skill argument.
 - A binding is private to one owner and logical name.
+- A local binding also identifies one concrete runtime compatibility bucket.
+  Stable and DEV deployments, and old/new minor-version buckets, may coexist in
+  one core process without sharing an engine or silently rebinding a handle.
 - Every operation rechecks the current skill, so a handle retained across a
-  skill-context switch is rejected.
+  skill-context or runtime-bucket switch is rejected.
 - SQLite data is placed under the active compatibility bucket's `data/db`.
 - Public bindings contain opaque locators and secret references only.
 - The in-process Python runtime is not a hostile-code security boundary.

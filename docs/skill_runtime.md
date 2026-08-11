@@ -62,6 +62,13 @@ Slots are A/B code deployments inside the same bucket. Data, `vendor/`, and `ven
 
 The default publication bump for skills is `patch`. A patch release stays in the same runtime bucket and uses the existing `data/`, `vendor/`, and `venv/` trees.
 
+Local storage capability bindings are concrete to this compatibility bucket,
+not merely to the skill name. This lets stable and DEV deployments, or the
+current and rollback buckets, remain live in one core process without sharing
+SQLite engines or filesystem-blob targets. A handle acquired in one bucket is
+stale outside that bucket and fails closed; patch releases inside the same
+bucket retain the binding and data target.
+
 If the skill has the reserved migration file, or a legacy manifest data migration hook, a requested/default patch bump is promoted to `minor`. A minor release creates a new `v<major>.<minor>` bucket and prepares a migrated copy of data there before activation.
 
 Major releases are manual. They also land in a new bucket, but the decision to publish one is outside automatic CI/CD policy.

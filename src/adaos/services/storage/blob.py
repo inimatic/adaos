@@ -13,9 +13,22 @@ from adaos.domain.blob_storage import BlobStorageBinding, BlobStorageRequirement
 from adaos.domain.ownership import validate_owner_ref
 
 
-def _binding_id(provider_id: str, owner_ref: str, logical_name: str) -> str:
+def _binding_id(
+    provider_id: str,
+    owner_ref: str,
+    logical_name: str,
+    *,
+    scope_identity: str | None = None,
+) -> str:
+    identity = {
+        "provider_id": provider_id,
+        "owner_ref": owner_ref,
+        "logical_name": logical_name,
+    }
+    if scope_identity:
+        identity["scope_identity"] = scope_identity
     payload = json.dumps(
-        {"provider_id": provider_id, "owner_ref": owner_ref, "logical_name": logical_name},
+        identity,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -55,7 +68,12 @@ class LocalBlobStorageProvider:
         target = (root / logical).resolve()
         target.relative_to(root)
         target.mkdir(parents=True, exist_ok=True)
-        binding_id = _binding_id(self.provider_id, owner, logical)
+        binding_id = _binding_id(
+            self.provider_id,
+            owner,
+            logical,
+            scope_identity=os.path.normcase(str(root)),
+        )
         with self._lock:
             self._targets[binding_id] = target
         return BlobStorageBinding(
