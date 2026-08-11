@@ -6,7 +6,8 @@ the [target architecture](../../../../docs/architecture/android-full-node.md).
 Current scope:
 
 - Android API 26+, `arm64-v8a` only;
-- user-started foreground service;
+- user-started persistent `specialUse` foreground service with sticky,
+  boot-completed, and package-replaced recovery;
 - embedded CPython 3.11 through Chaquopy;
 - stable app-private node identity and runtime marker;
 - unauthenticated loopback discovery on `127.0.0.1:8777`;
@@ -30,7 +31,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC14 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC15 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -54,6 +55,12 @@ is available, and expose `android_offline_fallback` otherwise. Prompts,
 profiles, tools, Teacher code, and LLM credentials are not copied into the APK.
 The APK does not package `sounddevice`, background capture, wake-word support,
 an LLM, or the full Builder runtime.
+
+Start persists the user's desired-running state and Stop clears it. Android
+may recreate a killed process through `START_STICKY`, and the boot/package
+receiver restores only a still-desired node. Force stop remains authoritative.
+API 34+ uses `specialUse`; older supported versions retain their existing
+foreground-service behavior, so the APK still has `minSdk 26`.
 
 ## Build
 
@@ -93,7 +100,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc14-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc15-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -120,6 +127,21 @@ Browsers registration, the dialog roster/agent/channel paths, a local Voice
 Assistant turn, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.
+
+Run the special-use duration gate while the phone remains attached:
+
+```powershell
+.\observe-special-use-device.ps1 `
+  -AdbPath "$env:ANDROID_HOME\platform-tools\adb.exe" `
+  -DurationHours 6.25 `
+  -IntervalSeconds 60
+```
+
+The observer writes an incremental report under
+`app/build/reports/android-special-use-soak-evidence.json`. It separates an
+existing event-log baseline from new foreground-service timeouts and records
+ready/unavailable samples, PID changes, final service presence, and member-link
+state.
 
 The YStore structurally compacts over-limit retained history on startup. Its
 generation is announced during browser authorization and included in the
@@ -210,3 +232,12 @@ reconnected through the deployed Hub AdaOS API, AdaOS Connect returned a
 Hub-delegated remote Browser invitation, and Arseni used the canonical Root
 LLM route. Supervisor was involved only as the stationary Hub process
 watchdog; it is not part of the Android member protocol.
+
+The PoC15 debug APK is 22,683,823 bytes with SHA-256
+`047cb54ff1c37cfef914e4ea4c89b9827f677df9d34d702b7bbe0e61c3d1bc34`.
+The API 36 Samsung reports foreground type `0x40000000` (`specialUse`). Its
+full Yjs/skill smoke passed, package replacement restored the desired node,
+and a forced process death was recovered through `START_STICKY` with a new PID,
+ready Python/Yjs, and a reconnecting member link. The six-hour physical soak
+started at 2026-08-11 19:15:23 UTC and remains an open gate until its final
+sample is recorded.

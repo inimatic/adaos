@@ -6,8 +6,8 @@ Implementation status: the A0/A1/A2/A3/A4/A5 vertical slice, the A6
 member-protocol slice, the A7 bounded-runtime implementation, the PoC8
 browser-mediated voice/dialog slice, the PoC9 Rasa/remote-assistant slice,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
-deployed-membership recovery corrections, and the PoC14 stale-peer transport
-bound
+deployed-membership recovery corrections, the PoC14 stale-peer transport
+bound, and the PoC15 Android lifecycle controller
 are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
 Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
@@ -28,11 +28,14 @@ directions. PoC13 additionally completed a fresh one-time-code join through
 the real regional Root route, canonical Hub invitations and companion LLM
 calls, and replacement of a wedged member worker. PoC14 prevents a stale Yjs
 browser peer from blocking the control channel and falsely leaving the hosted
-client in Recovery. Android Keystore custody and
+client in Recovery. PoC15 replaces the time-limited `dataSync` foreground
+service with `specialUse`, restores explicit user intent after process death,
+boot, and APK replacement, and keeps the Android 8 / API 26 floor. Android
+Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC14 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC15 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -164,11 +167,22 @@ the node:
 - an app-private data root supplied to Python explicitly;
 - a diagnostic export action for the PoC.
 
-Starting the node is a visible user action. The Activity calls
-`startForegroundService`, and the service promotes itself immediately with a
-clear notification. The first slice does not start itself from a boot receiver
-or from a background broadcast. This avoids Android 12+ background-start
-restrictions and keeps energy use explicit.
+Starting the node remains a visible user action. The Activity persists the
+user's desired-running state, calls `startForegroundService`, and the service
+promotes itself immediately with a clear notification. An explicit Stop clears
+that desired state. While it remains set, a manifest receiver may restore the
+node after `BOOT_COMPLETED` or `MY_PACKAGE_REPLACED`, which are Android-defined
+background-start exemptions. A package force-stop still suppresses receivers
+until the user opens the app again; the node does not bypass that platform
+security boundary.
+
+On API 34 and later the service declares `specialUse` with the subtype
+"User-started persistent AdaOS node with local browser and outbound member
+connectivity". This avoids the six-hours-per-day limit which Android 15+
+applies to `dataSync`. The permission and manifest metadata are ignored by
+older platform behavior, so `minSdk` remains 26. Runtime calls which require a
+newer API remain version-gated. Google Play distribution will require review
+of the declared special-use rationale.
 
 The service and Activity may share one application process in the first build.
 The service owns runtime state; the Activity can be destroyed and recreated
@@ -177,8 +191,12 @@ starting or binding the service directly.
 
 Android can still terminate the process under memory pressure or when the user
 stops the app. Therefore all durable state is flushed independently of the
-Activity, and startup must be idempotent. Automatic boot recovery and a more
-capable Android lifecycle controller are post-PoC work.
+Activity, and startup is idempotent. `START_STICKY` asks Android to recreate a
+system-killed service with a null intent; the service records this as
+`sticky_restart`. Durable start/stop reasons let the native UI distinguish a
+user stop, platform timeout, bootstrap failure, system destroy, boot, package
+replacement, and sticky recovery. This controller owns only Android process
+lifecycle and does not reproduce the desktop supervisor.
 
 ## Embedded Python Runtime
 
@@ -288,10 +306,11 @@ Python version, native library alignment, and source provenance.
 ## Supervisor and Skill Boundary
 
 The absence of the desktop supervisor is not a blocker. Android and the
-foreground `NodeService` become the outer lifecycle authority for the first
-slice. A later Android controller may add watchdog, bounded restart, health,
-and package-update coordination, but it must use Android lifecycle APIs rather
-than emulate POSIX process supervision.
+foreground `NodeService` are the outer lifecycle authority. The implemented
+controller uses durable desired-running state, `START_STICKY`, boot and package
+replacement broadcasts, a persistent notification, and compact stop reasons.
+Future health or package-update coordination must extend these Android APIs
+rather than emulate POSIX process supervision.
 
 Skills are not inherently incompatible with Android. The incompatible part is
 the current general installation and isolation machinery when it assumes:

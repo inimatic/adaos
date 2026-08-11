@@ -4,8 +4,8 @@ Status: active domain roadmap for an experimental proof of concept. The first
 A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
 bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
-deployed-membership recovery corrections, and the PoC14 stale-peer transport
-bound
+deployed-membership recovery corrections, the PoC14 stale-peer transport
+bound, and the PoC15 Android lifecycle controller
 are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -767,6 +767,52 @@ an Android member or native Yjs regression. Membership traffic for
 `sn_6acf0c01` used `/hubs/sn_6acf0c01/ws/subnet` in AdaOS API; supervisor only
 owned the stationary Hub process lifecycle.
 
+## PoC15 Extension: Persistent Android Lifecycle
+
+Outcome: keep an explicitly started mobile node alive beyond Android 15's
+six-hour `dataSync` foreground-service limit and restore it after ordinary
+process loss, boot, or APK replacement.
+
+- [x] `[must]` replace `dataSync` with a declared `specialUse` foreground
+  service and a specific persistent-node rationale.
+- [x] `[must]` retain `minSdk 26`; add no API-34 runtime call without an SDK
+  gate.
+- [x] `[must]` persist desired-running state only after an explicit Start and
+  clear it on explicit Stop.
+- [x] `[must]` return `START_STICKY` and accept a null-intent recreation.
+- [x] `[must]` restore desired state after `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED`; never bypass package force-stop.
+- [x] `[must]` persist compact start/stop reasons for native diagnostics.
+- [x] `[must]` return a bounded stopped response to a residual keep-alive ping
+  instead of raising `KeyError('node_id')` during shutdown.
+- [x] `[must]` build and install PoC15 on the API 36 Samsung and repeat the
+  full Yjs restart/skill/scenario smoke.
+- [x] `[must]` kill the running app process and prove Android recreates the
+  sticky service, Python runtime, Yjs listener, and member link.
+- [x] `[should]` prove package-replacement restoration through the real system
+  broadcast.
+- [ ] `[must]` retain a successful physical observation longer than six hours
+  with no new foreground-service timeout and a ready final sample. Observation
+  started on 2026-08-11 at 19:15:23 UTC; the incremental evidence file is
+  `app/build/reports/android-special-use-six-hour-poc15.json`.
+- [ ] `[should]` perform one real reboot/unlock acceptance run; shell injection
+  of protected `BOOT_COMPLETED` is correctly denied on the API 36 Samsung.
+- [ ] `[should]` repeat on API 26 and API 33 to close the lower-version
+  compatibility assertion.
+
+PoC15 initial physical evidence (2026-08-11): debug APK `0.1.0-poc15` is
+22,683,823 bytes with SHA-256
+`047cb54ff1c37cfef914e4ea4c89b9827f677df9d34d702b7bbe0e61c3d1bc34`.
+The merged manifest and installed package retain `minSdk 26`, grant
+`FOREGROUND_SERVICE_SPECIAL_USE`, and expose FGS type `0x40000000`. The full
+physical smoke passed Yjs/SQLite restart persistence and every fixed skill and
+scenario. Killing PID 25369 produced PID 25505; Android invoked
+`onStartCommand(intent=null)`, the local runtime returned ready, and the member
+link reconnected without an Activity start. A real `MY_PACKAGE_REPLACED`
+broadcast also restored the desired node. A 38-second observer calibration
+recorded three ready samples, no outage, and no new timeout; the former PoC14
+`dataSync` timeout remained baseline evidence only.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -848,8 +894,9 @@ must not be copied into a mobile fork.
 
 ### Should follow a successful A7 gate
 
-- replace sentinel lifecycle status with a bounded Android watchdog and restart
-  policy;
+- extend the implemented sticky/boot lifecycle controller with bounded health
+  policy only if physical soak evidence shows Android recreation is
+  insufficient;
 - add signed release builds and application-update migration tests;
 - widen the physical device matrix;
 - make version and native-wheel evidence part of CI artifacts;
