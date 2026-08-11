@@ -1248,6 +1248,10 @@
           "type": "string",
           "description": "Client state expression evaluated before each tick."
         },
+        "once": {
+          "type": "boolean",
+          "description": "Run immediately once when the surface mounts instead of installing a repeating timer."
+        },
         "action": { "$ref": "#/$defs/action" }
       }
     },
