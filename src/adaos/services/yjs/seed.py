@@ -29,8 +29,12 @@ SEED: dict = {
                             "actions": [
                                 {
                                     "on": "select",
-                                    "type": "openModal",
-                                    "params": {"modalId": "$event.action.openModal"},
+                                    "type": "navigate",
+                                    "params": {
+                                        "to": "$event.action.navigate",
+                                        "surface": "modal",
+                                        "modalId": "$event.launchModal",
+                                    },
                                 },
                             ],
                         },

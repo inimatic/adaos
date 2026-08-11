@@ -1077,7 +1077,7 @@ class ScenarioWorkflowRuntime:
             {
                 "id": "current-object",
                 "label": project_label,
-                "action": {"openModal": "project_meta_modal"},
+                "action": {"navigate": "prompt_engineer_scenario.project_meta_modal"},
             },
             {
                 "id": "workflow-stage",
@@ -1086,12 +1086,12 @@ class ScenarioWorkflowRuntime:
             {
                 "id": "llm-status",
                 "label": "LLM",
-                "action": {"openModal": "llm_status_modal"},
+                "action": {"navigate": "prompt_engineer_scenario.llm_status_modal"},
             },
             {
                 "id": "llm-profile",
                 "label": "LLM profile",
-                "action": {"openModal": "llm_profile_modal"},
+                "action": {"navigate": "prompt_engineer_scenario.llm_profile_modal"},
             },
             {
                 "id": "dev-webspace",

@@ -594,10 +594,10 @@ Status note:
   without changing skill action declarations
 - [ ] `[deferred]` design a universal cross-plane query/router language beyond
   browser-facing UI views
-- [ ] `[deferred]` migrate every historical `openModal` declaration to
-  `navigate`/`navigateModal` where a public view/route contract exists;
-  remaining modal-id-only callers now pass through one compatibility handler
-  with deprecation diagnostics
+- [x] `[deferred]` migrate active, published skill and scenario manifests from
+  `openModal` to `navigate`/`navigateModal`; immutable Builder `ui_revisions`
+  remain historical evidence, while third-party or unfinished manifests still
+  pass through one compatibility handler with deprecation diagnostics
 
 ### 4a. Stand-Oriented Demo Readiness
 

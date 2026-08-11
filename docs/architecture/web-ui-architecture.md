@@ -1022,5 +1022,12 @@ Recommended demo data shape:
 - [x] `[could]` add a browser diagnostics panel consuming the contract
   diagnostics endpoint
 - [ ] `[deferred]` remove legacy `openModal` compatibility once migrated
-  skills and scenarios have enough coverage; current runtime centralizes the
-  compatibility path and records deprecation diagnostics for remaining callers
+  third-party packages and unfinished drafts have enough coverage; active
+  published repository skills/scenarios now use `navigate` or `navigateModal`,
+  while the runtime keeps one diagnostic compatibility path for older callers
+
+The repository migration can be repeated for selected manifests with
+`python -m adaos.apps.open_modal_migrate --write <webui-or-scenario-json> ...`.
+It declares missing public modal views/routes before rewriting actions and is
+idempotent. Do not rewrite immutable Builder `ui_revisions`; they are audit
+evidence rather than active runtime manifests.

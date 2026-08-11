@@ -1158,8 +1158,10 @@ Per-action overrides use the same policy through `params.presentation`,
 ```json
 {
   "on": "select",
-  "type": "openModal",
+  "type": "navigate",
   "params": {
+    "to": "web_desktop_skill.nlu_teacher_modal",
+    "surface": "modal",
     "modalId": "nlu_teacher_modal",
     "restoreFocus": true
   }
