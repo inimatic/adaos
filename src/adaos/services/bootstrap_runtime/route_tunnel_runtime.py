@@ -1927,6 +1927,8 @@ class NatsRouteTunnelRuntime:
                 target: Path,
                 method: str,
                 request_headers: dict[str, Any] | None,
+                display_name: str | None = None,
+                mime_type: str | None = None,
             ) -> None:
                 from adaos.services.media_core import (
                     ROOT_MEDIA_RELAY_CHUNK_BYTES,
@@ -1939,6 +1941,8 @@ class NatsRouteTunnelRuntime:
                 total_size = int(stat.st_size)
                 headers_in = request_headers if isinstance(request_headers, dict) else {}
                 range_header = str(headers_in.get("range") or headers_in.get("Range") or "").strip()
+                response_name = str(display_name or target.name)
+                response_mime = str(mime_type or "").strip() or guess_media_type(response_name)
                 try:
                     range_spec = parse_media_range(range_header or None, size=total_size)
                 except Exception:
@@ -1957,8 +1961,8 @@ class NatsRouteTunnelRuntime:
                     return
 
                 status, _reason, headers, start, end = media_content_response_parts(
-                    filename=target.name,
-                    mime_type=guess_media_type(target.name),
+                    filename=response_name,
+                    mime_type=response_mime,
                     size=total_size,
                     byte_range=range_spec,
                     lower_case_headers=True,
@@ -3115,9 +3119,9 @@ class NatsRouteTunnelRuntime:
                                     break
                             if media_indexer_playback_id:
                                 try:
-                                    from adaos.services.media_indexer_library import resolve_media_indexer_content
+                                    from adaos.services.media_indexer_library import resolve_media_indexer_resource
 
-                                    target, _payload = resolve_media_indexer_content(media_indexer_playback_id)
+                                    resource = resolve_media_indexer_resource(media_indexer_playback_id)
                                 except ValueError as exc:
                                     await _route_media_reply_json(
                                         key,
@@ -3144,9 +3148,11 @@ class NatsRouteTunnelRuntime:
                                     return
                                 await _route_media_reply_file(
                                     key,
-                                    target=target,
+                                    target=resource.path,
                                     method=method,
                                     request_headers=headers,
+                                    display_name=resource.name,
+                                    mime_type=resource.mime_type,
                                 )
                                 route_outcome = "media_indexer_content_replied"
                                 return
@@ -3157,9 +3163,9 @@ class NatsRouteTunnelRuntime:
                                     target = media_file_path(filename)
                                 except ValueError as exc:
                                     try:
-                                        from adaos.services.media_indexer_library import resolve_media_indexer_content_by_name
+                                        from adaos.services.media_indexer_library import resolve_media_indexer_resource_by_name
 
-                                        target, _payload = resolve_media_indexer_content_by_name(filename)
+                                        resource = resolve_media_indexer_resource_by_name(filename)
                                     except ValueError:
                                         await _route_media_reply_json(
                                             key,
@@ -3184,11 +3190,17 @@ class NatsRouteTunnelRuntime:
                                         )
                                         route_outcome = "media_content_bad_request"
                                         return
+                                    target = resource.path
+                                    display_name = resource.name
+                                    mime_type = resource.mime_type
+                                else:
+                                    display_name = None
+                                    mime_type = None
                                 if not target.exists() or not target.is_file():
                                     try:
-                                        from adaos.services.media_indexer_library import resolve_media_indexer_content_by_name
+                                        from adaos.services.media_indexer_library import resolve_media_indexer_resource_by_name
 
-                                        target, _payload = resolve_media_indexer_content_by_name(filename)
+                                        resource = resolve_media_indexer_resource_by_name(filename)
                                     except ValueError as exc:
                                         await _route_media_reply_json(
                                             key,
@@ -3213,11 +3225,16 @@ class NatsRouteTunnelRuntime:
                                         )
                                         route_outcome = "media_content_missing"
                                         return
+                                    target = resource.path
+                                    display_name = resource.name
+                                    mime_type = resource.mime_type
                                 await _route_media_reply_file(
                                     key,
                                     target=target,
                                     method=method,
                                     request_headers=headers,
+                                    display_name=display_name,
+                                    mime_type=mime_type,
                                 )
                                 route_outcome = "media_content_replied"
                                 return
