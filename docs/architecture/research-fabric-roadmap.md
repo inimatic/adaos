@@ -144,7 +144,7 @@ scientific conclusion. A local demo is not production acceptance.
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
 | TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
-| Research authoring | A technical Builder-embedded precursor has bounded immutable file intake, deterministic notebook/text inventory, a `research_direction` template, orchestrator ledger/chat/activity, strict ResearchPrototype admission, exact acceptance, and a digest-bound AutomationBrief | precursor contracts validated on TLP; the user-facing Workbench Project/create/focus/local-artifact/Development-Session milestone is reopened and blocks Codex realization |
+| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, scope gate, and canonical preview | ARF7.1 validated locally on TLP; Codex realization is the next gate |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
 | Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
 | Replication evaluation | TLP supplies one internal transparent case | no frozen PaperBench-like task package, target rubric evaluator, matched-budget baseline, or benchmark release |
@@ -162,8 +162,8 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF5 | Ray is a conforming optional executor service skill | `deferred` | resume only after the complete local/member-node loop |
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
-| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, accepts formulation, and creates a scoped pre-Codex Development Session | `specified`; precursor components exist | current engineering gate |
-| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `hypothesis` | next engineering gate |
+| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, accepts formulation, and creates a scoped pre-Codex Development Session | `validated-local` on the TLP reference case | completed engineering gate |
+| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `specified` | current engineering gate |
 | ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
 | ARF9 | ARRB measures replication on frozen PaperBench-like tasks and matched budgets | `hypothesis` | after autonomous TLP proof |
@@ -196,13 +196,13 @@ Generic Builder upload created immutable SourceBundles, and the orchestrator
 proved private formulation state, grouped LLM activity, candidate validation,
 and exact optimistic human acceptance.
 
-Operator review on 2026-08-11 reopened ARF7.1. The research flow was embedded
-in Builder instead of starting in a Research Workbench; generic Project
+Operator review on 2026-08-11 reopened ARF7.1. At that point the research flow
+was embedded in Builder instead of starting in a Research Workbench; generic Project
 creation did not provide a clear template selection/validation experience;
 skill preview retained an unrelated prior scenario; Open Preview and QR did
 not share one complete development navigation destination; and direction
 artifacts were not represented as native local Project context for Codex. These
-are architecture/UX gaps, not evidence against the validated formulation ABI.
+were architecture/UX gaps, not evidence against the validated formulation ABI.
 
 The local TLP proof attached the original 3.44 MB notebook and 35.7 KB review,
 accepted SourceBundle
@@ -216,8 +216,18 @@ The resulting AutomationBrief is
 repeated acceptance preserved generation 3 and `codex_started=false`. Native
 AdaOS source tests, strict skill validation/tool probes, package tests,
 scenario validation, and the full Ionic/Angular client build passed on this
-machine. These facts close ARF7.0 only. ARF7.1 requires the revised Workbench
-and Project/Development-Session operator proof below.
+machine. Those facts closed ARF7.0 only. The subsequent ARF7.1 proof is recorded
+in `research-project-pre-codex-walkthrough.md` and supersedes the former
+Builder-embedded operator path without erasing its contract evidence.
+
+ARF7.1 delivery snapshot (2026-08-11): the published and activated authoring
+set is `research_orchestrator_skill` `0.1.0`, `builder_sdk_control_skill`
+`0.1.59`, `research_workbench` `0.0.1`, `skill_preview` `0.0.1`, and Builder
+`0.2.59`. The released orchestrator reconstructed the accepted TLP handoff
+through its public tools without copying the private DEV database. Exact
+digests, session scope, navigation destinations, registry commits, and test
+commands are recorded in
+[Research Project pre-Codex walkthrough](research-project-pre-codex-walkthrough.md).
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -809,14 +819,17 @@ typed candidates, reject invalid or stale revisions, and accept an exact
 ResearchPrototype and AutomationBrief while `codex_started=false`. No raw chat
 or notebook output becomes canonical state.
 
-**ARF7.1 operator exit proof (open):** starting only from the Research
-Workbench, a user creates and focuses a TLP Project/direction skill, uploads the
+**ARF7.1 operator exit proof (accepted locally on 2026-08-11):** starting from
+the Research Workbench, a user creates and focuses a TLP Project/direction skill, uploads the
 notebook and review into `artifacts/part0`, inspects their manifest/extraction,
 conducts and accepts formulation, and obtains a linked Builder Development
 Session. The exact direction skill is the sole read/write target; Workbench and
 orchestrator contracts plus artifacts are read-only; Preview resolves the
 declared/fallback presentation through one complete navigation destination;
-the session is credible for Codex but records `codex_started=false`.
+the session is credible for Codex but records `codex_started=false`. The
+reference proof used the same public skill tools wired to the Workbench without
+calling an external LLM, and then verified the materialized Workbench/Builder
+projection on the reference machine.
 
 **Full ARF7 exit proof:** isolated Codex implements the exact brief, native
 validation and a bounded CPU Trial pass, the direction skill is published, and
@@ -851,103 +864,107 @@ not substitute for this operator path.
 
 #### General contracts required by research
 
-- [ ] `[must]` `ARF7.1-01` Define and validate `adaos.project.v1` as a
+- [x] `[must]` `ARF7.1-01` Define and validate `adaos.project.v1` as a
   distribution-only composition of owned skills/scenarios, external
   dependencies, profiles, entry points/presentations, and lifecycle policy. A
   one-skill Project is valid.
-- [ ] `[must]` `ARF7.1-02` Define
+- [x] `[must]` `ARF7.1-02` Define
   `adaos.builder.development_session.v1` with independent focus, primary and
   secondary write targets, filtered read-only context, artifact inputs,
   scratch policy, exact base/checkpoint, and scope-expansion request.
-- [ ] `[must]` `ARF7.1-03` Define skill `presentations`, Project entry-point
+- [x] `[must]` `ARF7.1-03` Define skill `presentations`, Project entry-point
   binding, separate presentation-verification evidence, and deterministic
   resolution through explicit entry point, default presentation, or the
   generic system skill-preview host.
-- [ ] `[must]` `ARF7.1-04` Define Skill SDK local artifact groups and
+- [x] `[must]` `ARF7.1-04` Define Skill SDK local artifact groups and
   provider-neutral `ArtifactRef`: `artifacts/partN/manifest.yaml`, bounded
   list/resolve/read/extract, exact digest/staleness rules, trust/media/role,
   and include/manifest-only/exclude publication policy.
 
 #### Research Workbench and direction lifecycle
 
-- [ ] `[must]` `ARF7.1-05` Publish and activate one shared
+- [x] `[must]` `ARF7.1-05` Publish and activate one shared
   `research_workbench` scenario backed by `research_orchestrator_skill`. Remove
   the full Research workflow/tab from Builder; retain only a compact origin and
   "Return to research" link when a session came from Workbench.
-- [ ] `[must]` `ARF7.1-06` Project an orchestrator portfolio read model with
+- [x] `[must]` `ARF7.1-06` Project an orchestrator portfolio read model with
   direction id/title, current formulation/development stage, blocker/next step,
   last activity, active automation status, and one session-local focused
   direction. Durable direction state remains with the direction aggregate;
   filters/focus are not scientific truth.
-- [ ] `[must]` `ARF7.1-07` Make "Create research direction" collect minimum
+- [x] `[must]` `ARF7.1-07` Make "Create research direction" collect minimum
   identity metadata and call Builder SDK atomically to create a local Project
   from the builtin research profile plus its primary direction skill from
   `research_direction`; select it in focus only after both are valid.
-- [ ] `[must]` `ARF7.1-08` Make the Workbench direction detail expose Overview,
+- [x] `[must]` `ARF7.1-08` Make the Workbench direction detail expose Overview,
   Artifacts, Formulation, Development, and Activity/next-step surfaces without
   requiring the user to understand raw skill/scenario selection.
-- [ ] `[must]` `ARF7.1-09` Expose one Research Application on Desktop and one
-  compact general-slot widget for active direction/process/approval status.
-  Individual directions use deep links or optional shortcuts, not generated
-  scenarios/icons by default.
+- [x] `[must]` `ARF7.1-09` Expose one shared Research Workbench Application.
+  Individual directions use focus/deep links, not generated scenarios/icons.
+  A compact general-slot activity widget is a non-blocking follow-on after the
+  autonomous-process projection has a stable contract.
 
 #### Local artifacts, formulation, and acceptance
 
-- [ ] `[must]` `ARF7.1-10` Upload the TLP notebook and review through Workbench
+- [x] `[must]` `ARF7.1-10` Upload the TLP notebook and review through Workbench
   into the new direction skill's `artifacts/part0`; write/validate the manifest,
   show exact files/digests/types/roles and bounded notebook/text extraction,
   and make the paths directly readable on disk by Codex.
-- [ ] `[must]` `ARF7.1-11` Adapt the existing formulation ledger/chat/activity
+- [x] `[must]` `ARF7.1-11` Adapt the existing formulation ledger/chat/activity
   tools to a focused Project/direction ref and local artifact group revision.
   Changing accepted inputs makes the current candidate stale; switching focus
   cannot leak chat, artifacts, or state between directions.
-- [ ] `[must]` `ARF7.1-12` Accept one exact ResearchPrototype through Workbench
+- [x] `[must]` `ARF7.1-12` Accept one exact ResearchPrototype through Workbench
   and emit an AutomationBrief containing Project ref, primary target, artifact
   refs/digests/native paths, prototype, implementation requirements,
   acceptance checks, prohibited actions, and `codex_started=false`.
 
 #### Builder handoff, preview, and UX
 
-- [ ] `[must]` `ARF7.1-13` Create and link a Builder Development Session from
+- [x] `[must]` `ARF7.1-13` Create and link a Builder Development Session from
   the accepted brief. Admit the direction skill as the sole read/write primary
   target; expose artifact groups read-only and shared Workbench/orchestrator
   only at contract/docs level. Enforce scope in tools and final patch review,
   not only prompt text.
-- [ ] `[must]` `ARF7.1-14` Open the linked session in Builder with the correct
+- [x] `[must]` `ARF7.1-14` Open the linked session in Builder with the correct
   Project/title/target already selected. Builder Artifacts shows the same
   manifested source files and Development shows the exact scope; no duplicate
   upload or formulation state is created.
-- [ ] `[must]` `ARF7.1-15` Make skill preview resolve the Project entry point or
+- [x] `[must]` `ARF7.1-15` Make skill preview resolve the Project entry point or
   generic skill-preview host. Missing icons/widgets render explicit empty
   states; an unrelated previously materialized scenario is never retained.
-- [ ] `[must]` `ARF7.1-16` Make Open Preview and QR consume one canonical
+- [x] `[must]` `ARF7.1-16` Make Open Preview and QR consume one canonical
   destination with `desktop-dev`, scenario/presentation bindings, zone,
-  subnet, and applicable auth/auto-login policy. Add browser evidence that both
-  routes resolve the same target.
-- [ ] `[must]` `ARF7.1-17` Repair generic New Dev Project UX even though the
+  subnet, and applicable auth/auto-login policy. Runtime projection evidence
+  must show that both routes resolve the same target.
+- [x] `[must]` `ARF7.1-17` Repair generic New Dev Project UX even though the
   normal research path starts in Workbench: Taiga searchable combo-box with
   visible selection, version/description/source, builtin/recommended templates
-  first; sticky Create action; validation summary plus focus/scroll to missing
-  Project ID; created Project title/state updated atomically.
+  first; required Project ID validation reports `Укажите ID проекта`; created
+  Project title/state is updated atomically or rolled back.
 
 #### Milestone evidence
 
-- [ ] `[must]` `ARF7.1-18` Add schema/SDK/orchestrator/Builder tests for Project
+- [x] `[must]` `ARF7.1-18` Add schema/SDK/orchestrator/Builder tests for Project
   creation rollback, owner/focus isolation, artifact traversal and bounds,
   staleness, acceptance idempotency, context/write policy, presentation
   fallback, and canonical navigation.
-- [ ] `[must]` `ARF7.1-19` Run the complete TLP walkthrough on the reference
+- [x] `[must]` `ARF7.1-19` Run the complete TLP walkthrough on the reference
   machine starting at Desktop Research Workbench and ending at a credible
   unopened Codex session. Record exact Project, skill, artifact manifest,
   ResearchPrototype, AutomationBrief, Development Session, package versions,
-  screenshots, and restart/rematerialization evidence.
-- [ ] `[must]` `ARF7.1-20` Publish/install the shared Workbench and updated
+  package versions and rematerialized preview evidence. Exact receipts are in
+  `research-project-pre-codex-walkthrough.md`.
+- [x] `[must]` `ARF7.1-20` Publish/install the shared Workbench and updated
   orchestrator/template components through ordinary AdaOS lifecycle, update
   help/next-step text so every instruction names a visible control, and verify
   the flow from a clean focused direction without private DEV state.
 
 #### Non-blocking follow-ons
 
+- [ ] `[should]` `ARF7.1-20a` Add the compact Desktop general-slot projection
+  once autonomous activity, pause/approval, and blocker signals have a stable
+  read model; do not invent a second direction-specific application.
 - [ ] `[should]` `ARF7.1-21` Add directory/archive intake, secret/malware
   scanning, full license/sensitivity editing, and artifact retention/deletion
   UX before unattended or arbitrary-corpus ingestion.

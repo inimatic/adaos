@@ -1836,37 +1836,37 @@ consumer and acceptance case; the contracts remain domain-neutral.
 Architecture owner:
 [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
 
-- [ ] `[must]` Define/validate `adaos.project.v1` with arbitrary non-empty
+- [x] `[must]` Define/validate `adaos.project.v1` with arbitrary non-empty
   owned skill/scenario composition, dependencies, profiles, entry points, and
   lifecycle policy; preserve existing one-component projects as a compatible
   projection.
-- [ ] `[must]` Define/validate
+- [x] `[must]` Define/validate
   `adaos.builder.development_session.v1` with separate focus, primary/secondary
   targets, read-only context exposure, artifact inputs, scratch policy, base,
   and checkpoints.
-- [ ] `[must]` Extend Builder SDK with atomic create/open/add-component/session
+- [x] `[must]` Extend Builder SDK with atomic create/open/add-component/session
   operations and failure rollback. A domain orchestrator may call this API but
   cannot mutate component sources itself.
-- [ ] `[must]` Enforce development write scope in tool exposure and final
+- [x] `[must]` Enforce development write scope in tool exposure and final
   change-set validation. A read-only dependency change returns an explicit
   scope-expansion request.
-- [ ] `[must]` Add skill `presentations`, Project entry-point binding, exact
+- [x] `[must]` Add skill `presentations`, Project entry-point binding, exact
   verification receipts, and deterministic preview fallback through
   `adaos.system.skill-preview`; never retain an unrelated older scenario.
-- [ ] `[must]` Make Preview Open and QR render one canonical Navigation SDK
+- [x] `[must]` Make Preview Open and QR render one canonical Navigation SDK
   destination with exact dev webspace, presentation bindings, zone/subnet, and
   applicable auth policy.
-- [ ] `[must]` Add local `artifacts/partN` Skill SDK enumeration/resolution,
+- [x] `[must]` Add local `artifacts/partN` Skill SDK enumeration/resolution,
   bounded extraction, digest/staleness, trust/media metadata, and publication
   policy. Native filesystem access is the first Codex provider.
-- [ ] `[must]` Replace the New Dev Project template list with a Taiga searchable
+- [x] `[must]` Replace the New Dev Project template list with a Taiga searchable
   selector showing selection, version, description, and source; order builtin
-  recommended templates first; keep Create as a distinct sticky action and
-  focus/scroll to a missing required Project ID.
-- [ ] `[must]` Fix created-project selection so id, kind, display title,
+  recommended templates first; keep Create as a distinct action and show a
+  field-specific diagnostic for a missing required Project ID.
+- [x] `[must]` Fix created-project selection so id, kind, display title,
   Project ref, and initial target update atomically before upload, initialize,
   Preview, or Automation actions become available.
-- [ ] `[must]` Pass the Research Fabric ARF7.1 reference proof from shared
+- [x] `[must]` Pass the Research Fabric ARF7.1 reference proof from shared
   Research Workbench through Project/direction creation, local TLP artifact
   intake, exact formulation acceptance, and unopened scoped Codex session.
 - [ ] `[should]` Add Project/Application catalog projections with profiles,

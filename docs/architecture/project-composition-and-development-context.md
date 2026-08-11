@@ -206,7 +206,10 @@ Builder opens a Project through a mutable session overlay:
 schema: adaos.builder.development_session.v1
 session_id: dev_tlp_001
 project_ref: project:tlp_research
-base_release: null
+base_release:
+  scope: local
+  source_tree: sha256:<direction-code-tree>
+  package_digest: sha256:<local-checkpoint>
 
 focus:
   ref: skill:tlp_research_skill
@@ -251,6 +254,14 @@ the Project or orchestrator must explicitly admit a new target.
 Access is enforced by Builder tool/capability scope and final change-set
 validation, not only by prompt text. A run that changes a file outside admitted
 targets fails review even if the patch would otherwise pass tests.
+
+The first enforcement surface is
+`builder_sdk_control_skill.review_development_changes`. It resolves every
+absolute changed path against the session's exact target and scratch roots.
+Artifact roots take precedence over their enclosing skill source and therefore
+remain read-only. `request_development_scope` persists a deterministic
+`adaos.builder.scope_expansion_request.v1` with `approved=false`; it does not
+silently enlarge the session.
 
 ### Context projection
 
@@ -329,6 +340,22 @@ A later `additional_artifacts` binding, object-store provider, or MCP resource
 adapter may resolve the same ref. That extension must not force the local
 first milestone to duplicate files in a new database or require Codex to
 discover an undocumented MCP server.
+
+### Private pre-Codex checkpoint
+
+Acceptance needs an immutable base identity, but it must not publish a private
+notebook merely to create that identity. `builder_artifacts.local_checkpoint`
+therefore hashes the direction component's local code/config source into CTX
+Builder state and reports `scope=local`, `bytes_uploaded=0`. It excludes
+`artifacts/` from the code tree because AutomationBrief and Development Session
+bind each artifact group by its separately validated manifest digest and native
+read-only root.
+
+This checkpoint is not a Forge release and is not a distribution claim. Forge
+publication begins only after Codex implementation, validation, human review,
+and the ordinary publish decision. The separation avoids both a 413-sized
+private upload failure and a more serious accidental disclosure of research
+intake during formulation.
 
 ## Registry and Catalog Classification
 
@@ -419,3 +446,4 @@ experiment execution, or one Desktop icon/scenario per direction.
 - [Registry, Marketplace, and Operations Roadmap](registry-marketplace-operations-roadmap.md)
 - [AdaOS Research Fabric](research-fabric.md)
 - [Research Fabric Roadmap](research-fabric-roadmap.md)
+- [Research Project pre-Codex walkthrough](research-project-pre-codex-walkthrough.md)

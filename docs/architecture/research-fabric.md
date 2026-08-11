@@ -3,8 +3,8 @@
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
 first ARF7 technical precursor proved typed formulation revisions and an exact
-AutomationBrief, but the user-facing pre-Codex milestone is reopened: creation,
-artifact intake, focus, and formulation must begin in a shared Research
+AutomationBrief. ARF7.1 now also validates the user-facing pre-Codex path:
+creation, artifact intake, focus, and formulation begin in a shared Research
 Workbench over an explicit local Project and Builder Development Session, not
 in a research-specific Builder tab. Automated implementation, autonomous TLP
 campaigns, and replication benchmarking remain target work. Distributed
@@ -383,15 +383,14 @@ is available in Russian and English text or voice through the admitted
 conversational package. See the
 [Scenario Guidance and Help Contract](scenario-guidance.md).
 
-The separate authoring precursor publishes `research_orchestrator_skill`
-`0.0.1` and Builder scenario `0.2.57`. It proves the pre-Codex ledger,
-validation, optimistic acceptance, and exact AutomationBrief contracts. Its
-common Research view inside Builder is not the target product boundary and
-does not close the Workbench milestone. The target moves portfolio, focus,
-intake, dialogue, and acceptance to `research_workbench`; Builder retains
-Project creation SDK, source development, Codex, Trial, and publication.
-Neither path replaces the runtime research manager or makes the earlier
-dedicated TLP scenario mandatory for new directions.
+The published authoring set is `research_orchestrator_skill` `0.1.0`,
+`research_workbench` `0.0.1`, `builder_sdk_control_skill` `0.1.59`, generic
+`skill_preview` `0.0.1`, and Builder scenario `0.2.59`. The earlier precursor's
+common Research view inside Builder is no longer the product boundary.
+Portfolio, focus, intake, dialogue, and acceptance belong to Workbench;
+Builder retains Project SDK, scoped source development, Codex, Trial, and
+publication. Neither path replaces the runtime research manager or makes the
+earlier dedicated TLP scenario mandatory for new directions.
 
 The accepted control aggregate is E002. It ran the real STL-10 binary dataset
 on CPU for three epochs over a bounded 300-train/100-validation subset with
@@ -584,7 +583,8 @@ Research Workbench: create direction
   -> durable human/LLM formulation dialogue
   -> schema-valid ResearchPrototype revisions
   -> accept exact Research Prototype digest
-  -> freeze exact Project + artifacts + prototype + target policy
+  -> freeze a private local code checkpoint + exact artifact manifests,
+     prototype, and target policy (no Forge upload)
   -> emit immutable AutomationBrief and Builder Development Session
      (Codex has not started)
   -> user opens the linked Project in Builder
@@ -704,6 +704,47 @@ Repeated acceptance returned generation 3 and the same digests; it neither
 created a scientific run nor started Codex. This closes only the ARF7.0
 contract precursor, not the revised Research Workbench ARF7.1 milestone,
 implementation, ARF6 scientific proof, or autonomy.
+
+### TLP Research Workbench pre-Codex evidence
+
+On 2026-08-11 the revised path created the local
+`project:tlp_research_direction` composition and its sole primary
+`skill:tlp_research_direction` through the same orchestrator tools exposed by
+the shared Workbench. The original notebook (3,442,233 bytes) and review
+(35,660 bytes) are ordinary files under the direction-owned
+`artifacts/part0/`; the group manifest is
+`sha256:715091ac119c29a3b9d823b9c68c610bf7bc0b4b86201e3da97fdd4bd07fa73e`.
+The accepted SourceBundle is
+`sha256:637e32518f33ba75dd231acd794ff126bb39edda1f3034cf9410f8d17b6b83cf`.
+
+To keep this private intake out of Forge, acceptance made a local code-only
+checkpoint with source tree
+`sha256:e5980181dbe9ac956274c325271c4bd11282ce9b008888a17fcbf0a585439158`
+and package identity
+`sha256:e8f6d91c2dfc11fda26e1b0cb685622cd49c845d8a77ec7cd61c1cad53c64258`;
+`bytes_uploaded=0`. Artifact identity is not weakened by the exclusion from the
+code tree: the AutomationBrief and session independently bind the exact group
+manifest and native read-only root.
+
+The hand-authored, schema-admitted ResearchPrototype replayed through the
+published runtime is
+`sha256:ad3a9f531edfe13143efc9626c959732dcda56b690f0a305778c621f9bbd7778`;
+the resulting AutomationBrief is
+`sha256:139cb04deda7569777c9ebac603fc4838fdeec6bacbd8cb1e6344452594c513b`.
+Development Session `dev_tlp_research_direction_139cb04deda75697` admits only
+the direction skill for writes, exposes Workbench/orchestrator contracts and
+`artifact://skill/tlp_research_direction/part0` read-only, and records
+`codex_started=false`. A real scope review admitted the direction handler and
+rejected the notebook plus an AdaOS root file with distinct read-only/outside
+scope reasons.
+
+The Builder binding rematerialized `desktop-dev` to `research_workbench` rather
+than retaining the previous unrelated scenario. Open Preview, QR, and Return
+to Research use the same Navigation SDK destination including zone, subnet,
+development webspace, and `expected_scenario_id`. This closes the pre-Codex
+Project milestone, not Codex realization, an experiment, a scientific claim,
+or autonomous research. Full receipts and reproduction commands are in
+[Research Project pre-Codex walkthrough](research-project-pre-codex-walkthrough.md).
 
 ## Autonomous Research Sessions
 
