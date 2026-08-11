@@ -7,6 +7,7 @@ pre-Codex session and its exact filesystem scope; execution is a later gate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -23,6 +24,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 
 
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+_COMPONENT_REF_RE = re.compile(r"^(skill|scenario):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
 
 
 class DevelopmentSessionError(SdkError):
@@ -133,6 +135,104 @@ def binding_for(builder_webspace_id: str) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
+def _within(root: Path, candidate: Path) -> bool:
+    return candidate == root or root in candidate.parents
+
+
+def review_changes(session_id: str, paths: Sequence[str]) -> dict[str, Any]:
+    """Validate proposed changed paths against the effective write scope.
+
+    Read-only artifact roots take precedence over the enclosing target skill,
+    so a patch cannot rewrite intake material merely because the skill itself
+    is an admitted source target.
+    """
+
+    session = get(session_id)
+    values = [str(item or "").strip() for item in paths]
+    if not values or len(values) > 5000:
+        raise DevelopmentSessionError("changed paths must contain between 1 and 5000 items")
+    target_roots = [
+        Path(str(item["source_path"])).resolve()
+        for group in session["targets"].values()
+        for item in group
+    ]
+    scratch_root = Path(str(session["scratch"]["path"])).resolve()
+    artifact_roots = [Path(str(item["root_path"])).resolve() for item in session["artifact_inputs"]]
+    admitted: list[str] = []
+    violations: list[dict[str, str]] = []
+    for raw in values:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            violations.append({"path": raw, "reason": "path_must_be_absolute"})
+            continue
+        resolved = candidate.resolve()
+        if any(_within(root, resolved) for root in artifact_roots):
+            violations.append({"path": str(resolved), "reason": "read_only_artifact_input"})
+        elif _within(scratch_root, resolved) or any(_within(root, resolved) for root in target_roots):
+            admitted.append(str(resolved))
+        else:
+            violations.append({"path": str(resolved), "reason": "outside_development_session_scope"})
+    return {
+        "ok": not violations,
+        "session_id": session["session_id"],
+        "admitted": admitted,
+        "violations": violations,
+    }
+
+
+def request_scope_expansion(
+    session_id: str,
+    target_ref: str,
+    reason: str,
+    *,
+    actor: str = "codex",
+) -> dict[str, Any]:
+    """Record, but never auto-approve, a request for one additional target."""
+
+    session = get(session_id)
+    normalized_ref = str(target_ref or "").strip()
+    match = _COMPONENT_REF_RE.fullmatch(normalized_ref)
+    explanation = " ".join(str(reason or "").split()).strip()
+    if not match:
+        raise DevelopmentSessionError("target_ref must be a skill: or scenario: component ref")
+    if not explanation:
+        raise DevelopmentSessionError("scope-expansion reason is required")
+    existing = {
+        str(item["ref"])
+        for group in session["targets"].values()
+        for item in group
+    }
+    if normalized_ref in existing:
+        raise DevelopmentSessionError(f"{normalized_ref} is already an admitted write target")
+    kind, component_id = match.groups()
+    source_path = str(projects.resolve_root(kind, component_id))
+    identity = json.dumps(
+        {"session_id": session["session_id"], "target_ref": normalized_ref, "reason": explanation},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request_id = f"scope_{hashlib.sha256(identity).hexdigest()[:20]}"
+    path = (_path(session["session_id"]).parent / "scope_requests" / f"{request_id}.json").resolve()
+    payload = {
+        "schema": "adaos.builder.scope_expansion_request.v1",
+        "request_id": request_id,
+        "session_id": session["session_id"],
+        "target_ref": normalized_ref,
+        "source_path": source_path,
+        "reason": explanation,
+        "status": "requested",
+        "requested_by": str(actor or "codex"),
+        "requested_at": _now(),
+    }
+    with mutation_lock(path.parent / ".mutation.lock"):
+        if not path.is_file():
+            atomic_write_json(path, payload)
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    return {"ok": True, "approved": False, "request": payload, "state_path": str(path)}
+
+
 def create(
     project_id: str,
     *,
@@ -236,4 +336,14 @@ def create(
     return {"ok": True, "idempotent": False, "session": get(token)}
 
 
-__all__ = ["DevelopmentSessionError", "bind", "binding_for", "create", "get", "list_sessions", "validate"]
+__all__ = [
+    "DevelopmentSessionError",
+    "bind",
+    "binding_for",
+    "create",
+    "get",
+    "list_sessions",
+    "request_scope_expansion",
+    "review_changes",
+    "validate",
+]

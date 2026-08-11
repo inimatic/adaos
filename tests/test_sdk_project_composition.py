@@ -209,6 +209,36 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     assert bound["binding"]["focus_ref"] == "skill:tlp_direction"
     assert restored == bound["binding"]
 
+    target_file = project_space["skills"] / "tlp_direction" / "handlers" / "main.py"
+    target_file.parent.mkdir()
+    artifact_file = Path(session["artifact_inputs"][0]["root_path"]) / "review.md"
+    review = development_sessions.review_changes(
+        session["session_id"],
+        [str(target_file), str(artifact_file), str(tmp_path / "outside.py"), "relative.py"],
+    )
+    assert review["ok"] is False
+    assert review["admitted"] == [str(target_file.resolve())]
+    assert [item["reason"] for item in review["violations"]] == [
+        "read_only_artifact_input",
+        "outside_development_session_scope",
+        "path_must_be_absolute",
+    ]
+
+    _skill(project_space["skills"], "shared_metrics")
+    expansion = development_sessions.request_scope_expansion(
+        session["session_id"],
+        "skill:shared_metrics",
+        "The accepted metric is not available through the current contract.",
+    )
+    assert expansion["approved"] is False
+    assert expansion["request"]["status"] == "requested"
+    repeated_expansion = development_sessions.request_scope_expansion(
+        session["session_id"],
+        "skill:shared_metrics",
+        "The accepted metric is not available through the current contract.",
+    )
+    assert repeated_expansion["request"]["request_id"] == expansion["request"]["request_id"]
+
 
 def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
