@@ -1,6 +1,8 @@
 # Builder Preview Runtime
 
-Status: implemented architecture contract.
+Status: implemented scenario-preview architecture contract with the Project
+presentation and generic skill-preview extension specified but not yet locally
+accepted.
 
 This document defines project selection, Builder preview ownership, and
 webspace materialization. It replaces the former convention where a preview
@@ -13,6 +15,9 @@ UI selection and artifact mutation.
   parsing either webspace ID.
 - Selecting a project changes Builder context and only the paired preview. It
   does not reload the Builder host or scan unrelated DEV webspaces.
+- A focused skill resolves an explicit Project entry point/presentation or the
+  generic system skill-preview host. It never leaves an unrelated previous
+  scenario as the apparent preview.
 - A desired preview scenario is not reported as observed until reconcile has
   completed. Every new desired state has a monotonic generation and operation
   ID.
@@ -30,7 +35,7 @@ The canonical topics have one meaning each:
 | Topic | Meaning | May rebuild preview |
 | --- | --- | --- |
 | `builder.context.selected` | Builder UI selected a skill or scenario | no |
-| `builder.preview.desired` | paired preview should converge to a scenario | yes, paired target only |
+| `builder.preview.desired` | paired preview should converge to an exact scenario/presentation target and bindings | yes, paired target only |
 | `builder.preview.observed` | desired generation is now materialized | no; this is a fact |
 | `project.content.changed` | project files or metadata changed | yes, explicit subscribers only |
 
@@ -229,6 +234,29 @@ does not change that phase. The Builder header presents the editable process
 (`WORKING`) and the rendered target (`VIEWING`) separately so a user can move
 through the tree without mistaking navigation for a state transition.
 
+## Project And Skill Presentation Preview
+
+The Lifecycle target above selects a revision; the Project presentation selects
+the scenario host and bindings used to render it. Resolution order is:
+
+1. explicit Project entry point;
+2. focused skill's default `presentation`;
+3. `adaos.system.skill-preview` fallback;
+4. explicit diagnostic failure.
+
+The generic fallback renders standard metadata, README/help, icon,
+capabilities, declared widgets, and empty-state explanations. Presentation
+declaration and exact preview verification are separate records.
+
+Open Preview and QR render the same Navigation SDK destination. It carries the
+actual preview webspace rather than the Builder host webspace, plus exact
+presentation bindings, zone/subnet, and applicable authentication policy. The
+two controls cannot maintain separate URL templates.
+
+The full Project, presentation, Development Session, and local artifact-context
+boundary is defined by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+
 ## Workspace Catalog
 
 `workspace_catalog_state.version` increments in the same SQLite transaction
@@ -264,6 +292,10 @@ A project-selection regression test or smoke run must demonstrate:
    worker peak RSS, result size, and phase timings are present in diagnostics.
 7. Catalog updates do not create Yjs rooms and idempotent metadata writes do
    not advance catalog version.
+8. A skill without an explicit presentation renders the generic skill-preview
+   host rather than the previously selected scenario.
+9. Open Preview and QR resolve to the same canonical destination, including
+   development webspace and bindings.
 
 ## Local Verification Evidence
 

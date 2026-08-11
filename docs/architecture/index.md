@@ -56,6 +56,7 @@ Current target-state control-plane extensions are documented in:
 - [NLU Teacher](nlu-teacher-llm.md): governed clarification, authoring, validation, persistence, and promotion contract
 - [NLU Teacher Evolution Roadmap](nlu-evolution-roadmap.md) and [NLU Roadmap Checklist](nlu-roadmap.md): use-case gates and detailed sequencing owned by the NLU architecture
 - [AdaOS Product Terminology](product-terminology.md): product-facing terms and compatibility rules for Assistant, Webspace, Application, Device, Agent, Skill, Widget/Panel, Interface, and Catalog
+- [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md): target boundary between distributable Projects, ProjectRelease, Application/presentation entry points, local model-facing artifact groups, registry classification, and policy-scoped Builder Development Sessions
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization

@@ -66,6 +66,7 @@ Core invariant:
 
 The Builder owns the development path for:
 
+- new and updated declarative Projects that compose distributable components
 - new skills
 - updates to existing skills
 - new scenarios
@@ -86,6 +87,37 @@ The Builder does not own:
 
 Those surfaces are handled by the deterministic runtime, NLU Teacher,
 Root MCP operational planes, Infrascope, and supervisor/runtime governance.
+
+## Project And Development Session Boundary
+
+Builder's durable distribution input is a Project definition, not a mutable
+editor session. A Project may own one skill, one scenario with companion
+skills, or another non-empty component set. It declares dependencies, entry
+points/presentations, catalog metadata, and lifecycle policy. Publication
+resolves it into an immutable ProjectRelease.
+
+Builder opens that definition through a separate Development Session. The
+session owns current focus, admitted read/write targets, filtered read-only
+context, model-facing artifact inputs, scratch access, conversations, Runs,
+and checkpoints. Focus is a UI selection and never implicitly expands Codex
+write authority.
+
+The detailed contract and local-first artifact policy are defined by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+Artifact release and activation remain owned by
+[Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md).
+
+Builder templates may create different Project topologies:
+
+- a standalone/headless skill Project;
+- an interactive application Project with a scenario and companion skill;
+- a scenario composition that references existing skills;
+- a domain-specific profile such as a research-direction Project;
+- a Project assembled from existing components.
+
+The topology is selected by the template; core must not require every skill to
+own a scenario or every scenario to generate a new skill. Components may be
+added later through the same Project contract.
 
 ## Builder Pipeline
 
@@ -269,6 +301,24 @@ The Builder should decide whether an idea is:
 - a UI/catalog binding
 - an NLU/action descriptor improvement
 - a missing capability that needs a new skill or scenario artifact
+
+Scenario is the implementation host for an Application/presentation. Builder
+preview resolves an explicit Project entry point, then a skill's default
+presentation, then the generic `adaos.system.skill-preview` host. The fallback
+renders standard skill metadata, README/help, icon, capabilities, and declared
+widgets or explicit empty states. Selecting a skill must never leave an
+unrelated previous scenario in the preview webspace.
+
+Presentation declarations are not compatibility evidence. Builder Trial and
+preview receipts record the exact Project, component, scenario, binding, and
+revision combination that was actually validated.
+
+Domain workbenches may use Builder SDK to create/open Projects and observe
+development state, but they do not move their domain workflow into Builder.
+For example, Research Workbench owns direction selection, intake, formulation,
+and handoff; Builder owns source mutation, Codex, validation, Trial, and
+publication. Builder may show a compact origin/backlink card, not a duplicate
+Research workflow tab.
 
 ## Relationship To NLU Teacher
 
@@ -706,10 +756,12 @@ development Builder. A project-preview webspace cannot own another preview, so
 the topology remains bounded to these two explicit levels.
 
 Preview controls share this binding but keep their native responsibilities:
-Compare/select materializes through `adaos.sdk.builder.preview`, Open uses the
-browser workspace-navigation action in a new window, and QR renders the same
-relative workspace URL locally. No external QR service is part of the Builder
-contract.
+Compare/select materializes through `adaos.sdk.builder.preview`; Open and QR
+are projections of the same canonical navigation destination containing the
+exact development webspace, presentation/bindings, zone/subnet, and applicable
+authentication policy. Neither control substitutes the current Builder host
+webspace or independently reconstructs a weaker URL. No external QR service is
+part of the Builder contract.
 
 Project selection is a command/status flow:
 
@@ -720,11 +772,13 @@ Project selection is a command/status flow:
    use the normal action notification path.
 3. The source host receives a compact `data/builder` projection and hydrates
    page state from `data/builder/selection` without navigation or page reload.
-4. Scenario projects additionally publish `builder.preview.desired`; the
-   reconciler materializes only the explicitly related preview in the
-   background and later publishes `builder.preview.observed`.
-5. Skill projects change Builder data context only and leave the preview
-   scenario untouched.
+4. Projects with an explicit scenario/presentation publish
+   `builder.preview.desired`; the reconciler materializes only the explicitly
+   related preview in the background and later publishes
+   `builder.preview.observed`.
+5. A skill without an explicit presentation resolves through the system
+   skill-preview host. Leaving an older preview scenario untouched is a legacy
+   implementation gap, not target behavior.
 
 `builder.context.selected` is not a content-change event. It must not refresh
 the complete Prompt workflow projection. Artifact writes use

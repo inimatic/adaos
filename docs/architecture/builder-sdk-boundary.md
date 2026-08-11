@@ -5,10 +5,16 @@ complete locally in revision `032`. Chat-driven Automation and real
 Publication have been exercised with an isolated control project. Durable
 Forge acknowledgement for scenario drafts remains an explicit blocker;
 autonomous from-zero development is intentionally deferred to the next phase.
+The current one-component developer-project APIs remain compatible, while the
+composite `adaos.project.v1`, scoped Development Session, presentation, and
+local artifact-context extensions are specified for Builder Phase 12 and are
+not claimed complete by revision `032`.
 
 This document defines the public SDK boundary required by Prompt IDE, Builder,
 and autonomous Builder development. It complements `builder.md` and
 `builder-roadmap.md`; it does not replace their product and runtime plans.
+The general Project/session contract is defined by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
 
 ## Why This Boundary Exists
 
@@ -32,25 +38,32 @@ of SDK operations into tool responses.
 
 ### Developer projects
 
-`adaos.sdk.developer.projects` owns DEV artifact discovery and lifecycle:
+`adaos.sdk.developer.projects` currently owns one-component DEV artifact
+discovery and lifecycle. Its target contract additionally owns declarative
+Project composition without exposing runtime path-provider internals:
 
-- list and describe skill/scenario projects;
+- list and describe Project definitions and legacy skill/scenario project
+  projections;
 - resolve a project without exposing runtime path-provider internals;
 - list, read, and write allowlisted project files with bounded payloads;
 - update bounded project metadata without losing scenario UI payloads;
 - expose the initialized project type and reject attempts to change it after
   creation;
-- list templates and create projects;
+- list templates and atomically create Projects plus template-declared owned
+  components;
+- add/remove Project components and dependencies without silently changing
+  component ownership;
 - checkpoint, publish, and delete projects;
 - return plain JSON-compatible results and public SDK errors.
 
 Direct recursive deletion and construction of `.adaos/dev` paths do not belong
 in skills.
 
-### Prompt project context
+### Builder Development Session context
 
-`adaos.sdk.developer.prompt_context` owns the development context formerly
-stored directly by Prompt IDE handlers:
+`adaos.sdk.developer.prompt_context` is the compatibility name for context
+that targets `adaos.builder.development_session.v1`. It owns the development
+context formerly stored directly by Prompt IDE handlers:
 
 - read and atomically replace the base technical specification;
 - append bounded, immutable specification addenda;
@@ -58,13 +71,19 @@ stored directly by Prompt IDE handlers:
   marker;
 - keep the managed state file and base specification synchronized without
   exposing DEV paths to skills.
+- keep UI focus independent from primary/secondary write targets;
+- expose dependencies as `contract`, `docs`, bounded paths, or no source;
+- admit local artifact groups read-only and return explicit scope-expansion
+  requests when a run needs to mutate another component.
 
 ### Builder preview
 
 `adaos.sdk.builder.preview` owns workbench selection and preview lifecycle:
 
-- select the active scenario/project;
+- select the active Project/component and resolve its explicit presentation or
+  generic system skill-preview fallback;
 - ensure or open its dev webspace;
+- return one canonical navigation destination shared by Open Preview and QR;
 - read the current source-to-dev-webspace binding;
 - reload or materialize a validated Builder revision.
 
@@ -93,6 +112,14 @@ The SDK returns the stable automation projection, not a
 `adaos.sdk.builder.artifacts` owns artifact checkpoints. Conversation SDK
 operations own Builder topic creation and Builder Change lookup/upsert. Pending
 Actions and event publication use their existing SDK surfaces.
+
+This checkpoint/evidence API is distinct from the target Skill SDK
+model-facing source context. `ctx.artifacts` enumerates and resolves manifested
+`artifacts/partN` groups owned by a Project target skill, returns bounded
+metadata/text plus a native path for admitted Codex sessions, and preserves a
+provider-neutral ArtifactRef for future external/MCP adapters. Builder mounts
+those inputs read-only; it does not copy them into conversation state or
+runtime experiment data.
 
 ## Dependency Contract
 

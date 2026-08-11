@@ -153,6 +153,7 @@ nav:
       - NLU Roadmap: architecture/nlu-roadmap.md
       - Artifact Source Package Activation: architecture/artifact-source-package-activation.md
       - Artifact Source Package Activation Roadmap: architecture/artifact-source-package-activation-roadmap.md
+      - Project Composition Presentation And Development Context: architecture/project-composition-and-development-context.md
       - Artifact Pipeline Local Evidence 2026-07-24: architecture/artifact-pipeline-local-evidence-2026-07-24.md
       - Roadmap Inventory and Authority Map: architecture/roadmap-inventory.md
       - Developer Surface Map: architecture/developer-surface-map.md

@@ -10,6 +10,10 @@ portfolio-level distinction between platform, deployment profile, solution
 pack, solution agent, endpoint, and channel is governed by the
 [AdaOS Product Model](../product/index.md).
 
+The technical boundary between distributable Projects, Applications,
+presentations, and mutable Builder sessions is governed by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+
 ## Primary Model
 
 The user-facing hierarchy is:
@@ -37,6 +41,11 @@ Assistant
   -> Interfaces
   -> Catalog
 ```
+
+The Catalog is product-first. It normally presents installable Projects and
+their Application entry points. Skills and scenarios are component-level
+entities available in an advanced/developer view rather than peers that every
+user must understand.
 
 A managed deployment may contain one or more Assistant environments. The
 simplest current product shape is one Assistant backed by one subnet. Campus
@@ -76,19 +85,28 @@ Do not introduce separate role names such as `LLM programmer` for this
 capability creation path. If an implementation detail needs to mention LLM
 assistance, describe it as a Builder mode.
 
+Builder opens a distributable Project through a mutable **Development
+Session**. The session records current targets, read-only context, model-facing
+artifacts, and run/checkpoint state; it is not itself installed or published.
+The word Project must not be used for an arbitrary chat tab or Codex process.
+
 ## Term Mapping
 
 | Internal term | Product term | Notes |
 | --- | --- | --- |
 | `subnet`, `subnet_id` | Assistant, Assistant ID | Show the display name by default. Keep IDs for diagnostics. |
 | `webspace`, `default`, `main` | Webspace, Main | Webspace is an access/projection context, not a folder. |
-| `scenario` | Application | Scenario remains the implementation/authoring term. |
+| `scenario` | Application host | Scenario remains the implementation/authoring term; a Project entry point may bind one host to different skills, so the mapping is not always one-to-one. |
 | `web_desktop` | Capabilities | Default overview application. Keep `web_desktop` as the stable ID. |
 | `skill` | Skill | Executable capability used by applications and agents. |
+| `project` | Project, package, or application bundle according to UI context | Versioned distributable composition of skills/scenarios, entry points, and lifecycle policy. It is not a Builder session. |
+| `project_release` | Release | Immutable dependency-locked Project version; keep the technical term in diagnostics. |
+| `builder development session` | Development session | Mutable Builder overlay with explicit targets and read-only context. Never shown as an installed application. |
+| `presentation` | Application view or launch target | Explicit scenario host/binding for a skill or Project entry point. |
 | `widget` | Widget, later Panel | Current UI may keep Widget while the broader product model reserves Panel. |
 | `browser`, `member`, `hub`, `subnet endpoint` | Agent | Software participant of the assistant subnet. |
 | `device` | Device | Physical or virtual host. One device may host multiple agents. |
-| `marketplace` | Catalog | Place to add applications, skills, widgets/panels, interfaces, agents, and integrations. |
+| `marketplace` | Catalog | Place to add Projects/Applications by default, with skills, scenarios, widgets/panels, interfaces, agents, and integrations available in advanced views. |
 | `install` | Add to assistant | Use install/deploy wording only in advanced or developer UI. |
 
 ## UI Rules
@@ -109,6 +127,12 @@ Webspace / Application
 
 Debug-first labels such as raw subnet IDs, endpoint IDs, `LINK OK`, or low-level Yjs state belong in diagnostics and advanced mode.
 
+Catalog categories are discovery labels, not runtime types. For example,
+`research` may be a localized category, while
+`adaos.research.direction.v1` is a machine-readable profile and `member` or
+`home_subnet` is a deployment scope. UI filters must not collapse those three
+axes into one category field.
+
 ## Compatibility Policy
 
 Do not break the current API or Yjs schema while migrating terminology. Add public aliases and projections first:
@@ -117,5 +141,8 @@ Do not break the current API or Yjs schema while migrating terminology. Add publ
 - `application_id` may alias `scenario_id`.
 - `pinned_panels` may alias `pinned_widgets` if and when Panel becomes the visible term.
 - New product kinds such as Assistant, Application, Agent, and Panel can exist next to older internal/debug kinds.
+- Project/Application catalog entries may be added alongside the existing
+  skill/scenario registry arrays; component APIs remain compatible during the
+  migration.
 
 Device/Agent migration should happen through projections and catalog views before changing connectivity or pairing data structures.

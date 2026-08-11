@@ -2,15 +2,16 @@
 
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
-first ARF7 pre-Codex authoring slice is also validated locally: one research
-direction is one skill project, immutable source artifacts can be attached,
-the shared orchestrator records typed formulation revisions, and human
-acceptance creates an exact AutomationBrief without starting Codex. Automated
-implementation, autonomous TLP campaigns, and replication benchmarking remain
-target work. Distributed execution/Ray is explicitly deferred; the current
-path executes on the selected AdaOS member node.
+first ARF7 technical precursor proved typed formulation revisions and an exact
+AutomationBrief, but the user-facing pre-Codex milestone is reopened: creation,
+artifact intake, focus, and formulation must begin in a shared Research
+Workbench over an explicit local Project and Builder Development Session, not
+in a research-specific Builder tab. Automated implementation, autonomous TLP
+campaigns, and replication benchmarking remain target work. Distributed
+execution/Ray is explicitly deferred; the current path executes on the
+selected AdaOS member node.
 
-Last reviewed: 2026-08-10.
+Last reviewed: 2026-08-11.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -33,12 +34,13 @@ pack, and aResearcher as a solution agent or workbench are governed by the
 2. **aResearcher** remains a useful future product or assistant name. It may be
    the conversational surface over the fabric, but it is not the name of the
    persistence and execution contracts.
-3. A research direction is one ordinary AdaOS skill project. It owns its
-   domain code, runner entrypoints, and primary data. It does not require a
-   direction-specific scenario. The shared Builder/Research Workbench and
-   `research_orchestrator_skill` provide the authoring surface and stage
-   orchestration; a custom scenario is an optional product/UI extension, not
-   the unit of research identity.
+3. A research direction is one ordinary AdaOS Project whose primary owned
+   component is a `research.direction` skill. The skill is the direction
+   identity and future domain-code/runner owner; the Project is its
+   distribution definition. It does not require a direction-specific scenario.
+   The shared Research Workbench and `research_orchestrator_skill` provide the
+   portfolio, focus, intake, and formulation surface; Builder is opened only
+   for the bounded development session.
 4. Research uses the existing skill, optional scenario, workflow, package, and
    activation lifecycle. There is no separate `adaos research ...`
    installation or runtime CLI.
@@ -69,14 +71,15 @@ pack, and aResearcher as a solution agent or workbench are governed by the
    modal, and conversational help/next-step intents all consume one
    workflow-aware projection rather than maintaining separate action advice.
 13. Builder is the only software-authoring and adaptation control plane for a
-    research direction. The `research_direction` skill template specializes
-    Builder's existing Prototype, Preview, Automation, Trial, and Publication
-    lifecycle; neither the orchestrator nor a Workbench edits installed package
-    sources.
+    research direction, but it is not the research-management UI. Research
+    Workbench creates the Project/direction skill through Builder SDK, owns
+    intake and formulation, and later links to a Builder Development Session.
+    Neither the orchestrator nor Workbench edits installed package sources.
 14. Human/LLM research design produces a versioned `ResearchPrototype`, not an
-   authoritative chat transcript. Human consensus accepts an exact digest;
-   Automation receives a bounded implementation handoff derived from that
-   accepted revision.
+    authoritative chat transcript. Human consensus accepts an exact digest;
+    Automation receives a bounded implementation handoff naming the exact
+    Project, development targets, local artifact groups, read-only context,
+    and accepted revision.
 15. Full autonomy is a delegated execution mode over the same contracts. A
     signed `ResearchMandate` defines scope, budgets, tools, data access,
     software-mutation authority, stop conditions, and escalation. It never
@@ -95,6 +98,15 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     evaluation family is a PaperBench-like replication benchmark with frozen
     tasks, target claims, author/expert rubrics, contamination controls, and
     comparable agent/process/cost metrics.
+20. Source material needed by LLM/Codex is local-first. The direction skill
+    carries manifested `artifacts/partN` groups, the Skill SDK provides stable
+    refs and bounded reads, and Codex receives native filesystem paths. An
+    external artifact provider or MCP adapter may later resolve the same refs
+    but is not a pre-Codex admission dependency.
+21. Project distribution and Builder development context are distinct.
+    Projects declare jointly shipped components and entry points; mutable
+    focus, write targets, read-only dependencies, artifacts, and scratch access
+    belong to a Builder Development Session.
 
 ## Why `Research Fabric`
 
@@ -273,12 +285,19 @@ requests, and artifact references are likely core candidates. `TropicalPool`,
 notebooks / prose / code / papers
         |
         v
-Builder research-direction skill ---- immutable SourceBundle
-        |                               shared Research Workbench
-        +---- research orchestrator --- dialogue / activity journal
+shared Research Workbench ----------- portfolio / selected direction
+        |
+        +---- research orchestrator --- create Project through Builder SDK
+        |                               create/focus direction skill
+        |                               local artifacts/partN + manifest
+        |                               dialogue / activity journal
         |                               ResearchPrototype revisions
         |                               exact human acceptance
         |                               digest-bound AutomationBrief
+        v
+Builder Development Session -------- primary direction-skill write target
+        |                             read-only presentation/dependencies
+        |                             native read-only artifact paths
         v
 isolated Builder/Codex change -------- validation / Trial / Publication
         v
@@ -300,16 +319,18 @@ research-manager skill --------------- deterministic research governance
         `---- ResearchRelease ---------- future read-only writer skill
 
 AdaOS core supplies lifecycle, policy, identity, secrets, service discovery,
-generic storage/execution seams, artifacts, conversations, governed workflows,
-events, and projections. It does not supply TLP semantics or a second
-agent-specific authority plane.
+generic storage/execution seams, Project/presentation/session contracts,
+artifacts, conversations, governed workflows, events, and projections. It does
+not supply TLP semantics or a second agent-specific authority plane.
 ```
 
 The runtime proof uses `research_manager_skill`, `tlp_experiment_skill`, and
-the earlier `tlp_research` Workbench scenario. The authoring proof adds the
-shared `research_orchestrator_skill` and a `research_direction` Builder skill
-template. The earlier scenario remains a useful dedicated experiment UI, but
-new directions do not need to generate a scenario. `research-manager`,
+the earlier `tlp_research` Workbench scenario. The authoring precursor adds
+`research_orchestrator_skill` and a `research_direction` Builder skill
+template. The target authoring path moves that domain surface into the shared
+`research_workbench` scenario and creates the Project/skill through Builder
+SDK. The earlier scenario remains a useful dedicated experiment UI, but new
+directions do not need to generate a scenario. `research-manager`,
 `mlflow-tracker`, and `ray-executor` otherwise describe roles, not a
 requirement to hard-code one provider.
 
@@ -362,11 +383,15 @@ is available in Russian and English text or voice through the admitted
 conversational package. See the
 [Scenario Guidance and Help Contract](scenario-guidance.md).
 
-The separate authoring slice publishes `research_orchestrator_skill` `0.0.1`
-and Builder scenario `0.2.57`. The former is the shared pre-Codex ledger; the
-latter renders the common Research view. Neither replaces the runtime research
-manager or makes the earlier dedicated TLP scenario mandatory for new
-directions.
+The separate authoring precursor publishes `research_orchestrator_skill`
+`0.0.1` and Builder scenario `0.2.57`. It proves the pre-Codex ledger,
+validation, optimistic acceptance, and exact AutomationBrief contracts. Its
+common Research view inside Builder is not the target product boundary and
+does not close the Workbench milestone. The target moves portfolio, focus,
+intake, dialogue, and acceptance to `research_workbench`; Builder retains
+Project creation SDK, source development, Codex, Trial, and publication.
+Neither path replaces the runtime research manager or makes the earlier
+dedicated TLP scenario mandatory for new directions.
 
 The accepted control aggregate is E002. It ran the real STL-10 binary dataset
 on CPU for three epochs over a bounded 300-train/100-validation subset with
@@ -394,12 +419,12 @@ contract `1.0` for new sessions.
 
 | Owner | Owns | Must not own |
 | --- | --- | --- |
-| AdaOS core | Skill/scenario lifecycle, workflow rails, identity, policy, secrets, service supervision, capability binding, generic run/attempt records, artifact refs, event envelopes | TLP protocols, statistical conclusions, MLflow schema, Ray scheduler state |
-| Builder | Source intake, Research Prototype revisions, Preview, implementation handoff, isolated Codex Runs, software Trial, package Publication, dependency locks | Scientific execution state, test unblinding, claim truth, live research data |
+| AdaOS core | Skill/scenario/Project lifecycle, presentation and Development Session contracts, workflow rails, identity, policy, secrets, service supervision, capability binding, generic run/attempt records, artifact refs, event envelopes | TLP protocols, statistical conclusions, MLflow schema, Ray scheduler state |
+| Builder | Project/template creation SDK, explicit development targets/context, source mutation, Preview, isolated Codex Runs, software Trial, ProjectRelease Publication, dependency locks | Research portfolio/focus, formulation workflow, scientific execution state, test unblinding, claim truth, live research data |
 | aResearcher | Human/LLM design dialogue, mandate-bound planning, candidate hypotheses/campaigns/analyses, admitted autonomous decisions, evidence-grounded synthesis | Direct source mutation, implicit permission growth, tracker/executor authority, external publication |
 | Research manager skill | Provider-neutral Study/Experiment model, protocol locks, analysis plan, trial/run/attempt identity, tracker journal, evidence manifests, claim review, workflow guidance | Domain runner code, primary datasets, provider internals, global DB credentials, accelerator scheduling |
 | Domain runner/data-owner skill | Domain preparation, primary data binding, execution descriptor, normalized output collection, owned-artifact verification | Research approvals, tracker authority, another skill's database |
-| Shared Research Workbench | Source intake, formulation, activity, exact-acceptance, and handoff projections for any research-direction skill | Direction identity, domain data, installed-source mutation, scientific truth |
+| Shared Research Workbench | Direction portfolio and focus, Builder-SDK Project creation, local artifact intake/inspection, formulation, activity, exact acceptance, Development Session handoff, and progress projection | Direction identity, direct source mutation, Codex implementation, scientific truth |
 | Optional domain scenario | Specialized post-publication workflow/views when the shared Workbench cannot express a domain need | Default direction identity, new installation semantics, or private infrastructure |
 | Tracker provider | Parameter, metric, tag, and run-artifact ingestion and query | Protocol authority, approvals, claim truth |
 | Executor provider | Submission, scheduling, logs, status, cancellation, resource placement | Study state, statistical plan, tracker identity |
@@ -411,16 +436,19 @@ contract `1.0` for new sessions.
 The research-manager skill owns versioned schemas for these concepts:
 
 `SourceBundle`
-: Content-addressed manifest of notebooks, prose, papers, repositories, data
-  references, and extracted metadata supplied to a research project. Trust,
-  license, sensitivity, origin, and exploratory/authoritative status are
-  explicit; notebook outputs are never silently promoted to observations.
+: Immutable logical selection of manifested `artifacts/partN` items, optional
+  additional ArtifactRefs, and deterministic extracted metadata supplied to a
+  research Project. Local files are the first provider and remain directly
+  readable by Codex. Trust, license, sensitivity, origin, publication policy,
+  and exploratory/authoritative status are explicit; notebook outputs are
+  never silently promoted to observations.
 
 `ResearchPrototype`
-: Builder-owned design-time candidate containing the research brief,
+: Research-orchestrator-owned design-time candidate containing the research brief,
   hypotheses, campaign, analysis plan, capability requirements, assumptions,
-  and open questions. Acceptance fixes one digest for Automation and later
-  Study instantiation; chat remains linked provenance rather than the object.
+  and open questions. Acceptance fixes one digest plus the exact Project,
+  artifact groups, and target policy for Automation and later Study
+  instantiation; chat remains linked provenance rather than the object.
 
 `Study`
 : Stable aggregate for a research question, owners, policy, budget, and
@@ -538,36 +566,49 @@ test leakage an auditable policy violation rather than a notebook convention.
 
 ## Research Project Authoring and Builder Integration
 
-Research starts in Builder as one `research_direction` skill project when the
-experimental base does not yet exist. A direction is not a generated scenario
-plus a collection of skills. The shared Workbench and
-`research_orchestrator_skill` operate across direction projects, while the
-direction skill is the future unit of code publication, runner activation, and
-primary-data ownership:
+Research starts in the shared Research Workbench, not in a generic Builder
+modal. The Workbench maintains a portfolio/list projection and one selected
+direction in user-session focus. Creating a direction asks for minimal identity
+metadata, calls Builder SDK to create a local Project plus its primary
+`research_direction` skill, and immediately focuses that Project. The skill is
+the research identity and future code/runner owner; the Project is the
+declarative distribution definition.
 
 ```text
-research_direction skill draft
-  -> SourceBundle
+Research Workbench: create direction
+  -> Builder SDK creates local Project + primary direction skill
+  -> select Project/direction in focus
+  -> add ordinary files under artifacts/part0
+  -> validate manifest and form immutable SourceBundle selection
   -> deterministic notebook/document inventory
   -> durable human/LLM formulation dialogue
   -> schema-valid ResearchPrototype revisions
   -> accept exact Research Prototype digest
-  -> freeze exact source bundle + prototype + Builder checkpoint
-  -> emit immutable AutomationBrief (Codex has not started)
+  -> freeze exact Project + artifacts + prototype + target policy
+  -> emit immutable AutomationBrief and Builder Development Session
+     (Codex has not started)
+  -> user opens the linked Project in Builder
   -> isolated Codex implementation
   -> software validation and CPU Trial
-  -> direction-skill ProjectRelease and Workspace activation
+  -> ProjectRelease and Workspace activation
   -> instantiate Study and ExperimentCampaign from the accepted seed
 ```
 
-`SourceBundle` is a Builder project capability rather than orchestrator-owned
-file storage. Payload objects and bundle revisions are content-addressed and
-immutable; the mutable project record only selects the current bundle. The
-first implementation accepts bounded individual files, inventories notebook
-structure and UTF-8 text deterministically, and marks notebook outputs as
-untrusted source material. Directory/archive expansion, malware/secret scans,
-license policy, and sensitivity editing remain later intake gates and must not
-be implied by the first slice.
+The first user-facing implementation is local-first. Source payloads are
+ordinary files under the owned direction skill's `artifacts/partN` groups, and
+each group has a deterministic manifest. The Skill SDK lists, validates,
+resolves, and extracts bounded text from those files. Codex receives native
+read-only paths; the conversational LLM receives bounded extraction through
+the orchestrator. Logical `ArtifactRef` addressing is provider-neutral so an
+external store or MCP adapter can be added later without being an admission
+dependency now.
+
+Accepting a ResearchPrototype binds exact group/item digests. A changed file or
+newly selected artifact makes the unaccepted candidate stale. Directory/archive
+expansion, malware/secret scans, external artifact providers, complete license
+policy, and sensitivity editing remain later intake gates and must not be
+implied by the first slice. Publication policy decides whether each source
+payload is included, excluded, or represented only by its manifest/reference.
 
 The source assessment may inventory notebook cells, imports, outputs,
 environment hints, duplicate implementations, likely data leakage, and code
@@ -578,14 +619,16 @@ classes, analysis rules, budgets, stops, implementation requirements, and
 acceptance checks. LLM `ready_for_automation` is a proposal only: schema and
 semantic admission are repeated at acceptance.
 
-The accepted `AutomationBrief` contains the exact SourceBundle digest and
-inventory, exact ResearchPrototype digest and content, the direction's ordinary
-Builder/Forge checkpoint, implementation requirements, acceptance tests, and
-prohibited actions. Acceptance is optimistic and idempotent, rejects a stale
-source bundle or prototype, and explicitly records `codex_started=false`.
-Codex later implements the experimental base from this handoff; it does not
-receive authority to amend the scientific objective to fit code or observed
-results.
+The accepted `AutomationBrief` contains the exact Project and primary target,
+SourceBundle/group/item digests and native paths, exact ResearchPrototype
+digest and content, implementation requirements, acceptance tests, and
+prohibited actions. It creates a Builder Development Session in which the
+direction skill is the read/write primary target, artifacts are read-only, and
+Research Workbench/orchestrator dependencies are exposed only as declared
+contracts/docs. Acceptance is optimistic and idempotent, rejects stale input,
+and explicitly records `codex_started=false`. Codex later implements the
+experimental base from this handoff; it cannot amend the scientific objective
+or silently mutate a dependency outside the admitted development scope.
 
 A published research scenario continues to evolve scientific state without
 Builder when the existing contracts can express the change. New parameters,
@@ -596,10 +639,13 @@ the exact installed ProjectRelease. After Trial/Publication, the autonomous or
 human-operated session may explicitly adopt the new package digest; historical
 runs retain their original software identities.
 
-The first implementation deliberately uses no composite project type. The
-template catalogue exposes `research_direction` as a normal dynamic Builder
-skill template, and Builder's existing scenario remains the common authoring
-surface. A direction-specific scenario is justified only when post-publication
+The former technical precursor exposed `research_direction` as a dynamic
+Builder skill template and rendered a Research view inside Builder. It remains
+useful contract evidence but is not the target product boundary. The target
+uses the general composite Project definition and presentation contract from
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+Research Workbench owns portfolio/intake/formulation; Builder owns development.
+A direction-specific scenario is justified only when post-publication
 interaction cannot be represented by the shared Workbench and declared skill
 tools; it is never generated merely to name a study.
 
@@ -629,11 +675,13 @@ software authority, and later evidence. Its schema and review overhead is
 worth paying for repeatable or autonomous research, not automatically for every
 small coding task.
 
-### TLP pre-Codex acceptance evidence
+### TLP pre-Codex contract precursor evidence
 
 On 2026-08-10 the reference machine created `tlp_direction_skill` from the
 normal `research_direction` Builder template and attached the original notebook
-and review as two immutable source objects. The notebook inventory contains 63
+and review as two immutable source objects. This proves the formulation and
+handoff contracts, not the revised Research Workbench operator milestone. The
+notebook inventory contains 63
 cells (47 code, 16 Markdown) and 5,106 output records; those outputs are marked
 untrusted. The accepted bundle is
 `sha256:e3dc926450ec58291a85242a5925c1d7743041c2c3ac6f448f8e8f85f60e43e7`.
@@ -653,8 +701,9 @@ Acceptance fixed Builder package checkpoint
 and emitted AutomationBrief
 `sha256:1b1a149c841a6598b9d58ccad1f0fe800117b1ffc4252e49f7348efb28b48c29`.
 Repeated acceptance returned generation 3 and the same digests; it neither
-created a scientific run nor started Codex. This closes only the first ARF7
-pre-Codex milestone, not implementation, ARF6 scientific proof, or autonomy.
+created a scientific run nor started Codex. This closes only the ARF7.0
+contract precursor, not the revised Research Workbench ARF7.1 milestone,
+implementation, ARF6 scientific proof, or autonomy.
 
 ## Autonomous Research Sessions
 
@@ -921,7 +970,20 @@ lifecycle enforcement.
 
 ## Storage Topology
 
-The target respects current AdaOS ownership:
+Research source context and activated runtime data are distinct. A direction
+skill draft may contain manifested model-facing inputs:
+
+```text
+<direction-skill>/artifacts/part0/
+  manifest.yaml
+  notebook.ipynb
+  review.md
+```
+
+These files are development/reproducibility inputs governed by Project
+publication policy. They are not copied into the mutable runtime data tree and
+are not the experiment result store. The activated target respects current
+AdaOS ownership:
 
 ```text
 .adaos/
@@ -1334,6 +1396,7 @@ autonomous-science product claim.
 - [Scenario Guidance and Help Contract](scenario-guidance.md)
 - [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md)
 - [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
+- [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
 - [Model Runtime and Registry](model-runtime-and-registry.md)
 - [Skill Runtime Lifecycle](../skill_runtime.md)
 - [Operational Event Model](operational-event-model.md)

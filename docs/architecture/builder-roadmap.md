@@ -132,6 +132,7 @@ gate easy to read by priority.
 | 9. Reference Runtime | Complete for the current reference slice: stable async job messages, bounded context/memory/repair evidence, broadened goldens, eval-to-repair backlinks, and a validated public generated-skill example exist. | Complete: the generated example demonstrates skill-owned conversation, consent-gated memory, Pending Action, and browser UI. | Open: optional model-backed repair graders. | None. |
 | 10. Skill Factory | Complete for the single isolated-node scope: task-scoped access leases, User Hub validation/staging/approval, exact assignment, sparse path enforcement, and six golden outcomes are implemented. | Complete: success and failure rails are replayed through the real service contracts. | Open: multi-node pools and parallel dev tasks. | None. |
 | 11. Conversational Development | Locally validated semantic foundation: canonical Change/Run/Project model, shared statechart/resolver, capability negotiation, context capsules, risk-aware controls, dependent Process projection, durable prose continuation, outcome-oriented stable installation/placement, runtime-only Trial activation, chat-first Workbench, neutral channel ingress, cross-topology navigation, conversational package contract, output IR, story/static reports, and one non-Builder semantic proof. Open must gates include the executable-prototype foundation: bounded local CRUD/provider mocks, semantic activity requirements and simulation trace, compact composition slices, and the constrained conversational workflow profile and Automation handoff; plus one production IntentProposal rail, compatibility-rail retirement, complete registered activity/reply recovery, and one fresh operational empty-scenario acceptance run through the runtime-only Trial path. | Open: complete Builder-caller migration, deterministic representative-state profiles, structured renderer composition evidence, durable external delivery receipts, live English/Russian mutating Telegram parity, human wide/compact acceptance, richer view registry, issue split/merge, transport recovery inspector, and browser soak. Web/Voice consumed-control parity is locally complete. | Open: additional semantic operations, education-on-the-go exports, and optional rich-channel adapters. | Explicitly deferred: screenshot/multimodal context, general workflow prototype slices and round trips, protected-node migration/retirement, reverse/legacy workflow inference, visual workflow studio, non-conversational/advanced workflow prototyping, full Trial data isolation, simultaneous shared-skill versions, public alpha/beta rollout channels, hard Telegram parity, miniapp, free-form overlay Review migration, WorkLog extraction, trusted groups, proposal federation, and evidence network. |
+| 12. Project Composition And Scoped Development | Specified: Project is a distribution definition; Development Session, presentations, fallback skill preview, local artifact context, and canonical navigation have target contracts. | Open: registry/Catalog Project projection and portable artifact groups. | None. | External artifact providers/MCP and remote multi-component Project install/remove are deferred until local TLP proof. |
 
 ## Phase 0. Terminology And Ownership
 
@@ -1083,18 +1084,22 @@ Canonical model and context:
   exact base generation and affected-ref conflict keys rather than a global
   project lock. Parallel plans, scoped focus, direct conflict indexing,
   mutation leases, artifact generations, and explicit verified rebase are
-  implemented and covered by Project aggregate tests.
+  implemented and covered by development-portfolio projection tests.
 - [x] `[must]` Persist Run purpose as `iteration`, `experiment`, `evaluation`,
   or `recovery`; keep Experiment output off the accepted line until an explicit
   reviewed `adopt_experiment` command. The experiment ledger records pending,
   adopted, or discarded disposition and adoption advances the project artifact
   generation exactly once.
-- [x] `[must]` Publish and persist `adaos.builder.project.v1` with exact
+- [x] `[must]` Publish and persist the historical
+  `adaos.builder.project.v1` compatibility projection with exact
   source/stable/installed/DEV/candidate identities, component/dependency
   boundary, project policy, open Change portfolio, conflict/dependency index,
   scoped focus, workflow versions, and archive state. Known source, DEV,
   candidate, and stable refs are projected without inventing absent installed
-  identity.
+  identity. Phase 12 migrates canonical distribution fields to
+  `adaos.project.v1` and mutable fields to Development Session/portfolio
+  records; this checked implementation is not authority for the new Project
+  manifest.
 - [x] `[must]` Derive project summary and project-level commands without
   inventing one current stage from the focused Change, latest Run, selected
   Process node, or Preview target. The projection reports portfolio facts and
@@ -1821,6 +1826,60 @@ The dated entries below remain the chronological implementation ledger.
   shared skill, and public alpha/beta channel rollout. The MVP may render a
   Trial/alpha badge but cannot claim a registry channel promotion.
 
+## Phase 12. Project Composition And Scoped Development
+
+Goal: replace the overloaded "one Builder project equals one skill/scenario
+directory" assumption with a distributable Project definition and a separate,
+least-write Builder Development Session. Research Workbench is the first
+consumer and acceptance case; the contracts remain domain-neutral.
+
+Architecture owner:
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+
+- [ ] `[must]` Define/validate `adaos.project.v1` with arbitrary non-empty
+  owned skill/scenario composition, dependencies, profiles, entry points, and
+  lifecycle policy; preserve existing one-component projects as a compatible
+  projection.
+- [ ] `[must]` Define/validate
+  `adaos.builder.development_session.v1` with separate focus, primary/secondary
+  targets, read-only context exposure, artifact inputs, scratch policy, base,
+  and checkpoints.
+- [ ] `[must]` Extend Builder SDK with atomic create/open/add-component/session
+  operations and failure rollback. A domain orchestrator may call this API but
+  cannot mutate component sources itself.
+- [ ] `[must]` Enforce development write scope in tool exposure and final
+  change-set validation. A read-only dependency change returns an explicit
+  scope-expansion request.
+- [ ] `[must]` Add skill `presentations`, Project entry-point binding, exact
+  verification receipts, and deterministic preview fallback through
+  `adaos.system.skill-preview`; never retain an unrelated older scenario.
+- [ ] `[must]` Make Preview Open and QR render one canonical Navigation SDK
+  destination with exact dev webspace, presentation bindings, zone/subnet, and
+  applicable auth policy.
+- [ ] `[must]` Add local `artifacts/partN` Skill SDK enumeration/resolution,
+  bounded extraction, digest/staleness, trust/media metadata, and publication
+  policy. Native filesystem access is the first Codex provider.
+- [ ] `[must]` Replace the New Dev Project template list with a Taiga searchable
+  selector showing selection, version, description, and source; order builtin
+  recommended templates first; keep Create as a distinct sticky action and
+  focus/scroll to a missing required Project ID.
+- [ ] `[must]` Fix created-project selection so id, kind, display title,
+  Project ref, and initial target update atomically before upload, initialize,
+  Preview, or Automation actions become available.
+- [ ] `[must]` Pass the Research Fabric ARF7.1 reference proof from shared
+  Research Workbench through Project/direction creation, local TLP artifact
+  intake, exact formulation acceptance, and unopened scoped Codex session.
+- [ ] `[should]` Add Project/Application catalog projections with profiles,
+  localized categories, free tags, deployment scopes, and an advanced raw
+  component view.
+- [ ] `[should]` Add portable local artifact-group export/import and exact
+  cross-node verification receipts.
+- [ ] `[deferred]` Add external `additional_artifacts`, object storage, and MCP
+  resource resolution only after the native local contract is validated.
+- [ ] `[deferred]` Complete remote multi-component Project publication,
+  transactional install/remove, and shared-dependency reference accounting in
+  the artifact/registry roadmaps; these do not block the local pre-Codex proof.
+
 ## Cross-Document Anchors
 
 Builder is intentionally cross-cutting. Detailed work remains in:
@@ -1830,6 +1889,9 @@ Builder is intentionally cross-cutting. Detailed work remains in:
 - [Governed Evolution Roadmap](governed-evolution-roadmap.md): GE2 Personal
   Builder proof gate and its dependencies on managed deployment and repair
 - [Builder](builder.md): role, pipeline, and source-of-truth terminology
+- [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md):
+  Project distribution, Application/presentation resolution, local artifact
+  context, registry classification, and Builder Development Session boundary
 - [Builder Conversational Development Architecture](builder-conversational-development.md):
   chat-first product model, canonical Change/Run terminology, interaction
   frames, semantic UI operations, and future proposal collaboration

@@ -3,16 +3,19 @@
 Status: domain roadmap for registry, publication, installation, and durable
 operation mechanics.
 
+Last reviewed: 2026-08-11.
+
 This roadmap owns those mechanics. Their position in the broader managed
 deployment and verified-capability sequence is defined by
 [Governed Evolution](governed-evolution.md) and the
 [Governed Evolution Roadmap](governed-evolution-roadmap.md). ReDevice and other
 activation paths are proof cases; they do not redefine registry semantics.
 
-This note fixes the target architecture for three related tracks:
+This note fixes the target architecture for four related tracks:
 
-- registry synchronization for published skills and scenarios
-- marketplace UX in `InfrastateSkill`
+- registry synchronization for published Projects and component skills/scenarios
+- product-first Catalog UX with advanced component inspection
+- Project install/remove lifecycle over ProjectRelease and shared dependencies
 - reusable long-running operation projection for hub-client interaction
 
 It is intentionally evolutionary and tied to the AdaOS codebase as it exists today.
@@ -93,6 +96,14 @@ Current MVP priority:
 
 ## What Does Not Exist Yet
 
+- a published `projects` collection and canonical `adaos.project.v1`
+  normalization path
+- independent machine profiles, localized catalog categories, free tags, and
+  deployment scopes; those concepts must not be inferred from descriptions
+- product-first Catalog entries/entry points that hide component composition
+  from ordinary users while retaining an advanced component view
+- complete Project-level install/remove and shared-dependency reference
+  accounting in Catalog UX
 - shared remote `adaos-registry` catalog semantics are still not fully
   normalized across every skill/scenario push path
 - marketplace content is not yet modeled as a client-facing catalog adapter separate from raw `registry.json`
@@ -153,14 +164,15 @@ It should not become:
 - an execution queue
 - a per-client session artifact
 
-The target contract is a single shared upsert path for both skills and scenarios:
+The target contract is a single shared normalization/upsert path for Projects
+and component skills/scenarios:
 
 1. read artifact manifest
 2. normalize into one catalog entry model
 3. upsert by stable identity
 4. write sorted deterministic `registry.json`
 
-### Target entry shape
+### Target component entry shape
 
 The target entry should preserve current useful fields and converge on a richer stable model:
 
@@ -193,8 +205,48 @@ Rules:
 
 - reuse canonical manifest fields where they already exist
 - keep deterministic ordering by `kind` then stable id/name
-- preserve backward compatibility with current top-level `skills` and `scenarios` arrays
+- preserve backward compatibility with current top-level `skills` and
+  `scenarios` arrays while adding a `projects` collection
 - introduce shared normalization code instead of separate skill/scenario serializers
+
+### Target Project entry shape
+
+```json
+{
+  "kind": "project",
+  "id": "tlp_research",
+  "version": "0.1.0",
+  "profiles": ["adaos.research.direction.v1"],
+  "catalog": {
+    "title": "TLP Research",
+    "description": "Governed TLP research direction",
+    "categories": ["research", "machine-learning"],
+    "tags": ["tlp", "max-plus"]
+  },
+  "deployment": {
+    "scopes": ["member"]
+  },
+  "entrypoints": [
+    {
+      "id": "research",
+      "presentation": "scenario:research_workbench"
+    }
+  ],
+  "release": {
+    "project_release_digest": "sha256:..."
+  },
+  "install": {
+    "kind": "project",
+    "id": "tlp_research"
+  }
+}
+```
+
+The Project manifest is authoritative. `registry.json` is a deterministic
+published projection and must not become Project runtime state. Profiles and
+capabilities are machine contracts; catalog categories/tags are discovery
+metadata; deployment scope is placement compatibility. See
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
 
 ### Current anchors
 
@@ -206,20 +258,25 @@ Rules:
 
 - extract a typed `registry catalog entry` normalizer from [workspace_registry.py](/d:/git/adaos/src/adaos/services/workspace_registry.py)
 - reuse it both for local workspace registry and remote `adaos-registry` updates
-- make `push_skill` and `push_scenario` call one shared `upsert_registry_catalog_entry(kind, source_dir, target_repo)` path after artifact upload succeeds
+- make Project publication, `push_skill`, and `push_scenario` call one shared
+  `upsert_registry_catalog_entry(kind, source_dir, target_repo)` path after
+  artifact/release upload succeeds
 
-## 2. Marketplace in InfrastateSkill
+## 2. Catalog in InfrastateSkill
 
-The marketplace should be modeled as a thin adapter over the registry catalog, not as a direct UI binding to raw `registry.json`.
+The Catalog should be modeled as a thin adapter over the registry catalog, not
+as a direct UI binding to raw `registry.json`. Its default surface lists
+Projects/Applications and their entry points. Skills, scenarios, providers,
+capabilities, and dependency versions belong to an advanced Components view.
 
 ### Target flow
 
 1. hub loads registry catalog from `adaos-registry`
 2. adapter maps raw entries into UI-facing rows
-3. installed skills/scenarios are filtered out using local registries
-4. `InfrastateSkill` exposes a `Marketplace` action next to `Update skills & scenarios`
-5. client opens a modal with two tabs or two sections: skills and scenarios
-6. row action dispatches install command
+3. Project rows are compared with installed ProjectRelease/WorkspaceLock state
+4. `InfrastateSkill` exposes a `Catalog` action next to update operations
+5. client opens Projects/Applications by default and Components in advanced mode
+6. Project row action dispatches one Project install operation
 
 ### UI model
 
@@ -227,20 +284,23 @@ The UI-facing model should be small and explicit:
 
 ```json
 {
-  "kind": "skill",
-  "id": "infrastate_skill",
-  "title": "Infra State",
-  "version": "1.4.0",
-  "description": "Infrastructure and runtime control surface",
-  "tags": ["infra", "ops"],
+  "kind": "project",
+  "id": "tlp_research",
+  "title": "TLP Research",
+  "version": "0.1.0",
+  "description": "Governed TLP research direction",
+  "profiles": ["adaos.research.direction.v1"],
+  "categories": ["research", "machine-learning"],
+  "tags": ["tlp", "max-plus"],
+  "entrypoints": [{"id": "research", "title": "Open research"}],
   "publisher": "owner-123",
   "installed": false,
   "install_action": {
     "target": "infrastate.action",
-    "id": "marketplace_install",
+    "id": "catalog_install",
     "value": {
-      "target_kind": "skill",
-      "target_id": "infrastate_skill"
+      "target_kind": "project",
+      "target_id": "tlp_research"
     }
   }
 }
@@ -258,8 +318,8 @@ The UI-facing model should be small and explicit:
 - have `InfrastateSkill` consume a UI-ready marketplace snapshot instead of parsing registry payload inline
 - keep filtering logic as a pure function over:
   - catalog entries
-  - installed skill ids
-  - installed scenario ids
+  - installed ProjectRelease/WorkspaceLock identities
+  - component inventories for advanced diagnostics
 
 ## 3. Long-Running Operations
 
@@ -428,7 +488,12 @@ Define stable contracts before wiring UI and background workers.
 
 ### Deliverables
 
-- [ ] `[must]` shared catalog entry model for registry sync
+- [ ] `[must]` shared catalog entry model for skill, scenario, and Project
+  registry sync with backward-compatible component arrays
+- [ ] `[must]` keep `kind`, profiles/capabilities, categories/tags, and
+  deployment scope as separate validated fields
+- [ ] `[must]` Project entry points/presentations resolve to catalog
+  Applications without making a scenario or skill name the product identity
 - [x] shared operation state model
 - [x] Yjs projection schema for `runtime.operations` and `runtime.notifications`
 - [x] explicit rule that Yjs is projection-only
@@ -443,11 +508,17 @@ Define stable contracts before wiring UI and background workers.
 
 ### Goal
 
-Make `skill push` and `scenario push` update `adaos-registry/registry.json`.
+Make Project publication plus `skill push` and `scenario push` update
+`adaos-registry/registry.json` through one normalizer.
 
 ### Deliverables
 
-- [ ] `[should]` shared upsert helper reused by both artifact kinds across local and remote registry sync
+- [ ] `[should]` shared upsert helper reused by Project, skill, and scenario
+  entries across local and remote registry sync
+- [ ] `[should]` publish deterministic Project entries from accepted
+  ProjectRelease records without scanning live Builder sessions
+- [ ] `[should]` preserve raw component discovery for advanced tooling while
+  making Project/Application the default catalog read model
 - [ ] `[should]` tests for create/update behavior
 - [x] deterministic local workspace registry output ordering
 
@@ -456,18 +527,21 @@ Make `skill push` and `scenario push` update `adaos-registry/registry.json`.
 - [service.py](/d:/git/adaos/src/adaos/services/root/service.py)
 - [dev.py](/d:/git/adaos/src/adaos/apps/cli/commands/dev.py)
 
-## Phase 2: Marketplace Read Path
+## Phase 2: Catalog Read Path
 
 ### Goal
 
-Expose a marketplace catalog in `InfrastateSkill`.
+Expose a product-first Catalog in `InfrastateSkill`.
 
 ### Deliverables
 
-- [ ] `[deferred]` `Marketplace` action next to `Update skills & scenarios`
+- [ ] `[deferred]` `Catalog` action next to `Update skills & scenarios`
 - [ ] `[deferred]` catalog adapter service
-- [ ] `[deferred]` modal view with skills/scenarios sections
+- [ ] `[deferred]` default Projects/Applications view plus advanced
+  skills/scenarios/components view
 - [ ] `[deferred]` filtering against installed artifacts
+- [ ] `[deferred]` filters that use profiles for semantic selection,
+  categories/tags for discovery, and deployment scope for compatibility
 
 ## Phase 3: Async Install Operations
 
@@ -517,7 +591,7 @@ Smallest coherent change set:
 - `src/adaos/services/operations/*`
   - new reusable operation runtime layer
 - `.adaos/workspace/skills/infrastate_skill/handlers/main.py`
-  - add marketplace action, marketplace snapshot section, and operation projection consumption
+  - add product-first Catalog action/snapshot, advanced Components section, and operation projection consumption
 - `src/adaos/integrations/adaos-client/src/app/runtime/page-modal.service.ts`
   - register marketplace modal
 - `src/adaos/integrations/adaos-client/src/app/runtime/page-action.service.ts`
@@ -527,7 +601,10 @@ Smallest coherent change set:
 
 ## Backward Compatibility and Migration Risks
 
-- Keep `registry.json` backward compatible by preserving `skills` and `scenarios` arrays.
+- Keep `registry.json` backward compatible by preserving `skills` and
+  `scenarios` arrays while adding Project entries additively.
+- Generate Project categories/profiles/deployment fields from canonical
+  manifests; never infer machine semantics from description text.
 - Keep existing sync install APIs working during migration; async operation mode can be introduced behind new response fields first.
 - Keep existing `data/desktop/toasts` projection until the client fully consumes `runtime.notifications`.
 - Keep `infrastate.action` as the UX entry point if desired, but route it internally to reusable operation services instead of embedding install-specific orchestration in the skill handler.
@@ -535,6 +612,10 @@ Smallest coherent change set:
 Main risk areas:
 
 - letting registry schema drift between local workspace helper and shared registry publisher
+- making Project and Application catalog identity collapse back into one
+  scenario or skill id
+- mixing machine profiles, UI categories, and deployment scope in one
+  unvalidated tag list
 - letting operation status become duplicated between runtime memory and Yjs
 - making `InfrastateSkill` parse raw catalog payloads directly instead of using an adapter
 - introducing install-specific naming that prevents later reuse for node update, diagnostics, model download, or migrations
@@ -548,14 +629,17 @@ AdaOS should evolve this area by reusing what already exists:
 - client modal and notification plumbing
 - Yjs persistence and reconnect behavior
 
-But it should add one explicit layer that does not exist yet:
+But it should add two explicit layers that do not exist yet:
 
+- a Project/Application catalog adapter over backward-compatible raw component
+  entries and immutable ProjectRelease state
 - a reusable operation runtime model whose state is projected into Yjs for visibility, never executed through it
 
 That gives a coherent path from the current implementation to:
 
-- registry-backed marketplace discovery
-- UI-triggered install flows
+- registry-backed Project/Application Catalog discovery with advanced
+  component inspection
+- Project-level UI-triggered install/remove flows
 - non-blocking hub operations
 - reconnect-safe live progress and notifications
 

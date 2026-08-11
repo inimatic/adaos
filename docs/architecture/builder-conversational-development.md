@@ -13,6 +13,10 @@ a Git branch the development source of truth. It refines the broader
 [Artifact Source, Package, and Activation](artifact-source-package-activation.md)
 contracts.
 
+The word Project and its separation from a mutable Builder Development Session
+are governed by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+
 Delivery status and priority are tracked only in the
 [Builder Roadmap](builder-roadmap.md). This page owns the target concepts and
 invariants.
@@ -68,60 +72,55 @@ ordinary AdaOS artifacts and execution environments.
 The canonical hierarchy is:
 
 ```text
-Project
-  -> Issue
-  -> Change
-       -> Run
-       -> Revision
-       -> Trial
-       -> Release
+Project definition (distribution)
+  <- Issue and Change records reference project_ref
+       Change
+         -> Builder Development Session
+              -> Run
+         -> Revision
+         -> Trial
+         -> Release
 ```
 
-### Project Aggregate
+### Project Reference And Development Portfolio Projection
 
-`adaos.builder.project.v1` is the stable coordination boundary for one skill,
-scenario, or atomic multi-component capability. It is not itself one workflow
-instance and has no single mutable "stage".
+`adaos.project.v1` is the stable distribution definition for one or more owned
+skill/scenario components, dependencies, entry points, catalog metadata, and
+lifecycle policy. It has no mutable development stage, conversation, focused
+Change, or Codex process.
 
-Minimum fields:
-
-- canonical project ref, kind, title, description, owner/trust scope, and
-  archive state;
-- authoritative manifest/source identity and exact current public/stable
-  SourceRef and ProjectRelease when they exist;
-- installed WorkspaceLock/component bindings and current DEV base refs;
-- accepted Prototype and retained Implementation refs plus active candidate,
-  Trial, and Publication refs where applicable;
-- durable TrialActivation and ProjectPlacement refs that distinguish an
-  immutable released result from where it is currently runnable or visible;
-- open/terminal Issue and Change refs, Change dependency/conflict summary, and
-  focused Change refs by scoped command context;
-- component boundary, declared contracts, resolved dependency-lock refs, and
-  affected-ref index used for conflict detection;
-- project policy refs for routing, risk, approvals, executors, data modes,
-  retention, localization, and publication channels;
-- workflow-definition type/version used for each live Change;
-- created/updated/archive metadata and a projection generation.
-
-The project owns a portfolio, not a global current Change. Its summary is a
-derived projection answering:
+Builder maintains a backend-owned **development portfolio projection** keyed by
+the canonical Project ref. It is not serialized into the distributable Project
+manifest. The projection answers:
 
 - which stable/installed/DEV/candidate identities are current;
-- which Changes are open, focused, blocked, conflicting, or awaiting input;
-- which shared components and contracts they affect;
+- which Issues and Changes reference the Project and are open, focused,
+  blocked, conflicting, or awaiting input;
+- which Development Sessions and Runs are active;
+- which components/contracts they affect and which write scopes overlap;
 - what can safely start, continue, trial, publish, archive, or restore;
-- why a project-level command is unavailable.
+- why a development command is unavailable.
 
-Project policy may serialize overlapping mutations while allowing independent
-Changes and read/evaluation Runs concurrently. Change dependencies use typed
-`depends_on`, `blocks`, `alternative_to`, `supersedes`, and `split_from`
-edges. Dependency cycles fail validation; symmetric `related` links belong to
-Issues, not the execution order.
+The historical `adaos.builder.project.v1` payload becomes a compatibility
+projection over the canonical Project definition, related Issue/Change/session
+records, release/placement state, and summary generation. It must not remain a
+second mutable Project authority.
 
-Cross-component delivery remains one Change only when its scenario/skills must
-be accepted and promoted as one ProjectRelease dependency lock. Otherwise the
+A **Builder Development Session** binds one Change (or bounded pre-Change
+handoff) to current focus, exact base/checkpoint, primary/secondary write
+targets, filtered read-only context, artifact inputs, scratch policy, Runs,
+and conversation refs. Changing focus never expands its admitted write scope.
+
+Development policy may serialize overlapping mutations while allowing
+independent Changes and read/evaluation Runs concurrently. Change dependencies
+use typed `depends_on`, `blocks`, `alternative_to`, `supersedes`, and
+`split_from` edges. Dependency cycles fail validation; symmetric `related`
+links belong to Issues, not execution order.
+
+Cross-component delivery remains one Change only when its owned components
+must be accepted and promoted as one ProjectRelease dependency lock. Otherwise
 work is split into linked Changes with explicit contract and join evidence.
-The Project aggregate links the separate relationship planes defined by the
+The portfolio projection links the separate relationship planes defined by the
 [Governed Data-Driven Workflow Model](governed-workflow-runtime.md#related-models-that-must-stay-separate)
 without copying their mutable state.
 
@@ -1045,7 +1044,7 @@ remain discoverable from one map:
 | Decision | Owning contract | Delivery/evidence owner |
 | --- | --- | --- |
 | One validated state/transition model drives commands and explanations | [Governed Data-Driven Workflow Model](governed-workflow-runtime.md) | GWR1-GWR5 in the [workflow roadmap](governed-workflow-runtime-roadmap.md) |
-| Project is a portfolio/coordination aggregate, not one global stage | [Project Aggregate](#project-aggregate) | Builder Phase 11 and GWR4 project/concurrency proof |
+| Project is a distribution definition; mutable coordination is a portfolio projection plus Development Sessions | [Project Reference And Development Portfolio Projection](#project-reference-and-development-portfolio-projection) | Builder Phase 12 and GWR4 project/concurrency proof |
 | Conversation is primary; rich views are contextual | [Interaction Contract](#interaction-contract) and [Workbench Projection](#builder-workbench-projection) | Phase 11 in the [Builder Roadmap](builder-roadmap.md) |
 | Conversational input, output, NLU data, and conversation stories use one shared control protocol | [Conversational Control Interface](conversational-interface.md) | Builder Phase 11, GWR5 story proof, and NLU Teacher promotion gates |
 | Channel capabilities select presentation but never change command legality | [Channel Capability Boundary](#channel-capability-boundary) and the shared interaction protocol | GWR2 negotiation/conformance evidence |
@@ -1069,8 +1068,10 @@ remain discoverable from one map:
   entity, output, affordance, repair, example, optional deterministic matcher,
   locale, and story data; runtime learned overlays and Teacher candidates are
   not package truth until Builder promotes them.
-- Project/Change/Issue/Run records live in backend-owned durable storage or a
-  versioned project contract during migration.
+- The Project definition lives in versioned source and resolves to
+  ProjectRelease. Change/Issue/Development-Session/Run records live in
+  backend-owned durable storage and reference the canonical Project; the
+  compatibility Builder-project projection is never a second authority.
 - `webui.json` is the active declarative UI source; UI revisions are immutable
   snapshots.
 - `workflow.json` remains the canonical process definition. A conversational
@@ -1092,8 +1093,10 @@ The refactoring is additive and compatibility-preserving:
 3. link per-turn development-change evidence as `run` records;
 4. construct and digest a bounded context packet for Prototype and
    Implementation execution;
-5. expose a Project portfolio projection over existing manifest, selection,
-   Change, dependency, release, and archive records;
+5. expose a development portfolio projection keyed by the canonical Project
+   over existing selection, Change, Development Session, dependency, release,
+   placement, and archive records; migrate `adaos.builder.project.v1` to that
+   compatibility view;
 6. adapt Builder Interaction Frames to the shared Interaction/Response,
    capability-negotiation, async envelope, and delivery contracts;
 7. expose typed interaction actions with risk and generation preconditions;

@@ -80,7 +80,7 @@ deferred until the single-user loop is stable.
 
 | Term | Meaning |
 | --- | --- |
-| Project | Independently understandable development and release subject, such as a scenario and its dedicated companion skills. |
+| Project | Versioned declarative distribution definition containing a non-empty set of owned components, dependencies, entry points, catalog metadata, and lifecycle policy. |
 | Component | A scenario, skill, schema, migration, UI descriptor, governed `workflow.json`, or other versioned item included in a project release. |
 | SourceRef | Exact forge-independent reference to source content. |
 | PackageRef | Content-addressed reference to one immutable package. |
@@ -90,7 +90,14 @@ deferred until the single-user loop is stable.
 | Activation | Transactional selection of ProjectRelease packages for a workspace slot. |
 | WorkspaceLock | Authoritative record of the packages and dependency bindings currently selected for a workspace. |
 | DEV context | Mutable, isolated worktree or checkout created from a SourceRef. |
+| Builder Development Session | Mutable policy overlay that selects development targets and read-only context for one Project iteration; it is not distributed. |
 | Trial | Reversible candidate activation for an explicitly bounded audience and data policy. |
+
+Project composition, presentation resolution, local model-facing artifact
+groups, and Builder context policy are defined by
+[Project Composition, Presentation, and Development Context](project-composition-and-development-context.md).
+This page owns how that definition becomes immutable packages, ProjectRelease,
+WorkspaceLock, Trial, activation, and rollback.
 
 ## Architectural Planes
 
@@ -422,6 +429,26 @@ workspace + slot + scenario + skill_id -> package_digest
 
 without changing package identity.
 
+## Project Definition Boundary
+
+The source Project definition is the declarative input to release planning. It
+may own one standalone skill, one scenario with companion skills, or another
+non-empty combination. Shared components are declared as dependencies rather
+than copied into each Project.
+
+Transient Builder state is not serialized into the distributable Project:
+
+- current UI focus;
+- the particular Codex run or conversation;
+- temporary primary/secondary development targets;
+- read-only context hydration choices;
+- scratch paths and uncommitted task state.
+
+Those fields belong to a Builder Development Session. Stable owned components,
+entry points/presentations, dependency requirements, catalog profile, and
+install/remove data policy belong to the Project definition. Publication
+resolves the latter into the exact ProjectRelease below.
+
 ## Project Release Contract
 
 A ProjectRelease is the atomic compatibility and promotion unit:
@@ -453,9 +480,10 @@ project_release:
   validation_evidence_refs: [ sha256:... ]
 ```
 
-A simple standalone skill is a one-component ProjectRelease. A scenario with
-dedicated companion skills is released as one locked set. Shared skills remain
-separate packages and are pinned by digest.
+A simple standalone skill Project is a one-component ProjectRelease. A
+scenario with dedicated companion skills can be released as one locked set.
+Shared skills and shared Projects remain separate packages/releases and are
+pinned by digest.
 
 Schema locks are collected from every selected package. Migration locks and
 validation evidence references are recomputed from canonical payload bytes at
