@@ -19,6 +19,20 @@ from adaos.services.core_slots import write_slot_manifest
 from adaos.services.env_policy import env_float
 
 
+_LOCAL_SOURCE_COPY_IGNORES = (
+    ".git",
+    ".adaos",
+    ".venv",
+    ".codex-tmp",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".coverage",
+    "node_modules",
+)
+
+
 def _is_probably_git_sha(value: str) -> bool:
     token = str(value or "").strip()
     if len(token) < 7 or len(token) > 40:
@@ -962,17 +976,7 @@ def _clone_local_repo(source_repo_root: Path, target_rev: str, target_version: s
         source_repo_root,
         checkout_dir,
         dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(
-            ".git",
-            ".adaos",
-            ".venv",
-            "__pycache__",
-            ".pytest_cache",
-            ".mypy_cache",
-            ".ruff_cache",
-            ".coverage",
-            "node_modules",
-        ),
+        ignore=shutil.ignore_patterns(*_LOCAL_SOURCE_COPY_IGNORES),
     )
 
 

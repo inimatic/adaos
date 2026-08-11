@@ -705,6 +705,26 @@ def test_clone_local_repo_copy_mode_skips_git_metadata(monkeypatch, tmp_path: Pa
     assert not (checkout_dir / ".git").exists()
 
 
+def test_clone_local_repo_copy_mode_skips_transient_tool_caches(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    source_repo = tmp_path / "source"
+    checkout_dir = tmp_path / "checkout"
+    (source_repo / ".git").mkdir(parents=True, exist_ok=True)
+    (source_repo / "src").mkdir(parents=True, exist_ok=True)
+    (source_repo / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    transient_python = source_repo / ".codex-tmp" / "uv-cache" / "builds-v0" / ".tmp-build" / "bin" / "python"
+    transient_python.parent.mkdir(parents=True, exist_ok=True)
+    transient_python.write_text("transient launcher", encoding="utf-8")
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
+
+    mod._clone_local_repo(source_repo, target_rev="rev2026", target_version="1.2.3", checkout_dir=checkout_dir)
+
+    assert (checkout_dir / "src" / "app.py").exists()
+    assert not (checkout_dir / ".codex-tmp").exists()
+
+
 def test_clone_local_repo_copy_mode_when_worktree_dirty_and_target_unpinned(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
