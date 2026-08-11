@@ -56,9 +56,11 @@
             "actions": [
               {
                 "on": "select",
-                "type": "openModal",
+                "type": "navigate",
                 "params": {
-                  "modalId": "$event.action.openModal"
+                  "to": "$event.action.navigate",
+                  "surface": "modal",
+                  "modalId": "$event.launchModal"
                 }
               }
             ]

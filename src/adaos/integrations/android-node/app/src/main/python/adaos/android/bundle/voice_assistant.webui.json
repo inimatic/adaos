@@ -6,7 +6,10 @@
       "title": "Voice Assistant",
       "subtitle": "Local Android assistant",
       "icon": "mic-outline",
-      "launchModal": "voice_assistant_modal"
+      "launchModal": "voice_assistant_modal",
+      "action": {
+        "navigate": "voice_assistant.voice_assistant_modal"
+      }
     }
   ],
   "registry": {
@@ -18,7 +21,12 @@
           "layout": {
             "type": "single",
             "pattern": "stack",
-            "areas": [{ "id": "main", "role": "main" }]
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
           },
           "widgets": [
             {
@@ -76,8 +84,20 @@
                 }
               }
             }
-          ]
-        }
+          ],
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "routes": {
+              "voice_assistant": {
+                "view": "voice_assistant.voice_assistant_modal"
+              }
+            },
+            "defaultRoute": "voice_assistant"
+          }
+        },
+        "implements": [
+          "voice_assistant.voice_assistant_modal"
+        ]
       }
     },
     "widgets": {}
@@ -101,5 +121,18 @@
       "id": "voice_assistant_app",
       "autoInstall": true
     }
-  ]
+  ],
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "views": {
+      "voice_assistant.voice_assistant_modal": {
+        "title": "Voice Assistant",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {}
+      }
+    },
+    "defaultView": "voice_assistant.voice_assistant_modal"
+  }
 }

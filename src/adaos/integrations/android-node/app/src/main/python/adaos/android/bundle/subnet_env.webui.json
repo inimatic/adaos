@@ -5,7 +5,10 @@
       "id": "android_node_settings_app",
       "title": "Android Node",
       "icon": "phone-portrait-outline",
-      "launchModal": "subnet_env_modal"
+      "launchModal": "subnet_env_modal",
+      "action": {
+        "navigate": "subnet_env.subnet_env_modal"
+      }
     }
   ],
   "registry": {
@@ -114,8 +117,20 @@
                 "copyButton": true
               }
             }
-          ]
-        }
+          ],
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "routes": {
+              "subnet_env": {
+                "view": "subnet_env.subnet_env_modal"
+              }
+            },
+            "defaultRoute": "subnet_env"
+          }
+        },
+        "implements": [
+          "subnet_env.subnet_env_modal"
+        ]
       }
     }
   },
@@ -140,5 +155,18 @@
       "id": "android_node_settings_app",
       "autoInstall": true
     }
-  ]
+  ],
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "views": {
+      "subnet_env.subnet_env_modal": {
+        "title": "Android Node",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {}
+      }
+    },
+    "defaultView": "subnet_env.subnet_env_modal"
+  }
 }

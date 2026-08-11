@@ -6,7 +6,10 @@
       "title": "Browsers",
       "subtitle": "Local browser sessions",
       "icon": "browsers-outline",
-      "launchModal": "browsers_modal"
+      "launchModal": "browsers_modal",
+      "action": {
+        "navigate": "browsers_skill.browsers_modal"
+      }
     }
   ],
   "registry": {
@@ -18,7 +21,12 @@
           "layout": {
             "type": "single",
             "pattern": "stack",
-            "areas": [{ "id": "main", "role": "main" }]
+            "areas": [
+              {
+                "id": "main",
+                "role": "main"
+              }
+            ]
           },
           "widgets": [
             {
@@ -57,8 +65,20 @@
                 "emptyText": "No active local browser endpoints"
               }
             }
-          ]
-        }
+          ],
+          "interface": {
+            "schema": "adaos.ui.modal.interface.v1",
+            "routes": {
+              "browsers": {
+                "view": "browsers_skill.browsers_modal"
+              }
+            },
+            "defaultRoute": "browsers"
+          }
+        },
+        "implements": [
+          "browsers_skill.browsers_modal"
+        ]
       }
     },
     "widgets": {}
@@ -81,5 +101,18 @@
       "id": "browsers",
       "autoInstall": true
     }
-  ]
+  ],
+  "interface": {
+    "schema": "adaos.ui.skill_interface.v1",
+    "views": {
+      "browsers_skill.browsers_modal": {
+        "title": "Browsers",
+        "surfaces": [
+          "modal"
+        ],
+        "params": {}
+      }
+    },
+    "defaultView": "browsers_skill.browsers_modal"
+  }
 }
