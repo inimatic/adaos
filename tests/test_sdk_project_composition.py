@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from adaos.sdk.builder import development_sessions
+from adaos.sdk.builder import artifacts as builder_artifacts, development_sessions
 from adaos.sdk.developer import artifact_context, compositions, projects
 
 
@@ -133,6 +135,33 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
         artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
 
 
+def test_private_local_checkpoint_binds_code_and_keeps_artifacts_separate(project_space, tmp_path: Path, monkeypatch) -> None:
+    skill_root = _skill(project_space["skills"], "tlp_direction")
+    (skill_root / "handlers").mkdir()
+    (skill_root / "handlers" / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    source = tmp_path / "review.md"
+    source.write_text("private source", encoding="utf-8")
+    added = artifact_context.add_path("tlp_direction", "part0", source)
+    monkeypatch.setattr(
+        builder_artifacts,
+        "require_ctx",
+        lambda _feature=None: SimpleNamespace(paths=SimpleNamespace(state_dir=lambda: project_space["state"])),
+    )
+
+    first = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
+    Path(added["group"]["root_path"], "review.md").write_text("changed private source", encoding="utf-8")
+    second = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
+    (skill_root / "handlers" / "main.py").write_text("VALUE = 2\n", encoding="utf-8")
+    third = builder_artifacts.local_checkpoint(kind="skill", artifact_id="tlp_direction")
+
+    assert first["scope"] == "local"
+    assert first["bytes_uploaded"] == 0
+    assert first["source_tree"] == second["source_tree"]
+    assert third["source_tree"] != second["source_tree"]
+    checkpoint = json.loads(Path(first["stored_path"]).read_text(encoding="utf-8"))
+    assert all(not item["path"].startswith("artifacts/") for item in checkpoint["files"])
+
+
 def test_development_session_separates_write_targets_and_readonly_context(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
     compositions.create(_project("tlp_research", "tlp_direction"))
@@ -152,6 +181,7 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
             {"ref": "skill:research_orchestrator_skill", "relation": "dependency"},
         ],
         prohibited_actions=["Do not run experiments."],
+        base_release={"scope": "local", "source_tree": "sha256:" + "3" * 64},
     )
     repeated = development_sessions.create(
         "tlp_research",
@@ -163,6 +193,7 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
             {"ref": "skill:research_orchestrator_skill", "relation": "dependency"},
         ],
         prohibited_actions=["Do not run experiments."],
+        base_release={"scope": "local", "source_tree": "sha256:" + "3" * 64},
     )
 
     session = created["session"]
@@ -170,6 +201,7 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     assert session["context_members"][0]["access"] == "read-only"
     assert session["artifact_inputs"][0]["access"] == "read-only"
     assert session["artifact_inputs"][0]["manifest_digest"].startswith("sha256:")
+    assert session["base_release"]["scope"] == "local"
     assert repeated["idempotent"] is True
 
     bound = development_sessions.bind(session["session_id"], "desktop")

@@ -143,6 +143,7 @@ def create(
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
     prohibited_actions: Sequence[str],
+    base_release: Mapping[str, Any] | None = None,
     focus_ref: str | None = None,
     session_id: str | None = None,
     actor: str = "user:local",
@@ -199,7 +200,7 @@ def create(
         "schema": "adaos.builder.development_session.v1",
         "session_id": token,
         "project_ref": project["ref"],
-        "base_release": None,
+        "base_release": dict(base_release) if isinstance(base_release, Mapping) else None,
         "focus": {"ref": str(focus_ref or primary[0])},
         "targets": {
             "primary": [target(ref) for ref in primary],
@@ -226,6 +227,7 @@ def create(
                 previous["project_ref"] == payload["project_ref"]
                 and previous["handoff"] == payload["handoff"]
                 and previous["targets"] == payload["targets"]
+                and previous["base_release"] == payload["base_release"]
             ):
                 return {"ok": True, "idempotent": True, "session": previous}
             raise DevelopmentSessionError(f"development session {token!r} already exists with another scope")

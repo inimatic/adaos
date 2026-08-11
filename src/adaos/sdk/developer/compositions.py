@@ -231,6 +231,7 @@ def create_research_direction(
         return {"ok": True, "project": result, "primary_skill": component_projects.describe("skill", target_skill)}
     except Exception:
         # Roll back only roots proven to have been created by this operation.
+        created_project = created_project or project_root.is_dir()
         if created_project and project_root.parent == _root_parent() and project_root.is_dir():
             shutil.rmtree(project_root)
         if created_skill and skill_root.parent == component_projects.resolve_root("skill", target_skill, required=False).parent and skill_root.is_dir():
