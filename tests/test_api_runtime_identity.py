@@ -653,15 +653,15 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
         async def start_all(self) -> None:
             call_order.append("services")
 
-    class _Bus:
-        async def emit(self, event_type, payload, **kwargs) -> None:
-            call_order.append((event_type, payload, kwargs))
+    async def _emit(event_type, payload, **kwargs) -> None:
+        call_order.append((event_type, payload, kwargs))
 
     monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+    monkeypatch.setattr(api_server.sdk_data_bus, "emit", _emit)
     monkeypatch.setattr(
         api_server,
         "get_ctx",
-        lambda: types.SimpleNamespace(bus=_Bus()),
+        lambda: (_ for _ in ()).throw(AssertionError("raw AgentContext bus must not be used as the SDK bus")),
     )
 
     asyncio.run(api_server._start_service_skills_after_promotion("test.cutover"))

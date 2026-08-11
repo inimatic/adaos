@@ -190,6 +190,7 @@ _maybe_set_windows_selector_loop()
 
 from adaos.apps.api.auth import require_token
 from adaos.build_info import BUILD_INFO
+from adaos.sdk.data import bus as sdk_data_bus
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
@@ -1498,7 +1499,7 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
     if delay_s > 0.0:
         await asyncio.sleep(min(delay_s, 30.0))
     try:
-        await get_ctx().bus.emit(
+        await sdk_data_bus.emit(
             "sys.ready",
             {
                 "ts": time.time(),
