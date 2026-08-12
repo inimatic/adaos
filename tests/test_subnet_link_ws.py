@@ -213,3 +213,29 @@ def test_member_rpc_rejects_non_allowlisted_tools_before_context_access() -> Non
 
 def test_member_rpc_allows_canonical_adaos_connect_prepare() -> None:
     assert "adaos_connect:prepare" in member_rpc.MEMBER_RPC_ALLOWED_TOOLS
+
+
+def test_member_rpc_voice_activation_claim_uses_authenticated_node_id(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def claim(candidate, *, window_ms):  # noqa: ANN001, ANN202
+        captured.update({"candidate": candidate, "window_ms": window_ms})
+        return {"ok": True, "admitted": True, "winner_device_id": "android-1"}
+
+    monkeypatch.setattr("adaos.services.voice_runtime.claim_voice_activation", claim)
+
+    result = member_rpc.run_member_tool(
+        node_id="android-1",
+        tool="node.voice.activation.claim",
+        arguments={
+            "device_id": "spoofed-browser",
+            "room_id": "subnet-1",
+            "phrase_fingerprint": "phrase:hello",
+            "window_ms": 280,
+        },
+        timeout=5,
+    )
+
+    assert result["admitted"] is True
+    assert captured["candidate"]["device_id"] == "android-1"
+    assert captured["candidate"]["_meta"]["member_rpc"] is True

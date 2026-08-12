@@ -29,6 +29,24 @@ def run_member_tool(
     """Run a narrowly allowlisted Hub skill for an authenticated member node."""
 
     normalized_tool = str(tool or "").strip()
+    if normalized_tool == "node.voice.activation.claim":
+        from adaos.services.voice_runtime import claim_voice_activation
+
+        payload = dict(arguments or {})
+        payload["device_id"] = str(node_id)
+        try:
+            hub_subnet_id = str(getattr(get_ctx().config, "subnet_id", "") or "").strip()
+        except Exception:
+            hub_subnet_id = ""
+        if hub_subnet_id:
+            payload["room_id"] = hub_subnet_id
+        meta = dict(payload.get("_meta") or {})
+        meta.update({"subnet_origin_node_id": str(node_id), "member_rpc": True})
+        payload["_meta"] = meta
+        return claim_voice_activation(
+            payload,
+            window_ms=int(payload.get("window_ms") or 280),
+        )
     if normalized_tool not in MEMBER_RPC_ALLOWED_TOOLS:
         raise PermissionError("member_rpc_tool_not_allowed")
     skill_name, public_tool = normalized_tool.split(":", 1)

@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -24,6 +25,8 @@ LONG_FORM_START_INTENTS = frozenset(
 LONG_FORM_STOP_INTENT = "voice.long_form.stop"
 _POLICY_LOCK = threading.RLock()
 _LONG_FORM_LOCK = threading.RLock()
+_ACTIVATION_ARBITER_LOCK = threading.RLock()
+_ACTIVATION_ARBITER: "VoiceActivationArbiter | None" = None
 
 
 def _text(value: Any) -> str:
@@ -389,6 +392,168 @@ def choose_activation_candidate(
     }
 
 
+class VoiceActivationArbiter:
+    """Collect concurrent room activation claims and issue one short lease.
+
+    The collector uses Hub arrival time for its window so endpoints with skewed
+    clocks cannot accidentally escape arbitration.  ``audio_fingerprint`` is
+    supplied by native capture when available; transcript-only clients use a
+    normalized phrase fingerprint and expose that limitation in diagnostics.
+    """
+
+    def __init__(self, *, window_ms: int = 280, lease_ms: int = 2_500) -> None:
+        self.window_ms = max(50, int(window_ms))
+        self.lease_ms = max(self.window_ms, int(lease_ms))
+        self._condition = threading.Condition(threading.RLock())
+        self._groups: dict[str, dict[str, Any]] = {}
+        self._claims_total = 0
+        self._leases_total = 0
+        self._suppressed_total = 0
+        self._last_result: dict[str, Any] | None = None
+
+    @staticmethod
+    def _group_key(candidate: Mapping[str, Any]) -> str:
+        room_id = _text(candidate.get("room_id")) or "local"
+        fingerprint = (
+            _text(candidate.get("audio_fingerprint"))
+            or _text(candidate.get("phrase_fingerprint"))
+            or _text(candidate.get("capture_id"))
+        )
+        if not fingerprint:
+            raise ValueError("voice_activation_fingerprint_required")
+        return f"{room_id}\0{fingerprint}"
+
+    @staticmethod
+    def phrase_fingerprint(text: Any) -> str:
+        normalized = " ".join(_text(text).casefold().split())
+        if not normalized:
+            raise ValueError("voice_activation_phrase_required")
+        return "phrase:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+
+    def claim(self, candidate: Mapping[str, Any], *, window_ms: int | None = None) -> dict[str, Any]:
+        item = _mapping(candidate)
+        device_id = _text(item.get("device_id"))
+        if not device_id:
+            raise ValueError("voice_activation_device_required")
+        if not (
+            _text(item.get("audio_fingerprint"))
+            or _text(item.get("phrase_fingerprint"))
+            or _text(item.get("capture_id"))
+        ):
+            item["phrase_fingerprint"] = self.phrase_fingerprint(item.get("text"))
+        group_key = self._group_key(item)
+        bounded_window = max(50, min(1_000, int(window_ms or self.window_ms)))
+        received_wall_ms = time.time() * 1000.0
+        received_mono = time.monotonic()
+        item["endpoint_observed_at_ms"] = item.get("observed_at_ms")
+        item["observed_at_ms"] = received_wall_ms
+        item["hub_received_at_ms"] = received_wall_ms
+        item.setdefault("capture_id", f"capture:{uuid.uuid4().hex[:16]}")
+
+        with self._condition:
+            self._expire_unlocked(received_mono)
+            group = self._groups.get(group_key)
+            if group is not None and group.get("result") is not None:
+                return self._response_unlocked(group, device_id)
+            if group is None:
+                group = {
+                    "key": group_key,
+                    "created_mono": received_mono,
+                    "deadline_mono": received_mono + bounded_window / 1000.0,
+                    "expires_mono": received_mono + self.lease_ms / 1000.0,
+                    "window_ms": bounded_window,
+                    "candidates": {},
+                    "result": None,
+                    "winner_delivered": False,
+                }
+                self._groups[group_key] = group
+            candidates = group["candidates"]
+            previous = candidates.get(device_id)
+            if previous is None or (
+                float(item.get("activation_confidence") or 0.0),
+                float(item.get("snr_db") or -100.0),
+            ) > (
+                float(previous.get("activation_confidence") or 0.0),
+                float(previous.get("snr_db") or -100.0),
+            ):
+                candidates[device_id] = item
+            self._claims_total += 1
+            self._condition.notify_all()
+
+            while group.get("result") is None:
+                remaining = float(group["deadline_mono"]) - time.monotonic()
+                if remaining > 0:
+                    self._condition.wait(timeout=remaining)
+                    continue
+                collected = list(group["candidates"].values())
+                result = choose_activation_candidate(
+                    collected,
+                    # The collection deadline has already enforced the Hub
+                    # window. Rank against the latest arrival rather than the
+                    # scheduler wake-up time, which may be a few ms late.
+                    now_ms=max(float(value.get("observed_at_ms") or 0.0) for value in collected),
+                    window_ms=int(group["window_ms"]),
+                )
+                result["schema_version"] = "voice-activation-lease.v1"
+                result["group_key_hash"] = hashlib.sha256(group_key.encode("utf-8")).hexdigest()[:16]
+                result["candidate_count"] = len(group["candidates"])
+                result["lease_ms"] = self.lease_ms
+                group["result"] = result
+                self._leases_total += 1
+                self._suppressed_total += len(result.get("suppressed") or [])
+                self._last_result = dict(result)
+                self._condition.notify_all()
+            return self._response_unlocked(group, device_id)
+
+    def _response_unlocked(self, group: Mapping[str, Any], device_id: str) -> dict[str, Any]:
+        result = dict(group.get("result") or {})
+        winner = _mapping(result.get("winner"))
+        is_winner = _text(winner.get("device_id")) == device_id
+        delivered = bool(group.get("winner_delivered"))
+        admitted = is_winner and not delivered
+        if admitted:
+            group["winner_delivered"] = True
+        return {
+            **result,
+            "admitted": admitted,
+            "state": "winner" if admitted else "suppressed" if not is_winner else "lease_already_delivered",
+            "winner_device_id": _text(winner.get("device_id")) or None,
+            "request_device_id": device_id,
+        }
+
+    def _expire_unlocked(self, now_mono: float) -> None:
+        expired = [key for key, group in self._groups.items() if float(group["expires_mono"]) <= now_mono]
+        for key in expired:
+            self._groups.pop(key, None)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._condition:
+            self._expire_unlocked(time.monotonic())
+            return {
+                "schema_version": "voice-activation-arbiter.v1",
+                "state": "ready",
+                "window_ms": self.window_ms,
+                "lease_ms": self.lease_ms,
+                "active_groups": len(self._groups),
+                "claims_total": self._claims_total,
+                "leases_total": self._leases_total,
+                "suppressed_total": self._suppressed_total,
+                "last_result": dict(self._last_result or {}),
+            }
+
+
+def get_voice_activation_arbiter() -> VoiceActivationArbiter:
+    global _ACTIVATION_ARBITER
+    with _ACTIVATION_ARBITER_LOCK:
+        if _ACTIVATION_ARBITER is None:
+            _ACTIVATION_ARBITER = VoiceActivationArbiter()
+        return _ACTIVATION_ARBITER
+
+
+def claim_voice_activation(candidate: Mapping[str, Any], *, window_ms: int | None = None) -> dict[str, Any]:
+    return get_voice_activation_arbiter().claim(candidate, window_ms=window_ms)
+
+
 def audio_processing_report(
     *,
     capture_id: str,
@@ -428,8 +593,10 @@ __all__ = [
     "advance_long_form_session",
     "advance_persisted_long_form_session",
     "audio_processing_report",
+    "claim_voice_activation",
     "choose_activation_candidate",
     "default_voice_policy",
+    "get_voice_activation_arbiter",
     "listening_service_projection",
     "long_form_scope_key",
     "long_form_sessions_path",
@@ -439,4 +606,5 @@ __all__ = [
     "read_long_form_session",
     "set_voice_policy",
     "voice_policy_path",
+    "VoiceActivationArbiter",
 ]

@@ -9284,6 +9284,32 @@ async def process_events_command(
         await _ack(data={"event_type": event_type})
         return None
 
+    if kind == "voice.activation.claim":
+        try:
+            from adaos.services.voice_runtime import claim_voice_activation
+
+            candidate = dict(payload or {})
+            try:
+                node_id = str(getattr(get_agent_ctx().config, "node_id", "") or "").strip()
+                subnet_id = str(getattr(get_agent_ctx().config, "subnet_id", "") or "").strip()
+            except Exception:
+                node_id = ""
+                subnet_id = ""
+            candidate["device_id"] = node_id or device_id or "dev-unknown"
+            candidate["room_id"] = subnet_id or webspace_id
+            result = await asyncio.to_thread(
+                claim_voice_activation,
+                candidate,
+                window_ms=int(candidate.get("window_ms") or 280),
+            )
+            await _ack(data=result)
+        except (TypeError, ValueError) as exc:
+            await _ack(False, error=str(exc))
+        except Exception:
+            _log.warning("voice activation claim failed device=%s", device_id, exc_info=True)
+            await _ack(False, error="voice_activation_arbitration_failed")
+        return None
+
     if kind == "demo_metrics.host_action":
         event_payload = dict(payload or {})
         event_payload["webspace_id"] = payload.get("webspace_id")

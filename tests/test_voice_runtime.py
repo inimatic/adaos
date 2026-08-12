@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from adaos.services import voice_runtime
 
 
@@ -125,3 +127,38 @@ def test_audio_processing_report_never_claims_unavailable_aec() -> None:
 
     assert report["aec"] == {"available": False, "enabled": False, "state": "unavailable"}
     assert report["echo_reference"]["present"] is True
+
+
+def test_voice_activation_arbiter_collects_one_winner_and_suppresses_other_endpoint() -> None:
+    arbiter = voice_runtime.VoiceActivationArbiter(window_ms=60, lease_ms=500)
+    barrier = threading.Barrier(2)
+    results: dict[str, dict] = {}
+
+    def claim(device_id: str, confidence: float, snr_db: float) -> None:
+        barrier.wait()
+        results[device_id] = arbiter.claim(
+            {
+                "room_id": "room-1",
+                "phrase_fingerprint": "phrase:shared",
+                "capture_id": f"capture:{device_id}",
+                "device_id": device_id,
+                "activation_confidence": confidence,
+                "snr_db": snr_db,
+            }
+        )
+
+    phone = threading.Thread(target=claim, args=("phone", 0.9, 12.0))
+    pc = threading.Thread(target=claim, args=("pc", 0.9, 18.0))
+    phone.start()
+    pc.start()
+    phone.join(timeout=2)
+    pc.join(timeout=2)
+
+    assert results["pc"]["admitted"] is True
+    assert results["phone"]["admitted"] is False
+    assert results["phone"]["winner_device_id"] == "pc"
+    assert results["pc"]["candidate_count"] == 2
+    snapshot = arbiter.snapshot()
+    assert snapshot["claims_total"] == 2
+    assert snapshot["leases_total"] == 1
+    assert snapshot["suppressed_total"] == 1
