@@ -274,6 +274,10 @@ def _dialog_runtime_dev_fallback_allowed(*args: Any, **kwargs: Any) -> Any:
     return _call_dialog_registry_helper("_dialog_runtime_dev_fallback_allowed", *args, **kwargs)
 
 
+def _dialog_runtime_failure_is_unavailable(*args: Any, **kwargs: Any) -> Any:
+    return _call_dialog_registry_helper("_dialog_runtime_failure_is_unavailable", *args, **kwargs)
+
+
 def _dialog_runtime_uses_dev_webspace(*args: Any, **kwargs: Any) -> Any:
     return _call_dialog_registry_helper("_dialog_runtime_uses_dev_webspace", *args, **kwargs)
 
@@ -4490,13 +4494,14 @@ class RouterService:
                     dict(action_payload),
                     tool_meta,
                 )
-            except Exception:
+            except Exception as exc:
                 logging.getLogger("adaos.router.voice_chat").warning(
-                    "dialog follow-up tool failed timing skill=%s tool=%s webspace=%s took_ms=%.1f",
+                    "dialog follow-up tool failed timing skill=%s tool=%s webspace=%s took_ms=%.1f error_class=%s",
                     skill,
                     tool,
                     webspace_id,
                     (time.perf_counter() - tool_started) * 1000.0,
+                    type(exc).__name__,
                 )
                 logging.getLogger("adaos.router.voice_chat").warning(
                     "dialog follow-up tool failed skill=%s tool=%s",
@@ -4513,19 +4518,36 @@ class RouterService:
                     status="failed",
                     renderer={"receiver": "skill_runtime", "tool": f"{skill}.{tool}", "projection": "exception"},
                     summary=f"{skill}.{tool} raised during dialog turn",
-                    extra_policy={"result_status": "exception"},
+                    extra_policy={
+                        "result_status": "exception",
+                        "error_class": type(exc).__name__,
+                        "skill_materialized_failure": bool(materialized_chat_appends),
+                    },
                 )
-                try:
-                    await _append_dialog_tool_unavailable(webspace_id, channel_id, action_meta, target_node_id)
-                except Exception:
-                    logging.getLogger("adaos.router.voice_chat").debug(
-                        "dialog unavailable fallback failed webspace=%s channel=%s skill=%s tool=%s",
-                        webspace_id,
-                        channel_id,
-                        skill,
-                        tool,
-                        exc_info=True,
-                    )
+                # A skill may emit a precise, user-facing failure before
+                # raising. Preserve that answer and avoid appending a second,
+                # misleading "runtime unavailable" message.
+                if not materialized_chat_appends:
+                    try:
+                        if _dialog_runtime_failure_is_unavailable(exc):
+                            await _append_dialog_tool_unavailable(webspace_id, channel_id, action_meta, target_node_id)
+                        else:
+                            await _append_dialog_tool_failed(
+                                webspace_id,
+                                channel_id,
+                                action_meta,
+                                target_node_id,
+                                error_class=type(exc).__name__,
+                            )
+                    except Exception:
+                        logging.getLogger("adaos.router.voice_chat").debug(
+                            "dialog failure fallback failed webspace=%s channel=%s skill=%s tool=%s",
+                            webspace_id,
+                            channel_id,
+                            skill,
+                            tool,
+                            exc_info=True,
+                        )
                 return True
             finally:
                 _unsubscribe_dialog_materialization_probe(materialization_probe)
@@ -5141,6 +5163,41 @@ class RouterService:
                         payload={
                             **response,
                             "_meta": {**dict(meta), "skip_voice_chat": True},
+                        },
+                    )
+                )
+
+        async def _append_dialog_tool_failed(
+            webspace_id: str,
+            channel_id: str,
+            meta: Mapping[str, Any],
+            target_node_id: str | None,
+            *,
+            error_class: str,
+        ) -> None:
+            label = str(meta.get("active_agent_label") or _dialog_channel_label(channel_id)).strip() or "Dialog"
+            response = {
+                "id": _make_id("m"),
+                "from": "hub",
+                "text": (
+                    f"{label} could not complete the request ({error_class}). "
+                    "The request remains in conversation history; review the activity log and retry."
+                ),
+                "ts": time.time(),
+                "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
+                "active_agent_label": label,
+                "_meta": {**dict(meta), "dialog_error_class": error_class},
+            }
+            await _append_voice_chat_message(webspace_id, response, target_node_id)
+            if str(meta.get("io_type") or "").strip().lower() == "telegram":
+                self.bus.publish(
+                    Event(
+                        type="io.out.chat.append",
+                        source="router.dialog",
+                        ts=time.time(),
+                        payload={
+                            **response,
+                            "_meta": {**dict(response["_meta"]), "skip_voice_chat": True},
                         },
                     )
                 )

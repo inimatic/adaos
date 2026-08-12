@@ -2229,13 +2229,14 @@ async def test_voice_chat_receipt_only_tool_message_does_not_append_fallback(mon
     dialog_runtime.reset_all()
 
 
-async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_without_nlu(monkeypatch) -> None:
+async def test_voice_chat_user_active_dialog_tool_failure_reports_runtime_and_execution_failures_without_nlu(monkeypatch) -> None:
     from adaos.services import dialog_runtime
 
     doc = _Doc()
     bus = LocalEventBus()
     calls: list[tuple[str, str, dict]] = []
     seen_nlu: list[Event] = []
+    failure = {"message": "skill runtime unavailable"}
     webspace_id = "active-dialog-missing-runtime-ws"
     monkeypatch.setenv("ADAOS_VOICE_CHAT_INTENT_DEMO", "0")
     monkeypatch.setattr(
@@ -2263,7 +2264,7 @@ async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_with
 
     def _run_tool(skill, tool, payload, **_opts):
         calls.append((skill, tool, dict(payload)))
-        raise RuntimeError("skill runtime unavailable")
+        raise RuntimeError(failure["message"])
 
     monkeypatch.setattr(
         router_service_module,
@@ -2307,6 +2308,26 @@ async def test_voice_chat_user_active_dialog_tool_failure_shows_unavailable_with
     state = dialog_runtime.get_active_channel(webspace_id)
     assert state is not None
     assert state.channel_id == "conversational"
+
+    failure["message"] = "schema validation failed"
+    bus.publish(
+        Event(
+            type="voice.chat.user",
+            source="test",
+            ts=2.0,
+            payload={
+                "text": "retry structured turn",
+                "webspace_id": webspace_id,
+                "_meta": {"route_id": "voice_chat", "voice_chat_scope": "shared"},
+            },
+        )
+    )
+    await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
+
+    messages = doc.get_map("data")["voice_chat"]["messages"]
+    assert "could not complete the request (RuntimeError)" in str(messages[-1].get("text") or "")
+    assert "not available in runtime" not in str(messages[-1].get("text") or "")
     dialog_runtime.reset_all()
 
 
