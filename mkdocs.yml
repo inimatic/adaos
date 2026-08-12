@@ -126,6 +126,7 @@ nav:
   - Product:
       - Product Model: product/index.md
       - Solution Directions: product/solution-directions.md
+      - Advantage Claims And Evidence: product/advantage-claims.md
       - Documentation Language Policy: documentation-language-policy.md
       - Documentation Structure and Authority: documentation-structure.md
   - Issue Tracker: issue-tracker.md
