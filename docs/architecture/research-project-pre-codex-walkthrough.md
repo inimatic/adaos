@@ -112,6 +112,16 @@ portfolio rows/focus bindings, not additional Desktop applications.
 Both skills were activated from workspace releases. The Desktop projection was
 rebuilt and all three desktop scenarios were discoverable from workspace.
 
+### Runtime data-route reliability release
+
+The later 2026-08-12 system-path hardening was published independently of the
+historical composition above. Its accepted runtime identities are
+`research_orchestrator_skill 0.7.0`, `research_workbench 0.0.8`, and AdaOS
+client `0.0.325`. The installed orchestrator is active and ready in slot B;
+both workspace releases are clean against registry main. Full verification and
+the intentionally unclosed restart/catalog risks are recorded in
+[Runtime Data Route Reliability: 2026-08-12 Evidence](runtime-data-route-reliability-evidence-2026-08-12.md).
+
 ## Verification commands
 
 The proof used ordinary AdaOS lifecycle and runtime commands, including:

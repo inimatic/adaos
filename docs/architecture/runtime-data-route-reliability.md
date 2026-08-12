@@ -2,6 +2,10 @@
 
 Status: implemented baseline, validated against Research Workbench on 2026-08-12.
 
+The exact local releases, test counts, live API controls, and residual risks
+are recorded in
+[Runtime Data Route Reliability: 2026-08-12 Evidence](runtime-data-route-reliability-evidence-2026-08-12.md).
+
 ## Purpose
 
 Browser-visible data is delivered through AdaOS system paths: bounded tool

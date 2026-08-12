@@ -271,7 +271,8 @@ the hint against trusted active-manifest side effects at the execution node,
 waits for lifecycle capabilities by event, executes last-value/rate policy,
 and exposes stale/unavailable/error separately from domain data. Research
 Workbench opts into strict manifest/WebUI policy conformance. See
-[Runtime Data Route Reliability](runtime-data-route-reliability.md).
+[Runtime Data Route Reliability](runtime-data-route-reliability.md) and its
+[2026-08-12 evidence receipt](runtime-data-route-reliability-evidence-2026-08-12.md).
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
