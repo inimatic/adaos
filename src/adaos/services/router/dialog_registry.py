@@ -189,6 +189,7 @@ def _dialog_runtime_failure_is_unavailable(exc: BaseException) -> bool:
             "not found",
             "unavailable",
             "deactivated",
+            "no versions installed",
             "no default tool",
             "resolved_manifest",
             "manifest",
