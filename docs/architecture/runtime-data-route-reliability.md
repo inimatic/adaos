@@ -31,7 +31,9 @@ the transport contract.
    documentation.
 9. Mutation invalidation is tag-addressed and must not refresh unrelated
    semantic read keys.
-10. Every retry, stale result, lifecycle wait, and policy mismatch is visible
+10. A manual retry addresses one semantic read identity even for advisory
+    legacy sources that do not yet declare invalidation tags.
+11. Every retry, stale result, lifecycle wait, and policy mismatch is visible
     in diagnostics or validation evidence.
 
 ## Trusted read intent
@@ -46,6 +48,12 @@ The API reads `side_effects` from the active resolved manifest before granting
 read treatment. During drain, trusted read-only tools may complete while
 mutating tools are rejected. This preserves continuity without allowing an
 arbitrary browser payload to bypass mutation governance.
+
+The intent survives both HTTP forwarding and the hub-to-member RPC fast path.
+The member repeats the resolved-manifest check before execution. The hub's
+classification therefore cannot accidentally downgrade a different active
+package on the target node, and draining a member does not block its admitted
+reads or admit a mutation through the RPC shortcut.
 
 Generic `callSkill` actions retain mutation-safe defaults. They request
 `accept_mutations` unless a core-owned, validated read path supplies the read
@@ -84,6 +92,8 @@ host provides the same status affordance to other runtime-backed widgets.
 Last values, rate timestamps, status subjects, and request observables are
 bounded by the runtime cache budget. `maxRequestHz` is enforced per semantic
 identity: route, normalized arguments, webspace, and relevant state values.
+Retry invalidates only that identity; it does not turn an absent legacy tag
+declaration into a global refresh.
 
 ## Manifest and scenario conformance
 
@@ -134,6 +144,8 @@ or migrated scenarios cannot publish policy drift.
 | Initial read fails | state is `unavailable` or `error`, never valid empty |
 | Repeated invalidation exceeds route rate | request start is delayed to `maxRequestHz` |
 | Unrelated invalidation | zero calls |
+| Explicit Retry without tags | exactly the selected semantic source reloads |
+| Read routed to a member | intent reaches RPC/HTTP target and is re-verified there |
 | Manifest/WebUI policy differs in strict mode | scenario validation fails |
 
 The 2026-08-12 catalog audit found no newly introduced policy errors. Two

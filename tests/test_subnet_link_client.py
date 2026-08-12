@@ -49,6 +49,78 @@ def test_member_link_ws_compression_can_be_enabled(monkeypatch) -> None:
     assert mod._member_link_ws_compression() == "custom"
 
 
+def _install_rpc_tool_fakes(monkeypatch, calls: list[tuple]) -> None:
+    class _Manager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill: str, tool: str, arguments: dict, timeout=None):
+            calls.append((skill, tool, arguments, timeout))
+            return {"ok": True}
+
+    monkeypatch.setattr(
+        mod,
+        "get_ctx",
+        lambda: SimpleNamespace(
+            skills_repo=None,
+            sql=None,
+            git=None,
+            paths=None,
+            bus=None,
+            caps=None,
+            settings=None,
+        ),
+    )
+    monkeypatch.setattr(mod, "SkillManager", _Manager)
+    monkeypatch.setattr(mod, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+
+
+def test_member_rpc_allows_manifest_verified_read_during_drain(monkeypatch) -> None:
+    calls: list[tuple] = []
+    _install_rpc_tool_fakes(monkeypatch, calls)
+    monkeypatch.setattr(mod, "is_accepting_new_work", lambda: False)
+    monkeypatch.setattr(mod, "declared_tool_side_effects", lambda *_args, **_kwargs: "none")
+
+    result = mod.MemberLinkClient._run_tool(
+        "research:list_directions", {"webspace_id": "desktop"}, None, False, "read",
+    )
+
+    assert result == {"ok": True}
+    assert len(calls) == 1
+
+
+def test_member_rpc_rejects_mutation_during_drain(monkeypatch) -> None:
+    calls: list[tuple] = []
+    _install_rpc_tool_fakes(monkeypatch, calls)
+    monkeypatch.setattr(mod, "is_accepting_new_work", lambda: False)
+    monkeypatch.setattr(mod, "declared_tool_side_effects", lambda *_args, **_kwargs: "filesystem")
+
+    try:
+        mod.MemberLinkClient._run_tool(
+            "research:create_direction", {"title": "TLP"}, None, False, "mutation",
+        )
+        assert False, "mutation must not start while the member is draining"
+    except RuntimeError as exc:
+        assert "node_draining" in str(exc)
+    assert calls == []
+
+
+def test_member_rpc_rejects_untrusted_read_hint(monkeypatch) -> None:
+    calls: list[tuple] = []
+    _install_rpc_tool_fakes(monkeypatch, calls)
+    monkeypatch.setattr(mod, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(mod, "declared_tool_side_effects", lambda *_args, **_kwargs: "local_write")
+
+    try:
+        mod.MemberLinkClient._run_tool(
+            "research:create_direction", {"title": "TLP"}, None, False, "read",
+        )
+        assert False, "a caller hint must not downgrade a mutating tool"
+    except PermissionError as exc:
+        assert "tool_intent_mismatch" in str(exc)
+    assert calls == []
+
+
 def test_member_link_requires_hello_ack_before_connected(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     client._connected.set()

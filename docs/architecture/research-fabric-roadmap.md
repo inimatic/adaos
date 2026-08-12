@@ -1022,7 +1022,9 @@ not substitute for this operator path.
   AdaOS `tool/details` path: trusted read capability, event-driven lifecycle
   suspension, bounded retry/rate behavior, preserved last value, explicit
   unavailable/error presentation, strict route-policy validation, and an
-  idle/reconnect fault matrix. No Workbench-private transport is admitted.
+  idle/reconnect fault matrix. The read intent is preserved and re-verified on
+  both local and routed member execution, and explicit retry is scoped to one
+  semantic source. No Workbench-private transport is admitted.
 
 #### Non-blocking follow-ons
 

@@ -1694,9 +1694,9 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
             calls.append(("is_connected", node_id))
             return True
 
-        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False):
+        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False, intent=None):
             calls.append(("rpc", node_id))
-            return {"node_id": node_id, "tool": tool, "arguments": arguments, "timeout": timeout, "dev": dev}
+            return {"node_id": node_id, "tool": tool, "arguments": arguments, "timeout": timeout, "dev": dev, "intent": intent}
 
     ctx = SimpleNamespace(
         skills_repo=None,
@@ -1715,12 +1715,14 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
     monkeypatch.setattr(tool_bridge_module, "get_directory", lambda: _FakeDirectory())
     monkeypatch.setattr(tool_bridge_module, "get_hub_link_manager", lambda: _FakeLinkManager())
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "none")
 
     result = asyncio.run(
         tool_bridge_module.call_tool(
             tool_bridge_module.ToolCall(
                 tool="subnet_env:get_snapshot",
                 arguments={"webspace_id": "desktop", "target_node_id": "member-1"},
+                intent="read",
             ),
             SimpleNamespace(headers={}),
             Response(),
@@ -1731,6 +1733,7 @@ def test_call_tool_proxies_to_explicit_target_node_on_hub(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["result"]["node_id"] == "member-1"
     assert result["result"]["timeout"] == 8.0
+    assert result["result"]["intent"] == "read"
     assert result["trace_id"] == "trace-123"
     assert ("rpc", "member-1") in calls
 
@@ -1764,7 +1767,7 @@ def test_call_tool_keeps_hub_projection_tools_local_on_hub(monkeypatch, tool_nam
             calls.append(("is_connected", node_id))
             return True
 
-        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False):
+        async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, object], timeout=None, dev=False, intent=None):
             calls.append(("rpc", node_id))
             raise AssertionError("hub projection tools should stay local on the hub")
 

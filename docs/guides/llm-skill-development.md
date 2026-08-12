@@ -244,7 +244,15 @@ Lifecycle suspension is not a normal transient HTTP retry. A system client
 waits for the named authoritative capability event and performs no further
 tool calls while suspended. Browser-supplied read intent is a routing hint;
 the execution node must verify the active resolved manifest before allowing a
-read during a mutation-blocking transition.
+read during a mutation-blocking transition. This rule applies after routing:
+HTTP proxy and hub/member RPC must carry the intent to the target, and the
+member must repeat the manifest check. Do not trust a classification made only
+by the browser or an intermediate hub.
+
+An explicit Retry is identity-addressed even when a legacy/advisory source has
+no invalidation tags. It must reload only the selected skill/tool plus resolved
+arguments and webspace; never implement Retry as a global data-source
+invalidation.
 
 Add an idle-soak test for every stable tool-backed widget: after first paint,
 leave the selected entity and its dependencies unchanged for at least three

@@ -28,7 +28,7 @@ from adaos.services.node_config import load_config, normalize_node_names, set_no
 from adaos.services.node_runtime_state import save_node_runtime_state
 from adaos.services.node_runtime_state import load_member_hub_token
 from adaos.services.capacity import get_local_capacity
-from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
+from adaos.services.runtime_lifecycle import is_accepting_new_work, runtime_lifecycle_snapshot
 from adaos.services.runtime_topology import (
     DEFAULT_RUNTIME_PORT,
     http_base,
@@ -36,6 +36,7 @@ from adaos.services.runtime_topology import (
     supervisor_base_candidates_from_env,
 )
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.tool_contract import declared_tool_side_effects, side_effects_are_read_only
 from adaos.services.yjs.doc import apply_update_to_live_room
 from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_webspace, suppress_ystore_write_notifications
 
@@ -1615,18 +1616,25 @@ class MemberLinkClient:
         arguments = (params or {}).get("arguments") or {}
         timeout = (params or {}).get("timeout")
         dev = bool((params or {}).get("dev", False))
+        intent = str((params or {}).get("intent") or "").strip().lower()
         if not isinstance(tool, str) or ":" not in tool:
             await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": False, "error": "invalid_tool"}))
             return
 
         try:
-            result = await asyncio.to_thread(self._run_tool, tool, arguments, timeout, dev)
+            result = await asyncio.to_thread(self._run_tool, tool, arguments, timeout, dev, intent)
             await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": True, "result": result}))
         except Exception as exc:
             await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}))
 
     @staticmethod
-    def _run_tool(tool: str, arguments: dict[str, Any], timeout: Any, dev: bool) -> Any:
+    def _run_tool(
+        tool: str,
+        arguments: dict[str, Any],
+        timeout: Any,
+        dev: bool,
+        intent: str = "",
+    ) -> Any:
         ctx = get_ctx()
         skill_name, public_tool = tool.split(":", 1)
         mgr = SkillManager(
@@ -1638,6 +1646,24 @@ class MemberLinkClient:
             caps=ctx.caps,
             settings=ctx.settings,
         )
+        accepting_new_work = is_accepting_new_work()
+        declared_side_effects = (
+            declared_tool_side_effects(
+                mgr,
+                skill_name=skill_name,
+                public_tool=public_tool,
+                dev=dev,
+            )
+            if intent == "read" or not accepting_new_work
+            else ""
+        )
+        trusted_read_only = side_effects_are_read_only(declared_side_effects)
+        if intent == "read" and not trusted_read_only:
+            raise PermissionError(
+                f"tool_intent_mismatch:{tool}:declared_side_effects={declared_side_effects or 'undeclared'}"
+            )
+        if not accepting_new_work and not trusted_read_only:
+            raise RuntimeError(f"node_draining:{tool}")
         if dev:
             return mgr.run_dev_tool(skill_name, public_tool, arguments or {}, timeout=timeout)
         return mgr.run_tool(skill_name, public_tool, arguments or {}, timeout=timeout)

@@ -22,6 +22,10 @@ from adaos.services.eventbus import emit
 from adaos.services.pending_actions import list_pending_actions_async, publish_pending_action_async
 from adaos.services.runtime_lifecycle import is_accepting_new_work
 from adaos.services.skill.manager import SkillManager
+from adaos.services.skill.tool_contract import (
+    declared_tool_side_effects as _declared_tool_side_effects,
+    side_effects_are_read_only as _declared_side_effects_are_read_only,
+)
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.subnet.link_manager import get_hub_link_manager
@@ -179,11 +183,6 @@ def _action_risk_may_mutate(action_risk: Mapping[str, Any] | None) -> bool:
     return risk_class not in {"safe", "none", "read", "read_only", "readonly", "ui_navigation"}
 
 
-def _declared_side_effects_are_read_only(side_effects: str) -> bool:
-    token = str(side_effects or "").strip().lower().replace("-", "_")
-    return token in {"safe", "none", "read", "read_only", "readonly"}
-
-
 def _webspace_uses_dev_runtime(payload: Mapping[str, Any]) -> bool:
     """Resolve DEV execution from authoritative webspace metadata."""
     webspace_id = _resolve_tool_webspace_id(payload)
@@ -197,34 +196,6 @@ def _webspace_uses_dev_runtime(payload: Mapping[str, Any]) -> bool:
     except Exception:
         _log.debug("failed to resolve runtime space for webspace=%s", webspace_id, exc_info=True)
         return False
-
-
-def _declared_tool_side_effects(
-    manager: Any,
-    *,
-    skill_name: str,
-    public_tool: str,
-    dev: bool,
-) -> str:
-    """Read trusted side-effect metadata from the active resolved manifest."""
-    try:
-        status = manager.dev_runtime_status(skill_name) if dev else manager.runtime_status(skill_name)
-        manifest_path = Path(str(status.get("resolved_manifest") or ""))
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        tools = manifest.get("tools") if isinstance(manifest, dict) else {}
-        spec = tools.get(public_tool) if isinstance(tools, dict) else {}
-        if not isinstance(spec, dict):
-            return ""
-        governance = spec.get("yjs_governance") if isinstance(spec.get("yjs_governance"), dict) else {}
-        return str(
-            governance.get("side_effects")
-            or spec.get("side_effects")
-            or spec.get("sideEffects")
-            or spec.get("effects")
-            or ""
-        ).strip()
-    except Exception:
-        return ""
 
 
 def _explicit_risk_class(payload: Dict[str, Any], context: Dict[str, Any] | None = None) -> str:
@@ -627,6 +598,8 @@ async def _tool_call_idempotency_wait(entry: dict[str, Any], response: Response)
 
 def _tool_call_forward_payload(body: "ToolCall", payload: Dict[str, Any]) -> Dict[str, Any]:
     forward: Dict[str, Any] = {"tool": body.tool, "arguments": payload}
+    if body.intent:
+        forward["intent"] = body.intent
     if body.timeout is not None:
         forward["timeout"] = body.timeout
     if body.dev:
@@ -1201,6 +1174,7 @@ async def _proxy_tool_call_to_node(
                 arguments=payload,
                 timeout=rpc_timeout,
                 dev=body.dev,
+                intent=body.intent,
             )
             if readonly_snapshot:
                 _snapshot_unavailable_cache_clear(
@@ -1671,6 +1645,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                     arguments=payload,
                     timeout=body.timeout,
                     dev=body.dev,
+                    intent=body.intent,
                 )
                 return {"ok": True, "result": res, "trace_id": trace}
             except Exception as exc:

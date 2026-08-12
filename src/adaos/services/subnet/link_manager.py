@@ -1653,7 +1653,16 @@ class HubLinkManager:
             fut.set_exception(RuntimeError(str(err)))
         return True
 
-    async def rpc_tools_call(self, node_id: str, *, tool: str, arguments: dict[str, Any] | None, timeout: float | None, dev: bool) -> Any:
+    async def rpc_tools_call(
+        self,
+        node_id: str,
+        *,
+        tool: str,
+        arguments: dict[str, Any] | None,
+        timeout: float | None,
+        dev: bool,
+        intent: str | None = None,
+    ) -> Any:
         link = await self._get_link(node_id)
         if not link:
             raise ConnectionError("member_not_connected")
@@ -1671,6 +1680,7 @@ class HubLinkManager:
                     "arguments": arguments or {},
                     "timeout": timeout,
                     "dev": bool(dev),
+                    "intent": str(intent or "").strip() or None,
                 },
             }
         )
