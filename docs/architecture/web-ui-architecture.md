@@ -625,6 +625,15 @@ Yjs first paint without resetting user choices. Declarative `value == null`
 has explicit nullish semantics (`null` or missing); strict operators retain
 strict semantics.
 
+Render-plan identity is part of the layout runtime invariant. While the schema
+and page-state revision are unchanged, a renderer must reuse the same plan and
+area identities; area and widget loops must key children by their stable `id`.
+Data-source lifecycle emissions such as `loading` and `ready` may trigger
+change detection, but must never remount the widget that produced them. This is
+especially important for modal surfaces and expensive renderers such as
+Markdown/KaTeX, charts, and document viewers. Expensive renderers should also
+skip parsing when their effective input content is unchanged.
+
 ## Load and Readiness Model
 
 The target browser must treat staged rendering as a first-class contract.

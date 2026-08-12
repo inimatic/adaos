@@ -369,6 +369,13 @@ detail view; the runtime treats loose null comparisons only as explicit
 nullish checks. Page state is local to its webspace/scenario/page and is not a
 replacement for Yjs, streams, or tool-backed durable domain state.
 
+Give every layout area and widget a unique, stable `id`, including modal
+surfaces and all `layout.variants`. The runtime uses these identities to retain
+widget instances across data-source status updates and compatible layout
+changes. Do not generate changing IDs from timestamps, selected values, or
+response revisions: doing so forces remounts and can turn an otherwise bounded
+renderer (for example Markdown/KaTeX) into a CPU-intensive reload loop.
+
 When an LLM consumes skill-owned source artifacts, use the typed artifact SDK
 extraction envelope rather than truncating raw notebook JSON. Report source
 coverage and fragment refs to the user; bind generated claims only to supplied
