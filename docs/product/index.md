@@ -135,6 +135,8 @@ should identify:
 
 The current portfolio hypotheses are documented in
 [Solution Directions](solution-directions.md).
+Durable advantage claims and their proof rules are tracked in
+[Advantage Claims And Evidence](advantage-claims.md).
 
 ## Architectural Invariants
 

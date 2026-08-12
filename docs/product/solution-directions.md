@@ -22,6 +22,8 @@ deployment profile, solution pack, solution agent, endpoint, and channel.
 Shared primitives may already be implemented while a named direction remains
 strategic. Product maturity must be assessed from end-to-end solution evidence,
 not from the existence of an individual API or schema.
+Durable advantage claims must follow the proof and wording boundaries in
+[Advantage Claims And Evidence](advantage-claims.md).
 
 ## AdaOS Home
 
