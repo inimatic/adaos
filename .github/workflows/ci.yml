@@ -125,15 +125,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Create client repository token
+        id: client-repository-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: inimatic
+          repositories: adaos-client
+
       - name: Validate pinned AdaOS client revision
         shell: bash
+        env:
+          GH_TOKEN: ${{ steps.client-repository-token.outputs.token }}
         run: |
           client_path="src/adaos/integrations/adaos-client"
           client_revision="$(git ls-tree HEAD "$client_path" | awk '{print $3}')"
           test -n "$client_revision"
-          git submodule sync -- "$client_path"
-          git submodule update --init --depth 1 -- "$client_path"
-          test "$(git -C "$client_path" rev-parse HEAD)" = "$client_revision"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/inimatic/adaos-client/git/commits/$client_revision" \
+            --jq '.sha' | grep -Fx "$client_revision"
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
