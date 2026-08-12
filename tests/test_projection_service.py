@@ -27,11 +27,13 @@ def _reset_projection_runtime_diagnostics(monkeypatch: pytest.MonkeyPatch) -> No
     projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._YJS_PROJECTION_SOFT_OVERAGE_STATE.clear()
     projection_service_module._PROJECTION_RULE_MISS_STATS.clear()
     yield
     projection_service_module._PRIMARY_DOC_THROTTLE_NEXT_ALLOWED_AT.clear()
     projection_service_module._PRIMARY_DOC_GOVERNANCE_STATS.clear()
     projection_service_module._YJS_PROJECTION_GUARD_STATS.clear()
+    projection_service_module._YJS_PROJECTION_SOFT_OVERAGE_STATE.clear()
     projection_service_module._PROJECTION_RULE_MISS_STATS.clear()
 
 
@@ -1047,6 +1049,63 @@ def test_projection_service_degrades_oversized_yjs_projection_before_write(monke
     assert snapshot["total"] == 1
     assert snapshot["totals"]["guarded"] == 1
     assert snapshot["items"][0]["slot"] == "mediaserver.library"
+
+
+def test_projection_guard_allows_isolated_soft_overage_and_blocks_burst(monkeypatch) -> None:
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_SOFT_OVERAGE_MAX_RATIO", 1.5)
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_SOFT_OVERAGE_GRACE_TOTAL", 2)
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC", 60.0)
+    payload = {"description": "x" * 540}
+    kwargs = {
+        "webspace_id": "desktop",
+        "scope": "webspace",
+        "slot": "infrastate.summary",
+        "path": "data/infrastate/summary",
+        "owner": "skill:infrastate_skill",
+        "budget": {"max_payload_bytes": 512, "max_items": 10},
+        "route": {"surface": "widget:infrastate_widget", "route": "yjs"},
+    }
+
+    first, first_guard = projection_service_module._guarded_projection_payload(payload, **kwargs)
+    assert first == payload
+    assert first_guard is None
+
+    projection_service_module._guarded_projection_payload({"description": "healthy"}, **kwargs)
+    second, second_guard = projection_service_module._guarded_projection_payload(payload, **kwargs)
+    third, third_guard = projection_service_module._guarded_projection_payload(payload, **kwargs)
+    degraded, burst_guard = projection_service_module._guarded_projection_payload(payload, **kwargs)
+
+    assert second == payload
+    assert second_guard is None
+    assert third == payload
+    assert third_guard is None
+    assert degraded["error"] == "yjs_projection_payload_budget_exceeded"
+    assert burst_guard is not None
+    assert burst_guard["payload_overage"]["window_total"] == 3
+    assert burst_guard["payload_overage"]["grace_total"] == 2
+    assert burst_guard["payload_overage"]["hard_exceeded"] is False
+
+
+def test_projection_guard_blocks_hard_payload_overage_immediately(monkeypatch) -> None:
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_SOFT_OVERAGE_MAX_RATIO", 1.5)
+    monkeypatch.setattr(projection_service_module, "_YJS_PROJECTION_SOFT_OVERAGE_GRACE_TOTAL", 2)
+    payload = {"description": "x" * 800}
+
+    degraded, guard = projection_service_module._guarded_projection_payload(
+        payload,
+        webspace_id="desktop",
+        scope="webspace",
+        slot="infrastate.summary",
+        path="data/infrastate/summary",
+        owner="skill:infrastate_skill",
+        budget={"max_payload_bytes": 512, "max_items": 10},
+        route={"surface": "widget:infrastate_widget", "route": "yjs"},
+    )
+
+    assert degraded["error"] == "yjs_projection_payload_budget_exceeded"
+    assert guard is not None
+    assert guard["payload_overage"]["hard_exceeded"] is True
+    assert guard["payload_overage"]["hard_max_payload_bytes"] == 768
 
 
 def test_projection_guard_snapshot_reads_persisted_cli_process_events(monkeypatch, tmp_path) -> None:

@@ -40,6 +40,13 @@ def _int_env(name: str, default: int, minimum: int) -> int:
         return max(int(minimum), int(default))
 
 
+def _float_env(name: str, default: float, minimum: float) -> float:
+    try:
+        return max(float(minimum), float(str(os.getenv(name) or str(default)).strip()))
+    except Exception:
+        return max(float(minimum), float(default))
+
+
 _PRIMARY_DOC_MAX_STRING_CHARS = _int_env("ADAOS_YJS_PRIMARY_DOC_MAX_STRING_CHARS", 4096, 512)
 _YJS_PROJECTION_GUARD_ENABLED = str(os.getenv("ADAOS_YJS_PROJECTION_GUARD_ENABLE") or "1").strip().lower() in {
     "1",
@@ -56,6 +63,26 @@ _YJS_PROJECTION_DEFAULT_MAX_ITEMS = _int_env(
     "ADAOS_YJS_PROJECTION_DEFAULT_MAX_ITEMS",
     1000,
     1,
+)
+_YJS_PROJECTION_SOFT_OVERAGE_MAX_RATIO = _float_env(
+    "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_MAX_RATIO",
+    1.5,
+    1.0,
+)
+_YJS_PROJECTION_SOFT_OVERAGE_GRACE_TOTAL = _int_env(
+    "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_GRACE_TOTAL",
+    2,
+    0,
+)
+_YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC = _float_env(
+    "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC",
+    10.0,
+    0.0,
+)
+_YJS_PROJECTION_SOFT_OVERAGE_MAX_ENTRIES = _int_env(
+    "ADAOS_YJS_PROJECTION_SOFT_OVERAGE_MAX_ENTRIES",
+    512,
+    16,
 )
 _YJS_PROJECTION_GUARD_EVENT_READ_LIMIT = _int_env(
     "ADAOS_YJS_PROJECTION_GUARD_EVENT_READ_LIMIT",
@@ -99,6 +126,8 @@ _YJS_PROJECTION_AMPLIFICATION_SUPPRESS_SEC = max(
 )
 _YJS_PROJECTION_GUARD_LOCK = threading.Lock()
 _YJS_PROJECTION_GUARD_STATS: dict[str, dict[str, Any]] = {}
+_YJS_PROJECTION_SOFT_OVERAGE_LOCK = threading.Lock()
+_YJS_PROJECTION_SOFT_OVERAGE_STATE: dict[str, dict[str, Any]] = {}
 _PROJECTION_RULE_MISS_LOCK = threading.Lock()
 _PROJECTION_RULE_MISS_STATS: dict[str, dict[str, Any]] = {}
 _PROJECTION_RULE_MISS_MAX_ENTRIES = _int_env("ADAOS_PROJECTION_RULE_MISS_MAX_ENTRIES", 256, 16)
@@ -1056,9 +1085,105 @@ def _projection_route(rule: Any) -> dict[str, Any]:
     return dict(route) if isinstance(route, dict) else {}
 
 
+def _projection_soft_overage_setting(
+    budget: Mapping[str, Any],
+    key: str,
+    default: float | int,
+    *,
+    minimum: float,
+) -> float:
+    raw = budget.get(key)
+    if raw is None:
+        raw = default
+    try:
+        return max(float(minimum), float(raw))
+    except Exception:
+        return max(float(minimum), float(default))
+
+
+def _projection_payload_overage_state(
+    *,
+    webspace_id: str,
+    owner: str,
+    path: str,
+    payload_bytes: int,
+    max_payload_bytes: int,
+    budget: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    key = _projection_guard_key(webspace_id, owner, path)
+    if payload_bytes <= max_payload_bytes:
+        with _YJS_PROJECTION_SOFT_OVERAGE_LOCK:
+            _YJS_PROJECTION_SOFT_OVERAGE_STATE.pop(key, None)
+        return None
+
+    ratio = _projection_soft_overage_setting(
+        budget,
+        "soft_overage_max_ratio",
+        _YJS_PROJECTION_SOFT_OVERAGE_MAX_RATIO,
+        minimum=1.0,
+    )
+    grace_total = int(
+        _projection_soft_overage_setting(
+            budget,
+            "soft_overage_grace_total",
+            _YJS_PROJECTION_SOFT_OVERAGE_GRACE_TOTAL,
+            minimum=0.0,
+        )
+    )
+    window_sec = _projection_soft_overage_setting(
+        budget,
+        "soft_overage_window_sec",
+        _YJS_PROJECTION_SOFT_OVERAGE_WINDOW_SEC,
+        minimum=0.0,
+    )
+    hard_max_payload_bytes = max(max_payload_bytes, int(max_payload_bytes * ratio))
+    hard_exceeded = payload_bytes > hard_max_payload_bytes
+    if hard_exceeded or grace_total <= 0 or window_sec <= 0.0:
+        with _YJS_PROJECTION_SOFT_OVERAGE_LOCK:
+            _YJS_PROJECTION_SOFT_OVERAGE_STATE.pop(key, None)
+        return {
+            "allowed": False,
+            "hard_exceeded": hard_exceeded,
+            "window_total": 1,
+            "grace_total": grace_total,
+            "window_sec": window_sec,
+            "hard_max_payload_bytes": hard_max_payload_bytes,
+        }
+
+    now = time.monotonic()
+    with _YJS_PROJECTION_SOFT_OVERAGE_LOCK:
+        current = dict(_YJS_PROJECTION_SOFT_OVERAGE_STATE.get(key) or {})
+        window_started_at = float(current.get("window_started_at") or 0.0)
+        if window_started_at <= 0.0 or now - window_started_at > window_sec:
+            current = {"window_started_at": now, "window_total": 0}
+        current["window_total"] = int(current.get("window_total") or 0) + 1
+        current["last_at"] = now
+        current["payload_bytes"] = payload_bytes
+        current["max_payload_bytes"] = max_payload_bytes
+        if key not in _YJS_PROJECTION_SOFT_OVERAGE_STATE and len(_YJS_PROJECTION_SOFT_OVERAGE_STATE) >= int(
+            _YJS_PROJECTION_SOFT_OVERAGE_MAX_ENTRIES
+        ):
+            oldest = min(
+                _YJS_PROJECTION_SOFT_OVERAGE_STATE,
+                key=lambda item: float(_YJS_PROJECTION_SOFT_OVERAGE_STATE[item].get("last_at") or 0.0),
+            )
+            _YJS_PROJECTION_SOFT_OVERAGE_STATE.pop(oldest, None)
+        _YJS_PROJECTION_SOFT_OVERAGE_STATE[key] = current
+        window_total = int(current["window_total"])
+    return {
+        "allowed": window_total <= grace_total,
+        "hard_exceeded": False,
+        "window_total": window_total,
+        "grace_total": grace_total,
+        "window_sec": window_sec,
+        "hard_max_payload_bytes": hard_max_payload_bytes,
+    }
+
+
 def _guarded_projection_payload(
     value: Any,
     *,
+    webspace_id: str,
     scope: str,
     slot: str,
     path: str,
@@ -1072,12 +1197,33 @@ def _guarded_projection_payload(
     max_payload_bytes = _positive_int(budget.get("max_payload_bytes")) or int(_YJS_PROJECTION_DEFAULT_MAX_PAYLOAD_BYTES)
     max_items = _positive_int(budget.get("max_items")) or int(_YJS_PROJECTION_DEFAULT_MAX_ITEMS)
     collection_metrics = _projection_collection_metrics(value)
+    payload_overage = _projection_payload_overage_state(
+        webspace_id=webspace_id,
+        owner=owner,
+        path=path,
+        payload_bytes=payload_bytes,
+        max_payload_bytes=max_payload_bytes,
+        budget=budget,
+    )
     reason = ""
-    if max_payload_bytes and payload_bytes > max_payload_bytes:
+    if payload_overage is not None and not bool(payload_overage.get("allowed")):
         reason = "yjs_projection_payload_budget_exceeded"
     if max_items and int(collection_metrics.get("max_list_items") or 0) > max_items:
         reason = reason or "yjs_projection_item_budget_exceeded"
     if not reason:
+        if payload_overage is not None:
+            _log.warning(
+                "YJS projection soft payload overage allowed webspace=%s owner=%s slot=%s path=%s bytes=%s max_bytes=%s window_total=%s grace_total=%s hard_max_bytes=%s",
+                webspace_id,
+                owner,
+                slot,
+                path,
+                payload_bytes,
+                max_payload_bytes,
+                payload_overage.get("window_total") or 0,
+                payload_overage.get("grace_total") or 0,
+                payload_overage.get("hard_max_payload_bytes") or max_payload_bytes,
+            )
         return value, None
 
     preserved: dict[str, Any] = {}
@@ -1102,6 +1248,8 @@ def _guarded_projection_payload(
         "list_item_total": int(collection_metrics.get("list_item_total") or 0),
         "route": dict(route or {}),
     }
+    if payload_overage is not None:
+        guard["payload_overage"] = payload_overage
     degraded = {
         "ok": False,
         "state": "degraded",
@@ -1467,6 +1615,7 @@ class ProjectionService:
         route = _projection_route(rule)
         projected_value, guard = _guarded_projection_payload(
             projected_value,
+            webspace_id=ws_id,
             scope=scope,
             slot=slot,
             path=path,
