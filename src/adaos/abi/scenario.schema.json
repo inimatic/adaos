@@ -65,6 +65,17 @@
         }
       }
     },
+    "runtime_data_policy": {
+      "type": "object",
+      "description": "Browser runtime-read policy validation. Strict enforcement makes manifest/WebUI drift a release error.",
+      "additionalProperties": false,
+      "properties": {
+        "enforcement": {
+          "type": "string",
+          "enum": ["advisory", "strict"]
+        }
+      }
+    },
     "updated_at": {
       "type": "string",
       "description": "Optional ISO-8601 timestamp of the last manifest update."

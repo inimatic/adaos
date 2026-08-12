@@ -106,6 +106,79 @@ def test_call_tool_offloads_local_execution_to_worker(monkeypatch) -> None:
     assert result["trace_id"] == "trace-123"
 
 
+def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) -> None:
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "local_write")
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="notes:save", arguments={}, intent="read"),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        ))
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["error"] == "tool_intent_mismatch"
+    assert excinfo.value.detail["declared_side_effects"] == "local_write"
+
+
+def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout: float | None = None) -> dict[str, object]:
+            calls.append(f"{skill_name}:{tool_name}")
+            return {"items": []}
+
+    async def _safe_action(**_kwargs):
+        return {"risk_class": "none", "approval_required": False}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: False)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-read")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _safe_action)
+    monkeypatch.setattr(tool_bridge_module, "_should_autosync_workspace_runtime", lambda **_kwargs: False)
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "_declared_tool_side_effects",
+        lambda _manager, *, public_tool, **_kwargs: "none" if public_tool == "list" else "local_write",
+    )
+
+    result = asyncio.run(tool_bridge_module.call_tool(
+        tool_bridge_module.ToolCall(tool="notes:list", arguments={}, intent="read"),
+        SimpleNamespace(headers={}),
+        Response(),
+        ctx=_fake_ctx(),
+    ))
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(tool="notes:save", arguments={}),
+            SimpleNamespace(headers={}),
+            Response(),
+            ctx=_fake_ctx(),
+        ))
+
+    assert result["ok"] is True
+    assert calls == ["notes:list"]
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["error"] == "node_draining"
+
+
 def test_call_tool_replays_idempotent_result_without_reexecuting(monkeypatch) -> None:
     calls: list[str] = []
 

@@ -261,6 +261,18 @@ the exact direction skill is visible on first paint without making query state
 authoritative. Route tunnelling no longer invents the historical `8788`
 fallback; it uses runtime topology/state candidates only.
 
+ARF7.1 runtime data-route hardening (2026-08-12) used the slow/false-empty
+Workbench portfolio as a core acceptance test. The defect was systemic rather
+than a Workbench-private transport problem: every tool call used POST and was
+therefore gated as a mutation; lifecycle 503 responses were then amplified by
+timer retries, and a terminal failure was rendered as a valid empty list. The
+core now routes validated `tool/details` reads through `live_reads`, verifies
+the hint against trusted active-manifest side effects at the execution node,
+waits for lifecycle capabilities by event, executes last-value/rate policy,
+and exposes stale/unavailable/error separately from domain data. Research
+Workbench opts into strict manifest/WebUI policy conformance. See
+[Runtime Data Route Reliability](runtime-data-route-reliability.md).
+
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
 published-package reinstall, repeated service restart, AdaOS API restart, and
@@ -1006,6 +1018,11 @@ not substitute for this operator path.
   through a schema-declared one-shot query mapping, then converge on the
   canonical Yjs selection; never keep URL query state authoritative after
   initial addressing.
+- [x] `[must]` `ARF7.1-20e` Prove the Workbench portfolio over the ordinary
+  AdaOS `tool/details` path: trusted read capability, event-driven lifecycle
+  suspension, bounded retry/rate behavior, preserved last value, explicit
+  unavailable/error presentation, strict route-policy validation, and an
+  idle/reconnect fault matrix. No Workbench-private transport is admitted.
 
 #### Non-blocking follow-ons
 

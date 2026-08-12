@@ -1188,6 +1188,11 @@
           "type": "boolean",
           "description": "Keep the last successful value visible while a matching invalidation is revalidated."
         },
+        "maxRequestHz": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum request start rate for one semantic runtime-read identity."
+        },
         "value": {},
         "resource": {
           "$ref": "#/$defs/id",

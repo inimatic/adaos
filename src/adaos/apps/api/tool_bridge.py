@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Literal, Mapping
 from urllib.parse import urlparse
 
 import anyio
@@ -177,6 +177,11 @@ def _action_risk_may_mutate(action_risk: Mapping[str, Any] | None) -> bool:
     risk = action_risk if isinstance(action_risk, Mapping) else {}
     risk_class = str(risk.get("risk_class") or "").strip().lower().replace("-", "_")
     return risk_class not in {"safe", "none", "read", "read_only", "readonly", "ui_navigation"}
+
+
+def _declared_side_effects_are_read_only(side_effects: str) -> bool:
+    token = str(side_effects or "").strip().lower().replace("-", "_")
+    return token in {"safe", "none", "read", "read_only", "readonly"}
 
 
 def _webspace_uses_dev_runtime(payload: Mapping[str, Any]) -> bool:
@@ -488,6 +493,7 @@ def _tool_call_idempotency_fingerprint(body: "ToolCall") -> str:
         "tool": str(body.tool or "").strip(),
         "arguments": body.arguments or {},
         "context": body.context or {},
+        "intent": body.intent,
         "timeout": body.timeout,
         "dev": bool(body.dev),
     }
@@ -1343,6 +1349,10 @@ class ToolCall(BaseModel):
     tool: str
     arguments: Dict[str, Any] | None = None
     context: Dict[str, Any] | None = None
+    intent: Literal["read", "mutation"] | None = Field(
+        default=None,
+        description="Routing hint; the server verifies it against trusted tool metadata.",
+    )
     timeout: float | None = Field(default=None)
     dev: bool = Field(default=False, description="Run tool from DEV workspace instead of installed runtime")
     idempotency_key: str | None = None
@@ -1444,8 +1454,6 @@ async def call_tool(body: ToolCall, request: Request, response: Response, ctx: A
 
 async def _call_tool_impl(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
     call_started_at = time.perf_counter()
-    if not is_accepting_new_work():
-        raise HTTPException(status_code=503, detail="node is draining")
     # Разбираем "<skill_name>:<public_tool_name>"
     if ":" not in body.tool:
         raise HTTPException(status_code=400, detail="tool must be in '<skill_name>:<public_tool_name>' format")
@@ -1469,6 +1477,38 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     )
     if implicit_dev_webspace and _implicit_dev_runtime_available(ctx, mgr, skill_name):
         body = body.model_copy(update={"dev": True})
+
+    accepting_new_work = is_accepting_new_work()
+    # Preserve the cheap legacy path for obviously read-only calls while the
+    # runtime is ready. A read intent or a lifecycle exception, however, must
+    # always be authorized from the active resolved manifest.
+    declared_side_effects = (
+        ""
+        if accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool)
+        else _declared_tool_side_effects(
+            mgr,
+            skill_name=skill_name,
+            public_tool=public_tool,
+            dev=bool(body.dev),
+        )
+    )
+    trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
+    if body.intent == "read" and not trusted_read_only:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "tool_intent_mismatch",
+                "tool": body.tool,
+                "requested_intent": "read",
+                "declared_side_effects": declared_side_effects or "undeclared",
+                "retryable": False,
+            },
+        )
+    if not accepting_new_work and not trusted_read_only:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "node_draining", "tool": body.tool, "retryable": True},
+        )
 
     trace = attach_http_trace_headers(request.headers, response.headers)
     setup_done_at = time.perf_counter()
@@ -1497,16 +1537,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         payload=payload,
         target_node_id=target_node_id,
         local_node_id=local_node_id,
-        forced_side_effect_class=(
-            ""
-            if _looks_readonly_tool(public_tool)
-            else _declared_tool_side_effects(
-                mgr,
-                skill_name=skill_name,
-                public_tool=public_tool,
-                dev=bool(body.dev),
-            )
-        ),
+        forced_side_effect_class=declared_side_effects,
         ctx=ctx,
     )
     mutating_call = _action_risk_may_mutate(action_risk)

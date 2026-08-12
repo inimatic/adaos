@@ -206,6 +206,54 @@ def test_scenario_validation_reports_implicit_browser_read_policy(tmp_path: Path
     assert {
         "scenario.webui.cache_policy_implicit",
         "scenario.webui.invalidation_tags_missing",
+        "scenario.webui.preserve_last_value_implicit",
+        "scenario.webui.max_request_hz_implicit",
+    }.issubset(codes)
+
+
+def test_scenario_validation_rejects_data_route_policy_drift(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    skill_manifest = tmp_path / "skills" / "smoke_skill" / "skill.yaml"
+    skill = yaml.safe_load(skill_manifest.read_text(encoding="utf-8"))
+    skill["data_routes"] = [{
+        "surface": "widget:status",
+        "route": "tool/details",
+        "tool": "check",
+        "read_policy": {
+            "mode": "explicit",
+            "triggers": ["mount", "targeted_invalidation"],
+            "invalidation_tags": ["status"],
+            "preserve_last_value": True,
+            "max_request_hz": 2,
+        },
+    }]
+    skill_manifest.write_text(yaml.safe_dump(skill, sort_keys=False), encoding="utf-8")
+    scenario = _write_scenario(tmp_path, "webui_policy_drift", depends=["smoke_skill"], route="smoke_skill.check")
+    scenario_manifest = scenario / "scenario.yaml"
+    scenario_payload = yaml.safe_load(scenario_manifest.read_text(encoding="utf-8"))
+    scenario_payload["runtime_data_policy"] = {"enforcement": "strict"}
+    scenario_manifest.write_text(yaml.safe_dump(scenario_payload, sort_keys=False), encoding="utf-8")
+    (scenario / "webui.json").write_text(json.dumps({"widgets": [{
+        "id": "status",
+        "type": "item.details",
+        "dataSource": {
+            "kind": "skill",
+            "name": "smoke_skill.check",
+            "cacheTtlMs": 0,
+            "invalidationTags": ["other"],
+            "preserveLastValue": False,
+            "maxRequestHz": 1,
+        },
+    }]}), encoding="utf-8")
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    codes = {issue.code for issue in report.issues}
+    assert {
+        "scenario.webui.invalidation_tags_mismatch",
+        "scenario.webui.preserve_last_value_mismatch",
+        "scenario.webui.max_request_hz_mismatch",
     }.issubset(codes)
 
 

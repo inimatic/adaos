@@ -205,6 +205,7 @@ Map the skill route policy to camelCase browser fields and keep the tags exact:
     "kind": "skill",
     "name": "recipes.list_recipes",
     "cacheTtlMs": 0,
+    "maxRequestHz": 0.1,
     "invalidationTags": ["recipe.catalog"],
     "preserveLastValue": true
   },
@@ -224,6 +225,26 @@ the route budget explicitly permits expiry-driven revalidation. Scenario
 validation must cross-check every skill datasource and `callSkill` target
 against declared dependencies, exported tools, tool side effects, and exact
 `data_routes`; incomplete DEV folders must not shadow a valid workspace skill.
+
+For new or migrated scenarios, enable release-blocking conformance:
+
+```yaml
+runtime_data_policy:
+  enforcement: strict
+```
+
+Strict mode requires `invalidationTags`, `preserveLastValue`, and
+`maxRequestHz` to execute the exact `read_policy` declared by the skill. In
+advisory mode the same drift is reported as warnings so an existing catalog can
+be migrated without disguising incompatibility as success. Runtime source
+failure must be presented as stale/unavailable/error; it must never reuse a
+domain empty-state message.
+
+Lifecycle suspension is not a normal transient HTTP retry. A system client
+waits for the named authoritative capability event and performs no further
+tool calls while suspended. Browser-supplied read intent is a routing hint;
+the execution node must verify the active resolved manifest before allowing a
+read during a mutation-blocking transition.
 
 Add an idle-soak test for every stable tool-backed widget: after first paint,
 leave the selected entity and its dependencies unchanged for at least three

@@ -121,10 +121,10 @@ def _resolve_skill_root(dependency_id: str, roots: Iterable[Path]) -> tuple[Path
     return (candidates[0], False) if candidates else (None, False)
 
 
-def _skill_contract(skill_root: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+def _skill_contract(skill_root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     manifest = next((skill_root / name for name in _SKILL_MANIFESTS if (skill_root / name).is_file()), None)
     if manifest is None:
-        return {}, set()
+        return {}, {}
     payload = _load_mapping(manifest)
     tools = {
         str(item.get("name") or "").strip(): dict(item)
@@ -132,7 +132,7 @@ def _skill_contract(skill_root: Path) -> tuple[dict[str, dict[str, Any]], set[st
         if isinstance(item, Mapping) and str(item.get("name") or "").strip()
     }
     routed_tools = {
-        str(item.get("tool") or "").strip()
+        str(item.get("tool") or "").strip(): dict(item)
         for item in payload.get("data_routes") or []
         if isinstance(item, Mapping) and str(item.get("tool") or "").strip()
     }
@@ -162,8 +162,16 @@ def _scenario_webui_contract_issues(
     except Exception as exc:
         return [ScenarioValidationIssue("error", "scenario.webui.invalid", str(exc), "webui.json")]
 
+    scenario_payload = _load_mapping(manifest)
+    runtime_data_policy = (
+        scenario_payload.get("runtime_data_policy")
+        if isinstance(scenario_payload.get("runtime_data_policy"), Mapping)
+        else {}
+    )
+    policy_level = "error" if str(runtime_data_policy.get("enforcement") or "").strip().lower() == "strict" else "warning"
+
     dependencies = set(dependency_ids)
-    contracts: dict[str, tuple[dict[str, dict[str, Any]], set[str]]] = {}
+    contracts: dict[str, tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]] = {}
     for dependency_id in dependencies:
         skill_root, has_tools = _resolve_skill_root(dependency_id, roots)
         if skill_root is not None and has_tools:
@@ -182,7 +190,7 @@ def _scenario_webui_contract_issues(
             if skill_id not in dependencies:
                 issues.append(ScenarioValidationIssue("error", "scenario.webui.skill_dependency_missing", f"skill dataSource '{target}' is not declared in scenario dependencies", where))
                 continue
-            tools, routed_tools = contracts.get(skill_id, ({}, set()))
+            tools, routed_tools = contracts.get(skill_id, ({}, {}))
             if tool_name not in tools:
                 issues.append(ScenarioValidationIssue("error", "scenario.webui.skill_tool_unknown", f"skill dataSource references unknown tool '{target}'", where))
                 continue
@@ -196,6 +204,38 @@ def _scenario_webui_contract_issues(
             tags = data_source.get("invalidationTags")
             if not isinstance(tags, list) or not any(str(tag or "").strip() for tag in tags):
                 issues.append(ScenarioValidationIssue("warning", "scenario.webui.invalidation_tags_missing", f"skill dataSource '{target}' has no addressable invalidation tags", where))
+            route = routed_tools.get(tool_name) or {}
+            read_policy = route.get("read_policy") if isinstance(route.get("read_policy"), Mapping) else {}
+            if route:
+                declared_tags = {
+                    str(tag or "").strip()
+                    for tag in read_policy.get("invalidation_tags") or []
+                    if str(tag or "").strip()
+                }
+                rendered_tags = {
+                    str(tag or "").strip()
+                    for tag in tags or []
+                    if str(tag or "").strip()
+                } if isinstance(tags, list) else set()
+                if declared_tags != rendered_tags:
+                    issues.append(ScenarioValidationIssue(
+                        policy_level,
+                        "scenario.webui.invalidation_tags_mismatch",
+                        f"skill dataSource '{target}' invalidationTags must exactly match data_route read_policy",
+                        where,
+                    ))
+                declared_preserve = read_policy.get("preserve_last_value")
+                rendered_preserve = data_source.get("preserveLastValue")
+                if rendered_preserve is None:
+                    issues.append(ScenarioValidationIssue(policy_level, "scenario.webui.preserve_last_value_implicit", f"skill dataSource '{target}' does not execute the declared preserve_last_value policy", where))
+                elif bool(rendered_preserve) != bool(declared_preserve):
+                    issues.append(ScenarioValidationIssue(policy_level, "scenario.webui.preserve_last_value_mismatch", f"skill dataSource '{target}' preserveLastValue differs from data_route read_policy", where))
+                declared_hz = read_policy.get("max_request_hz")
+                rendered_hz = data_source.get("maxRequestHz")
+                if rendered_hz is None:
+                    issues.append(ScenarioValidationIssue(policy_level, "scenario.webui.max_request_hz_implicit", f"skill dataSource '{target}' does not execute the declared max_request_hz policy", where))
+                elif declared_hz is not None and float(rendered_hz) != float(declared_hz):
+                    issues.append(ScenarioValidationIssue(policy_level, "scenario.webui.max_request_hz_mismatch", f"skill dataSource '{target}' maxRequestHz differs from data_route read_policy", where))
 
         if item.get("type") == "callSkill":
             target = str(item.get("target") or "").strip()
@@ -203,7 +243,7 @@ def _scenario_webui_contract_issues(
             where = f"webui.json:{path}"
             if not separator or skill_id not in dependencies:
                 continue
-            tools, _routed_tools = contracts.get(skill_id, ({}, set()))
+            tools, _routed_tools = contracts.get(skill_id, ({}, {}))
             tool = tools.get(tool_name)
             if tool is None:
                 issues.append(ScenarioValidationIssue("error", "scenario.webui.action_tool_unknown", f"callSkill references unknown tool '{target}'", where))
