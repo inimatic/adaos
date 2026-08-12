@@ -1036,6 +1036,11 @@ class DeviceInventoryService:
                 now=now,
             ) if projection_like else {}
             build = _mapping(projection_snapshot.get("build"))
+            snapshot_services = _mapping(projection_snapshot.get("services"))
+            environment_voice = _mapping(_mapping(projection_snapshot.get("environment")).get("voice"))
+            voice_listening = _mapping(snapshot_services.get("voice_listening")) or _mapping(
+                environment_voice.get("listening")
+            )
             snapshot_state = _text_or_none(freshness.get("state")) if freshness else None
             last_seen_values = [
                 value
@@ -1091,6 +1096,9 @@ class DeviceInventoryService:
                         "runtime_version": _text_or_none(
                             build.get("runtime_version") or build.get("version")
                         ),
+                        "services": {
+                            "voice_listening": voice_listening,
+                        } if voice_listening else {},
                     },
                     "diagnostics": {
                         "policy_source": "access_links" if policy_entry else "none",

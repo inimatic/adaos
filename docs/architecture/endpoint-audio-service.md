@@ -420,6 +420,47 @@ Full diagnostics remain available for explicit refresh/check actions and debug
 views. They should not be used as the only contract for lightweight stream
 updates.
 
+## Shared Voice Runtime Slice
+
+The Android-node PoC17 adds reusable voice-session primitives under the common
+service and SDK layers:
+
+- persisted `node.voice.listening.v1` policy with `off`, `push_to_talk`,
+  `continuous`, and `activation` modes;
+- assistant-name activation in the shared hosted client, used by both mobile
+  and stationary nodes;
+- persistent note/dialog dictation state controlled by promoted Rasa intents;
+- capture/audio-processing metadata on endpoint events;
+- deterministic room candidate arbitration using activation confidence, SNR,
+  arrival time, and a bounded 280 ms window.
+
+Browser Hub-WAV capture requests platform `echoCancellation`,
+`noiseSuppression`, `autoGainControl`, and mono audio and reports the actual
+track settings. Android native capture uses `VOICE_COMMUNICATION` and reports
+the real availability/enabled state of `AcousticEchoCanceler`,
+`NoiseSuppressor`, and `AutomaticGainControl`. These are two implementations
+of one audio-processing contract, not two voice products. Only one capture
+owner may be active on a phone; browser ownership is the PoC default.
+
+Assistant gender selects TTS presentation and identifies the playback context
+for echo diagnostics. It is not evidence about the human speaker and must not
+bias STT. Speaker separation remains metadata-only until a privacy-reviewed
+diarization/enrollment service can issue verified speaker identities.
+
+Long-form dictation is explicit durable session state. While it is recording,
+ordinary recognized intents are held as text and cannot execute skills. The
+learned `voice.long_form.stop` intent ends recording; addressing another
+assistant is an alternative boundary. Note sessions save through Notebook and
+dialog sessions replay their completed buffer to the selected dialog runtime.
+
+The arbitration function is implemented, but subnet-wide candidate transport,
+winner leases, losing-device suppression, and preferred-device learning remain
+integration work. Best-practice completion is a two-stage design: each endpoint
+publishes only bounded activation evidence and an acoustic fingerprint; the
+Hub selects one room winner and issues a short lease before any mutating
+dispatch. Raw audio and biometric voiceprints are not required for that first
+deduplication stage.
+
 `endpoint-audio-content-check.v1` is the first diagnostic content-verification
 contract. It does not transcribe or dispatch by itself. It verifies the current
 policy projection, selected audio transport, retention settings, and the latest

@@ -1900,12 +1900,14 @@ async def _on_voice_chat_user(evt: Any) -> None:
     text = payload.get("text")
     if not isinstance(text, str) or not text.strip():
         return
+    meta = coerce_dict(payload.get("_meta"))
+    if meta.get("voice_long_form_active") is True:
+        return
     answer = _classify_answer(text)
     if not answer:
         return
 
     webspace_id = _resolve_webspace_id(payload)
-    meta = coerce_dict(payload.get("_meta"))
     try:
         teacher = await _read_teacher(webspace_id)
         confirmation = _latest_active_confirmation(teacher)

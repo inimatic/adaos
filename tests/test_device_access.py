@@ -3,6 +3,8 @@ from __future__ import annotations
 from adaos.services import access_links
 from adaos.services import device_access
 
+import pytest
+
 
 def test_command_profile_for_managed_member_enables_device_and_node_actions(monkeypatch) -> None:
     device = {
@@ -812,6 +814,65 @@ def test_hub_device_settings_use_local_node_config_policy(monkeypatch) -> None:
     assert settings["lifetime"]["set"]["reason"] == "hub_lifetime_not_applicable"
     assert settings["detach"]["reason"] == "hub_detach_not_applicable"
     assert settings["deny"]["reason"] == "hub_deny_not_applicable"
+
+
+def test_local_hub_voice_listening_policy_is_persisted(monkeypatch) -> None:
+    class _Config:
+        role = "hub"
+        subnet_id_value = "sn_local"
+        node_id_value = "node-local"
+
+    monkeypatch.setattr(device_access, "_load_node_config", lambda: _Config())
+
+    result = device_access.set_device_voice_listening(
+        "hub:sn_local",
+        "activation",
+    )
+
+    assert result["ok"] is True
+    assert result["device_ref"] == "hub:sn_local"
+    assert result["policy"]["listening_mode"] == "activation"
+    assert result["service"]["listening_mode"] == "activation"
+
+
+@pytest.mark.anyio
+async def test_member_voice_listening_waits_for_rpc_inside_event_loop(monkeypatch) -> None:
+    class _Manager:
+        async def rpc_tools_call(self, link_id: str, **kwargs):
+            return {
+                "ok": True,
+                "link_id": link_id,
+                "tool": kwargs["tool"],
+                "mode": kwargs["arguments"]["listening_mode"],
+            }
+
+    monkeypatch.setattr(device_access, "_hub_ref_for_device_ref", lambda _ref: None)
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "parse_device_ref",
+        lambda _ref: ("member", "android-node-1"),
+    )
+    monkeypatch.setattr(
+        device_access._device_inventory,
+        "_get_hub_link_manager",
+        lambda: _Manager(),
+    )
+
+    result = device_access.set_device_voice_listening(
+        "member:android-node-1",
+        "continuous",
+    )
+
+    assert result == {
+        "ok": True,
+        "device_ref": "member:android-node-1",
+        "result": {
+            "ok": True,
+            "link_id": "android-node-1",
+            "tool": "node.voice.configure",
+            "mode": "continuous",
+        },
+    }
 
 
 def test_rename_hub_device_updates_local_node_names(monkeypatch) -> None:

@@ -134,6 +134,48 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
                 }
             ],
         },
+        "voice.long_form.note.start": {
+            "description": "Start a long-form note session which ends only through NLU or a new addressed command.",
+            "scope": "scenario",
+            "examples": [
+                "\u0437\u0430\u043f\u0438\u0448\u0438 \u0434\u043b\u0438\u043d\u043d\u0443\u044e \u0437\u0430\u043c\u0435\u0442\u043a\u0443",
+                "\u043d\u0430\u0447\u043d\u0438 \u0437\u0430\u043f\u0438\u0441\u044c \u0434\u043b\u0438\u043d\u043d\u043e\u0439 \u0437\u0430\u043c\u0435\u0442\u043a\u0438",
+                "\u0445\u043e\u0447\u0443 \u043d\u0430\u0434\u0438\u043a\u0442\u043e\u0432\u0430\u0442\u044c \u0434\u043b\u0438\u043d\u043d\u0443\u044e \u0437\u0430\u043c\u0435\u0442\u043a\u0443",
+                "\u043e\u0442\u043a\u0440\u043e\u0439 \u0440\u0435\u0436\u0438\u043c \u0434\u043b\u0438\u043d\u043d\u043e\u0439 \u0437\u0430\u043f\u0438\u0441\u0438",
+                "\u0430\u0434\u0430 \u0437\u0430\u043f\u0438\u0448\u0438 \u0434\u043b\u0438\u043d\u043d\u0443\u044e \u0437\u0430\u043c\u0435\u0442\u043a\u0443",
+                "start a long note",
+                "begin long dictation",
+            ],
+            "actions": [{"type": "callHost", "target": "voice.long_form.note.start", "params": {"webspace_id": "$ctx.webspace_id"}}],
+        },
+        "voice.long_form.dialog.start": {
+            "description": "Start collecting a long question for the addressed dialog assistant.",
+            "scope": "scenario",
+            "examples": [
+                "\u043f\u043e\u0441\u043b\u0443\u0448\u0430\u0439 \u0434\u043b\u0438\u043d\u043d\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+                "\u044f \u0437\u0430\u0434\u0430\u043c \u0434\u043b\u0438\u043d\u043d\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+                "\u043d\u0430\u0447\u043d\u0438 \u0437\u0430\u043f\u0438\u0441\u044b\u0432\u0430\u0442\u044c \u043c\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+                "\u0430\u0440\u0441\u0435\u043d\u0438\u0439 \u043f\u043e\u0441\u043b\u0443\u0448\u0430\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+                "\u043c\u0438\u0440\u0430 \u043f\u043e\u0441\u043b\u0443\u0448\u0430\u0439 \u0434\u043b\u0438\u043d\u043d\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+                "listen to a long question",
+                "start recording my question",
+            ],
+            "actions": [{"type": "callHost", "target": "voice.long_form.dialog.start", "params": {"webspace_id": "$ctx.webspace_id"}}],
+        },
+        "voice.long_form.stop": {
+            "description": "Finish the active long-form note or dialog recording.",
+            "scope": "scenario",
+            "examples": [
+                "\u043a\u043e\u043d\u0435\u0446 \u0437\u0430\u043f\u0438\u0441\u0438",
+                "\u0437\u0430\u043a\u043e\u043d\u0447\u0438 \u0437\u0430\u043f\u0438\u0441\u044c",
+                "\u0437\u0430\u0432\u0435\u0440\u0448\u0438 \u0434\u0438\u043a\u0442\u043e\u0432\u043a\u0443",
+                "\u044d\u0442\u043e \u0432\u0441\u0451 \u043a\u043e\u043d\u0435\u0446 \u0437\u0430\u043f\u0438\u0441\u0438",
+                "\u0441\u043e\u0445\u0440\u0430\u043d\u0438 \u0438 \u0437\u0430\u043a\u043e\u043d\u0447\u0438 \u0437\u0430\u043f\u0438\u0441\u044c",
+                "end recording",
+                "finish dictation",
+            ],
+            "actions": [{"type": "callHost", "target": "voice.long_form.stop", "params": {"webspace_id": "$ctx.webspace_id"}}],
+        },
         "voice.listening.stop": {
             "description": "Stop an active continuous voice-listening session.",
             "scope": "scenario",

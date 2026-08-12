@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 
 from adaos.services import access_links as _access_links
@@ -443,6 +445,12 @@ def _hub_device_settings(device_ref: str) -> dict[str, Any] | None:
     device_ref_token = f"hub:{subnet_id or _hub_ref_id(device_ref) or 'local'}"
     command_params = {"device_ref": device_ref_token}
     storage = ".adaos/node.yaml: node.node_names"
+    try:
+        from adaos.services.voice_runtime import listening_service_projection
+
+        voice_listening = listening_service_projection()
+    except Exception:
+        voice_listening = {}
     return {
         "device_ref": device_ref_token,
         "kind": "hub",
@@ -525,6 +533,15 @@ def _hub_device_settings(device_ref: str) -> dict[str, Any] | None:
         "actions": {
             "open_apps": _toggle(bool(node_id), node_id=node_id or None),
             "open_marketplace": _toggle(bool(node_id), node_id=node_id or None),
+        },
+        "voice_listening": {
+            **voice_listening,
+            "set": _toggle(
+                True,
+                target="browsers_skill.set_device_voice_listening",
+                params=command_params,
+            ),
+            "helper": "The node listening policy is shared by browser and native audio endpoints.",
         },
         "reconcile": {"state": "ok", "issue_total": 0, "issues": [], "actions": {}},
         "adopt": {
@@ -680,6 +697,7 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
     audio_input_endpoint = _mapping(media_services.get("audio_input_endpoint"))
     audio_output_endpoint = _mapping(media_services.get("audio_output_endpoint"))
     media_action = _mapping(profile.get("media_control"))
+    voice_listening = _mapping(media_services.get("voice_listening"))
     return {
         "device_ref": device_ref_token,
         "kind": kind_token,
@@ -831,6 +849,22 @@ def get_device_settings(device_ref: str) -> dict[str, Any] | None:
             ),
             "helper": "Browser media channel preferences are stored per user and applied by the active browser session.",
         } if kind_token == "browser" else None,
+        "voice_listening": {
+            **voice_listening,
+            "set": _toggle(
+                kind_token == "member" and bool(observation.get("online")),
+                reason=(
+                    None
+                    if kind_token == "member" and bool(observation.get("online"))
+                    else "member_offline"
+                    if kind_token == "member"
+                    else "voice_listening_node_only"
+                ),
+                target="browsers_skill.set_device_voice_listening",
+                params=command_params,
+            ),
+            "helper": "Activation is a node policy. AEC availability remains an observed endpoint capability.",
+        } if kind_token == "member" and voice_listening else None,
         "identify": _toggle(
             kind_token == "browser" and bool(observation.get("online")),
             reason=None if kind_token == "browser" and bool(observation.get("online")) else "browser_offline" if kind_token == "browser" else "identify_browser_only",
@@ -1197,6 +1231,68 @@ def set_browser_media_control(
     }
 
 
+def set_device_voice_listening(
+    device_ref: str,
+    listening_mode: str,
+    *,
+    source: str = "device_registry",
+) -> dict[str, Any]:
+    token = _text(device_ref)
+    hub_ref = _hub_ref_for_device_ref(token)
+    if hub_ref:
+        from adaos.services.voice_runtime import listening_service_projection, set_voice_policy
+
+        try:
+            policy = set_voice_policy(listening_mode=listening_mode, source=source)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "device_ref": token}
+        return {
+            "ok": True,
+            "device_ref": hub_ref,
+            "policy": policy,
+            "service": listening_service_projection(policy),
+        }
+
+    parsed = _device_inventory.parse_device_ref(token)
+    if parsed is None:
+        return {"ok": False, "error": "invalid_device_ref", "device_ref": token}
+    kind, link_id = parsed
+    if kind != "member":
+        return {"ok": False, "error": "voice_listening_node_only", "device_ref": token, "kind": kind}
+    manager = _device_inventory._get_hub_link_manager()
+    if manager is None:
+        return {"ok": False, "error": "member_link_manager_unavailable", "device_ref": token}
+    try:
+        call = manager.rpc_tools_call(
+            link_id,
+            tool="node.voice.configure",
+            arguments={"listening_mode": listening_mode, "source": source},
+            timeout=12.0,
+            dev=False,
+            intent="device_registry.voice_listening.configure",
+        )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result = asyncio.run(call)
+        else:
+            # Tool handlers are synchronous, but can also be invoked from an
+            # API event loop. Run the member RPC in a helper thread so the
+            # result is never reported as successful before it arrives.
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="voice-config") as executor:
+                result = executor.submit(asyncio.run, call).result(timeout=14.0)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "member_voice_configuration_failed",
+            "detail": f"{type(exc).__name__}:{str(exc)[:240]}",
+            "device_ref": token,
+        }
+    if isinstance(result, Mapping) and result.get("ok") is False:
+        return {"ok": False, "device_ref": token, "result": dict(result)}
+    return {"ok": True, "device_ref": token, "result": result}
+
+
 __all__ = [
     "adopt_device",
     "add_device_alias",
@@ -1211,5 +1307,6 @@ __all__ = [
     "rename_browser_device_name",
     "rename_device",
     "set_browser_media_control",
+    "set_device_voice_listening",
     "set_device_lifetime",
 ]

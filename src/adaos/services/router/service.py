@@ -5202,6 +5202,184 @@ class RouterService:
                     )
                 )
 
+        def _voice_long_form_scope(webspace_id: str, meta: Mapping[str, Any]) -> str:
+            from adaos.services.voice_runtime import long_form_scope_key
+
+            speaker = meta.get("speaker") if isinstance(meta.get("speaker"), Mapping) else {}
+            return long_form_scope_key(
+                webspace_id,
+                speaker_id=str(speaker.get("id") or meta.get("speaker_id") or ""),
+                device_id=str(
+                    meta.get("capture_device_id")
+                    or meta.get("endpoint_id")
+                    or meta.get("device_id")
+                    or ""
+                ),
+            )
+
+        async def _append_long_form_control(
+            webspace_id: str,
+            *,
+            text: str,
+            result: Mapping[str, Any],
+            meta: Mapping[str, Any],
+            target_node_id: str | None,
+        ) -> None:
+            message = {
+                "id": _make_id("m"),
+                "from": "hub",
+                "text": text,
+                "ts": time.time(),
+                "client_directives": [
+                    dict(item)
+                    for item in result.get("client_directives") or []
+                    if isinstance(item, Mapping)
+                ],
+                "active_agent_id": str(meta.get("active_agent_id") or "").strip() or None,
+                "active_agent_label": str(meta.get("active_agent_label") or "").strip() or None,
+                "active_agent_gender": str(meta.get("active_agent_gender") or "").strip() or None,
+                "active_agent_voice": str(meta.get("active_agent_voice") or "").strip() or None,
+                "_meta": {
+                    **dict(meta),
+                    "webspace_id": webspace_id,
+                    "voice_long_form_active": result.get("session", {}).get("state") == "recording",
+                },
+            }
+            await _append_voice_chat_message(webspace_id, message, target_node_id)
+
+        async def _complete_long_form(
+            webspace_id: str,
+            *,
+            result: Mapping[str, Any],
+            meta: Mapping[str, Any],
+            target_node_id: str | None,
+            dispatch_completed_dialog: bool,
+        ) -> None:
+            session = result.get("session") if isinstance(result.get("session"), Mapping) else {}
+            purpose = str(session.get("purpose") or "generic")
+            completed_text = str(result.get("completed_text") or "").strip()
+            reply = "Запись завершена."
+            if purpose == "note" and completed_text:
+                try:
+                    note_result = await asyncio.to_thread(
+                        _call_runtime_skill_tool,
+                        "notebook_skill",
+                        "create_note",
+                        {"content": completed_text},
+                        {**dict(meta), "webspace_id": webspace_id, "voice_long_form": True},
+                    )
+                    if isinstance(note_result, Mapping) and note_result.get("ok") is False:
+                        raise RuntimeError(str(note_result.get("error") or "notebook_create_failed"))
+                    reply = "Длинная заметка сохранена."
+                except Exception:
+                    logging.getLogger("adaos.router.voice_chat").warning(
+                        "failed to save long-form note webspace=%s",
+                        webspace_id,
+                        exc_info=True,
+                    )
+                    reply = "Запись завершена, но заметку сохранить не удалось."
+            elif purpose == "dialog" and completed_text and dispatch_completed_dialog:
+                reply = "Запись завершена. Передаю вопрос ассистенту."
+
+            await _append_long_form_control(
+                webspace_id,
+                text=reply,
+                result=result,
+                meta=meta,
+                target_node_id=target_node_id,
+            )
+            if purpose == "dialog" and completed_text and dispatch_completed_dialog:
+                replay_meta = {
+                    **dict(meta),
+                    "webspace_id": webspace_id,
+                    "voice_long_form_active": False,
+                    "voice_long_form_replay": True,
+                    "route_id": "voice_chat",
+                }
+                self.bus.publish(
+                    Event(
+                        type=VOICE_CHAT_USER_EVENT,
+                        source="router.voice.long_form",
+                        ts=time.time(),
+                        payload={
+                            "text": completed_text,
+                            "webspace_id": webspace_id,
+                            "_meta": replay_meta,
+                        },
+                    )
+                )
+
+        async def _start_long_form(
+            webspace_id: str,
+            *,
+            intent_name: str,
+            text: str,
+            meta: Mapping[str, Any],
+            target_node_id: str | None,
+        ) -> Mapping[str, Any]:
+            from adaos.services.voice_runtime import advance_persisted_long_form_session
+
+            scope = _voice_long_form_scope(webspace_id, meta)
+            result = await asyncio.to_thread(
+                advance_persisted_long_form_session,
+                scope,
+                text=text,
+                intent_name=intent_name,
+                active_agent_id=str(meta.get("active_agent_id") or ""),
+            )
+            await _append_long_form_control(
+                webspace_id,
+                text="Я буду записывать, пока Вы не скажете «Конец записи».",
+                result=result,
+                meta=meta,
+                target_node_id=target_node_id,
+            )
+            return result
+
+        async def _on_voice_long_form_action(ev: Event) -> None:
+            payload = ev.payload if isinstance(ev.payload, dict) else {}
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+            webspace_id = str(payload.get("webspace_id") or meta.get("webspace_id") or "default").strip() or "default"
+            target_node_id = _resolve_voice_target_node_id(payload, meta, default_local=True)
+            intent_name = str(getattr(ev, "type", "") or "").strip()
+            text = str(payload.get("text") or "").strip()
+            from adaos.services.voice_runtime import (
+                LONG_FORM_START_INTENTS,
+                LONG_FORM_STOP_INTENT,
+                advance_persisted_long_form_session,
+                read_long_form_session,
+            )
+
+            scope = _voice_long_form_scope(webspace_id, meta)
+            current = await asyncio.to_thread(read_long_form_session, scope)
+            if intent_name in LONG_FORM_START_INTENTS:
+                if current.get("state") != "recording":
+                    await _start_long_form(
+                        webspace_id,
+                        intent_name=intent_name,
+                        text=text,
+                        meta=meta,
+                        target_node_id=target_node_id,
+                    )
+                return
+            if intent_name != LONG_FORM_STOP_INTENT or current.get("state") != "recording":
+                return
+            result = await asyncio.to_thread(
+                advance_persisted_long_form_session,
+                scope,
+                text=text,
+                intent_name=intent_name,
+                active_agent_id=str(meta.get("active_agent_id") or current.get("owner_agent_id") or ""),
+                drop_trailing_text=True,
+            )
+            await _complete_long_form(
+                webspace_id,
+                result=result,
+                meta=meta,
+                target_node_id=target_node_id,
+                dispatch_completed_dialog=True,
+            )
+
         async def _on_voice_user(ev: Event) -> None:
             voice_started = time.perf_counter()
             phase_started = voice_started
@@ -5337,6 +5515,46 @@ class RouterService:
                     extra=f"reason={transport_integrity_error}",
                 )
                 return
+            voice_control_task: asyncio.Task[dict[str, Any]] | None = None
+            long_form_scope = ""
+            long_form_state: Mapping[str, Any] = {}
+            try:
+                from adaos.services.nlu.voice_control import detect_voice_control_intent
+                from adaos.services.voice_runtime import read_long_form_session
+
+                long_form_scope = _voice_long_form_scope(ws, meta)
+                long_form_state = read_long_form_session(long_form_scope)
+                if long_form_state.get("state") == "recording":
+                    # The teacher confirmation gate must not consume words such
+                    # as "да" while they are part of an active dictation.
+                    meta["voice_long_form_active"] = True
+                voice_input = any(
+                    key in meta
+                    for key in (
+                        "voice_activation",
+                        "voice_listening_mode",
+                        "voice_long_form_active",
+                        "capture_id",
+                        "capture_device_id",
+                        "speaker_context",
+                    )
+                )
+                if (
+                    meta.get("voice_long_form_replay") is not True
+                    and (voice_input or long_form_state.get("state") == "recording")
+                ):
+                    control_texts = [text]
+                    if pre_addressed_agent is not None and str(pre_addressed_agent[1] or "").strip():
+                        control_texts.append(str(pre_addressed_agent[1]))
+                    # Hide the local Rasa round-trip under the existing history
+                    # and teacher-confirmation work. It remains a short gate;
+                    # the ordinary NLU pipeline is still asynchronous.
+                    voice_control_task = asyncio.create_task(
+                        asyncio.to_thread(detect_voice_control_intent, control_texts)
+                    )
+            except Exception:
+                long_form_scope = ""
+                long_form_state = {}
             if requested_dialog_channel_id == GENERAL_DIALOG_CHANNEL_ID:
                 _persist_general_dialog_channel(ws, event="general_channel_requested")
                 current_dialog_channel = dialog_runtime.get_active_channel(ws)
@@ -5404,6 +5622,8 @@ class RouterService:
                 )
 
                 if await should_consume_voice_confirmation_answer(ws, text):
+                    if voice_control_task is not None:
+                        voice_control_task.cancel()
                     _log_voice_phase("teacher_confirmation_consumed")
                     try:
                         logging.getLogger("adaos.router.voice_chat").debug(
@@ -5415,6 +5635,8 @@ class RouterService:
                         pass
                     return
                 if await should_suppress_voice_text_for_confirmation(ws, text):
+                    if voice_control_task is not None:
+                        voice_control_task.cancel()
                     _log_voice_phase("teacher_confirmation_suppressed")
                     try:
                         logging.getLogger("adaos.router.voice_chat").debug(
@@ -5440,6 +5662,108 @@ class RouterService:
             _log_voice_phase("text_correction")
             addressed_agent = _extract_addressed_agent(text)
             _log_voice_phase("addressed_agent_extracted", extra=f"addressed={bool(addressed_agent)}")
+            try:
+                from adaos.services.voice_runtime import (
+                    LONG_FORM_START_INTENTS,
+                    LONG_FORM_STOP_INTENT,
+                    advance_persisted_long_form_session,
+                )
+
+                control = (
+                    {}
+                    if meta.get("voice_long_form_replay") is True
+                    else await voice_control_task
+                    if voice_control_task is not None
+                    else {}
+                )
+                control_intent = str(control.get("intent") or "")
+                if long_form_state.get("state") == "recording":
+                    if control_intent == LONG_FORM_STOP_INTENT:
+                        completed = await asyncio.to_thread(
+                            advance_persisted_long_form_session,
+                            long_form_scope,
+                            text=text,
+                            intent_name=LONG_FORM_STOP_INTENT,
+                            active_agent_id=str(
+                                meta.get("active_agent_id")
+                                or long_form_state.get("owner_agent_id")
+                                or ""
+                            ),
+                        )
+                        await _complete_long_form(
+                            ws,
+                            result=completed,
+                            meta={**meta, "voice_control": control},
+                            target_node_id=target_node_id,
+                            dispatch_completed_dialog=True,
+                        )
+                        return
+
+                    addressed_agent_id = str(
+                        meta.get("addressed_agent_id")
+                        or (addressed_agent[0].get("id") if addressed_agent is not None else "")
+                        or ""
+                    ).strip()
+                    if addressed_agent_id:
+                        completed = await asyncio.to_thread(
+                            advance_persisted_long_form_session,
+                            long_form_scope,
+                            text=text,
+                            intent_name=control_intent,
+                            active_agent_id=str(meta.get("active_agent_id") or ""),
+                            addressed_agent_id=addressed_agent_id,
+                        )
+                        await _complete_long_form(
+                            ws,
+                            result=completed,
+                            meta=meta,
+                            target_node_id=target_node_id,
+                            dispatch_completed_dialog=False,
+                        )
+                        meta["voice_long_form_active"] = False
+                    else:
+                        await asyncio.to_thread(
+                            advance_persisted_long_form_session,
+                            long_form_scope,
+                            text=text,
+                            intent_name="",
+                            active_agent_id=str(meta.get("active_agent_id") or ""),
+                        )
+                        probe_meta = {
+                            **meta,
+                            "voice_long_form_active": True,
+                            "voice_long_form_probe": True,
+                            "voice_long_form_scope": long_form_scope,
+                        }
+                        self.bus.publish(
+                            Event(
+                                type="nlp.intent.detect.request",
+                                source="router.voice.long_form",
+                                ts=time.time(),
+                                payload={
+                                    "text": text,
+                                    "webspace_id": ws,
+                                    "request_id": _make_id("nlu-long-form"),
+                                    "_meta": probe_meta,
+                                },
+                            )
+                        )
+                        return
+                elif control_intent in LONG_FORM_START_INTENTS:
+                    await _start_long_form(
+                        ws,
+                        intent_name=control_intent,
+                        text=text,
+                        meta={**meta, "voice_control": control},
+                        target_node_id=target_node_id,
+                    )
+                    return
+            except Exception:
+                logging.getLogger("adaos.router.voice_chat").warning(
+                    "long-form voice gate failed webspace=%s",
+                    ws,
+                    exc_info=True,
+                )
             if addressed_agent is not None and str(addressed_agent[0].get("channel_id") or "") == GENERAL_DIALOG_CHANNEL_ID:
                 addressed_general_text = addressed_agent[1]
                 general_meta = _general_agent_metadata()
@@ -5796,6 +6120,8 @@ class RouterService:
             if self._event_originates_from_remote_member(payload):
                 return
             meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            if meta.get("voice_long_form_probe") is True:
+                return
             # A member may already own the interactive dialog RPC and publish
             # this event only as evidence for the asynchronous LLM teacher.
             # Do not start a second dialog fallback or append a duplicate reply.
@@ -5969,6 +6295,9 @@ class RouterService:
             ("voice.chat.open", _on_voice_open),
             ("voice.chat.user", _on_voice_user),
             ("dialog.user_message", _on_voice_user),
+            ("voice.long_form.note.start", _on_voice_long_form_action),
+            ("voice.long_form.dialog.start", _on_voice_long_form_action),
+            ("voice.long_form.stop", _on_voice_long_form_action),
             ("dialog.channel.select", _on_dialog_channel_select),
             ("dialog.channel.activated", _on_dialog_channel_event),
             ("dialog.channel.deactivated", _on_dialog_channel_event),

@@ -374,6 +374,19 @@ def set_browser_media_control(
     )
 
 
+def set_device_voice_listening(
+    device_ref: str,
+    listening_mode: str,
+    *,
+    source: str = "device_registry",
+) -> dict[str, Any]:
+    return _service.set_device_voice_listening(
+        str(device_ref or ""),
+        str(listening_mode or ""),
+        source=str(source or "device_registry"),
+    )
+
+
 def add_device_alias(
     device_ref: str,
     alias: str,

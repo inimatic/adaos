@@ -48,6 +48,9 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
     assert "set timer for [10 minutes](duration)" in _examples_for(dataset, "voice.timer.start")
     assert "перестань слушать" in _examples_for(dataset, "voice.listening.stop")
     assert "AdaOS, останови прослушивание" in _examples_for(dataset, "voice.listening.stop")
+    assert "запиши длинную заметку" in _examples_for(dataset, "voice.long_form.note.start")
+    assert "послушай длинный вопрос" in _examples_for(dataset, "voice.long_form.dialog.start")
+    assert "конец записи" in _examples_for(dataset, "voice.long_form.stop")
     assert "reload desktop" in _examples_for(dataset, "desktop.reload_webspace")
     assert "switch to [web_desktop](scenario_id)" in _examples_for(dataset, "desktop.switch_scenario")
     assert "- apps_catalog" in _lookup_examples_for(dataset, "modal_id")
@@ -205,6 +208,54 @@ async def test_default_desktop_nlu_dispatches_voice_listening_stop(monkeypatch) 
             },
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_long_form_probe_holds_content_but_dispatches_learned_stop(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    timer_events: list[dict] = []
+    stop_events: list[dict] = []
+    ctx.bus.subscribe("voice.chat.timer_start", lambda ev: timer_events.append(dict(ev.payload or {})))
+    ctx.bus.subscribe("voice.long_form.stop", lambda ev: stop_events.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+    meta = {
+        "route_id": "voice_chat",
+        "voice_long_form_active": True,
+        "voice_long_form_probe": True,
+    }
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": "voice.timer.start",
+            "confidence": 0.97,
+            "slots": {"duration": "10 минут"},
+            "text": "это часть длинной заметки про таймер",
+            "webspace_id": "desktop",
+            "request_id": "long-form-content-probe",
+            "_meta": meta,
+        }
+    )
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": "voice.long_form.stop",
+            "confidence": 0.99,
+            "slots": {},
+            "text": "конец записи",
+            "webspace_id": "desktop",
+            "request_id": "long-form-stop-probe",
+            "_meta": meta,
+        }
+    )
+
+    assert timer_events == []
+    assert len(stop_events) == 1
+    assert stop_events[0]["text"] == "конец записи"
 
 
 @pytest.mark.anyio

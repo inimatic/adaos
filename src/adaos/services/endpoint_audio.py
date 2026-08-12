@@ -78,6 +78,9 @@ def event_id(event: Mapping[str, Any]) -> str:
             "vad": event.get("vad"),
             "audio_bytes": _mapping(event.get("audio")).get("bytes"),
             "transcript": _mapping(event.get("transcript")).get("text"),
+            "audio_fingerprint": event.get("audio_fingerprint"),
+            "speaker_id": _mapping(event.get("speaker")).get("id"),
+            "echo_reference_id": _mapping(event.get("audio_processing")).get("echo_reference_id"),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -147,6 +150,10 @@ def dispatch_transcript(
                 "session_id": event.get("session_id"),
                 "surface_id": event.get("surface_id"),
                 "audio_event_id": event_id(event),
+                "capture_id": event.get("capture_id"),
+                "audio_fingerprint": event.get("audio_fingerprint"),
+                "speaker": _mapping(event.get("speaker")),
+                "audio_processing": _mapping(event.get("audio_processing")),
             },
         }
         bus_emit(get_ctx().bus, "nlp.intent.detect.rasa", payload, source=source)
@@ -390,6 +397,12 @@ def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] |
             transport = {}
         policy = policy_report(endpoint_data)
     stt = _mapping(state.get("stt"))
+    try:
+        from adaos.services.voice_runtime import listening_service_projection
+
+        listening_service = listening_service_projection()
+    except Exception:
+        listening_service = {}
     return {
         "schema_version": "endpoint-audio-diagnostics.v1",
         "mode": _text(_mapping(state.get("vad")).get("mode")) or "voice_activity",
@@ -402,6 +415,9 @@ def diagnostics_snapshot(state: Mapping[str, Any], endpoint: Mapping[str, Any] |
         "transport": transport,
         "policy": policy,
         "response_route": response_route_report(endpoint_data, _mapping(state.get("response_route"))) if endpoint_data else {},
+        "listening_service": listening_service,
+        "audio_processing": _mapping(state.get("audio_processing")),
+        "speaker": _mapping(state.get("speaker")),
         "events_count": len(list(state.get("events") or [])),
         "updated_at": _text(state.get("updated_at")) or _now(),
     }
@@ -632,11 +648,19 @@ def process_endpoint_event(
         "duration_ms": _mapping(event.get("record_button")).get("duration_ms") or _mapping(event.get("vad")).get("duration_ms"),
         "audio_bytes": _mapping(event.get("audio")).get("bytes"),
         "vad": _mapping(event.get("vad")),
+        "capture_id": _text(event.get("capture_id")),
+        "audio_fingerprint": _text(event.get("audio_fingerprint")),
+        "speaker": _mapping(event.get("speaker")),
+        "audio_processing": _mapping(event.get("audio_processing")),
         "updated_at": _now(),
     }
     result: dict[str, Any] = {"ok": True, "event": compact}
     state["last_audio_event"] = compact
     state["updated_at"] = compact["updated_at"]
+    if compact["audio_processing"]:
+        state["audio_processing"] = compact["audio_processing"]
+    if compact["speaker"]:
+        state["speaker"] = compact["speaker"]
     if event_type == "endpoint.audio.record_button":
         state["record_button"] = {
             "state": "recording" if compact["action"].endswith(".down") else "idle",

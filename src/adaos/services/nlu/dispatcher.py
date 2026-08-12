@@ -1183,6 +1183,24 @@ async def _on_nlp_intent_detected(evt: Any) -> None:
     if not intent:
         return
 
+    meta = payload.get("_meta") if isinstance(payload.get("_meta"), Mapping) else {}
+    if meta.get("voice_long_form_probe") is True and intent != "voice.long_form.stop":
+        # During dictation, NLU is used only to recognize the learned stop
+        # intent. Other recognized phrases are content, not executable actions.
+        ctx = get_ctx()
+        webspace_id = _resolve_webspace_id(payload)
+        scenario_id = await _resolve_scenario_id(ctx, webspace_id)
+        _emit_stage(
+            ctx,
+            stage="dispatcher",
+            status="held",
+            webspace_id=webspace_id,
+            scenario_id=scenario_id,
+            payload=payload,
+            reason="long_form_content_not_action",
+        )
+        return
+
     slots_raw = payload.get("slots") or {}
     slots: Dict[str, Any] = slots_raw if isinstance(slots_raw, dict) else {}
 
