@@ -1114,3 +1114,76 @@ def test_webui_schema_accepts_state_selected_list_sort_and_conditional_action() 
     }
 
     Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_accepts_state_selected_full_surface_layout_variants() -> None:
+    schema = _load_schema()
+    payload = {
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "research_workbench",
+                        "initialState": {"viewMode": "portfolio"},
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "portfolio", "role": "main"}],
+                            "variants": [
+                                {
+                                    "id": "direction",
+                                    "when": "$state.viewMode === 'direction'",
+                                    "type": "split",
+                                    "pattern": "focus-detail",
+                                    "auxWidth": 460,
+                                    "areas": [
+                                        {"id": "workspace", "role": "main"},
+                                        {"id": "context", "role": "aux"},
+                                    ],
+                                },
+                                {
+                                    "id": "portfolio",
+                                    "default": True,
+                                    "type": "single",
+                                    "pattern": "stack",
+                                    "areas": [{"id": "portfolio", "role": "main"}],
+                                },
+                            ],
+                        },
+                        "widgets": [
+                            {"id": "directions", "type": "ui.list", "area": "portfolio"},
+                            {"id": "discussion", "type": "ui.chat", "area": "workspace"},
+                            {"id": "consensus", "type": "static.markdown", "area": "context"},
+                        ],
+                    }
+                }
+            }
+        }
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_webui_schema_rejects_ambiguous_layout_variant_without_when_or_default() -> None:
+    schema = _load_schema()
+    payload = {
+        "ui": {
+            "application": {
+                "desktop": {
+                    "pageSchema": {
+                        "id": "invalid",
+                        "layout": {
+                            "type": "single",
+                            "areas": [{"id": "main"}],
+                            "variants": [
+                                {"id": "unknown", "type": "single", "areas": [{"id": "main"}]}
+                            ],
+                        },
+                        "widgets": [],
+                    }
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
