@@ -125,6 +125,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate pinned AdaOS client revision
+        shell: bash
+        run: |
+          client_path="src/adaos/integrations/adaos-client"
+          client_revision="$(git ls-tree HEAD "$client_path" | awk '{print $3}')"
+          test -n "$client_revision"
+          git submodule sync -- "$client_path"
+          git submodule update --init --depth 1 -- "$client_path"
+          test "$(git -C "$client_path" rev-parse HEAD)" = "$client_revision"
+
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
