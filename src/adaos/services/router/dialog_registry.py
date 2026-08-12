@@ -179,12 +179,7 @@ def _dialog_channel_label(channel_id: Any) -> str:
     return token.replace("_", " ").replace("-", " ").title() if token else "Dialog"
 
 
-def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> bool:
-    token = str(skill_id or "").strip()
-    if token == BUILDER_SKILL_ID:
-        return True
-    if token != CONVERSATION_COMPANIONS_SKILL_ID:
-        return False
+def _dialog_runtime_failure_is_unavailable(exc: BaseException) -> bool:
     detail = f"{type(exc).__name__}: {exc}".lower()
     return any(
         marker in detail
@@ -199,6 +194,15 @@ def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> b
             "manifest",
         )
     )
+
+
+def _dialog_runtime_dev_fallback_allowed(skill_id: Any, exc: BaseException) -> bool:
+    token = str(skill_id or "").strip()
+    if token == BUILDER_SKILL_ID:
+        return True
+    if token != CONVERSATION_COMPANIONS_SKILL_ID:
+        return False
+    return _dialog_runtime_failure_is_unavailable(exc)
 
 
 def _dialog_runtime_uses_dev_webspace(webspace_id: Any) -> bool:
