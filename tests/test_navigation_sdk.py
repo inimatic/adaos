@@ -36,6 +36,18 @@ def test_webspace_url_preserves_the_full_expected_context() -> None:
     assert navigation.parse_url(url) == destination
 
 
+def test_drive_download_url_contains_zone_and_public_token_only() -> None:
+    destination = navigation.drive_download_destination("pub_1234567890abcdef", zone="ru")
+
+    url = navigation.build_url(destination)
+
+    assert url == "https://inimatic.com/?intent=drive.download&zone=ru&public_token=pub_1234567890abcdef"
+    assert "subnet_id=" not in url
+    assert navigation.parse_url(url) == destination
+    resolution = navigation.resolve_destination(destination, current={})
+    assert (resolution["status"], resolution["action"]) == ("ready", "download")
+
+
 def test_mode_is_rejected_instead_of_silently_normalized() -> None:
     with pytest.raises(ValueError, match="mode is unsupported"):
         navigation.parse_url("https://inimatic.com/?mode=registration&user_code=4931-E638")

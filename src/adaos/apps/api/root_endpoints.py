@@ -71,6 +71,15 @@ from adaos.services.browser_assets import (
     public_blob_file_for_digest,
     publish_public_blob_bytes,
 )
+from adaos.services.drive_public_links import (
+    DrivePublicLinkError,
+    build_root_public_content_url,
+    map_public_link_exception,
+    register_root_public_link,
+    resolve_root_public_link,
+    root_public_link_metadata,
+    stream_hub_public_link,
+)
 
 router = APIRouter()
 root_router = APIRouter(prefix="/v1/root", tags=["root"])
@@ -234,7 +243,13 @@ def _legacy_root_token_auth(root_token: str | None) -> dict[str, Any] | None:
     token = str(root_token or "").strip()
     if not token:
         return None
-    expected = os.getenv("ROOT_TOKEN") or os.getenv("ADAOS_ROOT_BEARER_TOKEN") or ""
+    expected = (
+        os.getenv("ROOT_TOKEN")
+        or os.getenv("ADAOS_ROOT_BEARER_TOKEN")
+        or os.getenv("ADAOS_ROOT_TOKEN")
+        or os.getenv("HUB_ROOT_TOKEN")
+        or ""
+    )
     if expected and token != expected:
         raise HTTPException(status_code=401, detail="Invalid X-Root-Token")
     return {
@@ -1619,6 +1634,118 @@ def _fetch_public_browser_asset_source(source_url: str) -> tuple[bytes, str | No
     if len(data) > PUBLIC_ASSET_MAX_BYTES:
         raise HTTPException(status_code=413, detail="browser_asset_source_too_large")
     return data, mime
+
+
+class DrivePublicLinkRegisterRequest(BaseModel):
+    public_token: str = Field(..., min_length=16, max_length=160)
+    hub_token: str = Field(..., min_length=16, max_length=160)
+    subnet_id: str = Field(..., min_length=1)
+    hub_id: str | None = None
+    node_id: str | None = None
+    skill: str = "adaos_drive"
+    zone: str | None = None
+    zone_id: str | None = None
+    filename: str | None = None
+    name: str | None = None
+    size_bytes: int | None = None
+    mime_type: str | None = None
+    mime: str | None = None
+    modified_at: str | None = None
+    expires_at: str | float | int | None = None
+    ttl_seconds: int | None = None
+    url: str | None = None
+    view_url: str | None = None
+    download_url: str | None = None
+    root_download_url: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+def _drive_public_http_error(exc: Exception) -> HTTPException:
+    status, detail = map_public_link_exception(exc)
+    return HTTPException(status_code=status, detail=detail)
+
+
+@router.post("/v1/drive/public-links/register")
+async def drive_public_link_register(
+    body: DrivePublicLinkRegisterRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    root_token: str | None = Header(default=None, alias="X-Root-Token"),
+) -> dict[str, Any]:
+    auth = _require_root_read_auth_or_legacy_root_token(
+        authorization=authorization,
+        owner_token=owner_token,
+        root_token=root_token,
+    )
+    try:
+        dump = getattr(body, "model_dump", None)
+        payload = dump(exclude_none=True) if callable(dump) else body.dict(exclude_none=True)
+        public_token = str(payload.get("public_token") or "")
+        root_base = str(request.base_url).rstrip("/")
+        root_download_url = build_root_public_content_url(root_base, public_token, download=True)
+        payload.setdefault("view_url", build_root_public_content_url(root_base, public_token, download=False))
+        payload.setdefault("root_download_url", root_download_url)
+        payload.setdefault("download_url", root_download_url)
+        record = register_root_public_link(payload, ctx=get_ctx())
+        link = dict(record)
+        link["root_download_url"] = root_download_url
+        link.setdefault("download_url", str(payload.get("download_url") or root_download_url))
+        return {
+            "ok": True,
+            "auth": {"method": auth.get("method")},
+            "link": link,
+            "root_download_url": root_download_url,
+        }
+    except Exception as exc:
+        if isinstance(exc, (ValueError, DrivePublicLinkError)):
+            raise _drive_public_http_error(exc) from exc
+        raise
+
+
+@router.get("/v1/drive/public-links/{public_token}/meta")
+@router.get("/v1/drive/public-links/{public_token}/resolve")
+async def drive_public_link_meta(public_token: str) -> dict[str, Any]:
+    try:
+        return {"ok": True, "link": root_public_link_metadata(public_token, ctx=get_ctx())}
+    except Exception as exc:
+        if isinstance(exc, (ValueError, DrivePublicLinkError)):
+            raise _drive_public_http_error(exc) from exc
+        raise
+
+
+async def _drive_public_link_content_response(
+    public_token: str,
+    request: Request,
+    *,
+    download: bool = False,
+):
+    try:
+        root_record = resolve_root_public_link(public_token, ctx=get_ctx())
+        hub_token = str(root_record.get("hub_token") or "").strip()
+        return stream_hub_public_link(public_token, hub_token, request, download=download, ctx=get_ctx())
+    except Exception as exc:
+        if isinstance(exc, (ValueError, DrivePublicLinkError)):
+            raise _drive_public_http_error(exc) from exc
+        raise
+
+
+@router.get("/v1/drive/public-links/{public_token}/content")
+async def drive_public_link_content(
+    public_token: str,
+    request: Request,
+    download: bool = False,
+):
+    return await _drive_public_link_content_response(public_token, request, download=download)
+
+
+@router.head("/v1/drive/public-links/{public_token}/content")
+async def drive_public_link_content_head(
+    public_token: str,
+    request: Request,
+    download: bool = False,
+):
+    return await _drive_public_link_content_response(public_token, request, download=download)
 
 
 @router.post("/v1/hub/control/report")

@@ -21,14 +21,16 @@ RESOLUTION_SCHEMA = "adaos.navigation.resolution.v1"
 CONNECT_REGISTER = "connect.register"
 AUTH_LOGIN = "auth.login"
 WEBSPACE_OPEN = "webspace.open"
+DRIVE_DOWNLOAD = "drive.download"
 
-INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN})
+INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN, DRIVE_DOWNLOAD})
 SPACE_KINDS = frozenset({"workspace", "development", "preview", "trial"})
 PREVIEW_STAGES = frozenset({"prototype", "automation", "trial", "publication"})
 
 _QUERY_ORDER = (
     "intent",
     "zone",
+    "public_token",
     "subnet_id",
     "webspace_id",
     "space_kind",
@@ -104,6 +106,10 @@ def validate_destination(destination: Mapping[str, Any]) -> dict[str, Any]:
         normalized["preview_stage"] = stage
     if intent == CONNECT_REGISTER and not _text(normalized.get("user_code")):
         raise ValueError("connect.register requires user_code")
+    if intent == DRIVE_DOWNLOAD:
+        missing = [key for key in ("zone", "public_token") if not _text(normalized.get(key))]
+        if missing:
+            raise ValueError(f"drive.download requires: {', '.join(missing)}")
     if intent == WEBSPACE_OPEN:
         missing = [
             key
@@ -171,6 +177,20 @@ def webspace_destination(
             "expected_scenario_id": expected_scenario_id,
             "expected_revision": expected_revision,
             "preview_stage": preview_stage,
+        }
+    )
+
+
+def drive_download_destination(
+    public_token: str,
+    *,
+    zone: str,
+) -> dict[str, Any]:
+    return validate_destination(
+        {
+            "intent": DRIVE_DOWNLOAD,
+            "zone": zone,
+            "public_token": public_token,
         }
     )
 
@@ -262,6 +282,8 @@ def resolve_destination(
         return _resolution("ready", "register", "registration_intent_ready", target, context)
     if intent == AUTH_LOGIN:
         return _resolution("ready", "login", "login_intent_ready", target, context)
+    if intent == DRIVE_DOWNLOAD:
+        return _resolution("ready", "download", "drive_download_intent_ready", target, context)
 
     if _text(context.get("zone")).lower() != target["zone"]:
         return _resolution(
@@ -332,12 +354,14 @@ __all__ = [
     "AUTH_LOGIN",
     "CONNECT_REGISTER",
     "DESTINATION_SCHEMA",
+    "DRIVE_DOWNLOAD",
     "INTENTS",
     "PREVIEW_STAGES",
     "RESOLUTION_SCHEMA",
     "SPACE_KINDS",
     "WEBSPACE_OPEN",
     "build_url",
+    "drive_download_destination",
     "login_destination",
     "parse_url",
     "registration_destination",

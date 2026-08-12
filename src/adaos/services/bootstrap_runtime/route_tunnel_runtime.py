@@ -1929,6 +1929,7 @@ class NatsRouteTunnelRuntime:
                 request_headers: dict[str, Any] | None,
                 display_name: str | None = None,
                 mime_type: str | None = None,
+                download: bool = False,
             ) -> None:
                 from adaos.services.media_core import (
                     ROOT_MEDIA_RELAY_CHUNK_BYTES,
@@ -1967,6 +1968,10 @@ class NatsRouteTunnelRuntime:
                     byte_range=range_spec,
                     lower_case_headers=True,
                 )
+                if download:
+                    safe_name = response_name.replace("\\", "_").replace("/", "_").replace('"', "'")
+                    safe_name = safe_name.replace("\r", "").replace("\n", "").strip() or "download"
+                    headers["content-disposition"] = f'attachment; filename="{safe_name}"'
                 length = int(headers.get("content-length") or 0)
                 await _route_reply(
                     key,
@@ -3080,6 +3085,7 @@ class NatsRouteTunnelRuntime:
                             method = str((data or {}).get("method") or "GET").upper()
                             path = str((data or {}).get("path") or "/media/files")
                             path_norm = (path.rstrip("/") or "/") if isinstance(path, str) else "/"
+                            search = str((data or {}).get("search") or "")
                             headers = (data or {}).get("headers") if isinstance((data or {}).get("headers"), dict) else {}
                             content_length = int((data or {}).get("content_length") or 0)
 
@@ -3106,6 +3112,97 @@ class NatsRouteTunnelRuntime:
                                 }
                                 await _route_media_reply_json(key, status=200, payload=runtime0)
                                 route_outcome = "media_runtime_replied"
+                                return
+
+                            drive_public_token = ""
+                            for _prefix in (
+                                "/media/drive-public-links/",
+                                "/api/skills/adaos_drive/public-links/",
+                            ):
+                                if method in ("GET", "HEAD") and path_norm.startswith(_prefix):
+                                    suffix0 = unquote(path_norm[len(_prefix):])
+                                    if suffix0.endswith("/content"):
+                                        drive_public_token = suffix0[: -len("/content")].strip("/")
+                                    break
+                            if drive_public_token:
+                                try:
+                                    from adaos.services.drive_public_links import (
+                                        DrivePublicLinkExpired,
+                                        DrivePublicLinkForbidden,
+                                        DrivePublicLinkNotFound,
+                                        resolve_hub_public_link,
+                                    )
+
+                                    hub_token = str(
+                                        headers.get("x-adaos-drive-link-token")
+                                        or headers.get("X-AdaOS-Drive-Link-Token")
+                                        or ""
+                                    ).strip()
+                                    record, target = resolve_hub_public_link(drive_public_token, hub_token, ctx=service.ctx)
+                                    download_flag = str(_query_param(search, "download") or "").strip().lower() in {
+                                        "1",
+                                        "true",
+                                        "yes",
+                                        "on",
+                                    }
+                                except ValueError as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=400,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "drive_public_content_bad_request"
+                                    return
+                                except PermissionError as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=403,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "drive_public_content_forbidden"
+                                    return
+                                except FileNotFoundError as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=404,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "drive_public_content_missing"
+                                    return
+                                except DrivePublicLinkExpired:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=410,
+                                        payload={"ok": False, "detail": "drive_public_link_expired"},
+                                    )
+                                    route_outcome = "drive_public_content_expired"
+                                    return
+                                except DrivePublicLinkForbidden:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=403,
+                                        payload={"ok": False, "detail": "drive_public_link_forbidden"},
+                                    )
+                                    route_outcome = "drive_public_content_forbidden"
+                                    return
+                                except DrivePublicLinkNotFound:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=404,
+                                        payload={"ok": False, "detail": "drive_public_link_not_found"},
+                                    )
+                                    route_outcome = "drive_public_content_missing"
+                                    return
+                                await _route_media_reply_file(
+                                    key,
+                                    target=target,
+                                    method=method,
+                                    request_headers=headers,
+                                    display_name=str(record.get("filename") or target.name),
+                                    mime_type=str(record.get("mime_type") or ""),
+                                    download=download_flag,
+                                )
+                                route_outcome = "drive_public_content_replied"
                                 return
 
                             media_indexer_content_prefixes = (
