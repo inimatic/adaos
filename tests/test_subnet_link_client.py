@@ -181,6 +181,10 @@ def test_member_link_allocator_trim_is_rate_limited(monkeypatch) -> None:
 
 def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> None:
     client = mod.MemberLinkClient()
+    import adaos.services.voice_runtime as voice_runtime
+
+    voice_projection = {"enabled": True, "state": "ready", "owner": "room"}
+    monkeypatch.setattr(voice_runtime, "listening_service_projection", lambda: voice_projection)
     monkeypatch.setattr(mod, "BUILD_INFO", SimpleNamespace(version="0.1.0", build_date="2026-05-22T09:17:56+03:00"))
     monkeypatch.setattr(
         mod,
@@ -226,6 +230,10 @@ def test_member_snapshot_heartbeat_carries_core_build_version(monkeypatch) -> No
     assert snapshot["build"]["runtime_base_version"] == "0.1.0"
     assert snapshot["build"]["runtime_target_version"] == "6ae4ddbc8bc4ad25f391bf18f0ed868052d11a92"
     assert snapshot["slots"]["active_manifest"]["build_version"] == "0.1.0+1.6ae4ddb"
+    assert snapshot["environment"]["voice"]["listening"] == voice_projection
+    assert snapshot["environment"]["voice"]["stt"] == "endpoint_audio"
+    assert snapshot["environment"]["voice"]["tts"] == "native_or_browser"
+    assert snapshot["services"]["voice_listening"] == voice_projection
 
 
 def test_member_snapshot_heartbeat_repairs_stale_default_manifest_version(monkeypatch) -> None:

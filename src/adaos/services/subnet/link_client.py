@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 import time
 import urllib.parse
 from typing import Any, Callable
@@ -572,6 +573,12 @@ class MemberLinkClient:
         node_names = normalize_node_names(getattr(getattr(conf, "node_settings", None), "node_names", []))
         now = time.time()
         node_state = str(lifecycle.get("node_state") or "ready")
+        try:
+            from adaos.services.voice_runtime import listening_service_projection
+
+            voice_listening = listening_service_projection()
+        except Exception:
+            voice_listening = {}
         snapshot = {
             "captured_at": now,
             "node_id": str(getattr(conf, "node_id", "") or ""),
@@ -587,6 +594,15 @@ class MemberLinkClient:
             "connected_to_subnet": bool(self.is_connected()),
             "connected_to_hub": bool(self.is_connected()),
             "member_link_transition": transition,
+            "environment": {
+                "platform": sys.platform,
+                "voice": {
+                    "listening": voice_listening,
+                    "stt": "endpoint_audio",
+                    "tts": "native_or_browser",
+                },
+            },
+            "services": {"voice_listening": voice_listening},
             "build": {
                 "version": str(BUILD_INFO.version or ""),
                 "build_date": str(BUILD_INFO.build_date or ""),
