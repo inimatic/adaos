@@ -645,6 +645,35 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     assert call_order == ["reconnect"]
 
 
+def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "0")
+    call_order: list[object] = []
+
+    class _ServiceSupervisor:
+        async def start_all(self) -> None:
+            call_order.append("services")
+
+    async def _emit(event_type, payload, **kwargs) -> None:
+        call_order.append((event_type, payload, kwargs))
+
+    monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+    monkeypatch.setattr(api_server.sdk_data_bus, "emit", _emit)
+    monkeypatch.setattr(
+        api_server,
+        "get_ctx",
+        lambda: (_ for _ in ()).throw(AssertionError("raw AgentContext bus must not be used as the SDK bus")),
+    )
+
+    asyncio.run(api_server._start_service_skills_after_promotion("test.cutover"))
+
+    assert call_order[0] == "services"
+    event_type, payload, kwargs = call_order[1]
+    assert event_type == "sys.ready"
+    assert payload["promoted"] is True
+    assert payload["reason"] == "test.cutover"
+    assert kwargs == {"source": "lifecycle.promotion", "actor": "system"}
+
+
 def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-a-a-abcdef12")

@@ -465,6 +465,16 @@ _YWS_GUARD_SHORT_SESSION_WINDOW_S = _env_float("ADAOS_YWS_GUARD_SHORT_SESSION_WI
 _YWS_GUARD_SHORT_SESSION_LIMIT = _env_int("ADAOS_YWS_GUARD_SHORT_SESSION_LIMIT", 3, minimum=1)
 _YWS_GUARD_ROUTE_DEPENDENCY_RECOVERY = _env_flag("ADAOS_YWS_GUARD_ROUTE_DEPENDENCY_RECOVERY", True)
 _YWS_GUARD_ROUTE_PROBE_FRESH_S = _env_float("ADAOS_YWS_GUARD_ROUTE_PROBE_FRESH_S", 30.0, minimum=1.0)
+_YWS_GUARD_PLANNED_TRANSITION_GRACE_S = _env_float(
+    "ADAOS_YWS_GUARD_PLANNED_TRANSITION_GRACE_S",
+    120.0,
+    minimum=0.0,
+)
+_YWS_GUARD_PLANNED_TRANSITION_MAX_AGE_S = _env_float(
+    "ADAOS_YWS_GUARD_PLANNED_TRANSITION_MAX_AGE_S",
+    900.0,
+    minimum=1.0,
+)
 _WS_EVENT_SEND_QUEUE_LIMIT = _env_int("ADAOS_WS_EVENT_SEND_QUEUE_LIMIT", 64, minimum=1)
 _WS_EVENT_SEND_LOG_INTERVAL_S = _env_float("ADAOS_WS_EVENT_SEND_LOG_INTERVAL_S", 10.0, minimum=0.0)
 _YROOM_DIAG_LOG_INTERVAL_SEC = _env_float("ADAOS_YJS_ROOM_DIAG_LOG_INTERVAL_SEC", 5.0, minimum=0.0)
@@ -4274,6 +4284,17 @@ def _record_yws_guard_attempt(
     client_attempt_id: str | None = None,
 ) -> None:
     now = time.time()
+    planned_transition = _yws_guard_planned_transition_snapshot(now_ts=now)
+    if bool(planned_transition.get("suppress_reconnect_guard")):
+        with _YWS_STORM_LOCK:
+            _YWS_GUARD_DIAG["planned_transition_attempt_ignored_total"] = int(
+                _YWS_GUARD_DIAG.get("planned_transition_attempt_ignored_total") or 0
+            ) + 1
+            _YWS_GUARD_DIAG["last_planned_transition_attempt_ignored_at"] = now
+            _YWS_GUARD_DIAG["last_planned_transition_marker"] = str(
+                planned_transition.get("marker") or ""
+            )
+        return
     key = _yws_guard_client_history_key(
         webspace_id,
         dev_id,
@@ -4310,6 +4331,8 @@ def _record_yws_short_session(
     if lifetime_s >= _YWS_GUARD_MIN_STABLE_SESSION_S:
         return
     now = time.time()
+    if bool(_yws_guard_planned_transition_snapshot(now_ts=now).get("suppress_reconnect_guard")):
+        return
     key = _yws_guard_client_history_key(
         webspace_id,
         dev_id,
@@ -4751,6 +4774,91 @@ def _float_or_none(value: Any) -> float | None:
     return number
 
 
+def _yws_guard_planned_transition_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
+    """Identify the bounded reconnect window created by an AdaOS rollout.
+
+    A warm switch and the following root-supervisor restart close several
+    browser sockets at once.  Those reconnects are expected and must not be
+    classified as an independent multi-client attack.  The exemption is
+    bounded by transition age/completion grace and admission still requires a
+    healthy route (checked by the caller) plus the normal active-session cap.
+    """
+
+    now = time.time() if now_ts is None else float(now_ts)
+    try:
+        from adaos.services.core_update import read_status as _read_core_update_status
+
+        status = _read_core_update_status() or {}
+    except Exception as exc:
+        return {
+            "active": False,
+            "recently_completed": False,
+            "suppress_reconnect_guard": False,
+            "reason": "update_status_unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    state = str(status.get("state") or "").strip().lower()
+    phase = str(status.get("phase") or "").strip().lower()
+    updated_at = _float_or_none(status.get("updated_at"))
+    status_age_s = max(0.0, now - updated_at) if updated_at is not None else None
+    active_transition = bool(
+        state in {"countdown", "draining", "stopping", "restarting", "applying"}
+        or phase in {
+            "drain",
+            "shutdown",
+            "launch",
+            "root_promotion_pending",
+            "root_promoted",
+        }
+    )
+    active = bool(
+        active_transition
+        and (status_age_s is None or status_age_s <= float(_YWS_GUARD_PLANNED_TRANSITION_MAX_AGE_S))
+    )
+    completion_at = max(
+        [
+            value
+            for value in (
+                _float_or_none(status.get("root_restart_completed_at")),
+                _float_or_none(status.get("validated_at")),
+                _float_or_none(status.get("finished_at")),
+            )
+            if value is not None
+        ]
+        or [0.0]
+    )
+    completion_age_s = max(0.0, now - completion_at) if completion_at > 0.0 else None
+    recently_completed = bool(
+        state in {"succeeded", "success"}
+        and completion_age_s is not None
+        and completion_age_s <= float(_YWS_GUARD_PLANNED_TRANSITION_GRACE_S)
+    )
+    marker = "|".join(
+        token
+        for token in (
+            str(status.get("target_version") or "").strip(),
+            state,
+            phase,
+            str(int(completion_at)) if completion_at > 0.0 else "",
+        )
+        if token
+    )
+    return {
+        "active": active,
+        "recently_completed": recently_completed,
+        "suppress_reconnect_guard": bool(active or recently_completed),
+        "reason": "planned_transition_active" if active else (
+            "planned_transition_completion_grace" if recently_completed else "no_planned_transition"
+        ),
+        "state": state or None,
+        "phase": phase or None,
+        "status_age_s": round(status_age_s, 3) if status_age_s is not None else None,
+        "completion_age_s": round(completion_age_s, 3) if completion_age_s is not None else None,
+        "marker": marker,
+    }
+
+
 def _yws_guard_route_dependency_snapshot(*, now_ts: float | None = None) -> dict[str, Any]:
     """Return whether route semantics are healthy enough to permit a YWS rescue."""
     now = time.time() if now_ts is None else float(now_ts)
@@ -4896,6 +5004,9 @@ def _yws_guard_reject_reason(
     route_dependency: dict[str, Any] = {}
     dependency_recovery_allowed = False
     dependency_recovery_reason = ""
+    planned_transition = _yws_guard_planned_transition_snapshot(now_ts=now)
+    planned_transition_recovery_allowed = False
+    planned_transition_cleared_total = 0
 
     def _dependency_allows_recovery(trigger: str) -> bool:
         nonlocal route_dependency, dependency_recovery_allowed, dependency_recovery_reason
@@ -4999,7 +5110,43 @@ def _yws_guard_reject_reason(
         webspace_quarantine_until = float(
             _YWS_GUARD_QUARANTINE_UNTIL.get(_yws_guard_quarantine_key(webspace_key)) or 0.0
         )
-        if client_quarantine_until > now:
+        if bool(planned_transition.get("suppress_reconnect_guard")):
+            if active_total > 0:
+                planned_transition_recovery_allowed = True
+            elif _dependency_allows_recovery("planned_update_reconnect"):
+                planned_transition_recovery_allowed = True
+            if planned_transition_recovery_allowed:
+                history_prefix = f"{webspace_key}::"
+                for mapping in (
+                    _YWS_CLIENT_OPEN_HISTORY,
+                    _YWS_CLIENT_ATTEMPT_HISTORY,
+                    _YWS_CLIENT_SHORT_SESSION_HISTORY,
+                    _YWS_GUARD_QUARANTINE_UNTIL,
+                    _YWS_GUARD_RECOVERY_IN_FLIGHT_UNTIL,
+                    _YWS_GUARD_INCIDENTS,
+                ):
+                    for item_key in list(mapping.keys()):
+                        if str(item_key or "").startswith(history_prefix):
+                            mapping.pop(item_key, None)
+                            planned_transition_cleared_total += 1
+                cleared_client_quarantine = client_quarantine_until > now
+                cleared_webspace_quarantine = webspace_quarantine_until > now
+                _YWS_GUARD_DIAG["planned_transition_recovery_total"] = int(
+                    _YWS_GUARD_DIAG.get("planned_transition_recovery_total") or 0
+                ) + 1
+                _YWS_GUARD_DIAG["last_planned_transition_recovery_at"] = now
+                _YWS_GUARD_DIAG["last_planned_transition_recovery_webspace_id"] = webspace_key
+                _YWS_GUARD_DIAG["last_planned_transition_recovery_marker"] = str(
+                    planned_transition.get("marker") or ""
+                )
+                _YWS_GUARD_DIAG["last_planned_transition_recovery_cleared_total"] = (
+                    planned_transition_cleared_total
+                )
+        if active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
+            reason = "active_limit"
+        elif planned_transition_recovery_allowed:
+            reason = ""
+        elif client_quarantine_until > now:
             if active_total <= 0 and _dependency_allows_recovery("client_reconnect_backoff_no_active_yws"):
                 _YWS_GUARD_QUARANTINE_UNTIL.pop(client_key, None)
                 cleared_client_quarantine = True
@@ -5016,8 +5163,6 @@ def _yws_guard_reject_reason(
                 reason = "webspace_reconnect_backoff"
                 quarantine_until = webspace_quarantine_until
                 quarantine_ttl_s = max(0.0, webspace_quarantine_until - now)
-        elif active_total >= _YWS_MAX_ACTIVE_PER_WEBSPACE:
-            reason = "active_limit"
         else:
             client_reconnect_storm = client_15s >= _YWS_GUARD_CLIENT_OPEN_15S
             webspace_reconnect_storm = (
@@ -5139,6 +5284,9 @@ def _yws_guard_reject_reason(
         "route_dependency": route_dependency,
         "dependency_recovery_allowed": dependency_recovery_allowed,
         "dependency_recovery_reason": dependency_recovery_reason,
+        "planned_transition": planned_transition,
+        "planned_transition_recovery_allowed": planned_transition_recovery_allowed,
+        "planned_transition_cleared_total": planned_transition_cleared_total,
     }
     if reason:
         _yws_guard_log(
@@ -5381,6 +5529,7 @@ def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | Non
     short_session_threshold_reached = max_client_short_sessions >= int(_YWS_GUARD_SHORT_SESSION_LIMIT)
     webspace_quarantined = webspace_quarantine_until > now
     client_quarantined = bool(quarantined_clients)
+    planned_transition = _yws_guard_planned_transition_snapshot(now_ts=now)
     server_snapshot = _y_server_runtime_snapshot()
     direct_transport_enabled = _yws_direct_transport_enabled()
     state, reason = _yjs_balancer_state(
@@ -5454,8 +5603,11 @@ def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | Non
             "max_cooldown_s": float(_YWS_GUARD_MAX_COOLDOWN_S),
             "escalation_window_s": float(_YWS_GUARD_ESCALATION_WINDOW_S),
             "notify_interval_s": float(_YWS_GUARD_NOTIFY_INTERVAL_S),
+            "planned_transition_grace_s": float(_YWS_GUARD_PLANNED_TRANSITION_GRACE_S),
+            "planned_transition_max_age_s": float(_YWS_GUARD_PLANNED_TRANSITION_MAX_AGE_S),
         },
         "guard": {
+            "planned_transition": planned_transition,
             "recent_attempts_10s": recent_attempts_10s,
             "recent_attempts_60s": recent_attempts_60s,
             "distinct_clients_10s": distinct_clients_10s,

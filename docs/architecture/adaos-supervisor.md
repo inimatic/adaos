@@ -820,6 +820,20 @@ That prewarm now feeds a real fast-cutover path:
 - if candidate promotion, root reconnect, or supervisor adoption fails,
   supervisor keeps the old listener and reschedules the transition
 
+Candidate readiness is deliberately narrower than full active-runtime
+initialization. A passive candidate imports handlers and proves its listener,
+runtime and sidecar readiness, but defers `sys.ready` subscribers until it has
+been promoted. Service-skill startup and the deferred readiness event then run
+in a background promotion task. Slow skill projections therefore do not hold
+the candidate-readiness barrier or the promotion HTTP request.
+
+The hub/member watchdog treats `/api/node/reliability/runtime` as an advisory
+rich snapshot, not as the process-health probe. Its HTTP read is dispatched off
+the supervisor asyncio loop and uses
+`ADAOS_SUPERVISOR_RELIABILITY_PROBE_TIMEOUT_SEC` (4 seconds by default). A busy
+runtime may miss that deadline without freezing update coordination; listener
+and process probes remain the authoritative liveness checks.
+
 Candidate startup is also a read-only boundary for shared skill runtime slots.
 Workspace-to-runtime source synchronization is an explicit development action,
 never an implicit handler-import step, and is prohibited in candidate mode.

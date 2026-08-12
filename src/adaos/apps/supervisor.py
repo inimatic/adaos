@@ -589,6 +589,10 @@ def _required_upstream_watchdog_poll_interval_sec() -> float:
     return _RUNTIME_CONFIG.required_upstream_watchdog_poll_interval_sec()
 
 
+def _runtime_reliability_probe_timeout_sec() -> float:
+    return _RUNTIME_CONFIG.runtime_reliability_probe_timeout_sec()
+
+
 def _hub_root_watchdog_cooldown_sec() -> float:
     return _RUNTIME_CONFIG.hub_root_watchdog_cooldown_sec()
 
@@ -3935,6 +3939,25 @@ class SupervisorManager:
         runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
         return dict(runtime) if isinstance(runtime, dict) else {}
 
+    async def _runtime_reliability_payload_async(self, *, timeout: float | None = None) -> dict[str, Any]:
+        """Read advisory reliability data without blocking the supervisor loop.
+
+        Runtime reliability is intentionally richer than the cheap listener
+        health probe.  Event-loop pressure in the managed runtime may delay
+        this response, but it must not freeze update/restart coordination in
+        the supervisor itself.
+        """
+
+        resolved_timeout = (
+            _runtime_reliability_probe_timeout_sec()
+            if timeout is None
+            else max(0.1, float(timeout))
+        )
+        return await asyncio.to_thread(
+            self._runtime_reliability_payload,
+            timeout=resolved_timeout,
+        )
+
     def _transition_continuity_guard_snapshot(self, *, timeout: float = 2.0) -> dict[str, Any]:
         runtime = self._runtime_reliability_payload(timeout=timeout)
         sidecar_runtime = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
@@ -4558,7 +4581,7 @@ class SupervisorManager:
         last_state: dict[str, Any] = {}
         while True:
             attempts += 1
-            runtime = self._runtime_reliability_payload(timeout=1.5)
+            runtime = await self._runtime_reliability_payload_async()
             last_state = self._hub_root_channel_state(runtime)
             if self._hub_root_channel_ready(last_state):
                 return {
@@ -4585,7 +4608,7 @@ class SupervisorManager:
         if proc is None or proc.poll() is not None:
             return
         await self._maybe_probe_hub_root_from_root()
-        runtime = self._runtime_reliability_payload(timeout=1.5)
+        runtime = await self._runtime_reliability_payload_async()
         if not runtime:
             return
         previous_state = str(self._hub_root_watchdog_last_state or "").strip().lower()
@@ -4684,7 +4707,7 @@ class SupervisorManager:
         last_state: dict[str, Any] = {}
         while True:
             attempts += 1
-            runtime = self._runtime_reliability_payload(timeout=1.5)
+            runtime = await self._runtime_reliability_payload_async()
             last_state = self._member_hub_channel_state(runtime)
             if bool(last_state.get("connected")):
                 return {
@@ -4710,7 +4733,7 @@ class SupervisorManager:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
-        runtime = self._runtime_reliability_payload(timeout=1.5)
+        runtime = await self._runtime_reliability_payload_async()
         if not runtime:
             return
         previous_state = str(self._member_hub_watchdog_last_state or "").strip().lower()

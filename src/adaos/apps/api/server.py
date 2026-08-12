@@ -190,6 +190,7 @@ _maybe_set_windows_selector_loop()
 
 from adaos.apps.api.auth import require_token
 from adaos.build_info import BUILD_INFO
+from adaos.sdk.data import bus as sdk_data_bus
 from adaos.sdk.data.env import get_tts_backend
 from adaos.adapters.audio.tts.native_tts import NativeTTS
 from adaos.integrations.rhasspy.tts import RhasspyTTSAdapter
@@ -1485,6 +1486,32 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
     except Exception:
         logging.getLogger("adaos.runtime").warning(
             "failed to start service skills after candidate promotion reason=%s",
+            reason,
+            exc_info=True,
+        )
+    try:
+        delay_s = max(
+            0.0,
+            float(os.getenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "2") or "2"),
+        )
+    except Exception:
+        delay_s = 2.0
+    if delay_s > 0.0:
+        await asyncio.sleep(min(delay_s, 30.0))
+    try:
+        await sdk_data_bus.emit(
+            "sys.ready",
+            {
+                "ts": time.time(),
+                "promoted": True,
+                "reason": str(reason or "supervisor.fast_cutover"),
+            },
+            source="lifecycle.promotion",
+            actor="system",
+        )
+    except Exception:
+        logging.getLogger("adaos.runtime").warning(
+            "failed to emit deferred sys.ready after candidate promotion reason=%s",
             reason,
             exc_info=True,
         )

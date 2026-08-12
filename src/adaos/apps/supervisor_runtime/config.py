@@ -202,6 +202,20 @@ class SupervisorRuntimeConfig:
             minimum=2.0,
         )
 
+    def runtime_reliability_probe_timeout_sec(self) -> float:
+        """Deadline for the advisory runtime reliability snapshot.
+
+        The snapshot is richer than a listener readiness probe and can be
+        delayed by a busy runtime event loop.  Keep it bounded, but do not use
+        the old 1.5 second transport deadline as a process-health verdict.
+        """
+
+        return self._float(
+            "ADAOS_SUPERVISOR_RELIABILITY_PROBE_TIMEOUT_SEC",
+            4.0,
+            minimum=0.5,
+        )
+
     def hub_root_watchdog_cooldown_sec(self) -> float:
         return self._float(
             "ADAOS_SUPERVISOR_HUB_ROOT_RECONNECT_COOLDOWN_SEC", 30.0, minimum=5.0

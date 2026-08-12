@@ -83,6 +83,7 @@ class BootstrapBootCoordinator:
         except Exception:
             pass
         conf = getattr(service.ctx, "config", None) or operations.load_config(ctx=service.ctx)
+        candidate_runtime_mode = bool(service._nats_policy.runtime_candidate_mode())
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
                 from adaos.services.release_validation_autorun import (
@@ -182,11 +183,11 @@ class BootstrapBootCoordinator:
         except Exception:
             pass
         await operations.bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
-        if not service._nats_policy.runtime_candidate_mode():
+        if not candidate_runtime_mode:
             await asyncio.to_thread(operations.ensure_managed_nlu_service_skills, service._log)
         await service.skills_loader.import_all_handlers(service.ctx.paths.skills_dir())
         # Start service-type skills (external processes).
-        if service._nats_policy.runtime_candidate_mode():
+        if candidate_runtime_mode:
             service._log.info("skipping service skill startup for candidate runtime prewarm")
         else:
             try:
@@ -695,20 +696,26 @@ class BootstrapBootCoordinator:
 
             service._start_boot_task_once("adaos-lease-monitor", lease_monitor)
             service._lifecycle.mark_ready()
-            _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
-            await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
-            _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
+            if candidate_runtime_mode:
+                service._log.info(
+                    "deferring sys.ready handlers until candidate runtime promotion"
+                )
+            else:
+                _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
+                await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
+                _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
             _node_status_started = _startup_stage_mark("bootstrap_emit_node_status")
-            await _emit_node_status("sys.ready")
+            await _emit_node_status("candidate.ready" if candidate_runtime_mode else "sys.ready")
             _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
             try:
                 if callable(_finalize_runtime_boot_status):
                     _finalize_runtime_boot_status()
             except Exception:
-                service._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
-            _schedule_release_validation_autorun("sys.ready")
+                service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
+            if not candidate_runtime_mode:
+                _schedule_release_validation_autorun("sys.ready")
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
-            await _report_control_lifecycle("sys.ready")
+            await _report_control_lifecycle("candidate.ready" if candidate_runtime_mode else "sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
             service._status_watchdog.start_heartbeats(service._lifecycle)
         else:
@@ -732,18 +739,24 @@ class BootstrapBootCoordinator:
                         "candidate member runtime keeps registration heartbeat and hub websocket passive until promotion"
                     )
                 service._lifecycle.signal_ready()
-                _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
-                await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
-                _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
+                if candidate_runtime_mode:
+                    service._log.info(
+                        "deferring sys.ready handlers until candidate runtime promotion"
+                    )
+                else:
+                    _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
+                    await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
+                    _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
                 _node_status_started = _startup_stage_mark("bootstrap_emit_node_status")
-                await _emit_node_status("sys.ready")
+                await _emit_node_status("candidate.ready" if candidate_runtime_mode else "sys.ready")
                 _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
                 try:
                     if callable(_finalize_runtime_boot_status):
                         _finalize_runtime_boot_status()
                 except Exception:
-                    service._log.debug("failed to finalize core.update.status after sys.ready", exc_info=True)
-                _schedule_release_validation_autorun("sys.ready")
+                    service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
+                if not candidate_runtime_mode:
+                    _schedule_release_validation_autorun("sys.ready")
 
             # Keep the original boot-generation callback available to an
             # explicit member reconnect. If startup registration failed (for

@@ -1271,6 +1271,27 @@ def test_hub_root_watchdog_invokes_runtime_reconnect(monkeypatch) -> None:
     assert manager._hub_root_watchdog_last_result["verification"]["ok"] is False
 
 
+def test_supervisor_reliability_probe_uses_nonblocking_configured_deadline(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUPERVISOR_RELIABILITY_PROBE_TIMEOUT_SEC", "4.5")
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    seen: list[float] = []
+
+    def _payload(*, timeout: float = 0.0) -> dict[str, object]:
+        seen.append(timeout)
+        return {"node": {"role": "hub"}}
+
+    monkeypatch.setattr(manager, "_runtime_reliability_payload", _payload)
+
+    result = asyncio.run(manager._runtime_reliability_payload_async())
+
+    assert result == {"node": {"role": "hub"}}
+    assert seen == [4.5]
+
+
 def test_hub_root_watchdog_resets_browser_route_when_root_control_is_ready(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_ROUTE_DEGRADED_RESET", "1")
