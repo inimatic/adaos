@@ -162,7 +162,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF5 | Ray is a conforming optional executor service skill | `deferred` | resume only after the complete local/member-node loop |
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
-| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, accepts formulation, and creates a scoped pre-Codex Development Session | `validated-local` on the TLP reference case | completed engineering gate |
+| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local` for mechanics; strengthened real-LLM TLP admission proof pending | active hardening gate |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `specified` | current engineering gate |
 | ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
@@ -273,6 +273,26 @@ and exposes stale/unavailable/error separately from domain data. Research
 Workbench opts into strict manifest/WebUI policy conformance. See
 [Runtime Data Route Reliability](runtime-data-route-reliability.md) and its
 [2026-08-12 evidence receipt](runtime-data-route-reliability-evidence-2026-08-12.md).
+
+ARF7.1 formulation/layout hardening (2026-08-12) reopens the scientific-quality
+portion of the gate without undoing the already proven Project/artifact/session
+mechanics. `webui.v1` now has state-selected full-surface `layout.variants`;
+page state is scoped by webspace/scenario/page; loose null comparisons have
+explicit nullish semantics; desktop and modal renderers consume the same layout
+plan. Workbench uses portfolio and direction variants, so an absent/staged
+selection deterministically falls back to the portfolio instead of showing an
+empty detail view. The shared Markdown renderer normalizes CRLF before legacy
+formula delimiter recognition and the exact imported TLP equation is covered
+by a KaTeX regression.
+
+The artifact SDK now parses notebook source cells before bounding, omits output
+payloads, emits stable fragment refs, and discloses coverage. ResearchPrototype
+1.1 records core-owned `context_coverage`, source-grounded claims, typed paired
+design/inference/requirement/check structures, and an unforgeable deterministic
+`admission_review`. Bounded LLM repair now receives semantic quality failures;
+exhausted repair remains a visible draft. The existing `tlp_research_03`
+revision is intentionally not grandfathered into readiness: it lacks the new
+contract and remains insufficient for autonomous Codex until reformulated.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -1026,6 +1046,27 @@ not substitute for this operator path.
   idle/reconnect fault matrix. The read intent is preserved and re-verified on
   both local and routed member execution, and explicit retry is scoped to one
   semantic source. No Workbench-private transport is admitted.
+- [x] `[must]` `ARF7.1-20f` Add reusable state-selected full-surface layout
+  variants to `webui.v1`; isolate page state across webspace/scenario/page,
+  heal staged missing defaults, define nullish comparison semantics, and prove
+  portfolio/detail/back/reload fallback without a Workbench-private renderer.
+- [x] `[must]` `ARF7.1-20g` Make Markdown math parsing line-ending neutral and
+  cover the exact CRLF legacy equation block imported by the TLP review.
+- [x] `[must]` `ARF7.1-20h` Extract notebook source cells before bounding,
+  omit outputs, expose fragment provenance and coverage, and prevent generated
+  source claims from citing context that the formulation model did not receive.
+- [x] `[must]` `ARF7.1-20i` Strengthen ResearchPrototype with typed comparator,
+  pairing, RNG, data-seal, estimand, uncertainty, stopping, multiplicity,
+  negative-result, requirement, and acceptance structures. AdaOS owns the
+  deterministic admission review; LLM readiness is never sufficient.
+- [x] `[must]` `ARF7.1-20j` Present drafts honestly, disclose coverage and gate
+  blockers, enable acceptance only for an admitted revision, and coalesce
+  durable LLM progress while retaining detailed grouped chat updates.
+- [ ] `[must]` `ARF7.1-20k` Run a fresh ordinary Root-LLM formulation for
+  `tlp_research_03` from both original artifacts, pass the strengthened gate,
+  inspect the result as a human-readable draft, and record a black-box
+  portfolio -> direction -> back -> reload plus exact Markdown preview receipt.
+  This is the remaining operator proof before again calling ARF7.1 closed.
 
 #### Non-blocking follow-ons
 
@@ -1059,6 +1100,9 @@ not substitute for this operator path.
   execution profiles/budgets/stops, evaluation rules, assumptions, risks, open
   questions, implementation requirements, acceptance checks, readiness, source
   bundle, revision, and lineage.
+  Version 1.1 additionally binds disclosed context coverage, provenance-only
+  source grounding, typed causal/reproducibility and inference contracts, and
+  a deterministic core-owned admission review.
 - [ ] `[must]` `ARF7-07` Extend the current ordered experiment stages into a
   validated Campaign DAG with dependencies, branch predicates, evidence gates,
   budget aggregation, and cycle/conflict rejection before adaptive campaigns.

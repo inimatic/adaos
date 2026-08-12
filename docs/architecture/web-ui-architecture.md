@@ -605,6 +605,26 @@ Each layout should also support:
 - preferred focus phase
 - lazy boundaries
 
+### State-selected full-surface variants
+
+`webui.v1` pages may declare `layout.variants[]` when one workflow needs
+materially different full-surface compositions, such as a portfolio and an
+entity workbench. Each variant owns its complete `type`, `pattern`, areas, and
+optional widths. The first matching safe `when` expression wins and one
+`default: true` variant provides deterministic fallback. Widgets assigned to
+areas absent from the selected variant are outside the active view.
+
+This is the preferred ABI for major mode changes. Repeating `visibleIf` on all
+widgets is still useful within one composition, but it must not be used to
+simulate two layouts by placing duplicate `main` roles into one grid.
+
+Page-local state is scoped by `webspace + scenario + page`. Switching scope
+cannot leak selection or tabs from another application. Re-materializing the
+same schema merges only missing initial-state defaults, which supports staged
+Yjs first paint without resetting user choices. Declarative `value == null`
+has explicit nullish semantics (`null` or missing); strict operators retain
+strict semantics.
+
 ## Load and Readiness Model
 
 The target browser must treat staged rendering as a first-class contract.
@@ -767,6 +787,10 @@ Status note:
 - browser renderers now consume a shared layout render plan, so `role`
   remains semantic slot metadata and placement is selected by `layout.type`,
   optional `layout.pattern`, or `semantic.layout.pattern`
+- `webui.v1 layout.variants` and the shared desktop/modal render plan now
+  support state-selected full-surface compositions with deterministic fallback
+- page state is scoped across webspace/scenario/page and staged defaults heal
+  missing fields without overwriting active user state
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
   browser renderers
 - `chat_panel` now materializes into the shared browser chat surface through

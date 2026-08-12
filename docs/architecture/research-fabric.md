@@ -3,15 +3,19 @@
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
 first ARF7 technical precursor proved typed formulation revisions and an exact
-AutomationBrief. ARF7.1 now also validates the user-facing pre-Codex path:
+AutomationBrief. ARF7.1 now also validates the user-facing pre-Codex path and
+its strengthened authoring gate:
 creation, artifact intake, focus, and formulation begin in a shared Research
 Workbench over an explicit local Project and Builder Development Session, not
-in a research-specific Builder tab. Automated implementation, autonomous TLP
+in a research-specific Builder tab. State-scoped full-surface layout variants,
+provenance-aware artifact extraction, disclosed LLM context coverage, and a
+core-owned deterministic admission review now prevent partial UI state or LLM
+self-readiness from becoming an implementation handoff. Automated implementation, autonomous TLP
 campaigns, and replication benchmarking remain target work. Distributed
 execution/Ray is explicitly deferred; the current path executes on the
 selected AdaOS member node.
 
-Last reviewed: 2026-08-11.
+Last reviewed: 2026-08-12.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -107,6 +111,14 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     Projects declare jointly shipped components and entry points; mutable
     focus, write targets, read-only dependencies, artifacts, and scratch access
     belong to a Builder Development Session.
+22. UI-as-data supports state-selected full-surface layout variants. Page
+    state is scoped by webspace, scenario, and page; missing staged defaults
+    are healed without overwriting user navigation. A detail view therefore
+    cannot appear merely because an absent selection was misread as non-null.
+23. The formulation LLM cannot author its own admission. AdaOS owns context
+    coverage, provenance allowlists, and deterministic scientific/automation
+    checks. A failed candidate remains an inspectable draft after bounded
+    repair and cannot create an AutomationBrief.
 
 ## Why `Research Fabric`
 
@@ -577,7 +589,12 @@ The skill is the research identity and future code/runner owner; the Project is
 the declarative distribution definition.
 
 Portfolio and direction detail are mutually exclusive full-width Workbench
-layouts. `selectedDirectionId` is the only local focus authority. A paired
+layouts expressed as `layout.variants`, not as coincident widgets in duplicate
+`main` areas. `researchViewMode` chooses the presentation and
+`selectedDirectionId` supplies the entity identity; the direction variant
+requires both. Local page state is isolated by webspace/scenario/page and its
+defaults are merged for missing fields whenever staged materialization updates
+the same schema. A paired
 Builder selection may be offered as navigation context, but it must never
 overwrite Workbench focus or cause a delayed identity switch. Identity-bearing
 data sources clear their previous value while another direction is loading, so
@@ -611,7 +628,11 @@ Research Workbench: create direction
 The first user-facing implementation is local-first. Source payloads are
 ordinary files under the owned direction skill's `artifacts/partN` groups, and
 each group has a deterministic manifest. The Skill SDK lists, validates,
-resolves, and extracts bounded text from those files. Codex receives native
+resolves, and extracts bounded text from those files. Notebook JSON is parsed
+before bounding; source cells receive stable `#cell=N` refs and output payloads
+are omitted. Text fragments receive stable line refs. Every extraction returns
+a coverage envelope with represented/truncated/unreadable sources and selected
+character/unit counts. Codex receives native
 read-only paths; the conversational LLM receives bounded extraction through
 the orchestrator. Logical `ArtifactRef` addressing is provider-neutral so an
 external store or MCP adapter can be added later without being an admission
@@ -632,6 +653,20 @@ develop the question, falsifiable hypotheses, experiment stages, evidence
 classes, analysis rules, budgets, stops, implementation requirements, and
 acceptance checks. LLM `ready_for_automation` is a proposal only: schema and
 semantic admission are repeated at acceptance.
+
+`context_coverage` and `admission_review` are orchestrator-managed
+ResearchPrototype fields. The LLM cannot emit or override them. Source-grounded
+claims may cite only fragment refs present in the disclosed extraction
+allowlist. The deterministic review separately records quality gates and the
+final admission gates. It requires source coverage and grounding, smoke versus
+confirmatory separation, comparator isolation, named RNG streams, paired
+invariants/varied fields, data sealing/leakage controls, one operationalized
+primary estimand/outcome, uncertainty, multiplicity, practical significance,
+predeclared stopping, negative-result retention, and independently verifiable
+implementation/acceptance records. A schema-valid candidate may still be a
+draft. Bounded repair receives the exact gate findings; exhausted repair stores
+the draft with blockers instead of either discarding useful work or pretending
+it is ready.
 
 The accepted `AutomationBrief` contains the exact Project and primary target,
 SourceBundle/group/item digests and native paths, exact ResearchPrototype

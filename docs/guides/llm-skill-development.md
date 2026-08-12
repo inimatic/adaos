@@ -328,6 +328,53 @@ The minimum verification for a memory-sensitive skill is:
   after idle, and confirm parent RSS either relaxes or produces a named blocker
   in memory status
 
+### Page-state and full-surface layout rules
+
+For a UI-as-data page with materially different modes, declare
+`layout.variants` instead of stacking multiple `role: main` areas and hiding
+their widgets one by one. Use one explicit view-mode state plus the selected
+entity identity, for example:
+
+```json
+{
+  "initialState": {"viewMode": "portfolio", "selectedId": null},
+  "layout": {
+    "type": "single",
+    "areas": [{"id": "portfolio", "role": "main"}],
+    "variants": [
+      {
+        "id": "detail",
+        "when": "$state.viewMode === 'detail' && $state.selectedId != null",
+        "type": "split",
+        "pattern": "focus-detail",
+        "areas": [
+          {"id": "workspace", "role": "main"},
+          {"id": "context", "role": "aux"}
+        ]
+      },
+      {
+        "id": "portfolio",
+        "default": true,
+        "type": "single",
+        "areas": [{"id": "portfolio", "role": "main"}]
+      }
+    ]
+  }
+}
+```
+
+Update `viewMode` and `selectedId` in the same declarative action. On back,
+clear both in the same action. Never rely on `undefined != null` to reveal a
+detail view; the runtime treats loose null comparisons only as explicit
+nullish checks. Page state is local to its webspace/scenario/page and is not a
+replacement for Yjs, streams, or tool-backed durable domain state.
+
+When an LLM consumes skill-owned source artifacts, use the typed artifact SDK
+extraction envelope rather than truncating raw notebook JSON. Report source
+coverage and fragment refs to the user; bind generated claims only to supplied
+refs. Do not let a model-provided `ready` flag substitute for a deterministic
+admission review.
+
 ## Data-plane decision table
 
 | Need | Use | Avoid |
