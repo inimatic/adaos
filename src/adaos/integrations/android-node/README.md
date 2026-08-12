@@ -23,8 +23,12 @@ Current scope:
   stationary AdaOS, with training kept off-device;
 - shared assistant-name activation and persistent listening modes, plus
   Rasa-controlled long note/dialog recording;
-- optional native `AudioRecord(VOICE_COMMUNICATION)` diagnostics with Android
-  AEC/NS/AGC; browser capture remains the default owner;
+- foreground native Android SpeechRecognizer/TTS, with canonical alias gating,
+  recognition alternatives, an address-follow-up session, and portable Rasa;
+- Hub-issued 280 ms room winner leases over member RPC, plus browser claims over
+  the same stationary control WebSocket contract;
+- optional `AudioRecord(VOICE_COMMUNICATION)` diagnostics with Android
+  AEC/NS/AGC, kept exclusive from native speech and browser capture;
 - allowlisted member RPC to canonical `conversation_companions` and AdaOS
   Connect tools, including the Root-configured external LLM, plus
   low-confidence evidence forwarding to the canonical LLM Teacher;
@@ -35,7 +39,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC17 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC18 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -44,9 +48,14 @@ or bounded WebIO stream events. The native `Open AdaOS` action owns LO. AdaOS
 Connect separately enrolls this phone with a Root URL and one-time join code,
 then delegates remote browser, Telegram, and other-node invitations to the
 canonical Hub skill. Browsers projects bounded active control sessions. Voice
-uses half-duplex Android Chrome SpeechRecognition and speechSynthesis while
-the hosted client is open. A long press arms continuous listening until the
-user presses Stop or Rasa classifies a spoken turn as `voice.listening.stop`.
+can use half-duplex Android Chrome SpeechRecognition/speechSynthesis while the
+hosted client is open, or the foreground native Android recognizer/TTS without
+an open browser. The native runtime prefers the platform on-device recognizer
+when available and sends alternatives to Python, where the same projected
+assistant registry, portable Rasa bundle, and long-form state are used. A long
+press arms browser continuous listening until the user presses Stop or Rasa
+classifies a spoken turn as `voice.listening.stop`; the same structured result
+stops native listening.
 The training phrases live in canonical scenario NLU data; neither the browser
 nor the Android runtime matches natural-language stop phrases. A structured
 `client_directives` acknowledgement carries the intent back to the browser.
@@ -69,15 +78,20 @@ Mobile and Builder remain bounded local implementations. Companion turns
 use the canonical Hub skill and external LLM when the authenticated member link
 is available, and expose `android_offline_fallback` otherwise. Prompts,
 profiles, tools, Teacher code, and LLM credentials are not copied into the APK.
-The APK does not package `sounddevice`, wake-word inference, native STT, an LLM,
-or the full Builder runtime. The prepared native detector is disabled by
-default and retains no raw audio. When enabled for diagnostics it dynamically
-adds the microphone foreground type, reports real Android AEC/NS/AGC state,
-and yields capture ownership back to the browser when disabled.
+The APK does not package `sounddevice`, a reviewed wake-word model, an LLM, or
+the full Builder runtime. Native activation currently means an assistant alias
+in a recognized transcript; raw audio is not retained. A separate diagnostic
+backend dynamically adds the microphone foreground type and reports real
+Android AEC/NS/AGC state, but this does not prove the opaque SpeechRecognizer
+uses that same processing chain.
 
 Start persists the user's desired-running state and Stop clears it. Android
 may recreate a killed process through `START_STICKY`, and the boot/package
 receiver restores only a still-desired node. Force stop remains authoritative.
+Because modern Android does not grant a background receiver the while-in-use
+microphone exemption, those recovery paths restore `specialUse` and report
+`deferred_user_visible_start`; opening the Activity or notification explicitly
+re-arms the persisted native-listening policy and adds the microphone type.
 API 34+ uses `specialUse`; older supported versions retain their existing
 foreground-service behavior, so the APK still has `minSdk 26`.
 
@@ -119,7 +133,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The local repository handoff copies the same file to the ignored path
-`.tmp/android-node/adaos-android-node-0.1.0-poc17-debug.apk`. CI uploads its
+`.tmp/android-node/adaos-android-node-0.1.0-poc18-debug.apk`. CI uploads its
 own workflow artifact. This is a debug-signed development build, not a Play
 Store release package.
 
@@ -284,3 +298,26 @@ transitions, Wi-Fi and WAN loss, force-stop persistence, explicit stop without
 resurrection, and final restart. Steady sampled PSS was 134,221 KiB and startup
 sampled peak was 169,578 KiB with no bounded queue rejection or member-link
 drop. The APK and evidence live under ignored `.tmp/android-node`.
+
+The PoC18 debug APK is 23,173,136 bytes with SHA-256
+`5012271358f9f546c7734a737de9df39ec6fc77f32e9f9d8d8c70a33b399f0fa`.
+It was built and installed on the API 36 Samsung SM-F721N. The foreground
+runtime selected the on-device recognizer, remained in `activation`, recognized
+physical audio, and completed a local addressed dialog/TTS round trip. After
+the member-RPC tool-name correction, a physical address-only «Ада» obtained a
+real Hub lease and returned «Слушаю». Automated tests cover alternative
+selection, the follow-up window, long-form routing, NLU stop, and suppression
+before dialog mutation.
+
+Package replacement restored the node with native voice explicitly deferred;
+opening the Activity re-armed `android_on_device` recognition and returned the
+runtime to `listening`. Normal no-match silence was reported as
+`idle_no_match`, with the recognizer error counter remaining zero.
+
+Live two-endpoint transport checks used the deployed Hub control WebSocket and
+the phone's authenticated member/native endpoint concurrently. Both winner
+directions returned one shared lease with `candidate_count=2`; the lower-ranked
+endpoint did not dispatch. This is verified transport arbitration, not yet a
+simultaneous acoustic microphone test. Repeatable physical barge-in and a
+stationary headless-browser microphone turn remain open acceptance gates and
+are not claimed by this build.

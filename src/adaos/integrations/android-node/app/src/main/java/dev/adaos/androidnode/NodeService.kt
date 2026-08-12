@@ -15,8 +15,10 @@ import android.util.Log
 class NodeService : Service() {
     private lateinit var pythonHost: PythonHost
     private lateinit var voiceActivationDetector: VoiceActivationDetector
+    private lateinit var nativeVoiceAssistant: NativeVoiceAssistant
     private var stopping = false
     private var stopReason = STOP_REASON_SYSTEM_DESTROY
+    private val microphoneOwners = mutableSetOf<String>()
     @Volatile private var microphoneForeground = false
 
     override fun onCreate() {
@@ -26,8 +28,11 @@ class NodeService : Service() {
         voiceActivationDetector = VoiceActivationDetector(
             this,
             filesDir.resolve("adaos"),
-            ::setNativeCaptureActive,
-        )
+        ) { active -> setNativeCaptureActive("audio_record_vad", active) }
+        nativeVoiceAssistant = NativeVoiceAssistant(
+            this,
+            filesDir.resolve("adaos"),
+        ) { active -> setNativeCaptureActive("speech_recognizer", active) }
         createNotificationChannel()
     }
 
@@ -40,17 +45,25 @@ class NodeService : Service() {
         }
 
         startRuntimeForeground("Starting embedded Python")
-        // Microphone capture is legal only after this service is promoted to
-        // the declared microphone foreground-service type.
-        voiceActivationDetector.start()
+        val startReason = intent?.getStringExtra(EXTRA_START_REASON)
+            ?: if (intent == null) START_REASON_STICKY_RESTART else START_REASON_USER
+        val userVisibleCapture = intent?.action == ACTION_ARM_VOICE || startReason == START_REASON_USER
+        // Android's while-in-use microphone permission does not allow a boot,
+        // package-replaced, or sticky receiver to promote this service to the
+        // microphone type. Preserve the specialUse node and defer capture until
+        // a visible Activity sends ACTION_ARM_VOICE.
+        if (userVisibleCapture) {
+            voiceActivationDetector.start()
+        } else {
+            voiceActivationDetector.deferUntilUserVisible(startReason)
+        }
+        nativeVoiceAssistant.start(userVisibleCapture)
         val current = NodeStateStore.snapshot()
         if (current.phase == NodePhase.STARTING || current.phase == NodePhase.READY) {
             return START_STICKY
         }
 
         stopping = false
-        val startReason = intent?.getStringExtra(EXTRA_START_REASON)
-            ?: if (intent == null) START_REASON_STICKY_RESTART else START_REASON_USER
         NodeLifecycleStore.recordStart(this, startReason)
         publish(NodeStatus(NodePhase.STARTING, "Starting embedded Python"))
         pythonHost.start(filesDir.resolve("adaos")) { result ->
@@ -74,6 +87,7 @@ class NodeService : Service() {
                         )
                     )
                     voiceActivationDetector.stop()
+                    nativeVoiceAssistant.stop()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 },
@@ -92,6 +106,7 @@ class NodeService : Service() {
             publish(NodeStatus.stopped(detail))
         }
         voiceActivationDetector.stop()
+        nativeVoiceAssistant.stop()
         super.onDestroy()
     }
 
@@ -110,6 +125,7 @@ class NodeService : Service() {
         stopping = true
         stopReason = reason
         voiceActivationDetector.stop()
+        nativeVoiceAssistant.stop()
         publish(NodeStatus(NodePhase.STOPPING, "Flushing and stopping Python"))
         pythonHost.stop { result ->
             val detail = result.exceptionOrNull()?.message?.let { "Stopped with warning: $it" }
@@ -130,11 +146,13 @@ class NodeService : Service() {
     }
 
     @Synchronized
-    private fun setNativeCaptureActive(active: Boolean) {
-        if (microphoneForeground == active) return
-        microphoneForeground = active
+    private fun setNativeCaptureActive(owner: String, active: Boolean) {
+        if (active) microphoneOwners.add(owner) else microphoneOwners.remove(owner)
+        val next = microphoneOwners.isNotEmpty()
+        if (microphoneForeground == next) return
+        microphoneForeground = next
         startRuntimeForeground(
-            if (active) "Native voice activation is listening" else NodeStateStore.snapshot().detail,
+            if (next) "Native voice activation is listening" else NodeStateStore.snapshot().detail,
         )
     }
 
@@ -199,6 +217,7 @@ class NodeService : Service() {
 
     companion object {
         const val ACTION_START = "dev.adaos.androidnode.action.START"
+        const val ACTION_ARM_VOICE = "dev.adaos.androidnode.action.ARM_VOICE"
         const val ACTION_STOP = "dev.adaos.androidnode.action.STOP"
         const val EXTRA_START_REASON = "start_reason"
         const val START_REASON_USER = "user"

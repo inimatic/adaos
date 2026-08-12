@@ -9,10 +9,11 @@ the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
 bound, and the PoC15 Android lifecycle controller are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
-Samsung SM-F721N. The PoC16 continuous-voice control contract and the PoC17
-shared activation, long-form dictation, listening-policy, and Android audio
-front-end slice also pass their automated and physical acceptance gates on
-that phone.
+Samsung SM-F721N. PoC16 and PoC17 established the shared continuous-listening,
+activation, long-form, and audio-processing contracts. PoC18 adds Android
+native speech recognition/TTS and Hub-issued room winner leases. Its automated,
+build, install, transport, and bounded physical voice gates are recorded below;
+simultaneous acoustic two-microphone and barge-in acceptance remain open.
 Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
@@ -42,12 +43,16 @@ client, persists listening mode behind `node.voice.listening.v1`, promotes the
 same long-form Rasa intents to Android and stationary nodes, and prepares a
 native `AudioRecord` detector with platform AEC/NS/AGC. Browser capture remains
 the default owner; native capture is an explicit experimental setting so two
-recorders cannot compete for the microphone. Android
+recorders cannot compete for the microphone. PoC18 makes native capture a
+functional foreground mode: Android SpeechRecognizer supplies alternatives,
+the canonical AdaOS alias registry performs activation, the portable Rasa
+bundle performs NLU, and Android TTS renders the selected assistant voice. A
+Hub arbiter admits one endpoint before dialog dispatch. Android
 Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC17 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC18 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -552,16 +557,17 @@ The first vertical proof covers several paths rather than a synthetic page:
   while Connect creates authenticated remote invitations;
 - Browsers: control-channel registration -> bounded read-only session
   projection -> modal;
-- Voice Assistant: Android Chrome SpeechRecognition -> `dialog.user_message`
-  -> bounded local handler -> `data/voice_chat` plus `data/dialog` -> browser
-  speechSynthesis. `dialog.channel.select` and `dialog.agent.select` keep the
-  client selector, active channel, and active agent projection synchronized.
+- Voice Assistant: either Android Chrome or the PoC18 foreground native
+  SpeechRecognizer -> canonical alias gate -> Hub winner lease -> portable
+  Rasa/dialog handler -> `data/voice_chat` plus `data/dialog` -> browser or
+  Android TTS. `dialog.channel.select` and `dialog.agent.select` keep the client
+  selector, active channel, and active agent projection synchronized.
 
-The voice path remains browser-mediated. It uses Android's
-browser-exposed speech services while `https://inimatic.com` is visible and
-requires the normal one-time microphone permission for that origin. It does
-not import `sounddevice`, upload WAV to an absent hub STT endpoint, keep the
-microphone open in the background, or claim wake-word support. The local
+The browser path remains available and requires the normal one-time microphone
+permission for the `https://inimatic.com` origin. PoC18 also provides a
+browser-free foreground path owned by the Android service. It uses the Android
+on-device recognizer where the platform reports it available, otherwise the
+system recognizer, and does not import `sounddevice` or retain raw audio. The local
 fallback handles greeting, node status, Weather, and explicit Notebook
 creation; the tail is limited to 32 messages and each input to 2,048
 characters. The fixed roster contains AdaOS Mobile, Арсений, Ника, Мира, and
@@ -574,12 +580,13 @@ unavailable or times out, the turn remains usable through the explicit
 `android_offline_fallback` response source. The phone still cannot
 generate/install skills or start subprocesses.
 
-Continuous listening is half-duplex. Before browser TTS starts, the shared
-client stops STT and suppresses partial/final recognition events; it resumes
-continuous listening only after speech completion plus a bounded acoustic
-tail. This prevents a companion from turning its synthesized answer into the
-next user message. The implementation lives in `adaos-client`, so the browser
-contract is shared by stationary and mobile nodes.
+Browser continuous listening remains half-duplex. Before browser TTS starts,
+the shared client stops STT and suppresses partial/final recognition events;
+it resumes after speech completion plus a bounded acoustic tail. The native
+path records the recent Android TTS render, rejects high-overlap echo, and only
+interrupts TTS after both the canonical address gate and Hub lease accept a
+new turn. The native guard passes automated tests; a repeatable physical
+barge-in gate is still open.
 
 Once explicitly armed, continuous mode is a persistent browser state rather
 than a best-effort sequence of one-shot captures. Silence, a transient
@@ -806,12 +813,14 @@ capabilities:
   complete `psutil` behavior;
 - secrets and long-lived key custody through Android Keystore;
 - files and uploads through app-private storage and the system picker;
-- foreground browser voice through Web Speech in the implemented PoC9-PoC17 slice;
-- an experimental foreground `AudioRecord` activation front-end with dynamic
-  microphone-service promotion and Android platform AEC/NS/AGC; it is disabled
-  while the browser owns capture and does not yet perform wake-word inference;
-- future native STT, AudioTrack reference plumbing, and Android TTS behind the
-  same shared voice contracts;
+- foreground browser voice through Web Speech in the implemented PoC9-PoC18 slice;
+- foreground native recognition through Android SpeechRecognizer, with dynamic
+  `specialUse|microphone` service promotion and Android TTS in PoC18;
+- a separate `AudioRecord(VOICE_COMMUNICATION)` diagnostic backend for verified
+  platform AEC/NS/AGC evidence; it never competes with the functional native or
+  browser capture owner;
+- future reviewed wake-word inference and AudioTrack reference plumbing behind
+  the same shared voice contracts;
 - future camera through CameraX or another native adapter;
 - future low-latency media through Android-native WebRTC or separately proven
   Python wheels.
@@ -820,37 +829,46 @@ The first profile reports unavailable capabilities explicitly. It does not
 provide fake desktop implementations or allow import failures to crash the
 runtime.
 
-## PoC17 Voice Session Model
+## PoC18 Voice Session Model
 
 The listening policy is shared AdaOS state, not an Android-only preference.
 `node.voice.listening.v1` exposes `off`, `push_to_talk`, `continuous`, and
 `activation` through the local node API, member RPC, Device Registry, and the
-SDK. The default is `activation`: the hosted client keeps listening but admits
-a command only when its transcript addresses a projected assistant alias. A
-long-form session is the exception; after Rasa starts dictation, subsequent
-segments remain content until Rasa detects `voice.long_form.stop` or the user
-addresses another assistant.
+SDK. The default is `activation`: a browser or native recognizer keeps
+listening, but AdaOS admits a command only when one of its alternatives
+addresses an alias from the canonical dialog-agent registry. Address-only
+activation opens a bounded 12-second follow-up session. A long-form session is
+the other exception; after Rasa starts dictation, subsequent segments remain
+content until Rasa detects `voice.long_form.stop` or the user addresses another
+assistant.
 
 The capture ownership rule is strict:
 
 ```text
-browser owner (default)
+browser owner
   -> Web Speech / Hub WAV capture
   -> browser echoCancellation + noiseSuppression + autoGainControl
 
-native owner (explicit experimental flag)
+native speech owner
   -> specialUse service promoted to specialUse|microphone
+  -> Android on-device SpeechRecognizer when available, system fallback otherwise
+  -> canonical alias gate -> Hub lease -> portable Rasa -> Android TTS
+
+native diagnostic owner
   -> AudioRecord(VOICE_COMMUNICATION)
-  -> Android AcousticEchoCanceler / NoiseSuppressor / AGC evidence
+  -> Android AcousticEchoCanceler / NoiseSuppressor / AGC evidence only
 ```
 
 The Samsung physical gate reports Android AEC and noise suppression as
-available and enabled. The native detector currently reports VAD/audio quality
-and deliberately retains no raw audio; it is a prepared activation front-end,
-not a completed wake-word or native STT pipeline. When native capture stops,
-the service drops the `microphone` foreground type and returns ownership to the
-browser. This dynamic promotion preserves package-replaced/boot restoration of
-the ordinary `specialUse` node on modern Android.
+available and enabled for the diagnostic backend. The functional native path
+does not expose a raw PCM echo reference, so this result must not be read as
+proof that SpeechRecognizer itself applies the same AEC chain. When native
+capture stops, the service drops the `microphone` foreground type. A boot,
+package-replaced, or sticky receiver restores only the ordinary `specialUse`
+node: modern Android's while-in-use rule forbids it from adding the microphone
+type in the background. Native capture reports `deferred_user_visible_start`
+until the user opens the Activity or notification, which then re-arms the
+persisted policy from an eligible foreground state.
 
 Assistant gender and speaker gender are separate facts. Projected assistant
 gender/voice selects an appropriate TTS voice and labels the render reference
@@ -863,12 +881,16 @@ speaker id may scope a dictation session, but unknown speakers share an
 anonymous scope per webspace and capture device. Actual diarization, speaker
 enrollment, cross-device voiceprints, and biometric retention are deferred.
 
-Room arbitration has a shared deterministic primitive and a 280 ms candidate
-window. Candidates are ranked by activation confidence, SNR, arrival time, and
-stable device id, and the winner receives a lease while the others are
-suppressed. Transport-wide collection of candidates, lease delivery, and
-device-affinity learning are not yet wired; until that exists, mutating voice
-commands in a multi-microphone room still require conservative policy.
+Room arbitration uses a Hub-owned 280 ms collection window and 2.5-second
+lease. Browser claims arrive through the control WebSocket; member nodes use
+authenticated member RPC. Candidates are ranked by activation confidence,
+SNR, Hub arrival time, and stable device id. Only the admitted winner proceeds
+to dialog dispatch; losing endpoints return `room_microphone_suppressed`.
+`GET /api/node/voice/listening` exposes totals and the last result. Raw audio is
+not retained. Native SpeechRecognizer cannot provide an audio fingerprint, so
+transcript-only clients correlate on a normalized phrase hash; materially
+different recognition variants may still escape the same collection group.
+Device-affinity learning remains deferred.
 
 Long-form state is persisted rather than inferred from chat history. Note mode
 saves the completed buffer through Notebook. Dialog mode sends the completed
@@ -1018,9 +1040,10 @@ The first PoC does not include:
 - arbitrary marketplace installation;
 - service skills, per-skill venvs, subprocess isolation, or shell access;
 - supervisor, realtime sidecar, core A/B slots, or self-update;
-- production native/background speech recognition, wake-word inference,
-  camera, media server, WebRTC, or `aiortc`; the PoC17 native foreground
-  `AudioRecord`/AEC detector is diagnostic and disabled by default;
+- production wake-word inference, speaker diarization/enrollment, camera,
+  media server, WebRTC, or `aiortc`; PoC18 native recognition is an
+  experimental foreground microphone service and still requires an assistant
+  alias in the recognized transcript;
 - on-device Rasa training, Neural NLU, full Builder execution, phone-local MCP
   or Codex, and embedded LLM execution;
 - background geolocation or other while-in-use Android permissions;

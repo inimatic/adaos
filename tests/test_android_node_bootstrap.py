@@ -487,6 +487,122 @@ def test_android_long_form_note_is_started_and_stopped_by_rasa(
         bootstrap.stop()
 
 
+def test_native_voice_transcript_requires_address_and_dispatches_only_after_lease(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base_url = f"http://127.0.0.1:{runtime['port']}"
+    claims: list[dict] = []
+
+    def claim(candidate: dict) -> dict:
+        claims.append(candidate)
+        return {
+            "ok": True,
+            "admitted": True,
+            "state": "winner",
+            "lease_id": "voice-lease:test",
+            "winner_device_id": runtime["node_id"],
+        }
+
+    bootstrap._claim_voice_activation = claim
+    try:
+        status, ignored = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {"text": "разговор в комнате", "confidence": 0.9, "capture_id": "native-1"},
+        )
+        assert status == 200
+        assert ignored["accepted"] is False
+        assert ignored["state"] == "waiting_for_assistant_name"
+        assert claims == []
+
+        status, accepted = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {
+                "text": "А знаешь",
+                "alternatives": ["А знаешь", "Ада, статус ноды"],
+                "confidence": 0.91,
+                "capture_id": "native-2",
+            },
+        )
+        assert status == 200
+        assert accepted["accepted"] is True
+        assert accepted["arbitration"]["lease_id"] == "voice-lease:test"
+        assert accepted["prepared"]["voice_activation"] is True
+        assert accepted["prepared"]["recognizer_alternative_selected"] is True
+        assert accepted["prepared"]["command_text"] == "статус ноды"
+        assert claims[0]["text"] == "статус ноды"
+        assert accepted["response"]
+
+        status, armed = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {"text": "Арсений", "confidence": 0.88, "capture_id": "native-armed"},
+        )
+        assert status == 200
+        assert armed["state"] == "address_only"
+        assert armed["response"] == "Слушаю."
+
+        status, follow_up = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {"text": "привет", "confidence": 0.86, "capture_id": "native-follow-up"},
+        )
+        assert status == 200
+        assert follow_up["accepted"] is True
+        assert follow_up["prepared"]["state"] == "activation_follow_up"
+        assert follow_up["active_agent_id"] == "agent:conversation_companions:arseni"
+    finally:
+        bootstrap.stop()
+
+
+def test_native_voice_transcript_honors_room_suppression(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base_url = f"http://127.0.0.1:{runtime['port']}"
+    bootstrap._claim_voice_activation = lambda candidate: {  # noqa: ARG005
+        "ok": True,
+        "admitted": False,
+        "state": "suppressed",
+        "winner_device_id": "stationary-1",
+    }
+    try:
+        status, result = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {"text": "Арсений, привет", "confidence": 0.8, "capture_id": "native-3"},
+        )
+        assert status == 200
+        assert result["accepted"] is False
+        assert result["state"] == "room_microphone_suppressed"
+        assert result["arbitration"]["winner_device_id"] == "stationary-1"
+        assert bootstrap._skills._voice_current()["messages"] == []
+    finally:
+        bootstrap.stop()
+
+
+def test_native_voice_nlu_stop_command_turns_off_persisted_listener(tmp_path: Path) -> None:
+    bootstrap = _load_bootstrap()
+    runtime = json.loads(bootstrap.start(str(tmp_path), "test", 0))
+    base_url = f"http://127.0.0.1:{runtime['port']}"
+    bootstrap._claim_voice_activation = lambda candidate: {  # noqa: ARG005
+        "ok": True,
+        "admitted": True,
+        "state": "winner",
+        "lease_id": "voice-lease:stop",
+        "winner_device_id": runtime["node_id"],
+    }
+    try:
+        status, result = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {"text": "Ада, перестань слушать", "confidence": 0.95, "capture_id": "native-stop"},
+        )
+        assert status == 200
+        assert result["accepted"] is True
+        assert result["listening_stopped"] is True
+        assert result["client_directives"][0]["type"] == "voice.listening.stop"
+        assert bootstrap._voice_policy.read()["listening_mode"] == "off"
+    finally:
+        bootstrap.stop()
+
+
 def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
     tmp_path: Path,
 ) -> None:

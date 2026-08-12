@@ -35,6 +35,13 @@ class VoiceActivationDetector(
         }
     }
 
+    fun deferUntilUserVisible(reason: String) {
+        publishRuntime(
+            "deferred_user_visible_start",
+            JSONObject().put("reason", reason).put("capture_owner", "none"),
+        )
+    }
+
     fun stop() {
         stopping.set(true)
         thread?.interrupt()
@@ -48,13 +55,17 @@ class VoiceActivationDetector(
             val policy = readPolicy()
             val mode = policy.optString("listening_mode", "activation")
             val nativeEnabled = policy.optBoolean("native_detector_enabled", false)
-            if (!nativeEnabled || mode !in setOf("activation", "continuous")) {
+            val detector = policy.optJSONObject("activation")
+                ?.optString("native_detector", "android_on_device_speech")
+                ?: "android_on_device_speech"
+            if (!nativeEnabled || mode !in setOf("activation", "continuous") || detector != "audio_record_vad") {
                 publishRuntime(
-                    if (mode == "off") "disabled" else "parked_browser_owns_mic",
+                    if (mode == "off") "disabled" else if (nativeEnabled) "delegated_native_speech" else "parked_browser_owns_mic",
                     JSONObject()
                         .put("listening_mode", mode)
                         .put("native_detector_enabled", nativeEnabled)
-                        .put("capture_owner", "browser"),
+                        .put("native_detector", detector)
+                        .put("capture_owner", if (nativeEnabled) "android_speech_recognizer" else "browser"),
                 )
                 sleepBounded(1000)
                 continue
@@ -121,7 +132,8 @@ class VoiceActivationDetector(
                 val current = readPolicy()
                 if (
                     !current.optBoolean("native_detector_enabled", false) ||
-                    current.optString("listening_mode", "activation") !in setOf("activation", "continuous")
+                    current.optString("listening_mode", "activation") !in setOf("activation", "continuous") ||
+                    current.optJSONObject("activation")?.optString("native_detector", "") != "audio_record_vad"
                 ) break
                 val count = recorder.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
                 if (count <= 0) continue

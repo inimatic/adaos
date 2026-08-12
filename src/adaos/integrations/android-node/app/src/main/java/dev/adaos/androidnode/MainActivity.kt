@@ -37,6 +37,9 @@ class MainActivity : Activity() {
         super.onStart()
         Log.i(TAG, "onStart instance=${System.identityHashCode(this)}")
         NodeStateStore.subscribe(statusListener)
+        if (NodeLifecycleStore.desiredRunning(this)) {
+            startService(Intent(this, NodeService::class.java).setAction(NodeService.ACTION_ARM_VOICE))
+        }
     }
 
     override fun onStop() {

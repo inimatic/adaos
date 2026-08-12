@@ -476,6 +476,100 @@ class _Handler(BaseHTTPRequestHandler):
             _member_link_request_state_refresh()
             self._json(200, {"ok": True, "policy": policy, "service": _voice_policy.service()})
             return
+        if path == "/api/node/voice/native/transcript":
+            if _voice_policy is None or _skills is None:
+                self._json(503, {"ok": False, "accepted": False, "error": "native_voice_not_ready"})
+                return
+            policy = _voice_policy.read()
+            listening_mode = str(policy.get("listening_mode") or "activation")
+            if listening_mode not in {"activation", "continuous"}:
+                self._json(
+                    409,
+                    {
+                        "ok": True,
+                        "accepted": False,
+                        "state": "listening_mode_inactive",
+                        "listening_mode": listening_mode,
+                    },
+                )
+                return
+            try:
+                prepared = _skills.prepare_native_voice_transcript(
+                    body,
+                    listening_mode=listening_mode,
+                )
+                if not prepared.get("accepted"):
+                    self._json(200, prepared)
+                    return
+                arbitration = _claim_voice_activation(
+                    {
+                        "text": str(prepared.get("arbitration_text") or body.get("text") or ""),
+                        "capture_id": body.get("capture_id"),
+                        "observed_at_ms": body.get("observed_at_ms"),
+                        "activation_confidence": body.get("confidence"),
+                        "snr_db": body.get("snr_db"),
+                        "window_ms": body.get("window_ms") or 280,
+                        "capture_backend": body.get("capture_backend") or "android_speech_recognizer",
+                    }
+                )
+                if arbitration.get("admitted") is not True:
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "accepted": False,
+                            "state": "room_microphone_suppressed",
+                            "arbitration": arbitration,
+                        },
+                    )
+                    return
+                if prepared.get("state") == "address_only":
+                    self._json(
+                        200,
+                        {
+                            **prepared,
+                            "response": "Слушаю.",
+                            "response_source": "android_activation_control",
+                            "arbitration": arbitration,
+                        },
+                    )
+                    return
+                request_payload = dict(body)
+                request_payload["text"] = str(prepared.get("text") or body.get("text") or "")
+                request_payload.setdefault("webspace_id", "desktop")
+                meta = dict(request_payload.get("_meta") or {})
+                meta.update(
+                    {
+                        "voice_activation": bool(prepared.get("voice_activation")),
+                        "voice_activation_alias": prepared.get("voice_activation_alias"),
+                        "addressed_agent_id": prepared.get("addressed_agent_id"),
+                        "active_agent_id": prepared.get("addressed_agent_id"),
+                        "voice_activation_lease_id": arbitration.get("lease_id"),
+                        "voice_activation_winner_device_id": arbitration.get("winner_device_id"),
+                        "voice_listening_mode": listening_mode,
+                        "capture_backend": body.get("capture_backend") or "android_speech_recognizer",
+                    }
+                )
+                request_payload["_meta"] = meta
+                if prepared.get("addressed_agent_id"):
+                    request_payload["active_agent_id"] = prepared.get("addressed_agent_id")
+                result = _skills.handle_dialog_message(request_payload)
+                stop_listening = any(
+                    str(item.get("type") or "") == "voice.listening.stop"
+                    for item in result.get("client_directives") or []
+                    if isinstance(item, dict)
+                )
+                if stop_listening:
+                    _voice_policy.configure(
+                        {"listening_mode": "off"},
+                        source="native_voice_nlu",
+                    )
+                    _member_link_request_state_refresh()
+                    result["listening_stopped"] = True
+                self._json(200, {**result, "arbitration": arbitration, "prepared": prepared})
+            except AndroidSkillError as exc:
+                self._json(400, {"ok": False, "accepted": False, "error": str(exc)})
+            return
         self._json(404, {"ok": False, "error": "not_found", "path": path})
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib HTTP API
@@ -846,6 +940,8 @@ def _execute_control_message(
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
             data = _skills.handle_dialog_message(request_payload)
+        elif kind == "voice.activation.claim":
+            data = _claim_voice_activation(request_payload)
         elif kind == "dialog.channel.select":
             if _skills is None:
                 raise AndroidSkillError("android_skills_not_ready")
@@ -1059,16 +1155,69 @@ def _member_link_request_state_refresh() -> None:
 def _android_voice_runtime_snapshot() -> dict[str, Any]:
     runtime = _snapshot()
     root_text = str(runtime.get("data_root") or "").strip()
-    path = Path(root_text) / "voice-audio-runtime.json" if root_text else None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8")) if path is not None else {}
-        return payload if isinstance(payload, dict) else {}
-    except (OSError, ValueError, TypeError):
-        return {
-            "schema_version": "android-voice-audio-runtime.v1",
-            "state": "not_started",
-            "aec": {"available": False, "enabled": False},
-        }
+    root = Path(root_text) if root_text else None
+    def _read(name: str) -> dict[str, Any]:
+        if root is None:
+            return {}
+        try:
+            value = json.loads((root / name).read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    audio = _read("voice-audio-runtime.json")
+    native = _read("voice-native-runtime.json")
+    return {
+        "schema_version": "android-voice-runtime.v1",
+        "state": str(native.get("state") or audio.get("state") or "not_started"),
+        "native_assistant": native,
+        "audio_record": audio,
+    }
+
+
+def _claim_voice_activation(candidate: dict[str, Any]) -> dict[str, Any]:
+    runtime = _snapshot()
+    node_id = str(runtime.get("node_id") or "android-local")
+    subnet_id = str(runtime.get("subnet_id") or "local")
+    payload = dict(candidate or {})
+    payload["device_id"] = node_id
+    payload.setdefault("room_id", subnet_id)
+    arbitration_text = " ".join(str(payload.get("text") or "").casefold().split())
+    if not payload.get("phrase_fingerprint") and arbitration_text:
+        payload["phrase_fingerprint"] = "phrase:" + hashlib.sha256(
+            arbitration_text.encode("utf-8")
+        ).hexdigest()[:24]
+    payload.setdefault("capture_id", f"android:{uuid.uuid4().hex[:16]}")
+    payload.setdefault("observed_at_ms", time.time() * 1000.0)
+    payload.setdefault("window_ms", 280)
+    member_link = _member_link
+    if member_link is not None:
+        try:
+            result = member_link.call_hub_tool(
+                "node.voice.activation.claim",
+                payload,
+                timeout=5.0,
+            )
+            if isinstance(result, dict):
+                return result
+        except Exception as exc:
+            fallback_error = f"{type(exc).__name__}:{str(exc)[:160]}"
+        else:
+            fallback_error = "hub_activation_claim_invalid"
+    else:
+        fallback_error = "hub_link_unavailable"
+    seed = f"{payload.get('phrase_fingerprint')}:{node_id}:{payload.get('capture_id')}"
+    return {
+        "ok": True,
+        "admitted": True,
+        "state": "local_only",
+        "lease_id": "voice-local:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16],
+        "winner_device_id": node_id,
+        "request_device_id": node_id,
+        "candidate_count": 1,
+        "arbitration_scope": "local_only",
+        "fallback_error": fallback_error,
+    }
 
 
 def _handle_member_rpc(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:

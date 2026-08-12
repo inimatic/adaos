@@ -6,9 +6,11 @@ bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
 bound, and the PoC15 Android lifecycle controller are running on a physical
-Android 16 arm64 phone. The PoC16 continuous-voice control contract and PoC17
-shared activation/AEC/long-form slice pass their automated and physical
-acceptance gates. The phone renders `web_desktop` from
+Android 16 arm64 phone. PoC16 and PoC17 established the shared voice contracts;
+PoC18 adds native foreground recognition/TTS and Hub winner leases. Its
+automated, build, install, transport, and bounded physical voice gates pass,
+while repeatable simultaneous acoustic and barge-in gates remain open. The
+phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
 Root route. Keystore custody and the physical 2 GB device gate remain open.
@@ -909,6 +911,76 @@ restart. Steady sampled PSS was 134,221 KiB, startup sampled peak was 169,578
 KiB, and no bounded queue rejected or dropped work. Evidence and the APK are
 kept under ignored `.tmp/android-node` locally.
 
+## PoC18 Extension: Native Activation and Room Winner Lease
+
+Outcome: the phone can listen and answer from its foreground service without
+an open browser, while the Hub admits at most one endpoint for one correlated
+room utterance before any dialog mutation.
+
+- [x] `[must]` add Android SpeechRecognizer with on-device selection where the
+  platform reports it available and a system recognizer fallback;
+- [x] `[must]` send up to five recognition alternatives to the existing Python
+  runtime and apply the canonical dialog-agent alias registry there rather than
+  copying aliases into Kotlin;
+- [x] `[must]` support address-only activation with a bounded follow-up window,
+  portable Rasa dispatch, NLU-controlled listening stop, and Android TTS using
+  the projected assistant voice profile;
+- [x] `[must]` arbitrate browser claims through the control WebSocket and mobile
+  claims through authenticated member RPC using a Hub-owned 280 ms collection
+  window and 2.5-second winner lease;
+- [x] `[must]` suppress losing endpoints before dialog/Yjs mutation and expose
+  arbiter totals plus the last result through the voice-listening Node API;
+- [x] `[must]` keep the browser, native speech, and `AudioRecord` diagnostic
+  owners mutually exclusive and dynamically promote the Android foreground
+  service to the microphone type only while capture is active;
+- [x] `[must]` implement a recent-TTS overlap guard and require both the address
+  gate and Hub lease before an interruption can stop Android TTS;
+- [x] `[must]` run the host tests, Kotlin compilation, APK build/install, native
+  phone activation, deployed hosted-client tests, and both transport-level
+  winner directions against the real Hub/member link;
+- [ ] `[physical gate]` repeat a simultaneous acoustic phone-plus-PC utterance;
+  current two-candidate evidence injects real endpoint claims over both live
+  transports but does not prove microphone-level correlation;
+- [ ] `[physical gate]` repeat Android barge-in against a playing TTS response;
+  the guarded implementation and tests pass, but the nearby synthetic acoustic
+  source was not reliable enough for a reproducible final result;
+- [ ] `[physical gate]` complete stationary browser acoustic activation on the
+  deployed client; its code/tests and direct control-WS lease pass, but the
+  headless browser microphone run did not produce a verifiable turn;
+- [ ] `[deferred]` add a reviewed low-resource wake-word model and true
+  audio-reference plumbing; transcript address activation is the implemented
+  first stage, and SpeechRecognizer does not expose raw PCM/AEC evidence;
+- [ ] `[deferred]` add speaker diarization/enrollment only after privacy,
+  retention, confidence, and anonymous fallback contracts are agreed.
+
+PoC18 verified evidence (2026-08-12): debug APK `0.1.0-poc18` is 23,173,136
+bytes with SHA-256
+`5012271358f9f546c7734a737de9df39ec6fc77f32e9f9d8d8c70a33b399f0fa`.
+It was built, installed, and kept in `activation` mode on the API 36 Samsung;
+the runtime selected `android_on_device`, reported continuous-until-stopped and
+recognized physical audio. One physical addressed command completed a local
+dialog/TTS round trip on an intermediate build. After the member-RPC tool-name
+fix, a physical address-only «Ада» received «Слушаю» with the real Hub RPC
+counters showing one completed claim. The final native endpoint path, including
+alternatives, address follow-up, long-form routing, and NLU stop, is covered by
+automated tests; a final repeatable acoustic full-command run remains open.
+
+A final package-replacement gate verified Android's while-in-use boundary: the
+node recovered as `specialUse` and native voice reported
+`deferred_user_visible_start`, not a false failure. Opening the Activity then
+promoted the existing service to microphone capture and restored `listening`
+with `android_on_device`; ordinary silence produced `idle_no_match` while the
+real recognizer error counter remained zero.
+
+Against the live Hub subnet `sn_6acf0c01`, two concurrent claims over the real
+stationary control WebSocket and Android member/native endpoint returned the
+same lease and `candidate_count=2`. With higher stationary confidence the phone
+returned `room_microphone_suppressed`; with higher phone confidence the Hub
+endpoint was suppressed and the phone alone dispatched the node-status turn.
+The deployed hosted client reports version `0.0.330` and contains the shared
+claim-before-dispatch change. These results verify transport arbitration, not
+simultaneous acoustic capture.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -923,7 +995,7 @@ the phase which needs it is active.
 | `cryptography` | A6 | build/prove Android arm64 package | Android TLS/Keystore adapter behind existing contract |
 | `psutil` | A7 | isolate import and required metrics | Android diagnostics adapter |
 | Rasa model | PoC9 | export promoted artifact into portable inference data | reject promotion; never retrain on phone |
-| `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC17 browser/native front end | Android `AudioRecord` adapter; explicit media capability unavailable |
+| `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC18 browser/native front end | Android platform speech/audio adapters; explicit media capability unavailable |
 
 The Android lock must be built from imports reached by the selected profile,
 not by copying `pyproject.toml` wholesale.

@@ -545,7 +545,7 @@ class AndroidMemberLink:
         timeout: float = 40.0,
     ) -> Any:
         normalized_tool = str(tool or "").strip()
-        if ":" not in normalized_tool:
+        if ":" not in normalized_tool and normalized_tool != "node.voice.activation.claim":
             raise ValueError("member_rpc_tool_invalid")
         with self._lock:
             if not self._is_connected_locked():

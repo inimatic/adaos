@@ -28,15 +28,24 @@ class AndroidVoicePolicyStore:
     def __init__(self, data_root: str | Path) -> None:
         self.path = Path(data_root) / "voice-listening-policy.json"
         self._lock = threading.RLock()
+        if not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps(self.default(), ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
 
     def default(self) -> dict[str, Any]:
         return {
             "schema_version": "voice-listening-policy.v1",
             "listening_mode": "activation",
-            "native_detector_enabled": False,
+            "native_detector_enabled": True,
             "activation": {
                 "detector": "transcript_address",
-                "native_detector": "audio_record_vad_prepared",
+                "native_detector": "android_on_device_speech",
+                "prefer_on_device": True,
+                "language": "ru-RU",
+                "barge_in_enabled": True,
                 "require_address": True,
                 "aliases_source": "dialog_agent_registry",
             },

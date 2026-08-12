@@ -162,3 +162,32 @@ def test_voice_activation_arbiter_collects_one_winner_and_suppresses_other_endpo
     assert snapshot["claims_total"] == 2
     assert snapshot["leases_total"] == 1
     assert snapshot["suppressed_total"] == 1
+
+
+def test_voice_activation_arbiter_correlates_transcript_clients_with_distinct_capture_ids() -> None:
+    arbiter = voice_runtime.VoiceActivationArbiter(window_ms=60, lease_ms=500)
+    barrier = threading.Barrier(2)
+    results: dict[str, dict] = {}
+
+    def claim(device_id: str, confidence: float) -> None:
+        barrier.wait()
+        results[device_id] = arbiter.claim(
+            {
+                "room_id": "room-1",
+                "text": "Ада проверь статус",
+                "capture_id": f"capture:{device_id}",
+                "device_id": device_id,
+                "activation_confidence": confidence,
+            }
+        )
+
+    phone = threading.Thread(target=claim, args=("phone", 0.8))
+    pc = threading.Thread(target=claim, args=("pc", 0.9))
+    phone.start()
+    pc.start()
+    phone.join(timeout=2)
+    pc.join(timeout=2)
+
+    assert results["pc"]["admitted"] is True
+    assert results["phone"]["admitted"] is False
+    assert results["pc"]["candidate_count"] == 2

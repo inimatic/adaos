@@ -435,12 +435,11 @@ class VoiceActivationArbiter:
         device_id = _text(item.get("device_id"))
         if not device_id:
             raise ValueError("voice_activation_device_required")
-        if not (
-            _text(item.get("audio_fingerprint"))
-            or _text(item.get("phrase_fingerprint"))
-            or _text(item.get("capture_id"))
-        ):
-            item["phrase_fingerprint"] = self.phrase_fingerprint(item.get("text"))
+        if not _text(item.get("audio_fingerprint")) and not _text(item.get("phrase_fingerprint")):
+            if _text(item.get("text")):
+                item["phrase_fingerprint"] = self.phrase_fingerprint(item.get("text"))
+            elif not _text(item.get("capture_id")):
+                raise ValueError("voice_activation_fingerprint_required")
         group_key = self._group_key(item)
         bounded_window = max(50, min(1_000, int(window_ms or self.window_ms)))
         received_wall_ms = time.time() * 1000.0

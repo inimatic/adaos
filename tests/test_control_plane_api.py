@@ -12,6 +12,35 @@ from adaos.apps.api.auth import require_token
 from adaos.services.system_model import CanonicalObject, CanonicalProjection
 
 
+def test_node_voice_listening_exposes_room_arbitration_runtime(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.services import voice_runtime
+
+    arbiter = voice_runtime.VoiceActivationArbiter(window_ms=60, lease_ms=500)
+    monkeypatch.setattr(voice_runtime, "get_voice_activation_arbiter", lambda: arbiter)
+    monkeypatch.setattr(voice_runtime, "read_voice_policy", voice_runtime.default_voice_policy)
+
+    app = FastAPI()
+    app.include_router(node_api.router, prefix="/api/node")
+    app.dependency_overrides[require_token] = lambda: None
+
+    response = TestClient(app).get("/api/node/voice/listening")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["room_arbitration_runtime"] == {
+        "schema_version": "voice-activation-arbiter.v1",
+        "state": "ready",
+        "window_ms": 60,
+        "lease_ms": 500,
+        "active_groups": 0,
+        "claims_total": 0,
+        "leases_total": 0,
+        "suppressed_total": 0,
+        "last_result": {},
+    }
+
+
 def test_node_control_plane_object_self_returns_canonical_payload(monkeypatch) -> None:
     fake_y_py = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),

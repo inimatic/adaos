@@ -3536,18 +3536,27 @@ async def node_status():
 
 @router.get("/voice/listening", dependencies=[Depends(require_token)])
 async def node_voice_listening() -> dict[str, Any]:
-    from adaos.services.voice_runtime import listening_service_projection, read_voice_policy
+    from adaos.services.voice_runtime import (
+        get_voice_activation_arbiter,
+        listening_service_projection,
+        read_voice_policy,
+    )
 
     return {
         "ok": True,
         "policy": await asyncio.to_thread(read_voice_policy),
         "service": await asyncio.to_thread(listening_service_projection),
+        "room_arbitration_runtime": await asyncio.to_thread(get_voice_activation_arbiter().snapshot),
     }
 
 
 @router.post("/voice/listening", dependencies=[Depends(require_token)])
 async def node_voice_listening_update(payload: dict[str, Any]) -> dict[str, Any]:
-    from adaos.services.voice_runtime import listening_service_projection, set_voice_policy
+    from adaos.services.voice_runtime import (
+        get_voice_activation_arbiter,
+        listening_service_projection,
+        set_voice_policy,
+    )
 
     mode = str(payload.get("listening_mode") or payload.get("mode") or "").strip()
     try:
@@ -3559,7 +3568,12 @@ async def node_voice_listening_update(payload: dict[str, Any]) -> dict[str, Any]
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "policy": policy, "service": listening_service_projection(policy)}
+    return {
+        "ok": True,
+        "policy": policy,
+        "service": listening_service_projection(policy),
+        "room_arbitration_runtime": get_voice_activation_arbiter().snapshot(),
+    }
 
 
 @router.get("/control-plane/objects/self", dependencies=[Depends(require_token)])

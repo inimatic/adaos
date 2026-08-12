@@ -63,6 +63,8 @@ _LONG_FORM_NOTE_START_INTENT = "voice.long_form.note.start"
 _LONG_FORM_DIALOG_START_INTENT = "voice.long_form.dialog.start"
 _LONG_FORM_STOP_INTENT = "voice.long_form.stop"
 _LONG_FORM_SETTING = "voice_long_form_session"
+_NATIVE_ACTIVATION_SETTING = "voice_native_activation_session"
+_NATIVE_ACTIVATION_FOLLOW_UP_SECONDS = 12.0
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
 _NIKA_AGENT_ID = "agent:conversation_companions:nika"
@@ -1712,6 +1714,129 @@ class AndroidSkillRuntime:
         self._last_dialog_route_at = _utc_now()
         return (message or None), used_llm
 
+    def prepare_native_voice_transcript(
+        self,
+        payload: dict[str, Any],
+        *,
+        listening_mode: str,
+    ) -> dict[str, Any]:
+        """Apply address gating before a native transcript enters dialog/NLU."""
+
+        primary_text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
+        if not primary_text:
+            raise AndroidSkillError("voice_assistant_text_required")
+        candidates = [primary_text]
+        for value in payload.get("alternatives") or []:
+            candidate = str(value or "").strip()[:_MAX_VOICE_TEXT_CHARS]
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        long_form_active = self._long_form_state().get("state") == "recording"
+        selected_text = primary_text
+        addressed = None
+        for candidate in candidates:
+            candidate_addressed = self._addressed_dialog_agent(candidate)
+            if candidate_addressed is not None:
+                selected_text = candidate
+                addressed = candidate_addressed
+                break
+        activation_session: dict[str, Any] = {}
+        try:
+            stored_activation = json.loads(self._setting(_NATIVE_ACTIVATION_SETTING, "{}"))
+            if isinstance(stored_activation, dict):
+                activation_session = stored_activation
+        except (TypeError, ValueError):
+            pass
+        follow_up_agent_id = str(activation_session.get("agent_id") or "")
+        follow_up_active = (
+            float(activation_session.get("expires_at") or 0.0) >= time.time()
+            and follow_up_agent_id in _DIALOG_AGENT_BY_ID
+        )
+        if listening_mode == "activation" and not long_form_active and addressed is None:
+            if follow_up_active:
+                agent = self._dialog_agent(follow_up_agent_id)
+                self._set_setting(_NATIVE_ACTIVATION_SETTING, "{}")
+                self._activate_dialog_agent(
+                    follow_up_agent_id,
+                    event="native_activation_follow_up",
+                    project=False,
+                )
+                return {
+                    "ok": True,
+                    "accepted": True,
+                    "state": "activation_follow_up",
+                    "text": primary_text,
+                    "recognizer_alternatives": candidates,
+                    "arbitration_text": primary_text,
+                    "command_text": primary_text,
+                    "voice_activation": True,
+                    "voice_activation_alias": "follow_up",
+                    "addressed_agent_id": follow_up_agent_id,
+                    "active_agent_gender": agent.get("gender"),
+                    "active_agent_voice": agent.get("voice"),
+                }
+            return {
+                "ok": True,
+                "accepted": False,
+                "state": "waiting_for_assistant_name",
+                "text": primary_text,
+                "recognizer_alternatives": candidates,
+            }
+        if addressed is not None:
+            agent, command_text = addressed
+            agent_id = str(agent.get("id") or "")
+            self._activate_dialog_agent(
+                agent_id,
+                event="native_activation",
+                project=False,
+            )
+            if command_text:
+                self._set_setting(_NATIVE_ACTIVATION_SETTING, "{}")
+            else:
+                self._set_setting(
+                    _NATIVE_ACTIVATION_SETTING,
+                    json.dumps(
+                        {
+                            "agent_id": agent_id,
+                            "expires_at": time.time() + _NATIVE_ACTIVATION_FOLLOW_UP_SECONDS,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            return {
+                "ok": True,
+                "accepted": True,
+                "state": "activated" if command_text else "address_only",
+                "text": selected_text,
+                "recognizer_primary_text": primary_text,
+                "recognizer_alternative_selected": selected_text != primary_text,
+                "recognizer_alternatives": candidates,
+                "arbitration_text": command_text or str(agent.get("label") or text),
+                "command_text": command_text,
+                "voice_activation": True,
+                "voice_activation_alias": next(
+                    (
+                        alias
+                        for alias in agent.get("aliases") or ()
+                        if selected_text.casefold().startswith(str(alias).casefold())
+                    ),
+                    "",
+                ),
+                "addressed_agent_id": agent_id,
+                "follow_up_expires_in_s": _NATIVE_ACTIVATION_FOLLOW_UP_SECONDS if not command_text else 0,
+                "active_agent_gender": agent.get("gender"),
+                "active_agent_voice": agent.get("voice"),
+            }
+        return {
+            "ok": True,
+            "accepted": True,
+            "state": "long_form" if long_form_active else "continuous",
+            "text": primary_text,
+            "recognizer_alternatives": candidates,
+            "arbitration_text": primary_text,
+            "command_text": primary_text,
+            "voice_activation": False,
+        }
+
     def handle_dialog_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         text = str(payload.get("text") or "").strip()[:_MAX_VOICE_TEXT_CHARS]
         if not text:
@@ -1849,6 +1974,8 @@ class AndroidSkillRuntime:
             "dialog_channel_id": active_agent["channel_id"],
             "active_agent_id": active_agent["id"],
             "active_agent_label": active_agent["label"],
+            "active_agent_gender": active_agent.get("gender"),
+            "active_agent_voice": active_agent.get("voice"),
             "active_agent_gender": active_agent.get("gender"),
             "active_agent_voice": active_agent.get("voice"),
             "active_agent_icon": active_agent.get("icon"),
