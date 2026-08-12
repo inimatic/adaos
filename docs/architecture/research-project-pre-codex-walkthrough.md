@@ -122,6 +122,60 @@ both workspace releases are clean against registry main. Full verification and
 the intentionally unclosed restart/catalog risks are recorded in
 [Runtime Data Route Reliability: 2026-08-12 Evidence](runtime-data-route-reliability-evidence-2026-08-12.md).
 
+### Strengthened formulation and layout receipt
+
+The later 2026-08-12 admission pass deliberately reformulated
+`project:tlp_research_03` instead of treating the earlier candidate as ready.
+Both original artifacts are present and independently identified; notebook
+outputs remain untrusted exploratory source material.
+
+| Object | Strengthened identity |
+| --- | --- |
+| Project / primary target | `project:tlp_research_03` / `skill:tlp_research_03` |
+| SourceBundle | `sha256:c1bd548e2e8a2cdfa661263aea5962bab72f823b49f33349612f7d01762092a4` |
+| ResearchPrototype revision 5 | `sha256:50d83bb5896697ca112925a6931436a858eb9afc4690737a2d0f4e3d7000c47c` |
+| Admission | `admitted`; 23/23 deterministic checks passed |
+| AutomationBrief | `sha256:8679e07b69980cb95b614b425dbb13baf5c409b3648f61fa11544bc89aacc2d7` |
+| Development Session | `dev_tlp_research_03_8679e07b69980cb9`, `status=ready` |
+| Direction state | `handoff_ready`, generation 9 |
+
+The contract freezes three pool2 arms (MaxPool, zero/frozen centered TLP, and
+learned centered TLP), a one-seed/three-epoch CPU workflow smoke with inference
+disabled, and a separately labelled 30-epoch confirmatory series over ten
+enumerated paired seeds. It fixes an STL-10 train/validation manifest, seals
+the test split, names four RNG streams, declares one primary paired validation
+estimand and a 10,000-resample paired bootstrap, retains negative results, and
+requires digest-bound execution, data, reproducibility, observability,
+evidence, recovery, and analysis checks. These choices are implementation
+inputs, not claims that TLP wins.
+
+Fresh Root-LLM drafts did not receive special trust: rejected revisions remain
+in the formulation ledger with failures for hypothesis/observation confusion,
+missing allocation, placeholder text, or incomplete automation coverage. The
+accepted revision is the human-reviewed consensus that passed the core-owned
+gate. Codex has not started and no scientific run was created.
+
+The published authoring packages for this pass are:
+
+| Component | Release | Registry commit |
+| --- | --- | --- |
+| `research_orchestrator_skill` | `0.10.2` | `7184f9dce65120e68488d9299d77dcc28b1f6983` |
+| `research_workbench` | `0.0.11` | `a485486e507d44711b461155e82395164f6f61c3` |
+| AdaOS client | live `0.0.329+6aee45f` | includes the full-surface layout and CRLF KaTeX commits |
+
+The exact pre-publication runtime was installed with
+`adaos skill install research_orchestrator_skill --source workspace --local
+--test --silent`; it passed and activated `0.10.2` in slot A. Post-publication
+strict tool-probe validation, skill tests, scenario validation, and scenario
+tests all passed. Focused browser tests passed 33/33 and the clean production
+client build succeeded before hosting release.
+
+The final authenticated portfolio/back/reload and rendered-formula operator
+record remains separate. A clean headless Chrome reached the expected pairing
+surface but had no WebAuthn session; its websocket received 404 before Desktop
+materialization. That run proves neither success nor failure of the Workbench
+layout and is not presented as an authenticated black-box receipt.
+
 ## Verification commands
 
 The proof used ordinary AdaOS lifecycle and runtime commands, including:

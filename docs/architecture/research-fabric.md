@@ -3,8 +3,9 @@
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
 first ARF7 technical precursor proved typed formulation revisions and an exact
-AutomationBrief. ARF7.1 now also validates the user-facing pre-Codex path and
-its strengthened authoring gate:
+AutomationBrief. ARF7.1 now also validates the pre-Codex mechanics and its
+strengthened authoring gate; the final authenticated browser reload receipt
+remains an explicit UX acceptance item:
 creation, artifact intake, focus, and formulation begin in a shared Research
 Workbench over an explicit local Project and Builder Development Session, not
 in a research-specific Builder tab. State-scoped full-surface layout variants,
@@ -119,6 +120,17 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     coverage, provenance allowlists, and deterministic scientific/automation
     checks. A failed candidate remains an inspectable draft after bounded
     repair and cannot create an AutomationBrief.
+24. Structured model output is a transport constraint, not a trust boundary.
+    Formulation requests use provider-native JSON output when available;
+    parsing errors and repair inputs are bounded, normalization is limited to
+    mechanical contract-shape recovery, and schema plus deterministic semantic
+    admission still run after every model response. Missing scientific choices
+    are never invented by normalization.
+25. Runtime execution location and package source are independent. Ordinary
+    install resolves a published registry release; pre-publication verification
+    explicitly selects the current workspace tree with
+    `skill install NAME --source workspace`. Both paths use the same validation,
+    slot, test, activation, and isolation contracts.
 
 ## Why `Research Fabric`
 
@@ -806,6 +818,29 @@ development webspace, and `expected_scenario_id`. This closes the pre-Codex
 Project milestone, not Codex realization, an experiment, a scientific claim,
 or autonomous research. Full receipts and reproduction commands are in
 [Research Project pre-Codex walkthrough](research-project-pre-codex-walkthrough.md).
+
+The strengthened 2026-08-12 acceptance uses the newer
+`project:tlp_research_03` fixture rather than silently grandfathering the
+earlier hand-authored contract. Root-LLM drafts remained durable and visibly
+failed deterministic checks until a human-reviewed revision 5 separated
+observations from hypotheses, enumerated paired allocation, declared the data
+seal/RNG/stopping/uncertainty policy, and covered execution, data,
+reproducibility, observability, evidence, recovery, and analysis. The admitted
+prototype is
+`sha256:50d83bb5896697ca112925a6931436a858eb9afc4690737a2d0f4e3d7000c47c`;
+its AutomationBrief is
+`sha256:8679e07b69980cb95b614b425dbb13baf5c409b3648f61fa11544bc89aacc2d7`.
+Development Session `dev_tlp_research_03_8679e07b69980cb9` exposes only
+`skill:tlp_research_03` read-write, keeps both direction-owned artifacts
+read-only, and prohibits scientific execution during code generation.
+
+This consensus is sufficient to start bounded autonomous implementation of
+the experimental base: Codex need not infer the intervention, paired units,
+smoke/confirmatory distinction, primary estimand, evidence boundary, or
+acceptance tests. It is not sufficient to claim a TLP result, select a result
+after seeing test data, or start the confirmatory series without the later
+workflow decision. The distinction is the practical value of the structured
+handoff over simply attaching the original review Markdown.
 
 ## Autonomous Research Sessions
 

@@ -162,7 +162,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF5 | Ray is a conforming optional executor service skill | `deferred` | resume only after the complete local/member-node loop |
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
-| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local` for mechanics; strengthened real-LLM TLP admission proof pending | active hardening gate |
+| ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `specified` | current engineering gate |
 | ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
@@ -293,6 +293,36 @@ design/inference/requirement/check structures, and an unforgeable deterministic
 exhausted repair remains a visible draft. The existing `tlp_research_03`
 revision is intentionally not grandfathered into readiness: it lacks the new
 contract and remains insufficient for autonomous Codex until reformulated.
+
+ARF7.1 strengthened TLP admission receipt (2026-08-12): ordinary Root-LLM
+drafts for `project:tlp_research_03` were retained but rejected when they
+promoted hypotheses to observations, omitted predeclared paired units, copied
+template placeholders, or lacked execution/data/reproducibility/observability/
+evidence coverage. Provider-native JSON output, bounded repair payloads, and
+conservative shape normalization improved recovery without granting the model
+admission authority. A human-reviewed revision 5 then passed all 23
+deterministic checks. It binds SourceBundle
+`sha256:c1bd548e2e8a2cdfa661263aea5962bab72f823b49f33349612f7d01762092a4`,
+ResearchPrototype
+`sha256:50d83bb5896697ca112925a6931436a858eb9afc4690737a2d0f4e3d7000c47c`,
+AutomationBrief
+`sha256:8679e07b69980cb95b614b425dbb13baf5c409b3648f61fa11544bc89aacc2d7`,
+and ready Development Session `dev_tlp_research_03_8679e07b69980cb9`.
+The direction is `handoff_ready`, generation 9; Codex has not started and no
+scientific run was created.
+
+The same pass exposed an ambiguity in the ordinary lifecycle CLI: `--local`
+selects the execution location but the default install source remains the
+published registry. Core now adds the explicit, general
+`skill install NAME --source workspace` path, validates that exact tree, runs
+its tests, and prepares/activates it without a registry sync. The reference
+skill `0.10.2` passed this path in slot A. The state-selected layout and CRLF
+KaTeX regression passed 33 focused browser tests and a clean production build;
+the deployed live client is `0.0.329+6aee45f`. An isolated headless browser
+could not complete the final authenticated portfolio/back/reload receipt
+because it had no WebAuthn session and the pairing websocket returned 404.
+That remaining operator check is recorded explicitly below rather than being
+reported as a layout success.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -1062,11 +1092,17 @@ not substitute for this operator path.
 - [x] `[must]` `ARF7.1-20j` Present drafts honestly, disclose coverage and gate
   blockers, enable acceptance only for an admitted revision, and coalesce
   durable LLM progress while retaining detailed grouped chat updates.
-- [ ] `[must]` `ARF7.1-20k` Run a fresh ordinary Root-LLM formulation for
-  `tlp_research_03` from both original artifacts, pass the strengthened gate,
-  inspect the result as a human-readable draft, and record a black-box
-  portfolio -> direction -> back -> reload plus exact Markdown preview receipt.
-  This is the remaining operator proof before again calling ARF7.1 closed.
+- [x] `[must]` `ARF7.1-20k` Run fresh ordinary Root-LLM formulation for
+  `tlp_research_03` from both original artifacts, retain and explain rejected
+  drafts, human-review a corrected exact revision, and pass the strengthened
+  deterministic gate before creating AutomationBrief/Development Session.
+  The model is not required or allowed to self-certify admission.
+- [ ] `[must]` `ARF7.1-20l` In an authenticated operator browser, record the
+  published portfolio -> direction -> back -> reload fallback and the exact
+  CRLF Markdown/KaTeX preview. Automated layout/math regressions, production
+  build, and hosting deployment are complete; a clean headless profile reached
+  pairing rather than the authenticated Desktop and therefore is not accepted
+  as this black-box receipt.
 
 #### Non-blocking follow-ons
 

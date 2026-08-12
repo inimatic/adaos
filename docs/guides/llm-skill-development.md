@@ -375,6 +375,35 @@ coverage and fragment refs to the user; bind generated claims only to supplied
 refs. Do not let a model-provided `ready` flag substitute for a deterministic
 admission review.
 
+### Structured LLM candidate boundary
+
+When a skill asks an LLM to produce a contract candidate rather than ordinary
+prose, treat structure, semantics, and admission as three separate gates:
+
+1. Request provider-native JSON or schema-constrained output when the provider
+   supports it. This reduces formatting failures but does not make the content
+   trusted.
+2. Parse a bounded response. Error messages and repair prompts must not echo an
+   unbounded provider payload or place the candidate inside an instruction
+   envelope that the next model can mistake for the requested object.
+3. Apply only conservative mechanical normalization: lift known wrapper fields,
+   canonicalize declared enum aliases, add deterministic ids, and repair
+   unambiguous JSON syntax such as a trailing comma. Never invent seeds,
+   comparators, evidence, thresholds, permissions, or scientific decisions.
+4. Run the published schema and then a deterministic semantic gate owned by
+   AdaOS or the governing skill. Model-authored `ready`, `valid`, `approved`, or
+   review fields are input text, never authority.
+5. Retain rejected candidates with bounded failure reasons. A bounded repair
+   may create another revision; exhaustion must remain a visible draft rather
+   than silently falling back to plausible prose.
+
+For research-like contracts, semantic checks should cover source provenance,
+hypothesis-versus-observation stance, predeclared allocation, disjoint varied
+and invariant fields, inference/stopping policy, and independently verifiable
+implementation and acceptance coverage. The specific domain checks belong to
+the governing skill; the reusable job, schema, digest, and lifecycle rails
+belong to the platform.
+
 ## Data-plane decision table
 
 | Need | Use | Avoid |
@@ -1336,6 +1365,11 @@ When coding:
 
 Before publishing:
 
+- install the exact pre-publication workspace source through the ordinary
+  lifecycle when the test target is not yet the registry release:
+  `adaos skill install NAME --source workspace --local --test --silent`.
+  `--local` chooses where the command executes; it does not by itself change
+  the default source from registry to workspace.
 - verify `data_routes` exists for browser-facing Yjs, stream, details, or
   diagnostic surfaces
 - verify every tool-backed surface names its exact tool and has a causal

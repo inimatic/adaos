@@ -791,6 +791,10 @@ Status note:
   support state-selected full-surface compositions with deterministic fallback
 - page state is scoped across webspace/scenario/page and staged defaults heal
   missing fields without overwriting active user state
+- the Research Workbench conformance case covers portfolio/detail selection,
+  back/reload fallback, and an imported Windows/CRLF Markdown equation; focused
+  Chrome tests passed 33/33 and the production client containing the ABI built
+  successfully before deployment
 - `collection_grid`, `metric_chart`, and `event_log` already materialize into
   browser renderers
 - `chat_panel` now materializes into the shared browser chat surface through
