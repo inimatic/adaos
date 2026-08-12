@@ -180,6 +180,12 @@ It renders stream-provided media through browser-routed descriptors such as
 `hub_browser_media`, keeps large media payloads out of Yjs, and declares
 fullscreen, keyboard, swipe, and action-button behavior as UI-as-data.
 
+`media.videoBrowser` is a browser playback/catalog surface for bounded media
+rows. Skill-backed `dataSource.kind: skill` catalogs should set
+`inputs.autoSelectFirst: false` unless the skill intentionally wants opening the
+surface to begin preparing the first item for playback. `showDiagnostics` should
+be reserved for diagnostic views because it renders live media preview elements.
+
 ### Skill UI interfaces and modal addressing
 
 `webui.interface.views` declares stable skill-domain UI views. Concrete
