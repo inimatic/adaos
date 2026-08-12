@@ -1864,7 +1864,7 @@ class NatsRouteTunnelRuntime:
                     for base in bases:
                         url_try = f"{base}{path}{search}"
                         try:
-                            timeout = _hub_route_local_http_timeout(path)
+                            timeout = _hub_route_local_http_timeout(path, headers)
                             resp = sess.request(method, url_try, data=body_data, headers=h2, timeout=timeout)
                             last_exc = None
                             break
@@ -3752,7 +3752,7 @@ class NatsRouteTunnelRuntime:
                                                 # short and, critically, run them off the event loop
                                                 # thread because the local hub HTTP server lives in this
                                                 # same process.
-                                                timeout = _hub_route_local_http_timeout(path)
+                                                timeout = _hub_route_local_http_timeout(path, headers)
                                                 resp = sess.request(method, url_try, data=body, headers=h2, timeout=timeout)
                                                 last_exc = None
                                                 break
@@ -3888,6 +3888,20 @@ class NatsRouteTunnelRuntime:
                                 expected_timeout_ms = 6500
                             elif http_path == "/api/tools/call":
                                 expected_timeout_ms = 60000
+                                if isinstance(headers, dict):
+                                    for header_name, header_value in headers.items():
+                                        if str(header_name or "").strip().lower() != "x-adaos-timeout-ms":
+                                            continue
+                                        try:
+                                            requested_timeout_ms = int(float(str(header_value or "").strip()))
+                                        except Exception:
+                                            requested_timeout_ms = 0
+                                        if requested_timeout_ms > 0:
+                                            expected_timeout_ms = max(
+                                                expected_timeout_ms,
+                                                min(requested_timeout_ms, 600000),
+                                            )
+                                        break
                             # Give a small buffer to avoid false positives around the edge.
                             if (
                                 http_kind == "app"

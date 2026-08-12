@@ -846,6 +846,51 @@ def _readonly_snapshot_rpc_timeout_s(requested_timeout: float | None) -> float |
     return max(1.0, min(value, 30.0))
 
 
+def _tool_call_max_timeout_s() -> float:
+    raw = str(os.getenv("ADAOS_TOOL_CALL_MAX_TIMEOUT_S") or "600").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 600.0
+    return max(30.0, min(value, 3600.0))
+
+
+def _bounded_tool_call_timeout_s(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed <= 0.0:
+        return None
+    return max(1.0, min(parsed, _tool_call_max_timeout_s()))
+
+
+def _request_tool_call_timeout_s(body: "ToolCall", request: Request) -> float | None:
+    timeout_s = _bounded_tool_call_timeout_s(body.timeout)
+    if timeout_s is not None:
+        return timeout_s
+    try:
+        raw_ms = str(request.headers.get("X-AdaOS-Timeout-Ms") or "").strip()
+    except Exception:
+        raw_ms = ""
+    if raw_ms:
+        try:
+            parsed_ms = float(raw_ms)
+        except Exception:
+            parsed_ms = 0.0
+        if parsed_ms > 0.0:
+            timeout_s = _bounded_tool_call_timeout_s(parsed_ms / 1000.0)
+            if timeout_s is not None:
+                return timeout_s
+    try:
+        raw_s = str(request.headers.get("X-AdaOS-Timeout-S") or "").strip()
+    except Exception:
+        raw_s = ""
+    return _bounded_tool_call_timeout_s(raw_s) if raw_s else None
+
+
 def _debug_autosync_enabled() -> bool:
     raw = str(os.getenv("ADAOS_TOOL_BRIDGE_WORKSPACE_AUTOSYNC") or "").strip().lower()
     if raw:
@@ -1397,6 +1442,9 @@ def _project_tool_context_meta(
 
 @router.post("/tools/call", dependencies=[Depends(require_token)])
 async def call_tool(body: ToolCall, request: Request, response: Response, ctx: AgentContext = Depends(get_ctx)):
+    resolved_timeout = _request_tool_call_timeout_s(body, request)
+    if resolved_timeout is not None and resolved_timeout != body.timeout:
+        body = body.model_copy(update={"timeout": resolved_timeout})
     mode, key, entry = _tool_call_idempotency_begin(body, request)
     if mode == "cached" and entry is not None:
         return _tool_call_idempotency_replay(entry, response)

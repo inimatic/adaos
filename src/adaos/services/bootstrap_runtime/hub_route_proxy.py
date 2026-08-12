@@ -492,7 +492,26 @@ def _append_local_http_base(bases: list[str], value: str | None) -> None:
         bases.append(base)
 
 
-def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
+def _hub_route_requested_timeout_s(headers: Any | None = None) -> float | None:
+    if not isinstance(headers, dict):
+        return None
+    raw = ""
+    for key, value in headers.items():
+        if str(key or "").strip().lower() == "x-adaos-timeout-ms":
+            raw = str(value or "").strip()
+            break
+    if not raw:
+        return None
+    try:
+        parsed_ms = float(raw)
+    except Exception:
+        return None
+    if parsed_ms <= 0.0:
+        return None
+    return max(1.0, min(parsed_ms / 1000.0, 600.0))
+
+
+def _hub_route_local_http_timeout(path: str, headers: Any | None = None) -> tuple[float, float]:
     path_norm = "/" + str(path or "").split("?", 1)[0].lstrip("/")
     if path_norm in ("/api/node/status", "/api/ping", "/healthz"):
         return (0.5, 1.2)
@@ -503,6 +522,9 @@ def _hub_route_local_http_timeout(path: str) -> tuple[float, float]:
     if path_norm.startswith("/api/media/files/"):
         return (3.0, 300.0)
     if path_norm == "/api/tools/call":
+        requested_timeout_s = _hub_route_requested_timeout_s(headers)
+        if requested_timeout_s is not None:
+            return (1.5, min(605.0, max(55.0, requested_timeout_s + 5.0)))
         # Root allows tools/call to take up to 60s. Keep the local hop below
         # that ceiling, but do not make member-link tools fail under normal
         # cross-node latency.

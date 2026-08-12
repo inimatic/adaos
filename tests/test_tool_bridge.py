@@ -1165,6 +1165,54 @@ def test_call_tool_projects_bounded_conversation_context_into_meta(monkeypatch) 
     assert "unbounded" not in meta
 
 
+def test_call_tool_uses_timeout_header_for_local_runtime(monkeypatch) -> None:
+    timeouts: list[float | None] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(
+            self,
+            skill_name: str,
+            tool_name: str,
+            payload: dict[str, object],
+            timeout: float | None = None,
+        ) -> dict[str, object]:
+            timeouts.append(timeout)
+            return {"ok": True, "skill": skill_name, "tool": tool_name, "payload": payload}
+
+    async def _fake_run_sync(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    async def _allow_action(**_kwargs):
+        return {"risk_class": "local", "approval_required": False}
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-timeout")
+    monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "local_write")
+    monkeypatch.setattr(tool_bridge_module, "_enforce_runtime_action_gate", _allow_action)
+    monkeypatch.setattr(tool_bridge_module, "_workspace_skill_source_exists", lambda *_args, **_kwargs: False)
+
+    result = asyncio.run(
+        tool_bridge_module.call_tool(
+            tool_bridge_module.ToolCall(
+                tool="media_center_skill:import_folder",
+                arguments={"path": "/mnt/media"},
+            ),
+            SimpleNamespace(headers={"X-AdaOS-Timeout-Ms": "180000"}),
+            Response(),
+            ctx=_fake_ctx(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert timeouts == [180.0]
+
+
 def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch) -> None:
     calls: list[str] = []
 

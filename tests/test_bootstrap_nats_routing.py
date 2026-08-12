@@ -803,6 +803,14 @@ def test_build_hub_route_ws_bases_prefers_supervisor_state_over_legacy_env(monke
 
 def test_hub_route_local_http_timeout_allows_tools_call_to_finish() -> None:
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/tools/call") == (1.5, 55.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(
+        "/api/tools/call",
+        {"X-AdaOS-Timeout-Ms": "180000"},
+    ) == (1.5, 185.0)
+    assert _hub_route_proxy._hub_route_local_http_timeout(
+        "/api/tools/call",
+        {"x-adaos-timeout-ms": "900000"},
+    ) == (1.5, 605.0)
     assert _hub_route_proxy._hub_route_local_http_timeout("/api/ping") == (0.5, 1.2)
 
 
