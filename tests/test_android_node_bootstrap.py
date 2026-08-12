@@ -171,7 +171,7 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["runtime"]["nlu"]["mode"] == "always"
         assert status["runtime"]["nlu"]["training"] == "off_device"
         assert status["runtime"]["nlu"]["model_id"] == (
-            "362b6f47acb743658d8cd4bb8f538a41"
+            "a7a8607bf4b14183b86159e0dcee6524"
         )
         assert status["environment"]["nlu"] == status["runtime"]["nlu"]
         assert status["runtime"]["startup_duration_ms"] >= 0
@@ -384,6 +384,59 @@ def test_android_dialog_uses_rasa_teacher_and_canonical_hub_companion(
         assert member_link.events[0][2] == "android.nlu.rasa"
         assert member_link.events[0][1]["_meta"]["nlu_teacher_only"] is True
         assert member_link.order == ["rpc", "teacher"]
+    finally:
+        bootstrap.stop()
+
+
+def test_android_dialog_stops_listening_from_rasa_before_companion_routing(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    bootstrap.start(str(tmp_path), "test", 0)
+
+    class FakeMemberLink:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict, float]] = []
+
+        def send_bus_event(
+            self, _event_type: str, _payload: dict, *, source: str = ""
+        ) -> bool:
+            return False
+
+        def call_hub_tool(
+            self, tool: str, arguments: dict, *, timeout: float
+        ) -> dict:
+            self.calls.append((tool, arguments, timeout))
+            return {"message": "This must not be called", "used_llm": True}
+
+    member_link = FakeMemberLink()
+    try:
+        assert bootstrap._skills is not None
+        bootstrap._skills.member_link = member_link
+        bootstrap._skills.select_dialog_agent(
+            {"agent_id": "agent:conversation_companions:arseni"}
+        )
+
+        result = bootstrap._skills.handle_dialog_message(
+            {"text": "перестань слушать", "webspace_id": "desktop"}
+        )
+
+        assert result["nlu"]["intent"]["name"] == "voice.listening.stop"
+        assert result["nlu"]["intent"]["confidence"] >= 0.45
+        assert result["response"] == "Прослушивание остановлено."
+        assert result["response_source"] == "android_nlu_control"
+        assert result["used_llm"] is False
+        assert result["client_directives"] == [
+            {
+                "type": "voice.listening.stop",
+                "source": "nlu",
+                "intent": "voice.listening.stop",
+                "confidence": result["nlu"]["intent"]["confidence"],
+            }
+        ]
+        assert member_link.calls == []
+        message = bootstrap._skills._voice_current()["messages"][-1]
+        assert message["client_directives"] == result["client_directives"]
     finally:
         bootstrap.stop()
 

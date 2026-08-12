@@ -58,6 +58,7 @@ _MAX_VOICE_MESSAGES = 32
 _MAX_VOICE_TEXT_CHARS = 2 * 1024
 _RASA_LOW_CONFIDENCE = 0.45
 _RASA_BUNDLE_PATH = Path(__file__).with_name("bundle") / "rasa_mobile_bundle.json.gz"
+_VOICE_STOP_INTENT = "voice.listening.stop"
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
 _NIKA_AGENT_ID = "agent:conversation_companions:nika"
@@ -1620,11 +1621,36 @@ class AndroidSkillRuntime:
             response_input = addressed_text or "привет"
         now = time.time()
         turn_id = uuid.uuid4().hex[:12]
-        response_text, used_llm = self._hub_dialog_response(
-            response_input,
-            active_agent,
-            webspace_id=webspace_id,
+        intent = nlu_result.get("intent") if isinstance(nlu_result.get("intent"), dict) else {}
+        intent_name = str(intent.get("name") or "").strip()
+        intent_confidence = float(intent.get("confidence") or 0.0)
+        stop_listening = (
+            intent_name == _VOICE_STOP_INTENT
+            and intent_confidence >= _RASA_LOW_CONFIDENCE
         )
+        client_directives: list[dict[str, Any]] = []
+        if stop_listening:
+            response_text = "Прослушивание остановлено."
+            used_llm = False
+            response_source = "android_nlu_control"
+            self._last_dialog_route = "android_nlu_control"
+            self._last_dialog_error = ""
+            self._last_dialog_route_at = _utc_now()
+            client_directives.append(
+                {
+                    "type": _VOICE_STOP_INTENT,
+                    "source": "nlu",
+                    "intent": intent_name,
+                    "confidence": intent_confidence,
+                }
+            )
+        else:
+            response_text, used_llm = self._hub_dialog_response(
+                response_input,
+                active_agent,
+                webspace_id=webspace_id,
+            )
+            response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"
         # Preserve interactive priority on the single member link: the Hub
         # dialog RPC must be queued and completed before optional teacher work.
         teacher_dispatched = self._dispatch_nlu_teacher(
@@ -1633,7 +1659,6 @@ class AndroidSkillRuntime:
             request_id=f"mobile-{turn_id}",
             webspace_id=webspace_id,
         )
-        response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"
         if not response_text:
             response_text = self._voice_response(response_input, active_agent)
             response_source = "android_offline_fallback"
@@ -1649,6 +1674,30 @@ class AndroidSkillRuntime:
             for item in current.get("messages") or []
             if isinstance(item, dict)
         ]
+        assistant_message = {
+            "id": f"mobile-assistant-{turn_id}",
+            "from": "hub",
+            "text": response_text,
+            "ts": now + 0.001,
+            "dialog_channel_id": active_agent["channel_id"],
+            "active_agent_id": active_agent["id"],
+            "active_agent_label": active_agent["label"],
+            "active_agent_gender": active_agent.get("gender"),
+            "active_agent_voice": active_agent.get("voice"),
+            "active_agent_icon": active_agent.get("icon"),
+            "voice": active_agent.get("voice"),
+            "voice_profile": {
+                "lang": "ru-RU",
+                "gender": active_agent.get("gender"),
+                "voice": active_agent.get("voice"),
+            },
+            "response_source": response_source,
+            "used_llm": used_llm,
+            "llm_route": self._last_dialog_route,
+            "llm_route_error": self._last_dialog_error,
+        }
+        if client_directives:
+            assistant_message["client_directives"] = [dict(item) for item in client_directives]
         messages.extend(
             [
                 {
@@ -1659,28 +1708,7 @@ class AndroidSkillRuntime:
                     "dialog_channel_id": active_agent["channel_id"],
                     "active_agent_id": active_agent["id"],
                 },
-                {
-                    "id": f"mobile-assistant-{turn_id}",
-                    "from": "hub",
-                    "text": response_text,
-                    "ts": now + 0.001,
-                    "dialog_channel_id": active_agent["channel_id"],
-                    "active_agent_id": active_agent["id"],
-                    "active_agent_label": active_agent["label"],
-                    "active_agent_gender": active_agent.get("gender"),
-                    "active_agent_voice": active_agent.get("voice"),
-                    "active_agent_icon": active_agent.get("icon"),
-                    "voice": active_agent.get("voice"),
-                    "voice_profile": {
-                        "lang": "ru-RU",
-                        "gender": active_agent.get("gender"),
-                        "voice": active_agent.get("voice"),
-                    },
-                    "response_source": response_source,
-                    "used_llm": used_llm,
-                    "llm_route": self._last_dialog_route,
-                    "llm_route_error": self._last_dialog_error,
-                },
+                assistant_message,
             ]
         )
         snapshot = {
@@ -1691,7 +1719,6 @@ class AndroidSkillRuntime:
             "updated_at": _utc_now(),
         }
         dialog = self._dialog_snapshot(event="turn")
-        intent = nlu_result.get("intent") if isinstance(nlu_result.get("intent"), dict) else {}
         nlu_projection = {
             "provider": "rasa",
             "mode": "always",
@@ -1738,6 +1765,7 @@ class AndroidSkillRuntime:
             "llm_route": self._last_dialog_route,
             "llm_route_error": self._last_dialog_error,
             "nlu": nlu_projection,
+            "client_directives": client_directives,
         }
 
     def _voice_response(self, text: str, agent: dict[str, Any]) -> str:

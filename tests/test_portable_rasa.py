@@ -38,8 +38,8 @@ def test_portable_rasa_bundle_is_pinned_to_the_promoted_model() -> None:
         "model_id": model["model_id"],
         "source_model_sha256": model["source_model_sha256"],
         "rasa_version": "3.6.21",
-        "trained_at": "2026-08-10T04:46:18.995211",
-        "intent_count": 27,
+        "trained_at": "2026-08-12T07:26:11.293424",
+        "intent_count": 28,
         "entity_labels": [
             "O",
             "U-modal_id",
@@ -57,11 +57,14 @@ def test_portable_rasa_bundle_is_pinned_to_the_promoted_model() -> None:
 @pytest.mark.parametrize(
     ("text", "intent", "confidence"),
     [
-        ("привет", "greet", 0.6901980733468518),
-        ("какая погода в Москве", "weather.current", 0.8829258239014717),
-        ("позови Миру", "conversation.switch_character", 0.4345343843500729),
-        ("дай совет по ситуации", "conversation.talk", 0.8023249480019865),
-        ("говори короче", "conversation.update_profile", 0.8576209478397628),
+        ("привет", "greet", 0.6964879833700544),
+        ("какая погода в Москве", "weather.current", 0.8875921471931973),
+        ("позови Миру", "conversation.switch_character", 0.43149059241884336),
+        ("дай совет по ситуации", "conversation.talk", 0.8082575190884664),
+        ("говори короче", "conversation.update_profile", 0.8617763828142704),
+        ("перестань слушать", "voice.listening.stop", 0.8623001051010677),
+        ("останови прослушивание", "voice.listening.stop", 0.9328660537212444),
+        ("выключи микрофон", "voice.listening.stop", 0.7683554246462293),
     ],
 )
 def test_portable_rasa_preserves_canonical_intent_predictions(
@@ -86,7 +89,7 @@ def test_portable_rasa_preserves_canonical_crf_entities() -> None:
             "entity": "scenario_id",
             "start": 14,
             "end": 25,
-            "confidence_entity": pytest.approx(0.653014055189146, abs=1e-9),
+            "confidence_entity": pytest.approx(0.6496746013240244, abs=1e-9),
             "value": "web_desktop",
             "extractor": "CRFEntityExtractor",
             "processors": ["EntitySynonymMapper"],

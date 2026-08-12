@@ -46,6 +46,8 @@ def test_default_desktop_nlu_sync_exports_modal_intents_to_rasa_project() -> Non
     assert "open marketplace" in _examples_for(dataset, "desktop.open_marketplace")
     assert "\u043e\u0442\u043a\u0440\u043e\u0439 \u043c\u0430\u0440\u043a\u0435\u0442\u043f\u043b\u0430\u0441\u0435" in _examples_for(dataset, "desktop.open_marketplace")
     assert "set timer for [10 minutes](duration)" in _examples_for(dataset, "voice.timer.start")
+    assert "перестань слушать" in _examples_for(dataset, "voice.listening.stop")
+    assert "AdaOS, останови прослушивание" in _examples_for(dataset, "voice.listening.stop")
     assert "reload desktop" in _examples_for(dataset, "desktop.reload_webspace")
     assert "switch to [web_desktop](scenario_id)" in _examples_for(dataset, "desktop.switch_scenario")
     assert "- apps_catalog" in _lookup_examples_for(dataset, "modal_id")
@@ -163,6 +165,44 @@ async def test_default_desktop_nlu_dispatches_voice_timer_start(monkeypatch) -> 
             "slots": {"duration": "10 \u043c\u0438\u043d\u0443\u0442"},
             "text": "\u043f\u043e\u0441\u0442\u0430\u0432\u044c \u0442\u0430\u0439\u043c\u0435\u0440 \u043d\u0430 10 \u043c\u0438\u043d\u0443\u0442",
             "_meta": {"route_id": "voice_chat", "webspace_id": "desktop", "scenario_id": "web_desktop"},
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_default_desktop_nlu_dispatches_voice_listening_stop(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    from adaos.services.nlu import dispatcher as dispatcher_module
+
+    ctx = get_ctx()
+    emitted: list[dict] = []
+    ctx.bus.subscribe("voice.listening.stop", lambda ev: emitted.append(dict(ev.payload or {})))
+
+    async def _scenario_id(_ctx, _webspace_id: str) -> str:
+        return "web_desktop"
+
+    monkeypatch.setattr(dispatcher_module, "_resolve_scenario_id", _scenario_id)
+
+    await dispatcher_module._on_nlp_intent_detected(
+        {
+            "intent": "voice.listening.stop",
+            "confidence": 1.0,
+            "slots": {},
+            "text": "перестань слушать",
+            "webspace_id": "desktop",
+            "_meta": {"route_id": "voice_chat"},
+        }
+    )
+
+    assert emitted == [
+        {
+            "webspace_id": "desktop",
+            "text": "перестань слушать",
+            "_meta": {
+                "route_id": "voice_chat",
+                "webspace_id": "desktop",
+                "scenario_id": "web_desktop",
+            },
         }
     ]
 

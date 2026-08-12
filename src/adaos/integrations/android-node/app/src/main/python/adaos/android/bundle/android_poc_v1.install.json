@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -26,11 +26,11 @@
   "models": [
     {
       "id": "rasa_nlu",
-      "model_id": "362b6f47acb743658d8cd4bb8f538a41",
+      "model_id": "a7a8607bf4b14183b86159e0dcee6524",
       "format": "adaos.rasa.mobile.v1",
       "path": "rasa_mobile_bundle.json.gz",
-      "source_model_sha256": "e71b2d7e614d7fb8fddcd2b68080e1611e83303e40d278738964313c142ed27a",
-      "sha256": "1ee5966213a3e268646f5ac55eb04c28a37ac42c3ddde8f08ef9789dd52fa035",
+      "source_model_sha256": "9a815806af8d7c376332214e5bfb817e81695881725a70e2b0d0af5f4cf5e6c1",
+      "sha256": "70e2e013266d4d6dcee368a21642232c5274bbd6407d5f3510af312540662cbd",
       "training": "off_device",
       "runtime": "shared_portable_rasa"
     }
@@ -113,7 +113,7 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "789f76923fd1fed92697131518864027307ef79a1093929a0bafc918368b01a6"
+    "sha256": "eb21f1c9e817413fc4c7d6327b40e1e6450eceb26551a3ff72a2747526565e2f"
   },
   "member_link_module": {
     "path": "../member_link.py",

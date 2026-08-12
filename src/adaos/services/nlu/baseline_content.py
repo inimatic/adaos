@@ -134,6 +134,29 @@ _DEFAULT_DESKTOP_NLU: dict[str, Any] = {
                 }
             ],
         },
+        "voice.listening.stop": {
+            "description": "Stop an active continuous voice-listening session.",
+            "scope": "scenario",
+            "examples": [
+                "останови прослушивание",
+                "прекрати прослушивание",
+                "перестань слушать",
+                "больше не слушай",
+                "выключи микрофон",
+                "заверши режим прослушивания",
+                "ада, прекрати слушать",
+                "AdaOS, останови прослушивание",
+                "stop listening",
+                "turn off listening",
+            ],
+            "actions": [
+                {
+                    "type": "callHost",
+                    "target": "voice.listening.stop",
+                    "params": {"webspace_id": "$ctx.webspace_id"},
+                }
+            ],
+        },
     }
 }
 
