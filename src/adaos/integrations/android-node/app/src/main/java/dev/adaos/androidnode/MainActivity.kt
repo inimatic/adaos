@@ -29,6 +29,7 @@ class MainActivity : Activity() {
         Log.i(TAG, "onCreate instance=${System.identityHashCode(this)}")
         setContentView(buildContent())
         requestNotificationPermission()
+        requestMicrophonePermission()
         handleLaunchIntent(intent)
     }
 
@@ -199,9 +200,16 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun requestMicrophonePermission() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+        }
+    }
+
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val REQUEST_RECORD_AUDIO = 1702
         private const val TAG = "AdaOSNodeActivity"
         private const val ACTION_DEBUG_STOP_NODE =
             "dev.adaos.androidnode.action.DEBUG_STOP_NODE"

@@ -59,6 +59,10 @@ _MAX_VOICE_TEXT_CHARS = 2 * 1024
 _RASA_LOW_CONFIDENCE = 0.45
 _RASA_BUNDLE_PATH = Path(__file__).with_name("bundle") / "rasa_mobile_bundle.json.gz"
 _VOICE_STOP_INTENT = "voice.listening.stop"
+_LONG_FORM_NOTE_START_INTENT = "voice.long_form.note.start"
+_LONG_FORM_DIALOG_START_INTENT = "voice.long_form.dialog.start"
+_LONG_FORM_STOP_INTENT = "voice.long_form.stop"
+_LONG_FORM_SETTING = "voice_long_form_session"
 _GENERAL_DIALOG_AGENT_ID = "agent:android:local"
 _ARSENI_AGENT_ID = "agent:conversation_companions:arseni"
 _NIKA_AGENT_ID = "agent:conversation_companions:nika"
@@ -1214,6 +1218,11 @@ class AndroidSkillRuntime:
             for key, value in agent.items()
             if key != "aliases"
         }
+        projected["aliases"] = [
+            str(value)
+            for value in agent.get("aliases") or ()
+            if str(value or "").strip()
+        ]
         projected["capabilities"] = list(projected.get("capabilities") or [])
         hub_connected = self._member_link_connected()
         hub_companion = (
@@ -1443,6 +1452,125 @@ class AndroidSkillRuntime:
                     return dict(agent), str(match.group("rest") or "").strip()
         return None
 
+    def _long_form_state(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self._setting(_LONG_FORM_SETTING, "{}"))
+            return value if isinstance(value, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def _set_long_form_state(self, value: dict[str, Any]) -> None:
+        self._set_setting(
+            _LONG_FORM_SETTING,
+            json.dumps(value, ensure_ascii=False, sort_keys=True),
+        )
+
+    def _advance_long_form(
+        self,
+        *,
+        text: str,
+        intent_name: str,
+        agent: dict[str, Any],
+        meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = self._long_form_state()
+        recording = current.get("state") == "recording"
+        if not recording and intent_name in {
+            _LONG_FORM_NOTE_START_INTENT,
+            _LONG_FORM_DIALOG_START_INTENT,
+        }:
+            purpose = "note" if intent_name == _LONG_FORM_NOTE_START_INTENT else "dialog"
+            session = {
+                "schema_version": "voice-long-form-session.v1",
+                "session_id": f"dictation:{uuid.uuid4().hex[:16]}",
+                "state": "recording",
+                "purpose": purpose,
+                "owner_agent_id": str(agent.get("id") or ""),
+                "segments": [],
+                "started_at": _utc_now(),
+                "updated_at": _utc_now(),
+            }
+            self._set_long_form_state(session)
+            return {
+                "action": "started",
+                "session": session,
+                "response": "Я буду записывать, пока Вы не скажете «Конец записи».",
+                "directives": [
+                    {
+                        "type": "voice.dictation.start",
+                        "source": "nlu",
+                        "intent": intent_name,
+                        "purpose": purpose,
+                        "session_id": session["session_id"],
+                    }
+                ],
+            }
+        if not recording:
+            return {"action": "pass", "session": current, "directives": []}
+
+        addressed_agent_id = str(meta.get("addressed_agent_id") or "").strip()
+        alternative = bool(addressed_agent_id) and intent_name != _LONG_FORM_STOP_INTENT
+        if intent_name == _LONG_FORM_STOP_INTENT or alternative:
+            completed = " ".join(
+                str(item or "").strip()
+                for item in current.get("segments") or []
+                if str(item or "").strip()
+            ).strip()[:_MAX_NOTE_CONTENT_CHARS]
+            current.update(
+                {
+                    "state": "completed",
+                    "text": completed,
+                    "ended_at": _utc_now(),
+                    "ended_by": "alternative_address" if alternative else "nlu",
+                    "updated_at": _utc_now(),
+                }
+            )
+            note = None
+            if current.get("purpose") == "note" and completed:
+                note = self._notebook_create({"content": completed})
+                response = "Длинная заметка сохранена."
+            elif current.get("purpose") == "dialog" and completed and not alternative:
+                response = ""
+            else:
+                response = "Запись завершена."
+            self._set_long_form_state(current)
+            return {
+                "action": "completed_and_dispatch" if alternative else "completed",
+                "session": current,
+                "completed_text": completed,
+                "dispatch_text": text if alternative else completed if current.get("purpose") == "dialog" else "",
+                "response": response,
+                "note": note,
+                "directives": [
+                    {
+                        "type": "voice.dictation.stop",
+                        "source": "activation" if alternative else "nlu",
+                        "intent": intent_name,
+                        "purpose": current.get("purpose"),
+                        "session_id": current.get("session_id"),
+                    }
+                ],
+            }
+
+        segments = [str(item or "").strip() for item in current.get("segments") or [] if str(item or "").strip()]
+        if text:
+            segments.append(text)
+        current.update({"segments": segments[-512:], "updated_at": _utc_now()})
+        self._set_long_form_state(current)
+        return {
+            "action": "appended",
+            "session": current,
+            "response": "",
+            "directives": [
+                {
+                    "type": "voice.dictation.append",
+                    "source": "stt",
+                    "segment_count": len(segments),
+                    "session_id": current.get("session_id"),
+                }
+            ],
+        }
+
     def _empty_voice_chat(self) -> dict[str, Any]:
         return {
             "messages": [],
@@ -1624,12 +1752,49 @@ class AndroidSkillRuntime:
         intent = nlu_result.get("intent") if isinstance(nlu_result.get("intent"), dict) else {}
         intent_name = str(intent.get("name") or "").strip()
         intent_confidence = float(intent.get("confidence") or 0.0)
+        control_intent_name = (
+            intent_name if intent_confidence >= _RASA_LOW_CONFIDENCE else ""
+        )
         stop_listening = (
             intent_name == _VOICE_STOP_INTENT
             and intent_confidence >= _RASA_LOW_CONFIDENCE
         )
-        client_directives: list[dict[str, Any]] = []
-        if stop_listening:
+        long_form = self._advance_long_form(
+            text=response_input,
+            intent_name=control_intent_name,
+            agent=active_agent,
+            meta=meta,
+        )
+        long_form_action = str(long_form.get("action") or "pass")
+        client_directives: list[dict[str, Any]] = [
+            dict(item)
+            for item in long_form.get("directives") or []
+            if isinstance(item, dict)
+        ]
+        suppress_fallback = long_form_action == "appended"
+        if long_form_action in {"started", "appended"}:
+            response_text = str(long_form.get("response") or "")
+            used_llm = False
+            response_source = "android_long_form_control"
+            self._last_dialog_route = "android_long_form_control"
+            self._last_dialog_error = ""
+            self._last_dialog_route_at = _utc_now()
+        elif long_form_action in {"completed", "completed_and_dispatch"}:
+            dispatch_text = str(long_form.get("dispatch_text") or "").strip()
+            if dispatch_text:
+                response_input = dispatch_text
+                response_text, used_llm = self._hub_dialog_response(
+                    response_input,
+                    active_agent,
+                    webspace_id=webspace_id,
+                )
+                response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"
+            else:
+                response_text = str(long_form.get("response") or "")
+                used_llm = False
+                response_source = "android_long_form_control"
+                suppress_fallback = True
+        elif stop_listening:
             response_text = "Прослушивание остановлено."
             used_llm = False
             response_source = "android_nlu_control"
@@ -1653,13 +1818,15 @@ class AndroidSkillRuntime:
             response_source = "hub_skill_llm" if response_text and used_llm else "hub_skill"
         # Preserve interactive priority on the single member link: the Hub
         # dialog RPC must be queued and completed before optional teacher work.
-        teacher_dispatched = self._dispatch_nlu_teacher(
-            text=text,
-            nlu_result=nlu_result,
-            request_id=f"mobile-{turn_id}",
-            webspace_id=webspace_id,
-        )
-        if not response_text:
+        teacher_dispatched = False
+        if long_form_action not in {"appended"}:
+            teacher_dispatched = self._dispatch_nlu_teacher(
+                text=text,
+                nlu_result=nlu_result,
+                request_id=f"mobile-{turn_id}",
+                webspace_id=webspace_id,
+            )
+        if not response_text and not suppress_fallback:
             response_text = self._voice_response(response_input, active_agent)
             response_source = "android_offline_fallback"
             used_llm = False
@@ -1715,6 +1882,7 @@ class AndroidSkillRuntime:
             "messages": messages[-_MAX_VOICE_MESSAGES:],
             "status": "ready",
             "assistant": self._dialog_agent_projection(active_agent),
+            "long_form": dict(long_form.get("session") or {}),
             "last_turn_id": turn_id,
             "updated_at": _utc_now(),
         }
@@ -1735,6 +1903,7 @@ class AndroidSkillRuntime:
                 if isinstance(item, dict)
             ],
             "teacher_dispatched": teacher_dispatched,
+            "long_form_action": long_form_action,
             "model_id": (
                 self._nlu_runtime.metadata.get("model_id")
                 if self._nlu_runtime is not None
@@ -1766,6 +1935,8 @@ class AndroidSkillRuntime:
             "llm_route_error": self._last_dialog_error,
             "nlu": nlu_projection,
             "client_directives": client_directives,
+            "long_form_action": long_form_action,
+            "long_form": dict(long_form.get("session") or {}),
         }
 
     def _voice_response(self, text: str, agent: dict[str, Any]) -> str:

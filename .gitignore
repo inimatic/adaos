@@ -39,3 +39,5 @@ example3
 .gitignore
 build
 .gradle/
+.tmp
+.kotlin/

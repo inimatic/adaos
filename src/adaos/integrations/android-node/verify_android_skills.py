@@ -289,6 +289,18 @@ def main() -> int:
         if browsers.get("result", {}).get("summary", {}).get("value", 0) < 1:
             raise RuntimeError("Browsers did not project the active control session")
 
+        local_agent, _ = _command(
+            websocket,
+            "dialog-agent-local-smoke",
+            "dialog.agent.select",
+            {
+                "agent_id": "agent:android:local",
+                "webspace_id": "desktop",
+            },
+        )
+        if local_agent.get("active_agent", {}).get("label") != "AdaOS Mobile":
+            raise RuntimeError("Android local dialog agent was not activated")
+
         voice, _ = _command(
             websocket,
             "voice-assistant-smoke",
@@ -297,6 +309,53 @@ def main() -> int:
         )
         if voice.get("accepted") is not True or not voice.get("response"):
             raise RuntimeError("Android voice assistant did not complete a local turn")
+
+        long_form_marker = f"Длинная заметка {arguments.marker}"
+        long_form_start, _ = _command(
+            websocket,
+            "voice-long-form-start-smoke",
+            "dialog.user_message",
+            {"text": "запиши длинную заметку", "webspace_id": "desktop"},
+        )
+        if long_form_start.get("long_form_action") != "started":
+            raise RuntimeError(f"Android long-form note did not start: {long_form_start}")
+        long_form_append, _ = _command(
+            websocket,
+            "voice-long-form-append-smoke",
+            "dialog.user_message",
+            {"text": long_form_marker, "webspace_id": "desktop"},
+        )
+        if long_form_append.get("long_form_action") != "appended":
+            raise RuntimeError(f"Android long-form note did not append: {long_form_append}")
+        long_form_stop, _ = _command(
+            websocket,
+            "voice-long-form-stop-smoke",
+            "dialog.user_message",
+            {"text": "конец записи", "webspace_id": "desktop"},
+        )
+        if long_form_stop.get("long_form_action") != "completed":
+            raise RuntimeError(f"Android long-form note did not complete: {long_form_stop}")
+        notebook_after_dictation = _post(
+            arguments.base_url,
+            {"tool": "notebook_skill:get_notebook_snapshot", "arguments": {}},
+        )
+        long_form_note = next(
+            (
+                item
+                for item in notebook_after_dictation.get("items") or []
+                if item.get("content") == long_form_marker
+            ),
+            None,
+        )
+        if not long_form_note:
+            raise RuntimeError("Android long-form content was not saved to Notebook")
+        _post(
+            arguments.base_url,
+            {
+                "tool": "notebook_skill:delete_note",
+                "arguments": {"note_id": str(long_form_note.get("id") or "")},
+            },
+        )
 
         selected, _ = _command(
             websocket,
@@ -483,6 +542,7 @@ def main() -> int:
                 "adaos_connect_member_state": True,
                 "browsers_projection": True,
                 "voice_assistant_turn": True,
+                "voice_long_form_note": True,
                 "dialog_roster": sorted(expected_agents),
                 "dialog_agent_switch": True,
                 "taiga_widgets": sorted(required_widgets),

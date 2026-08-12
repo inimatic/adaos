@@ -43,6 +43,15 @@
                 "agentSelector": true,
                 "agentSelectorLabel": "Ассистент",
                 "agentChip": true,
+                "autoSpeak": true,
+                "autoSpeakFrom": "hub",
+                "autoSpeakLang": "ru-RU",
+                "listeningMode": "activation",
+                "activationAliases": [
+                  "Ада",
+                  "AdaOS",
+                  "ассистент"
+                ],
                 "meta": {
                   "route_id": "voice_chat",
                   "voice_chat_scope": "local"
@@ -52,7 +61,9 @@
                   "lang": "ru-RU",
                   "autoSend": true,
                   "pushToTalk": false,
-                  "readyCue": true
+                  "readyCue": false,
+                  "autoStart": true,
+                  "listeningMode": "activation"
                 }
               },
               "dataSource": {

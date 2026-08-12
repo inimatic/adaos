@@ -171,7 +171,7 @@ def test_loopback_runtime_persists_identity_and_reports_member_status(tmp_path: 
         assert status["runtime"]["nlu"]["mode"] == "always"
         assert status["runtime"]["nlu"]["training"] == "off_device"
         assert status["runtime"]["nlu"]["model_id"] == (
-            "a7a8607bf4b14183b86159e0dcee6524"
+            "4c9689f56b794a349dee616edf7077aa"
         )
         assert status["environment"]["nlu"] == status["runtime"]["nlu"]
         assert status["runtime"]["startup_duration_ms"] >= 0
@@ -437,6 +437,52 @@ def test_android_dialog_stops_listening_from_rasa_before_companion_routing(
         assert member_link.calls == []
         message = bootstrap._skills._voice_current()["messages"][-1]
         assert message["client_directives"] == result["client_directives"]
+    finally:
+        bootstrap.stop()
+
+
+def test_android_long_form_note_is_started_and_stopped_by_rasa(
+    tmp_path: Path,
+) -> None:
+    bootstrap = _load_bootstrap()
+    bootstrap.start(str(tmp_path), "test", 0)
+
+    class OfflineMemberLink:
+        def send_bus_event(
+            self, _event_type: str, _payload: dict, *, source: str = ""
+        ) -> bool:
+            return False
+
+    try:
+        assert bootstrap._skills is not None
+        bootstrap._skills.member_link = OfflineMemberLink()
+
+        started = bootstrap._skills.handle_dialog_message(
+            {"text": "запиши длинную заметку", "webspace_id": "desktop"}
+        )
+        assert started["nlu"]["intent"]["name"] == "voice.long_form.note.start"
+        assert started["long_form_action"] == "started"
+        assert started["client_directives"][0]["type"] == "voice.dictation.start"
+
+        appended = bootstrap._skills.handle_dialog_message(
+            {"text": "Встреча состоится завтра утром", "webspace_id": "desktop"}
+        )
+        assert appended["long_form_action"] == "appended"
+        assert appended["client_directives"][0]["type"] == "voice.dictation.append"
+        assert appended["response"] == ""
+
+        completed = bootstrap._skills.handle_dialog_message(
+            {"text": "конец записи", "webspace_id": "desktop"}
+        )
+        assert completed["nlu"]["intent"]["name"] == "voice.long_form.stop"
+        assert completed["long_form_action"] == "completed"
+        assert completed["client_directives"][0]["type"] == "voice.dictation.stop"
+        assert completed["response"] == "Длинная заметка сохранена."
+        notes = bootstrap._skills._notebook_snapshot()["items"]
+        assert any(
+            item["content"] == "Встреча состоится завтра утром"
+            for item in notes
+        )
     finally:
         bootstrap.stop()
 

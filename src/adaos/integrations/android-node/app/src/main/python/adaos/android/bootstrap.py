@@ -23,6 +23,7 @@ from .ystore import AndroidYStore
 from .skills import AndroidSkillError, AndroidSkillRuntime
 from .member_link import AndroidMemberLink
 from .resources import AndroidResourceSampler
+from .voice_runtime import AndroidVoicePolicyStore
 
 _ALLOWED_ORIGINS = {
     "https://inimatic.com",
@@ -59,6 +60,7 @@ _base_yjs_update = b""
 _ystore: AndroidYStore | None = None
 _skills: AndroidSkillRuntime | None = None
 _member_link: AndroidMemberLink | None = None
+_voice_policy: AndroidVoicePolicyStore | None = None
 _install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
 _resource_sampler = AndroidResourceSampler()
@@ -299,6 +301,20 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/node/member/status":
             self._json(200, _member_link_snapshot())
             return
+        if path == "/api/node/voice/listening":
+            if _voice_policy is None:
+                self._json(503, {"ok": False, "error": "voice_policy_not_ready"})
+                return
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "policy": _voice_policy.read(),
+                    "service": _voice_policy.service(),
+                    "runtime": _android_voice_runtime_snapshot(),
+                },
+            )
+            return
         if path == "/api/subnet/alias":
             runtime = _snapshot()
             self._json(
@@ -444,6 +460,21 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(409, {"ok": False, "accepted": False, "error": str(exc)})
                 return
             self._json(200, {"ok": True, "accepted": True, **result})
+            return
+        if path == "/api/node/voice/listening":
+            if _voice_policy is None:
+                self._json(503, {"ok": False, "error": "voice_policy_not_ready"})
+                return
+            try:
+                policy = _voice_policy.configure(
+                    body,
+                    source=str(body.get("source") or "node_api"),
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            _member_link_request_state_refresh()
+            self._json(200, {"ok": True, "policy": policy, "service": _voice_policy.service()})
             return
         self._json(404, {"ok": False, "error": "not_found", "path": path})
 
@@ -1017,6 +1048,42 @@ def _member_link_snapshot() -> dict[str, Any]:
     return member_link.snapshot()
 
 
+def _member_link_request_state_refresh() -> None:
+    member_link = _member_link
+    if member_link is None:
+        return
+    member_link.send_status(reason="voice_policy_changed")
+    member_link.send_node_state(reason="voice_policy_changed")
+
+
+def _android_voice_runtime_snapshot() -> dict[str, Any]:
+    runtime = _snapshot()
+    root_text = str(runtime.get("data_root") or "").strip()
+    path = Path(root_text) / "voice-audio-runtime.json" if root_text else None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8")) if path is not None else {}
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {
+            "schema_version": "android-voice-audio-runtime.v1",
+            "state": "not_started",
+            "aec": {"available": False, "enabled": False},
+        }
+
+
+def _handle_member_rpc(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool != "node.voice.configure":
+        raise PermissionError("member_rpc_tool_not_allowed_android")
+    if _voice_policy is None:
+        raise RuntimeError("voice_policy_not_ready")
+    policy = _voice_policy.configure(
+        dict(arguments or {}),
+        source=str(arguments.get("source") or "device_registry"),
+    )
+    _member_link_request_state_refresh()
+    return {"ok": True, "policy": policy, "service": _voice_policy.service()}
+
+
 def _member_link_state_changed(snapshot: dict[str, Any]) -> None:
     skills = _skills
     if skills is not None:
@@ -1512,7 +1579,7 @@ def start(
 
     bootstrap_started = time.perf_counter()
     global _server, _thread, _runtime, _desktop_snapshot, _base_yjs_update, _ystore, _skills
-    global _member_link
+    global _member_link, _voice_policy
     global _install_descriptor
     root = Path(data_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -1522,6 +1589,7 @@ def start(
         _resource_sampler.reset()
         normalized_device_label = str(device_label or "Android phone").strip()[:64]
         node_id, subnet_id = _load_identity(root)
+        _voice_policy = AndroidVoicePolicyStore(root)
         _install_descriptor = _load_verified_install_descriptor()
         _desktop_snapshot = _build_desktop_snapshot()
         _base_yjs_update = _load_base_yjs_update()
@@ -1591,6 +1659,7 @@ def start(
             document_provider=_member_document_snapshot,
             apply_yjs_update=_apply_member_yjs_update,
             state_changed=_member_link_state_changed,
+            rpc_handler=_handle_member_rpc,
         )
         _member_link = member_link
         _skills.attach_member_link(member_link)
@@ -1602,7 +1671,7 @@ def start(
 def stop() -> str:
     """Stop the loopback runtime without terminating the embedded interpreter."""
 
-    global _server, _thread, _runtime, _ystore, _skills, _member_link
+    global _server, _thread, _runtime, _ystore, _skills, _member_link, _voice_policy
     with _lock:
         server = _server
         thread = _thread
@@ -1626,6 +1695,7 @@ def stop() -> str:
     _skills = None
     if skills is not None:
         skills.close()
+    _voice_policy = None
     with _yjs_lock:
         store = _ystore
         _ystore = None
@@ -1676,6 +1746,7 @@ def _loopback_ping_payload() -> tuple[int, dict[str, Any]]:
                 "stt": "browser_speech_recognition",
                 "tts": "browser_speech_synthesis",
                 "assistant": "android_local",
+                "listening": _voice_policy.service() if _voice_policy is not None else {},
             },
         },
     }
@@ -1720,6 +1791,7 @@ def _node_status() -> dict[str, Any]:
                     "stt": "browser_speech_recognition",
                     "tts": "browser_speech_synthesis",
                     "assistant": "android_local",
+                    "listening": _voice_policy.service() if _voice_policy is not None else {},
                 },
             },
         }
@@ -1853,6 +1925,12 @@ def _node_status() -> dict[str, Any]:
             "install_descriptor_sha256": str(_install_descriptor.get("sha256") or ""),
             "bundle_id": runtime["bundle_id"],
             "member_link": member,
+            "services": {
+                "voice_listening": _voice_policy.service() if _voice_policy is not None else {},
+            },
+        },
+        "services": {
+            "voice_listening": _voice_policy.service() if _voice_policy is not None else {},
         },
         "environment": {
             "platform": "android",
@@ -1865,6 +1943,8 @@ def _node_status() -> dict[str, Any]:
                 "stt": "browser_speech_recognition",
                 "tts": "browser_speech_synthesis",
                 "assistant": "android_local",
+                "listening": _voice_policy.service() if _voice_policy is not None else {},
+                "audio_processing": _android_voice_runtime_snapshot(),
             },
         },
     }

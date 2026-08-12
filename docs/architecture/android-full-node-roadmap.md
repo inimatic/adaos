@@ -6,8 +6,9 @@ bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
 bound, and the PoC15 Android lifecycle controller are running on a physical
-Android 16 arm64 phone. The PoC16 continuous-voice control contract passes its
-automated and physical acceptance gates. The phone renders `web_desktop` from
+Android 16 arm64 phone. The PoC16 continuous-voice control contract and PoC17
+shared activation/AEC/long-form slice pass their automated and physical
+acceptance gates. The phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
 Root route. Keystore custody and the physical 2 GB device gate remain open.
@@ -41,9 +42,16 @@ later can:
     for Арсений/Мира without copying their profiles or prompts into Android;
 13. forward low-confidence NLU evidence to the canonical LLM Teacher when the
     Hub is reachable.
+14. use assistant-name activation and persistent listening modes from the same
+    hosted client on Android and stationary nodes;
+15. record a long note or question until the promoted Rasa model detects its
+    learned stop intent;
+16. expose honest browser/native AEC evidence without allowing two capture
+    owners to compete for the Android microphone.
 
 Production distribution, arbitrary skill installation, media, phone-as-hub,
-and background voice capture without a visible browser are outside this proof.
+and production background speech recognition without a visible browser are
+outside this proof.
 
 ## Delivery Rules
 
@@ -850,6 +858,57 @@ TTS turn without adding synthesized speech as a user turn. A spoken stop from
 the nearby Enjoy 30 produced the structured NLU directive, returned the UI to
 `Listen`, and did not re-arm. The one-hour observation remains open.
 
+## PoC17 Extension: Shared Activation, AEC, and Long-Form Sessions
+
+Outcome: mobile and stationary nodes share the same activation/listening
+contracts and canonical Rasa controls, while Android provides a real but
+optional foreground audio front-end for platform AEC diagnostics.
+
+- [x] `[must]` add assistant-alias transcript activation to the shared hosted
+  client and use it for both mobile and stationary nodes;
+- [x] `[must]` keep activation/continuous listening half-duplex with TTS and
+  suppress bounded recent render echo;
+- [x] `[must]` persist `off`, `push_to_talk`, `continuous`, and `activation`
+  behind `node.voice.listening.v1`, local API, member RPC, SDK, and Device
+  Registry settings;
+- [x] `[must]` add canonical Rasa intents for long note, long dialog question,
+  and end recording; train off-device and export the same model to Android;
+- [x] `[must]` persist long-form session state and hold ordinary NLU results as
+  content while recording; save note buffers to Notebook and replay completed
+  dialog buffers to the selected companion;
+- [x] `[must]` request and report browser AEC/NS/AGC track settings and add an
+  Android `AudioRecord(VOICE_COMMUNICATION)` front-end which reports actual
+  platform AcousticEchoCanceler/NoiseSuppressor/AGC state;
+- [x] `[must]` make Android capture ownership exclusive: browser by default,
+  native only behind `native_detector_enabled`, with dynamic
+  `specialUse|microphone` foreground promotion;
+- [x] `[must]` carry assistant gender/voice only as TTS and echo-reference
+  context; do not pretend it identifies the human speaker for STT;
+- [x] `[must]` implement a deterministic 280 ms room-candidate arbitration
+  primitive without raw-audio retention;
+- [x] `[must]` run host/client tests, build/install PoC17, exercise native AEC,
+  long-form Notebook, fixed skills, network loss, force-stop persistence, and
+  explicit-stop lifecycle on the physical Samsung;
+- [ ] `[should]` connect room candidates to a Hub-issued winner lease and
+  suppress losing endpoints before mutating dispatch;
+- [ ] `[should]` replace the prepared native VAD with a reviewed wake-word
+  model and native STT handoff before claiming browser-free assistant use;
+- [ ] `[deferred]` add speaker diarization/enrollment until privacy, biometric
+  retention, confidence, and anonymous-speaker fallback contracts are agreed.
+
+PoC17 physical evidence (2026-08-12): debug APK `0.1.0-poc17` is 22,805,696
+bytes with SHA-256
+`89aeb174aff85c76cb7b9dbc86e2cc3a1d9a7639f750ab6e9f4ea676ab3a8334`.
+On the API 36 Samsung, portable Rasa loaded 31 intents from the promoted model;
+the native front-end reported AEC available/enabled and noise suppression
+available/enabled, then returned capture ownership and FGS type to browser /
+`specialUse`. The repeatable smoke created and deleted a long-form Notebook
+note. The lifecycle gate passed browser/screen transitions, Wi-Fi and total WAN
+loss, force-stop persistence, explicit stop without resurrection, and final
+restart. Steady sampled PSS was 134,221 KiB, startup sampled peak was 169,578
+KiB, and no bounded queue rejected or dropped work. Evidence and the APK are
+kept under ignored `.tmp/android-node` locally.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -864,7 +923,7 @@ the phase which needs it is active.
 | `cryptography` | A6 | build/prove Android arm64 package | Android TLS/Keystore adapter behind existing contract |
 | `psutil` | A7 | isolate import and required metrics | Android diagnostics adapter |
 | Rasa model | PoC9 | export promoted artifact into portable inference data | reject promotion; never retrain on phone |
-| `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC7 browser voice | explicit native/background capability unavailable |
+| `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC17 browser/native front end | Android `AudioRecord` adapter; explicit media capability unavailable |
 
 The Android lock must be built from imports reached by the selected profile,
 not by copying `pyproject.toml` wholesale.
@@ -959,8 +1018,8 @@ must not be copied into a mobile fork.
 - verified pure-Python content updates independent of the APK;
 - a local LAN listener with an explicit access policy;
 - native Android notifications or widgets backed by AdaOS state;
-- app-native foreground audio/TTS/camera adapters when browser mediation is
-  insufficient;
+- native STT/TTS/camera adapters and a reviewed wake-word model when browser
+  mediation is insufficient;
 - WebRTC data/media upgrade;
 - restricted edge-Hub experiments on higher-memory devices after member
   routing, lifecycle, Keystore, and resource-budget gates are specified.

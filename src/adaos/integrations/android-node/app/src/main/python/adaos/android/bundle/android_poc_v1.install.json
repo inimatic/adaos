@@ -1,7 +1,7 @@
 {
   "schema": "adaos.android.install.v1",
   "id": "android_poc_v1",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "default_webspace": "desktop",
   "home_scenario": "web_desktop",
   "runtime": {
@@ -26,11 +26,11 @@
   "models": [
     {
       "id": "rasa_nlu",
-      "model_id": "a7a8607bf4b14183b86159e0dcee6524",
+      "model_id": "4c9689f56b794a349dee616edf7077aa",
       "format": "adaos.rasa.mobile.v1",
       "path": "rasa_mobile_bundle.json.gz",
-      "source_model_sha256": "9a815806af8d7c376332214e5bfb817e81695881725a70e2b0d0af5f4cf5e6c1",
-      "sha256": "70e2e013266d4d6dcee368a21642232c5274bbd6407d5f3510af312540662cbd",
+      "source_model_sha256": "c952a7b1d50103966ac81df14dfb0a2b6ce6864bf73315845302908cf2675549",
+      "sha256": "d888e573f09bc6795f31e46b3cd7c4a0634c0e3d1aa67a864d6c9e0f92618562",
       "training": "off_device",
       "runtime": "shared_portable_rasa"
     }
@@ -46,7 +46,7 @@
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "5c9dfb81a08834a287afb844758c0adfc96271ee2de550eace52bef71332ebd2"
+          "sha256": "9962cf87590f0f31a1fd3b3655db28c0457c9d4adcad0bfe699ca513dcb0154a"
         }
       ]
     },
@@ -95,9 +95,9 @@
     },
     {
       "id": "voice_assistant",
-      "version": "android-poc.2",
+      "version": "android-poc.3",
       "descriptor": "voice_assistant.webui.json",
-      "sha256": "d8e5230a3905eba05d98f3de98be4b96121078a5a7e54111163408c4ebfd389e"
+      "sha256": "bbfcc0e83af9ca85d97fd79d038fa52e5e9509fc512a8832eaac8989a0cdaba1"
     },
     {
       "id": "notebook_skill",
@@ -113,10 +113,10 @@
   ],
   "runtime_module": {
     "path": "../skills.py",
-    "sha256": "eb21f1c9e817413fc4c7d6327b40e1e6450eceb26551a3ff72a2747526565e2f"
+    "sha256": "b83459ffc1305787160214e06b911aab6c6ec1fcf5d6a93f5dead412575b6e60"
   },
   "member_link_module": {
     "path": "../member_link.py",
-    "sha256": "202145064d3dd4638b3dd917053fc11715c520d168e0ae0c0655afd3ca0c4417"
+    "sha256": "12f92d53d689aef3cb7cd4bb7ab7958ee677f1d8a5ea0726371ec008971608a7"
   }
 }

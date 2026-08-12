@@ -21,6 +21,10 @@ Current scope:
   demo-metrics handlers, with no subprocess or runtime package install;
 - always-on offline Rasa NLU exported from the same promoted model used by
   stationary AdaOS, with training kept off-device;
+- shared assistant-name activation and persistent listening modes, plus
+  Rasa-controlled long note/dialog recording;
+- optional native `AudioRecord(VOICE_COMMUNICATION)` diagnostics with Android
+  AEC/NS/AGC; browser capture remains the default owner;
 - allowlisted member RPC to canonical `conversation_companions` and AdaOS
   Connect tools, including the Root-configured external LLM, plus
   low-confidence evidence forwarding to the canonical LLM Teacher;
@@ -31,7 +35,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC16 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC17 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -49,7 +53,11 @@ nor the Android runtime matches natural-language stop phrases. A structured
 Continuous mode restarts after silence, transient STT errors, send failures,
 and completed TTS, but never plays a readiness tone while the microphone is
 armed. A one-shot capture plays its optional tone completely before opening
-SpeechRecognition. Dialog work runs in one bounded background slot so
+SpeechRecognition. Activation mode admits a turn only after a projected
+assistant alias. Long-form note/dialog sessions remain open across STT segments
+until the promoted Rasa model detects `voice.long_form.stop` or another
+assistant is addressed; note buffers are saved through Notebook. Dialog work
+runs in one bounded background slot so
 a slow Hub/LLM response cannot starve control WebSocket keepalives.
 Each accepted WebSocket also has a bounded send timeout: a browser Yjs peer
 which stops reading is aborted instead of blocking later control registration
@@ -61,8 +69,11 @@ Mobile and Builder remain bounded local implementations. Companion turns
 use the canonical Hub skill and external LLM when the authenticated member link
 is available, and expose `android_offline_fallback` otherwise. Prompts,
 profiles, tools, Teacher code, and LLM credentials are not copied into the APK.
-The APK does not package `sounddevice`, background capture, wake-word support,
-an LLM, or the full Builder runtime.
+The APK does not package `sounddevice`, wake-word inference, native STT, an LLM,
+or the full Builder runtime. The prepared native detector is disabled by
+default and retains no raw audio. When enabled for diagnostics it dynamically
+adds the microphone foreground type, reports real Android AEC/NS/AGC state,
+and yields capture ownership back to the browser when disabled.
 
 Start persists the user's desired-running state and Stop clears it. Android
 may recreate a killed process through `START_STICKY`, and the boot/package
@@ -107,9 +118,10 @@ If a bundled `webui.json` changes, regenerate the immutable Yjs seed first:
 py -3.11 generate_yjs_seed.py
 ```
 
-The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc16-debug.apk`. This is a
-debug-signed development artifact, not a Play Store release package.
+The local repository handoff copies the same file to the ignored path
+`.tmp/android-node/adaos-android-node-0.1.0-poc17-debug.apk`. CI uploads its
+own workflow artifact. This is a debug-signed development build, not a Play
+Store release package.
 
 ## Install and smoke-test
 
@@ -132,7 +144,7 @@ browser should show the seven fixed apps, two widgets, and a green YJS status
 without login or a development token.
 `-VerifySkills` runs Weather offline/recovery, AdaOS Connect member state,
 Browsers registration, the dialog roster/agent/channel paths, a local Voice
-Assistant turn, Notebook
+Assistant turn, Rasa-controlled long-form Notebook recording, Notebook
 create/delete/stream/restart, and the Taiga scenario/event round trip against
 the physical device.
 
@@ -259,3 +271,16 @@ buffered callbacks from the stopped recognizer, and suppressed a textual
 match to the recent synthesized response during the bounded echo guard. The
 physical Enjoy 30 voice run produced the structured stop directive, changed
 the control back to `Listen`, and did not re-arm.
+
+The PoC17 debug APK is 22,805,696 bytes with SHA-256
+`89aeb174aff85c76cb7b9dbc86e2cc3a1d9a7639f750ab6e9f4ea676ab3a8334`.
+On the API 36 Samsung it loaded the promoted 31-intent portable Rasa model and
+completed the fixed-skill smoke including long-form note creation through
+Notebook. With native capture explicitly enabled, Android reported
+AcousticEchoCanceler and NoiseSuppressor available and enabled; disabling it
+returned the runtime to `parked_browser_owns_mic` and foreground type
+`specialUse`. The short physical lifecycle gate passed screen/browser
+transitions, Wi-Fi and WAN loss, force-stop persistence, explicit stop without
+resurrection, and final restart. Steady sampled PSS was 134,221 KiB and startup
+sampled peak was 169,578 KiB with no bounded queue rejection or member-link
+drop. The APK and evidence live under ignored `.tmp/android-node`.

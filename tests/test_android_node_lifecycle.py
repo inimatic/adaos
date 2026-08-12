@@ -24,13 +24,15 @@ def test_android_special_use_manifest_keeps_api_26_floor() -> None:
         for element in manifest.findall("uses-permission")
     }
     assert "android.permission.FOREGROUND_SERVICE_SPECIAL_USE" in permissions
+    assert "android.permission.FOREGROUND_SERVICE_MICROPHONE" in permissions
+    assert "android.permission.RECORD_AUDIO" in permissions
     assert "android.permission.FOREGROUND_SERVICE_DATA_SYNC" not in permissions
     assert "android.permission.RECEIVE_BOOT_COMPLETED" in permissions
 
     service = manifest.find("application/service")
     assert service is not None
     assert service.attrib[f"{ANDROID}name"] == ".NodeService"
-    assert service.attrib[f"{ANDROID}foregroundServiceType"] == "specialUse"
+    assert set(service.attrib[f"{ANDROID}foregroundServiceType"].split("|")) == {"specialUse", "microphone"}
     subtype = service.find("property")
     assert subtype is not None
     assert subtype.attrib[f"{ANDROID}name"] == (

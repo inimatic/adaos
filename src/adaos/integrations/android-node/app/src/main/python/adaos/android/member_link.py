@@ -246,6 +246,7 @@ class AndroidMemberLink:
         document_provider: Callable[[], dict[str, Any]],
         apply_yjs_update: Callable[[bytes], bool],
         state_changed: Callable[[dict[str, Any]], None],
+        rpc_handler: Callable[[str, dict[str, Any]], Any] | None = None,
     ) -> None:
         self.path = Path(data_root) / "android-member-link.json"
         self.node_id = str(node_id)
@@ -254,6 +255,7 @@ class AndroidMemberLink:
         self.document_provider = document_provider
         self.apply_yjs_update = apply_yjs_update
         self.state_changed = state_changed
+        self.rpc_handler = rpc_handler
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -283,6 +285,8 @@ class AndroidMemberLink:
         self._rpc_requested_total = 0
         self._rpc_completed_total = 0
         self._rpc_failed_total = 0
+        self._inbound_rpc_total = 0
+        self._inbound_rpc_failed_total = 0
         self._config = self._load_config()
         self._worker_generation = 0
         if not self._config.get("enabled"):
@@ -498,6 +502,16 @@ class AndroidMemberLink:
                 self._node_state_queued = False
         return queued
 
+    def send_status(self, *, reason: str = "local_status_changed") -> bool:
+        return self._enqueue(
+            {
+                "t": "node.status",
+                "status": self._member_status(),
+                "reason": str(reason or "local_status_changed"),
+                "ts": time.time(),
+            }
+        )
+
     def send_bus_event(
         self,
         event_type: str,
@@ -685,6 +699,8 @@ class AndroidMemberLink:
                 "rpc_requested_total": self._rpc_requested_total,
                 "rpc_completed_total": self._rpc_completed_total,
                 "rpc_failed_total": self._rpc_failed_total,
+                "inbound_rpc_total": self._inbound_rpc_total,
+                "inbound_rpc_failed_total": self._inbound_rpc_failed_total,
             }
 
     def _set_state(
@@ -786,14 +802,26 @@ class AndroidMemberLink:
                 except queue.Full:
                     pass
         elif kind == "rpc.req":
-            connection.send_json(
-                {
-                    "t": "rpc.res",
-                    "id": str(message.get("id") or ""),
-                    "ok": False,
-                    "error": "rpc_not_supported_android_poc",
-                }
-            )
+            request_id = str(message.get("id") or "")
+            params = message.get("params") if isinstance(message.get("params"), dict) else {}
+            tool = str(params.get("tool") or "")
+            arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+            self._inbound_rpc_total += 1
+            try:
+                if str(message.get("method") or "") != "tools.call" or self.rpc_handler is None:
+                    raise PermissionError("rpc_not_supported_android_poc")
+                result = self.rpc_handler(tool, arguments)
+                connection.send_json({"t": "rpc.res", "id": request_id, "ok": True, "result": result})
+            except Exception as exc:
+                self._inbound_rpc_failed_total += 1
+                connection.send_json(
+                    {
+                        "t": "rpc.res",
+                        "id": request_id,
+                        "ok": False,
+                        "error": f"{type(exc).__name__}:{str(exc)[:240]}",
+                    }
+                )
         elif kind == "core.update.request":
             connection.send_json(
                 {

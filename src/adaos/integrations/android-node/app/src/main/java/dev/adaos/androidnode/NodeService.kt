@@ -6,19 +6,28 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 
 class NodeService : Service() {
     private lateinit var pythonHost: PythonHost
+    private lateinit var voiceActivationDetector: VoiceActivationDetector
     private var stopping = false
     private var stopReason = STOP_REASON_SYSTEM_DESTROY
+    @Volatile private var microphoneForeground = false
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
         pythonHost = PythonHost(this)
+        voiceActivationDetector = VoiceActivationDetector(
+            this,
+            filesDir.resolve("adaos"),
+            ::setNativeCaptureActive,
+        )
         createNotificationChannel()
     }
 
@@ -30,7 +39,10 @@ class NodeService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, notification("Starting embedded Python"))
+        startRuntimeForeground("Starting embedded Python")
+        // Microphone capture is legal only after this service is promoted to
+        // the declared microphone foreground-service type.
+        voiceActivationDetector.start()
         val current = NodeStateStore.snapshot()
         if (current.phase == NodePhase.STARTING || current.phase == NodePhase.READY) {
             return START_STICKY
@@ -61,6 +73,7 @@ class NodeService : Service() {
                             error.message ?: error.javaClass.simpleName,
                         )
                     )
+                    voiceActivationDetector.stop()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 },
@@ -78,6 +91,7 @@ class NodeService : Service() {
             NodeLifecycleStore.recordStop(this, STOP_REASON_SYSTEM_DESTROY, detail)
             publish(NodeStatus.stopped(detail))
         }
+        voiceActivationDetector.stop()
         super.onDestroy()
     }
 
@@ -95,6 +109,7 @@ class NodeService : Service() {
         Log.i(TAG, "stopRuntime requested reason=$reason")
         stopping = true
         stopReason = reason
+        voiceActivationDetector.stop()
         publish(NodeStatus(NodePhase.STOPPING, "Flushing and stopping Python"))
         pythonHost.stop { result ->
             val detail = result.exceptionOrNull()?.message?.let { "Stopped with warning: $it" }
@@ -111,6 +126,34 @@ class NodeService : Service() {
         if (status.phase != NodePhase.STOPPED) {
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             manager.notify(NOTIFICATION_ID, notification(status.detail))
+        }
+    }
+
+    @Synchronized
+    private fun setNativeCaptureActive(active: Boolean) {
+        if (microphoneForeground == active) return
+        microphoneForeground = active
+        startRuntimeForeground(
+            if (active) "Native voice activation is listening" else NodeStateStore.snapshot().detail,
+        )
+    }
+
+    private fun startRuntimeForeground(text: String) {
+        val currentNotification = notification(text)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            if (microphoneForeground) {
+                serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIFICATION_ID, currentNotification, serviceType)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && microphoneForeground) {
+            startForeground(
+                NOTIFICATION_ID,
+                currentNotification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, currentNotification)
         }
     }
 

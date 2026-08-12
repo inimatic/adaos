@@ -9,8 +9,10 @@ the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
 bound, and the PoC15 Android lifecycle controller are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
-Samsung SM-F721N. The PoC16 continuous-voice control contract also passes its
-automated and physical acceptance gates on that phone.
+Samsung SM-F721N. The PoC16 continuous-voice control contract and the PoC17
+shared activation, long-form dictation, listening-policy, and Android audio
+front-end slice also pass their automated and physical acceptance gates on
+that phone.
 Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
@@ -35,12 +37,17 @@ boot, and APK replacement, and keeps the Android 8 / API 26 floor. PoC16 keeps
 foreground browser listening armed across silence and transient STT/transport
 failures, removes microphone-open readiness tones, and stops only on an
 explicit UI action or a structured `voice.listening.stop` result from the
-promoted Rasa model. Android
+promoted Rasa model. PoC17 adds name-based activation to the shared hosted
+client, persists listening mode behind `node.voice.listening.v1`, promotes the
+same long-form Rasa intents to Android and stationary nodes, and prepares a
+native `AudioRecord` detector with platform AEC/NS/AGC. Browser capture remains
+the default owner; native capture is an explicit experimental setting so two
+recorders cannot compete for the microphone. Android
 Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC16 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC17 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -799,8 +806,12 @@ capabilities:
   complete `psutil` behavior;
 - secrets and long-lived key custody through Android Keystore;
 - files and uploads through app-private storage and the system picker;
-- foreground browser voice through Web Speech in the implemented PoC9 slice;
-- future app-native/background audio through AudioRecord/AudioTrack and Android TTS;
+- foreground browser voice through Web Speech in the implemented PoC9-PoC17 slice;
+- an experimental foreground `AudioRecord` activation front-end with dynamic
+  microphone-service promotion and Android platform AEC/NS/AGC; it is disabled
+  while the browser owns capture and does not yet perform wake-word inference;
+- future native STT, AudioTrack reference plumbing, and Android TTS behind the
+  same shared voice contracts;
 - future camera through CameraX or another native adapter;
 - future low-latency media through Android-native WebRTC or separately proven
   Python wheels.
@@ -808,6 +819,65 @@ capabilities:
 The first profile reports unavailable capabilities explicitly. It does not
 provide fake desktop implementations or allow import failures to crash the
 runtime.
+
+## PoC17 Voice Session Model
+
+The listening policy is shared AdaOS state, not an Android-only preference.
+`node.voice.listening.v1` exposes `off`, `push_to_talk`, `continuous`, and
+`activation` through the local node API, member RPC, Device Registry, and the
+SDK. The default is `activation`: the hosted client keeps listening but admits
+a command only when its transcript addresses a projected assistant alias. A
+long-form session is the exception; after Rasa starts dictation, subsequent
+segments remain content until Rasa detects `voice.long_form.stop` or the user
+addresses another assistant.
+
+The capture ownership rule is strict:
+
+```text
+browser owner (default)
+  -> Web Speech / Hub WAV capture
+  -> browser echoCancellation + noiseSuppression + autoGainControl
+
+native owner (explicit experimental flag)
+  -> specialUse service promoted to specialUse|microphone
+  -> AudioRecord(VOICE_COMMUNICATION)
+  -> Android AcousticEchoCanceler / NoiseSuppressor / AGC evidence
+```
+
+The Samsung physical gate reports Android AEC and noise suppression as
+available and enabled. The native detector currently reports VAD/audio quality
+and deliberately retains no raw audio; it is a prepared activation front-end,
+not a completed wake-word or native STT pipeline. When native capture stops,
+the service drops the `microphone` foreground type and returns ownership to the
+browser. This dynamic promotion preserves package-replaced/boot restoration of
+the ordinary `specialUse` node on modern Android.
+
+Assistant gender and speaker gender are separate facts. Projected assistant
+gender/voice selects an appropriate TTS voice and labels the render reference
+used by echo diagnostics. It must not be sent to STT as though it described the
+human speaker. Generic STT remains gender-neutral; later speaker adaptation
+requires an observed or enrolled speaker profile with explicit privacy policy.
+
+Speaker separation is therefore `metadata_only` in this slice. A verified
+speaker id may scope a dictation session, but unknown speakers share an
+anonymous scope per webspace and capture device. Actual diarization, speaker
+enrollment, cross-device voiceprints, and biometric retention are deferred.
+
+Room arbitration has a shared deterministic primitive and a 280 ms candidate
+window. Candidates are ranked by activation confidence, SNR, arrival time, and
+stable device id, and the winner receives a lease while the others are
+suppressed. Transport-wide collection of candidates, lease delivery, and
+device-affinity learning are not yet wired; until that exists, mutating voice
+commands in a multi-microphone room still require conservative policy.
+
+Long-form state is persisted rather than inferred from chat history. Note mode
+saves the completed buffer through Notebook. Dialog mode sends the completed
+question to the selected companion. During recording, ordinary NLU results are
+held as content; only the learned stop intent is executable. A newly addressed
+assistant completes the current recording and starts a normal turn. The phone
+uses the portable inference bundle exported from the same promoted Rasa model
+that the stationary service loads, so phrases and intent identities do not
+fork by platform.
 
 ## Resource Model
 
@@ -948,8 +1018,9 @@ The first PoC does not include:
 - arbitrary marketplace installation;
 - service skills, per-skill venvs, subprocess isolation, or shell access;
 - supervisor, realtime sidecar, core A/B slots, or self-update;
-- native/background microphone capture, wake word, camera, media server,
-  WebRTC, or `aiortc`;
+- production native/background speech recognition, wake-word inference,
+  camera, media server, WebRTC, or `aiortc`; the PoC17 native foreground
+  `AudioRecord`/AEC detector is diagnostic and disabled by default;
 - on-device Rasa training, Neural NLU, full Builder execution, phone-local MCP
   or Codex, and embedded LLM execution;
 - background geolocation or other while-in-use Android permissions;
