@@ -204,6 +204,7 @@
         "cli.skill.install.option.slot": "Target runtime slot (A or B)",
         "cli.skill.install.option.silent": "Skip running the skill setup tool after installation",
         "cli.skill.install.option.safe": "Check workspace is clean under skills/ before installing",
+        "cli.skill.install.option.source": "Source to install: registry release or current workspace tree",
         "cli.skill.migrate.option.force": "Force skill source refresh on dev nodes by stashing local workspace changes before update",
         "cli.skill.install.setup_not_supported": "Skill does not provide a setup tool; skipping",
         "cli.skill.install.setup_failed": "Setup failed: {error}",

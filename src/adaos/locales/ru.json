@@ -205,6 +205,7 @@
         "cli.skill.install.option.slot": "Целевой слот (A или B)",
         "cli.skill.install.option.silent": "Не запускать setup после установки",
         "cli.skill.install.option.safe": "Проверять, что под каталогом skills/ нет незакоммиченных изменений перед установкой",
+        "cli.skill.install.option.source": "Источник установки: опубликованная версия registry или текущее дерево workspace",
         "cli.skill.migrate.option.force": "Принудительно обновить исходники навыка на dev-ноде, убрав локальные изменения workspace в stash перед обновлением",
         "cli.skill.install.setup_not_supported": "У навыка нет setup-инструмента, пропускаю",
         "cli.skill.install.setup_failed": "Setup завершился ошибкой: {error}",

@@ -1356,8 +1356,13 @@ def cmd_install(
     silent: bool = typer.Option(False, "--silent", help=_("cli.skill.install.option.silent")),
     safe: bool = typer.Option(False, "--safe", help=_("cli.skill.install.option.safe")),
     local: bool = typer.Option(False, "--local", help="Force local execution (bypass hub API)."),
+    source: str = typer.Option("registry", "--source", help=_("cli.skill.install.option.source")),
 ):
-    if not local and _hub_api_ready(timeout_s=3.0):
+    source_mode = str(source or "registry").strip().lower()
+    if source_mode not in {"registry", "workspace"}:
+        raise typer.BadParameter("source must be 'registry' or 'workspace'", param_hint="--source")
+
+    if source_mode == "registry" and not local and _hub_api_ready(timeout_s=3.0):
         # API-first: install/prepare/activate via the running hub server (works even if repo root is stale vs active slot).
         try:
             installed = _hub_post(
@@ -1436,40 +1441,68 @@ def cmd_install(
         return
 
     mgr = _mgr()
-    try:
-        result = mgr.install(name, validate=False, safe=safe)
-    except Exception as exc:
-        message = str(exc)
-        typer.secho(f"install failed: {message}", fg=typer.colors.RED)
-        # Provide an explicit hint when Git reports unresolved merges.
-        if "git pull" in message and "unmerged files" in message.lower():
-            try:
-                ctx = get_ctx()
-                workspace_root = ctx.paths.workspace_dir()
-                typer.echo(f"Skills workspace Git repo: {workspace_root}")
-                typer.echo(
-                    f"Run 'git -C \"{workspace_root}\" status' to inspect conflicted files, "
-                    f"resolve them, then re-run 'adaos skill install {name}'."
-                )
-            except Exception:
-                # Best-effort hint; ignore failures in helper diagnostics.
-                pass
-        raise typer.Exit(1) from exc
+    runtime_source_path: Path | None = None
+    if source_mode == "registry":
+        try:
+            result = mgr.install(name, validate=False, safe=safe)
+        except Exception as exc:
+            message = str(exc)
+            typer.secho(f"install failed: {message}", fg=typer.colors.RED)
+            # Provide an explicit hint when Git reports unresolved merges.
+            if "git pull" in message and "unmerged files" in message.lower():
+                try:
+                    ctx = get_ctx()
+                    workspace_root = ctx.paths.workspace_dir()
+                    typer.echo(f"Skills workspace Git repo: {workspace_root}")
+                    typer.echo(
+                        f"Run 'git -C \"{workspace_root}\" status' to inspect conflicted files, "
+                        f"resolve them, then re-run 'adaos skill install {name}'."
+                    )
+                except Exception:
+                    # Best-effort hint; ignore failures in helper diagnostics.
+                    pass
+            raise typer.Exit(1) from exc
 
-    if isinstance(result, tuple):
-        meta, report = result
-    elif hasattr(result, "id"):
-        meta, report = result, None
+        if isinstance(result, tuple):
+            meta, report = result
+        elif hasattr(result, "id"):
+            meta, report = result, None
+        else:
+            typer.echo(str(result))
+            return
+        skill_name = meta.id.value if meta and hasattr(meta, "id") else name
     else:
-        typer.echo(str(result))
-        return
+        ctx = get_ctx()
+        runtime_source_path = (ctx.paths.skills_workspace_dir() / name).resolve()
+        if not runtime_source_path.is_dir():
+            typer.secho(
+                f"workspace skill source not found: {runtime_source_path}",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(1)
+        try:
+            report = mgr.validate_skill(
+                name,
+                strict=not safe,
+                probe_tools=False,
+                source="workspace",
+                path=runtime_source_path,
+            )
+        except Exception as exc:
+            typer.secho(f"workspace validation failed: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(1) from exc
+        skill_name = name
 
     if report is not None and hasattr(report, "ok") and not report.ok:
         typer.secho(str(report), fg=typer.colors.YELLOW)
 
-    skill_name = meta.id.value if meta and hasattr(meta, "id") else name
     try:
-        runtime = mgr.prepare_runtime(skill_name, run_tests=test, preferred_slot=slot)
+        runtime = mgr.prepare_runtime(
+            skill_name,
+            path=runtime_source_path,
+            run_tests=test,
+            preferred_slot=slot,
+        )
     except Exception as exc:
         typer.secho(f"runtime preparation failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
