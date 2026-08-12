@@ -284,6 +284,164 @@ def read_text(skill_id: str, group_id: str, artifact_id: str, *, max_characters:
         raise ArtifactContextError("artifact is not UTF-8 text") from exc
 
 
+def _text_units(text: str, artifact_ref: str, *, chunk_characters: int = 4_000) -> list[dict[str, Any]]:
+    lines = text.splitlines(keepends=True)
+    units: list[dict[str, Any]] = []
+    start = 1
+    body: list[str] = []
+    size = 0
+    for line_number, line in enumerate(lines, start=1):
+        if body and size + len(line) > chunk_characters:
+            units.append(
+                {
+                    "id": f"lines-{start}-{line_number - 1}",
+                    "ref": f"{artifact_ref}#lines={start}-{line_number - 1}",
+                    "content": "".join(body),
+                }
+            )
+            body = []
+            size = 0
+            start = line_number
+        body.append(line)
+        size += len(line)
+    if body or not units:
+        end = max(start, len(lines))
+        units.append(
+            {
+                "id": f"lines-{start}-{end}",
+                "ref": f"{artifact_ref}#lines={start}-{end}",
+                "content": "".join(body),
+            }
+        )
+    return units
+
+
+def _notebook_units(text: str, artifact_ref: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    try:
+        notebook = json.loads(text)
+    except ValueError as exc:
+        raise ArtifactContextError("notebook artifact is not valid JSON") from exc
+    if not isinstance(notebook, Mapping):
+        raise ArtifactContextError("notebook artifact must contain a JSON object")
+    cells = notebook.get("cells") or []
+    if not isinstance(cells, list):
+        raise ArtifactContextError("notebook cells must be an array")
+    units: list[dict[str, Any]] = []
+    output_count = 0
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, Mapping):
+            continue
+        cell_type = str(cell.get("cell_type") or "unknown")
+        source = cell.get("source") or ""
+        body = "".join(str(item) for item in source) if isinstance(source, list) else str(source)
+        outputs = cell.get("outputs") or []
+        if isinstance(outputs, list):
+            output_count += len(outputs)
+        if not body.strip():
+            continue
+        units.append(
+            {
+                "id": f"cell-{index}",
+                "ref": f"{artifact_ref}#cell={index}",
+                "label": f"cell {index} ({cell_type})",
+                "content": body,
+            }
+        )
+    return units, {
+        "notebook_cells": len(cells),
+        "source_cells": len(units),
+        "omitted_output_items": output_count,
+        "outputs_included": False,
+    }
+
+
+def extract_text(
+    skill_id: str,
+    group_id: str,
+    artifact_id: str,
+    *,
+    max_characters: int = 40_000,
+) -> dict[str, Any]:
+    """Extract bounded, provenance-addressable LLM context from a text artifact.
+
+    Notebook structure is parsed before bounding and output payloads are
+    deliberately omitted. Plain text is chunked into stable line references.
+    The coverage envelope lets orchestrators disclose exactly what the model
+    did and did not receive.
+    """
+
+    resolved = resolve(skill_id, group_id, artifact_id)
+    maximum = max(1, min(int(max_characters), 1_000_000))
+    raw = Path(resolved["native_path"]).read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ArtifactContextError("artifact is not UTF-8 text") from exc
+    artifact_ref = str(resolved["ref"])
+    notebook_meta: dict[str, Any] = {}
+    if str(resolved.get("media_type") or "") == "application/x-ipynb+json" or str(resolved.get("path") or "").lower().endswith(".ipynb"):
+        units, notebook_meta = _notebook_units(text, artifact_ref)
+        strategy = "notebook_source_cells_without_outputs"
+    else:
+        units = _text_units(text, artifact_ref)
+        strategy = "utf8_line_chunks"
+
+    selected: list[dict[str, Any]] = []
+    remaining = maximum
+    extracted_characters = 0
+    for unit in units:
+        if remaining <= 0:
+            break
+        content = str(unit.get("content") or "")
+        accepted = content[:remaining]
+        if not accepted:
+            continue
+        selected.append(
+            {
+                "id": unit["id"],
+                "ref": unit["ref"],
+                "label": unit.get("label") or unit["id"],
+                "content": accepted,
+                "selected_characters": len(accepted),
+                "source_characters": len(content),
+                "truncated": len(accepted) < len(content),
+            }
+        )
+        extracted_characters += len(accepted)
+        remaining -= len(accepted)
+
+    content = "\n\n".join(
+        f"--- {item['label']} [{item['ref']}] ---\n{item['content'].rstrip()}" for item in selected
+    )
+    selected_units = len(selected)
+    total_units = len(units)
+    return {
+        "artifact_ref": artifact_ref,
+        "name": resolved.get("path"),
+        "digest": resolved.get("digest"),
+        "media_type": resolved.get("media_type"),
+        "content": content,
+        "provenance": [
+            {
+                key: item[key]
+                for key in ("id", "ref", "selected_characters", "source_characters", "truncated")
+            }
+            for item in selected
+        ],
+        "coverage": {
+            "strategy": strategy,
+            "raw_bytes": len(raw),
+            "source_characters": sum(len(str(item.get("content") or "")) for item in units),
+            "selected_characters": extracted_characters,
+            "total_units": total_units,
+            "selected_units": selected_units,
+            "omitted_units": max(0, total_units - selected_units),
+            "truncated": selected_units < total_units or any(bool(item["truncated"]) for item in selected),
+            **notebook_meta,
+        },
+    }
+
+
 def source_bundle(skill_id: str) -> dict[str, Any]:
     """Compatibility projection for formulation code; files remain skill-owned."""
 
@@ -317,4 +475,4 @@ def source_bundle(skill_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["ArtifactContextError", "add_path", "get_group", "groups", "read_text", "resolve", "source_bundle"]
+__all__ = ["ArtifactContextError", "add_path", "extract_text", "get_group", "groups", "read_text", "resolve", "source_bundle"]

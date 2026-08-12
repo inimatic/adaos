@@ -136,6 +136,71 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
         artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
 
 
+def test_artifact_context_extracts_notebook_sources_before_bounding_and_omits_outputs(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    source = tmp_path / "experiment.ipynb"
+    source.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {"cell_type": "markdown", "source": ["# Hypothesis\n", "TLP is unconfirmed."], "metadata": {}},
+                    {
+                        "cell_type": "code",
+                        "source": ["def tropical_pool(x, w):\n", "    return (x + w).amax((-1, -2))\n"],
+                        "outputs": [{"output_type": "stream", "text": ["x" * 100_000]}],
+                        "metadata": {},
+                        "execution_count": 1,
+                    },
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    added = artifact_context.add_path("tlp_direction", "part0", source)
+
+    extracted = artifact_context.extract_text(
+        "tlp_direction", "part0", added["artifact"]["artifact_id"], max_characters=10_000
+    )
+
+    assert "TLP is unconfirmed" in extracted["content"]
+    assert "def tropical_pool" in extracted["content"]
+    assert "x" * 1_000 not in extracted["content"]
+    assert extracted["coverage"] == {
+        "strategy": "notebook_source_cells_without_outputs",
+        "raw_bytes": source.stat().st_size,
+        "source_characters": 91,
+        "selected_characters": 91,
+        "total_units": 2,
+        "selected_units": 2,
+        "omitted_units": 0,
+        "truncated": False,
+        "notebook_cells": 2,
+        "source_cells": 2,
+        "omitted_output_items": 1,
+        "outputs_included": False,
+    }
+    assert extracted["provenance"][1]["ref"].endswith("#cell=1")
+
+
+def test_artifact_context_reports_line_level_coverage_for_bounded_text(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    source = tmp_path / "review.md"
+    source.write_text("first evidence\n" + "second interpretation\n" * 500, encoding="utf-8")
+    added = artifact_context.add_path("tlp_direction", "part0", source)
+
+    extracted = artifact_context.extract_text(
+        "tlp_direction", "part0", added["artifact"]["artifact_id"], max_characters=500
+    )
+
+    assert extracted["coverage"]["truncated"] is True
+    assert extracted["coverage"]["selected_characters"] == 500
+    assert extracted["provenance"][0]["ref"].startswith("artifact://skill/tlp_direction/part0/")
+    assert "#lines=" in extracted["provenance"][0]["ref"]
+
+
 def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
