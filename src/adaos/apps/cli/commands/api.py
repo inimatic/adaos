@@ -3,6 +3,7 @@ import atexit
 import asyncio
 import ctypes
 import errno
+import gc
 import json
 import os
 import socket
@@ -34,6 +35,19 @@ app = typer.Typer(help="HTTP API for AdaOS")
 class DetachedServerLaunch:
     pid: int
     log_path: Path
+
+
+class ManagedRuntimeConflict(RuntimeError):
+    def __init__(self, *, host: str, port: int, pids: list[int] | tuple[int, ...] = ()) -> None:
+        self.host = str(host or "127.0.0.1")
+        self.port = int(port)
+        self.pids = tuple(int(pid) for pid in pids if int(pid or 0) > 0)
+        pid_text = f" pids={list(self.pids)}" if self.pids else ""
+        super().__init__(
+            "autostart is already running and owns "
+            f"http://{self.host}:{self.port}.{pid_text} "
+            "Use `adaos autostart disable` to stop it before starting the API directly."
+        )
 
 
 _RUNTIME_PREFLIGHT_REQUIRED_FILES: tuple[str, ...] = (
@@ -753,6 +767,18 @@ def _advertise_base(host: str, port: int) -> str:
     return f"http://{advertised_host}:{int(port)}"
 
 
+def _configure_runtime_endpoint_env(*, advertised_base: str, launch_mode: str) -> None:
+    parsed = urlparse(str(advertised_base or "").strip())
+    runtime_host = str(parsed.hostname or "127.0.0.1").strip() or "127.0.0.1"
+    runtime_port = int(parsed.port or 0)
+    if runtime_port <= 0:
+        raise ValueError(f"runtime endpoint requires an explicit port: {advertised_base!r}")
+    os.environ["ADAOS_SELF_BASE_URL"] = str(advertised_base).rstrip("/")
+    os.environ["ADAOS_RUNTIME_HOST"] = runtime_host
+    os.environ["ADAOS_RUNTIME_PORT"] = str(runtime_port)
+    os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = str(launch_mode or "api_serve")
+
+
 def _configured_local_api_url(conf) -> str | None:
     if conf is None:
         return None
@@ -1036,7 +1062,12 @@ def _find_matching_server_pids(host: str, port: int, *, protected_pids: set[int]
 
 
 def _find_listening_server_pid(host: str, port: int) -> int | None:
+    gc_was_enabled = False
     try:
+        if _y_py_loaded():
+            gc_was_enabled = gc.isenabled()
+            if gc_was_enabled:
+                gc.disable()
         for conn in psutil.net_connections(kind="inet"):
             if conn.status != psutil.CONN_LISTEN:
                 continue
@@ -1051,7 +1082,20 @@ def _find_listening_server_pid(host: str, port: int) -> int | None:
                 return pid
     except Exception:
         return None
+    finally:
+        if gc_was_enabled:
+            try:
+                gc.enable()
+            except Exception:
+                pass
     return None
+
+
+def _y_py_loaded() -> bool:
+    try:
+        return any(name == "y_py" or name.startswith("y_py.") for name in sys.modules)
+    except Exception:
+        return False
 
 
 def _terminate_process_tree(pid: int) -> None:
@@ -1273,6 +1317,16 @@ def _stop_previous_server(host: str, port: int) -> None:
     owner_pid = _find_listening_server_pid(host, port)
     if owner_pid and owner_pid != os.getpid() and owner_pid not in protected_pids and owner_pid not in candidate_pids:
         candidate_pids.append(owner_pid)
+    if current_owner == "api" and not _env_flag("ADAOS_API_TAKEOVER_AUTOSTART", default=False):
+        meta_owner = str((meta or {}).get("owner") or "").strip().lower()
+        if meta_owner in {"autostart", "supervisor"}:
+            managed_pids = [
+                pid
+                for pid in (file_pid, owner_pid or 0)
+                if pid > 0 and pid != os.getpid() and pid not in protected_pids and _process_running(pid)
+            ]
+            if managed_pids:
+                raise ManagedRuntimeConflict(host=host, port=port, pids=sorted(set(managed_pids)))
     for pid in _find_matching_server_pids(host, port, protected_pids=protected_pids):
         if pid not in candidate_pids:
             candidate_pids.append(pid)
@@ -1302,10 +1356,7 @@ def _stop_previous_server(host: str, port: int) -> None:
                 continue
             filtered_pids.append(pid)
         if managed_conflicts:
-            raise RuntimeError(
-                "refusing to stop managed AdaOS autostart runtime "
-                f"pids={managed_conflicts}; use `adaos autostart restart` or set ADAOS_API_TAKEOVER_AUTOSTART=1"
-            )
+            raise ManagedRuntimeConflict(host=host, port=port, pids=managed_conflicts)
         candidate_pids = filtered_pids
 
     token = _resolved_shutdown_token()
@@ -1738,9 +1789,26 @@ def run_api_runtime(
     pidfile = _pidfile_path(host, port)
 
     _ensure_api_pre_stop_preflight_or_exit(host, port, action="api serve")
-    from adaos.apps.api.server import app as server_app
+    try:
+        _stop_previous_server(host, port)
+    except ManagedRuntimeConflict as exc:
+        typer.secho(
+            f"[AdaOS] autostart is already running and owns http://{exc.host}:{exc.port}.",
+            fg=typer.colors.YELLOW,
+        )
+        if exc.pids:
+            typer.secho(f"[AdaOS] managed runtime pids: {list(exc.pids)}", fg=typer.colors.YELLOW)
+        typer.secho(
+            "[AdaOS] To stop it, run: adaos autostart disable",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=1)
 
-    _stop_previous_server(host, port)
+    _configure_runtime_endpoint_env(advertised_base=advertised_base, launch_mode=launch_mode)
+    if token:
+        os.environ["ADAOS_TOKEN"] = token
+
+    from adaos.apps.api.server import app as server_app
     _write_pidfile(pidfile, host=host, port=port, advertised_base=advertised_base, owner=pidfile_owner)
     atexit.register(_cleanup_pidfile, pidfile)
 
@@ -1752,16 +1820,6 @@ def run_api_runtime(
         except Exception:
             pass
 
-    if token:
-        os.environ["ADAOS_TOKEN"] = token
-    try:
-        os.environ["ADAOS_SELF_BASE_URL"] = advertised_base
-    except Exception:
-        pass
-    try:
-        os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] = launch_mode
-    except Exception:
-        pass
     dev_sidecar_proc: subprocess.Popen | None = None
     try:
         dev_sidecar_proc = asyncio.run(_ensure_api_serve_dev_sidecar(conf, launch_mode=launch_mode))

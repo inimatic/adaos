@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import gc
 import hashlib
 import json
 import os
@@ -76,6 +77,12 @@ _MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
     "listener_url": None,
     "public_bases": [],
     "last_error": None,
+}
+_REALTIME_LISTENER_PORT_CACHE: dict[str, Any] = {
+    "host": None,
+    "port": None,
+    "checked_at": 0.0,
+    "open": False,
 }
 
 _LIFECYCLE_RUNTIME_FIELDS = (
@@ -547,6 +554,8 @@ def _route_tunnel_runtime_endpoint_from_payload(payload: dict[str, Any] | None) 
 
 
 def _route_tunnel_supervisor_state_endpoint() -> tuple[str, int] | None:
+    if not env_bool("ADAOS_SUPERVISOR_ENABLED"):
+        return None
     try:
         path = current_base_dir() / "state" / "supervisor" / "runtime.json"
         payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -1123,12 +1132,30 @@ def _process_matches_realtime_bind(proc: Any, host: str, port: int) -> bool:
     return _host_matches_listener(host, cmd_host)
 
 
+def _y_py_loaded() -> bool:
+    try:
+        return any(name == "y_py" or name.startswith("y_py.") for name in sys.modules)
+    except Exception:
+        return False
+
+
+def _skip_realtime_listener_pid_scan() -> bool:
+    return _y_py_loaded() and not env_bool("ADAOS_REALTIME_ALLOW_Y_PY_PSUTIL_NET_CONNECTIONS", default=False)
+
+
 def _find_realtime_listener_pid(host: str, port: int) -> int | None:
+    if _skip_realtime_listener_pid_scan():
+        return None
     try:
         import psutil
     except Exception:
         return None
+    gc_was_enabled = False
     try:
+        if _y_py_loaded():
+            gc_was_enabled = gc.isenabled()
+            if gc_was_enabled:
+                gc.disable()
         for conn in psutil.net_connections(kind="inet"):
             if conn.status != psutil.CONN_LISTEN:
                 continue
@@ -1143,7 +1170,38 @@ def _find_realtime_listener_pid(host: str, port: int) -> int | None:
                 return pid
     except Exception:
         return None
+    finally:
+        if gc_was_enabled:
+            with contextlib.suppress(Exception):
+                gc.enable()
     return None
+
+
+def _is_port_open_sync(host: str, port: int, *, timeout_s: float = 0.15) -> bool:
+    try:
+        with socket.create_connection((str(host or "127.0.0.1"), int(port)), timeout=max(0.05, float(timeout_s))):
+            return True
+    except Exception:
+        return False
+
+
+def _cached_realtime_listener_port_open(host: str, port: int, *, ttl_s: float = 1.0) -> bool:
+    now = time.monotonic()
+    cached_host = str(_REALTIME_LISTENER_PORT_CACHE.get("host") or "")
+    cached_port = int(_REALTIME_LISTENER_PORT_CACHE.get("port") or 0)
+    checked_at = float(_REALTIME_LISTENER_PORT_CACHE.get("checked_at") or 0.0)
+    if cached_host == str(host or "") and cached_port == int(port) and now - checked_at <= max(0.0, float(ttl_s)):
+        return bool(_REALTIME_LISTENER_PORT_CACHE.get("open"))
+    opened = _is_port_open_sync(host, port)
+    _REALTIME_LISTENER_PORT_CACHE.update(
+        {
+            "host": str(host or ""),
+            "port": int(port),
+            "checked_at": now,
+            "open": opened,
+        }
+    )
+    return opened
 
 
 def _terminate_process_tree(pid: int) -> bool:
@@ -1432,11 +1490,17 @@ async def _is_port_open(host: str, port: int) -> bool:
 
 
 async def probe_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float = 2.0) -> bool:
+    pid_scan_skipped = _skip_realtime_listener_pid_scan()
     try:
-        if _find_realtime_listener_pid(host, port):
+        if not pid_scan_skipped and _find_realtime_listener_pid(host, port):
             return True
     except Exception:
         pass
+    if pid_scan_skipped:
+        try:
+            return bool(await asyncio.wait_for(_is_port_open(host, port), timeout=max(0.1, float(timeout_s))))
+        except Exception:
+            return False
     if not _truthy(os.getenv("ADAOS_REALTIME_READY_PROBE_CONNECT"), default=False):
         return False
     try:
@@ -1459,6 +1523,8 @@ async def wait_realtime_sidecar_bound(*, host: str, port: int, timeout_s: float 
     deadline = time.monotonic() + max(0.5, float(timeout_s))
     while time.monotonic() < deadline:
         if _find_realtime_listener_pid(host, port):
+            return True
+        if _skip_realtime_listener_pid_scan() and await _is_port_open(host, port):
             return True
         await asyncio.sleep(0.1)
     return False
@@ -1607,7 +1673,9 @@ def realtime_sidecar_listener_snapshot(
 ) -> dict[str, Any]:
     host = realtime_sidecar_host()
     port = realtime_sidecar_port()
-    listener_pid = _find_realtime_listener_pid(host, port)
+    enablement_policy = realtime_sidecar_enablement_policy(role=role)
+    pid_scan_skipped = _skip_realtime_listener_pid_scan()
+    listener_pid = None if pid_scan_skipped else _find_realtime_listener_pid(host, port)
     managed_pid: int | None = None
     managed_alive = False
     managed_exit_code: int | None = None
@@ -1625,6 +1693,8 @@ def realtime_sidecar_listener_snapshot(
         managed_alive = False
         managed_exit_code = None
     listener_running = bool(isinstance(listener_pid, int) and listener_pid > 0)
+    if not listener_running and (pid_scan_skipped or enablement_policy.get("enabled") is True or proc is not None):
+        listener_running = _cached_realtime_listener_port_open(host, port)
     listener_matches_managed = bool(
         listener_running
         and isinstance(managed_pid, int)
@@ -1632,8 +1702,7 @@ def realtime_sidecar_listener_snapshot(
         and int(listener_pid) == int(managed_pid)
     )
     adopted_listener = bool(listener_running and not listener_matches_managed)
-    enablement_policy = realtime_sidecar_enablement_policy(role=role)
-    return {
+    payload = {
         "host": host,
         "port": int(port),
         "local_url": realtime_sidecar_local_url(),
@@ -1642,7 +1711,7 @@ def realtime_sidecar_listener_snapshot(
         "managed_pid": managed_pid,
         "managed_alive": managed_alive,
         "managed_exit_code": managed_exit_code,
-        "listener_pid": int(listener_pid) if listener_running else None,
+        "listener_pid": int(listener_pid) if isinstance(listener_pid, int) and listener_pid > 0 else None,
         "listener_running": listener_running,
         "listener_matches_managed": listener_matches_managed,
         "adopted_listener": adopted_listener,
@@ -1650,6 +1719,9 @@ def realtime_sidecar_listener_snapshot(
         "route_tunnel_contract": realtime_sidecar_route_tunnel_contract(role=role),
         "media_proxy_contract": realtime_sidecar_media_proxy_contract(role=role),
     }
+    if pid_scan_skipped:
+        payload["listener_pid_unavailable_reason"] = "y_py_loaded"
+    return payload
 
 
 async def restart_realtime_sidecar_subprocess(
@@ -1733,6 +1805,26 @@ def _read_lifecycle_state(path: Path) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def _sidecar_runtime_lifecycle_state(*, base_dir: Path | None = None) -> dict[str, Any]:
+    if env_bool("ADAOS_SUPERVISOR_ENABLED"):
+        root = Path(base_dir).resolve() if base_dir is not None else current_base_dir()
+        return _read_lifecycle_state(root / "state" / "supervisor" / "runtime.json")
+
+    host = _route_tunnel_upstream_host()
+    port = _route_tunnel_upstream_port()
+    return {
+        "runtime_state": "ready",
+        "runtime_api_ready": True,
+        "desired_running": True,
+        "stopping": False,
+        "managed_alive": True,
+        "runtime_instance_id": str(os.getenv("ADAOS_RUNTIME_INSTANCE_ID") or "").strip() or None,
+        "transition_role": str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "active").strip().lower() or "active",
+        "runtime_url": f"http://{host}:{int(port)}",
+        "runtime_port": int(port),
+    }
+
+
 def _compact_lifecycle_fields(payload: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
     return {field: payload[field] for field in fields if field in payload}
 
@@ -1760,12 +1852,33 @@ def build_sidecar_lifecycle_report(
     runtime_crash_grace_s: float = 6.0,
     shutdown_kind: str | None = None,
     shutdown_reason: str | None = None,
+    runtime_state: dict[str, Any] | None = None,
+    supervisor_enabled: bool | None = None,
 ) -> dict[str, Any]:
     now = time.time() if reported_at is None else float(reported_at)
     state_dir = Path(base_dir).resolve() / "state"
-    runtime = _read_lifecycle_state(state_dir / "supervisor" / "runtime.json")
-    attempt = _read_lifecycle_state(state_dir / "supervisor" / "update_attempt.json")
-    status = _read_lifecycle_state(state_dir / "core_update" / "status.json")
+    runtime = (
+        dict(runtime_state)
+        if isinstance(runtime_state, dict)
+        else _read_lifecycle_state(state_dir / "supervisor" / "runtime.json")
+    )
+    use_supervisor_state = supervisor_enabled is not False
+    attempt = (
+        _read_lifecycle_state(state_dir / "supervisor" / "update_attempt.json")
+        if use_supervisor_state
+        else {}
+    )
+    status = (
+        _read_lifecycle_state(state_dir / "core_update" / "status.json")
+        if use_supervisor_state
+        else {
+            "state": "idle",
+            "phase": "",
+            "message": "supervisor disabled",
+            "reason": "supervisor_disabled",
+            "updated_at": now,
+        }
+    )
     compact_runtime = _compact_lifecycle_fields(runtime, _LIFECYCLE_RUNTIME_FIELDS)
     desired_running = compact_runtime.get("desired_running") is not False
     managed_alive = compact_runtime.get("managed_alive") is not False
@@ -2125,9 +2238,15 @@ class RealtimeSidecarServer:
             except asyncio.TimeoutError:
                 continue
 
-    async def _runtime_listener_ready_for_lifecycle(self) -> bool:
-        runtime_path = current_base_dir() / "state" / "supervisor" / "runtime.json"
-        runtime = _read_lifecycle_state(runtime_path)
+    async def _runtime_listener_ready_for_lifecycle(
+        self,
+        runtime_state: dict[str, Any] | None = None,
+    ) -> bool:
+        runtime = (
+            dict(runtime_state)
+            if isinstance(runtime_state, dict)
+            else _sidecar_runtime_lifecycle_state()
+        )
         if runtime.get("desired_running") is False or runtime.get("managed_alive") is False:
             return False
         endpoint = _route_tunnel_runtime_endpoint_from_payload(runtime)
@@ -2179,7 +2298,9 @@ class RealtimeSidecarServer:
         runtime_listener_missing_since: float | None = None
         while not self._stopped.is_set():
             now = time.time()
-            runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle()
+            supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
+            runtime_state = _sidecar_runtime_lifecycle_state()
+            runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle(runtime_state)
             if runtime_listener_ready:
                 runtime_listener_missing_since = None
             elif runtime_listener_missing_since is None:
@@ -2198,6 +2319,8 @@ class RealtimeSidecarServer:
                 reported_at=now,
                 runtime_listener_unavailable_for_s=runtime_listener_unavailable_for_s,
                 runtime_crash_grace_s=runtime_crash_grace_s,
+                runtime_state=runtime_state,
+                supervisor_enabled=supervisor_enabled,
             )
             fingerprint = _sidecar_lifecycle_semantic_fingerprint(payload)
             changed = fingerprint != self._lifecycle_fingerprint
@@ -2338,6 +2461,8 @@ class RealtimeSidecarServer:
                     revision=self._lifecycle_revision + 1,
                     shutdown_kind="planned",
                     shutdown_reason="service_stop",
+                    runtime_state=_sidecar_runtime_lifecycle_state(),
+                    supervisor_enabled=env_bool("ADAOS_SUPERVISOR_ENABLED"),
                 )
                 await asyncio.wait_for(
                     asyncio.to_thread(_post_sidecar_lifecycle_report, payload),

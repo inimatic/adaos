@@ -1,9 +1,14 @@
 import asyncio
 import json
+import os
 import types
 
+import pytest
+
 from adaos.apps.cli.commands.api import (
+    ManagedRuntimeConflict,
     _advertise_base,
+    _configure_runtime_endpoint_env,
     _ensure_api_serve_dev_sidecar,
     _find_matching_server_pids,
     _is_local_url,
@@ -16,6 +21,7 @@ from adaos.apps.cli.commands.api import (
     _resolve_stop_bind,
     _resolve_bind,
     _resolve_implicit_api_port_fallback,
+    _stop_previous_server,
     _write_pidfile,
     app,
 )
@@ -515,6 +521,72 @@ def test_api_serve_uses_api_launch_mode(monkeypatch):
     assert called["port"] == 8779
     assert called["launch_mode"] == "api_serve"
     assert called["pidfile_owner"] == "api"
+
+
+def test_configure_runtime_endpoint_env_uses_actual_api_bind(monkeypatch):
+    monkeypatch.delenv("ADAOS_SELF_BASE_URL", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_HOST", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_PORT", raising=False)
+    monkeypatch.delenv("ADAOS_RUNTIME_LAUNCH_MODE", raising=False)
+
+    _configure_runtime_endpoint_env(
+        advertised_base="http://127.0.0.1:8779",
+        launch_mode="api_serve",
+    )
+
+    assert os.environ["ADAOS_SELF_BASE_URL"] == "http://127.0.0.1:8779"
+    assert os.environ["ADAOS_RUNTIME_HOST"] == "127.0.0.1"
+    assert os.environ["ADAOS_RUNTIME_PORT"] == "8779"
+    assert os.environ["ADAOS_RUNTIME_LAUNCH_MODE"] == "api_serve"
+
+
+def test_api_serve_reports_autostart_conflict_without_traceback(monkeypatch):
+    runner = CliRunner()
+    conf = NodeConfig(
+        node_id="n1",
+        subnet_id="sn_1",
+        role="hub",
+        hub_url="http://127.0.0.1:8777",
+        local_api_url="http://127.0.0.1:8777",
+        token="t1",
+    )
+
+    def _raise_conflict(host, port):
+        raise ManagedRuntimeConflict(host=host, port=port, pids=[222])
+
+    monkeypatch.setattr(api_cmd, "load_config", lambda: conf)
+    monkeypatch.setattr(api_cmd, "_ensure_api_pre_stop_preflight_or_exit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_cmd, "_stop_previous_server", _raise_conflict)
+
+    result = runner.invoke(app, ["serve", "--host", "127.0.0.1", "--port", "8777"])
+
+    assert result.exit_code == 1
+    assert "autostart is already running" in result.stdout
+    assert "adaos autostart disable" in result.stdout
+    assert "Traceback" not in result.stdout
+
+
+def test_stop_previous_server_refuses_autostart_pidfile_owner(monkeypatch, tmp_path):
+    pidfile = tmp_path / "serve.json"
+    pidfile.write_text(json.dumps({"pid": 123, "owner": "autostart"}), encoding="utf-8")
+
+    monkeypatch.setattr(api_cmd, "_pidfile_path", lambda _host, _port: pidfile)
+    monkeypatch.setattr(api_cmd, "_current_process_family_pids", lambda: set())
+    monkeypatch.setattr(api_cmd, "_current_launch_owner", lambda: "api")
+    monkeypatch.setattr(api_cmd, "_current_base_dir", lambda: tmp_path)
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: None)
+    monkeypatch.setattr(api_cmd, "_process_running", lambda pid: int(pid) == 123)
+    monkeypatch.setattr(
+        api_cmd,
+        "_env_flag",
+        lambda name, default=False: False if name == "ADAOS_API_TAKEOVER_AUTOSTART" else default,
+    )
+
+    with pytest.raises(ManagedRuntimeConflict) as excinfo:
+        _stop_previous_server("127.0.0.1", 8777)
+
+    assert excinfo.value.pids == (123,)
+    assert "autostart disable" in str(excinfo.value)
 
 
 def test_dev_serve_uses_dev_launch_mode(monkeypatch):

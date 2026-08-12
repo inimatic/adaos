@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -477,6 +478,67 @@ def test_realtime_sidecar_route_tunnel_discovers_runtime_from_persisted_supervis
     assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8788/yws"
 
 
+def test_realtime_sidecar_ignores_persisted_supervisor_state_when_supervisor_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state" / "supervisor"
+    state_dir.mkdir(parents=True)
+    (state_dir / "runtime.json").write_text(
+        '{"runtime_url":"http://127.0.0.1:8778","desired_running":true,"managed_alive":true}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+    monkeypatch.setenv("ADAOS_RUNTIME_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
+
+    listeners = realtime_sidecar_mod.realtime_sidecar_route_tunnel_listeners()
+    lifecycle = realtime_sidecar_mod._sidecar_runtime_lifecycle_state(base_dir=tmp_path)
+
+    assert listeners["ws"]["upstream_port"] == 8777
+    assert listeners["yws"]["upstream_url"] == "ws://127.0.0.1:8777/yws"
+    assert lifecycle["runtime_url"] == "http://127.0.0.1:8777"
+
+
+def test_sidecar_lifecycle_report_uses_unmanaged_runtime_state_without_stale_transition(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "state" / "supervisor").mkdir(parents=True)
+    (tmp_path / "state" / "core_update").mkdir(parents=True)
+    (tmp_path / "state" / "supervisor" / "update_attempt.json").write_text(
+        '{"state":"failed","message":"stale supervisor transition"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "state" / "core_update" / "status.json").write_text(
+        '{"state":"failed","message":"stale supervisor status"}',
+        encoding="utf-8",
+    )
+
+    payload = build_sidecar_lifecycle_report(
+        base_dir=tmp_path,
+        transport_snapshot={"listen": "127.0.0.1:7422", "active_session": True, "remote_connected_ago_s": 1.0},
+        runtime_listener_ready=True,
+        source_epoch="epoch-unmanaged",
+        revision=1,
+        runtime_state={
+            "runtime_state": "ready",
+            "runtime_api_ready": True,
+            "managed_alive": True,
+            "desired_running": True,
+            "runtime_url": "http://127.0.0.1:8777",
+            "runtime_port": 8777,
+        },
+        supervisor_enabled=False,
+    )
+
+    assert payload["supervisor"]["runtime"]["runtime_url"] == "http://127.0.0.1:8777"
+    assert payload["supervisor"]["runtime"]["listener_running"] is True
+    assert payload["supervisor"]["attempt"] == {}
+    assert payload["supervisor"]["status"]["state"] == "idle"
+    assert payload["supervisor"]["status"]["reason"] == "supervisor_disabled"
+
+
 def test_realtime_sidecar_parent_snapshot_does_not_http_probe_supervisor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -540,6 +602,7 @@ def test_realtime_sidecar_listener_snapshot_includes_route_tunnel_contract(
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8777")
+    monkeypatch.setenv("ADAOS_REALTIME_ALLOW_Y_PY_PSUTIL_NET_CONNECTIONS", "1")
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(_free_port()))
     monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
     monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda host, port: 7422)
@@ -555,6 +618,28 @@ def test_realtime_sidecar_listener_snapshot_includes_route_tunnel_contract(
     assert snapshot["route_tunnel_contract"]["yws"]["delegation_mode"] == "local_ws_proxy"
     assert snapshot["media_proxy_contract"]["current_support"] == "disabled"
     assert snapshot["media_proxy_contract"]["planned_owner"] == "sidecar"
+
+
+def test_realtime_sidecar_listener_snapshot_skips_pid_scan_when_y_py_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "y_py", object())
+    monkeypatch.delenv("ADAOS_REALTIME_ALLOW_Y_PY_PSUTIL_NET_CONNECTIONS", raising=False)
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(_free_port()))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_find_realtime_listener_pid",
+        lambda _host, _port: (_ for _ in ()).throw(AssertionError("pid scan must be skipped")),
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+
+    snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(role="hub")
+
+    assert snapshot["listener_running"] is True
+    assert snapshot["listener_pid"] is None
+    assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
 
 
 def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
