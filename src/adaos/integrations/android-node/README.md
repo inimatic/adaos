@@ -31,7 +31,7 @@ Current scope:
   receive an explicit negative acknowledgement;
 - `Open AdaOS` launch into `https://inimatic.com` zone LO.
 
-This is the PoC15 A0-A7 implementation artifact. It reports `yjs_ready=true`,
+This is the PoC16 A0-A7 implementation artifact. It reports `yjs_ready=true`,
 renders the packaged desktop through the normal hosted client, calculates
 state-vector diffs with native `y-py`, and persists accepted updates in the
 app-private SQLite YStore. Weather and host events use `/ws`; Notebook tools use
@@ -41,7 +41,15 @@ Connect separately enrolls this phone with a Root URL and one-time join code,
 then delegates remote browser, Telegram, and other-node invitations to the
 canonical Hub skill. Browsers projects bounded active control sessions. Voice
 uses half-duplex Android Chrome SpeechRecognition and speechSynthesis while
-the hosted client is open. Dialog work runs in one bounded background slot so
+the hosted client is open. A long press arms continuous listening until the
+user presses Stop or Rasa classifies a spoken turn as `voice.listening.stop`.
+The training phrases live in canonical scenario NLU data; neither the browser
+nor the Android runtime matches natural-language stop phrases. A structured
+`client_directives` acknowledgement carries the intent back to the browser.
+Continuous mode restarts after silence, transient STT errors, send failures,
+and completed TTS, but never plays a readiness tone while the microphone is
+armed. A one-shot capture plays its optional tone completely before opening
+SpeechRecognition. Dialog work runs in one bounded background slot so
 a slow Hub/LLM response cannot starve control WebSocket keepalives.
 Each accepted WebSocket also has a bounded send timeout: a browser Yjs peer
 which stops reading is aborted instead of blocking later control registration
@@ -100,7 +108,7 @@ py -3.11 generate_yjs_seed.py
 ```
 
 The repository build handoff copies the same file to
-`artifacts/android-node/adaos-android-node-0.1.0-poc15-debug.apk`. This is a
+`artifacts/android-node/adaos-android-node-0.1.0-poc16-debug.apk`. This is a
 debug-signed development artifact, not a Play Store release package.
 
 ## Install and smoke-test
@@ -241,3 +249,13 @@ and a forced process death was recovered through `START_STICKY` with a new PID,
 ready Python/Yjs, and a reconnecting member link. The six-hour physical soak
 started at 2026-08-11 19:15:23 UTC and remains an open gate until its final
 sample is recorded.
+
+The PoC16 debug APK is 22,695,091 bytes with SHA-256
+`a428bce053c4a8362d03aa4be25ea9a68afe5ae46b3a3ddee53a96e402212416`.
+On the same phone, portable Rasa reported 28 intents and classified
+«перестань слушать» as `voice.listening.stop` at confidence 0.8623001. Hosted
+client `0.0.322` stayed armed across silence and a response, discarded
+buffered callbacks from the stopped recognizer, and suppressed a textual
+match to the recent synthesized response during the bounded echo guard. The
+physical Enjoy 30 voice run produced the structured stop directive, changed
+the control back to `Listen`, and did not re-arm.

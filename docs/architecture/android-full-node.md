@@ -7,10 +7,11 @@ member-protocol slice, the A7 bounded-runtime implementation, the PoC8
 browser-mediated voice/dialog slice, the PoC9 Rasa/remote-assistant slice,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
-bound, and the PoC15 Android lifecycle controller
-are implemented under
+bound, and the PoC15 Android lifecycle controller are implemented under
 `src/adaos/integrations/android-node` and have been exercised on an Android 16
-Samsung SM-F721N. Together they prove the Android lifecycle, embedded CPython
+Samsung SM-F721N. The PoC16 continuous-voice control contract also passes its
+automated and physical acceptance gates on that phone.
+Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
 `web_desktop` rendering from the real local YDoc. The YDoc has been updated
@@ -30,12 +31,16 @@ calls, and replacement of a wedged member worker. PoC14 prevents a stale Yjs
 browser peer from blocking the control channel and falsely leaving the hosted
 client in Recovery. PoC15 replaces the time-limited `dataSync` foreground
 service with `specialUse`, restores explicit user intent after process death,
-boot, and APK replacement, and keeps the Android 8 / API 26 floor. Android
+boot, and APK replacement, and keeps the Android 8 / API 26 floor. PoC16 keeps
+foreground browser listening armed across silence and transient STT/transport
+failures, removes microphone-open readiness tones, and stops only on an
+explicit UI action or a structured `voice.listening.stop` result from the
+promoted Rasa model. Android
 Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC15 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC16 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -568,6 +573,16 @@ continuous listening only after speech completion plus a bounded acoustic
 tail. This prevents a companion from turning its synthesized answer into the
 next user message. The implementation lives in `adaos-client`, so the browser
 contract is shared by stationary and mobile nodes.
+
+Once explicitly armed, continuous mode is a persistent browser state rather
+than a best-effort sequence of one-shot captures. Silence, a transient
+SpeechRecognition error, a temporary send failure, and a completed response do
+not disarm it. It is disarmed by the visible Stop action or by a structured
+`voice.listening.stop` client directive returned after canonical Rasa
+classification. Natural-language variants such as «перестань слушать» belong
+to NLU training data and are not matched in TypeScript or the Android runtime.
+Continuous mode is silent; an optional readiness cue is reserved for one-shot
+capture and completes before the microphone opens.
 
 Remote dialog work also cannot occupy the control WebSocket reader. The phone
 runs at most one dialog command on a bounded worker while the reader continues

@@ -5,8 +5,9 @@ A0/A1/A2/A3/A4/A5 vertical slice, the A6 member-protocol slice, the A7
 bounded-runtime implementation, the PoC9 Rasa/remote-assistant extension,
 the PoC11 routed-connectivity/voice half-duplex corrections, the PoC13
 deployed-membership recovery corrections, the PoC14 stale-peer transport
-bound, and the PoC15 Android lifecycle controller
-are running on a physical Android 16 arm64 phone. It renders `web_desktop` from
+bound, and the PoC15 Android lifecycle controller are running on a physical
+Android 16 arm64 phone. The PoC16 continuous-voice control contract passes its
+automated and physical acceptance gates. The phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
 Root route. Keystore custody and the physical 2 GB device gate remain open.
@@ -42,7 +43,7 @@ later can:
     Hub is reachable.
 
 Production distribution, arbitrary skill installation, media, phone-as-hub,
-and continuous unattended daemon operation are outside this proof.
+and background voice capture without a visible browser are outside this proof.
 
 ## Delivery Rules
 
@@ -812,6 +813,42 @@ link reconnected without an Activity start. A real `MY_PACKAGE_REPLACED`
 broadcast also restored the desired node. A 38-second observer calibration
 recorded three ready samples, no outage, and no new timeout; the former PoC14
 `dataSync` timeout remained baseline evidence only.
+
+## PoC16 Extension: Persistent Foreground Voice Session
+
+Outcome: once the user explicitly arms the browser assistant, keep it waiting
+for further turns until an explicit UI stop or a stop intent classified by the
+canonical NLU model. This remains foreground, browser-mediated voice; it does
+not claim background microphone capture or wake-word activation.
+
+- [x] `[must]` remove the readiness cue from continuous mode and complete a
+  one-shot cue before opening SpeechRecognition.
+- [x] `[must]` keep continuous mode armed across no-speech, transient STT
+  failures, temporary command-send failures, and the TTS half-duplex cycle.
+- [x] `[must]` define `voice.listening.stop` and its phrase variants in the
+  canonical scenario NLU data, not in browser or Android phrase matching.
+- [x] `[must]` train the canonical off-device Rasa model and export the same
+  promoted artifact into the portable Android bundle.
+- [x] `[must]` return a structured `client_directives` stop acknowledgement
+  and prevent the turn from reaching a selected companion LLM.
+- [x] `[must]` cover cue ordering, silent retry, structured stop, portable NLU,
+  and Android routing with automated tests.
+- [x] `[must]` deploy the shared client and PoC16 APK to the physical Samsung;
+  prove command/answer/re-arm and spoken stop without an acoustic self-loop.
+- [ ] `[should]` observe a foreground continuous session for at least one hour
+  with silence, several turns, and a final spoken stop.
+- [ ] `[deferred]` admit per-agent voice activation only after wake-word/VAD,
+  echo-reference, activation-session, and agent-alias contracts are defined.
+
+PoC16 physical evidence (2026-08-12): debug APK `0.1.0-poc16` is 22,695,091
+bytes with SHA-256
+`a428bce053c4a8362d03aa4be25ea9a68afe5ae46b3a3ddee53a96e402212416`.
+The API 36 Samsung reported the new 28-intent portable Rasa model ready and
+classified «перестань слушать» as `voice.listening.stop` at confidence
+0.8623001. The hosted client `0.0.322` remained armed through silence and a
+TTS turn without adding synthesized speech as a user turn. A spoken stop from
+the nearby Enjoy 30 produced the structured NLU directive, returned the UI to
+`Listen`, and did not re-arm. The one-hour observation remains open.
 
 ## Dependency Work Queue
 
