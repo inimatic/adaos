@@ -120,6 +120,12 @@ This folder contains JSON Schemas used by AdaOS for validation and by editors or
   folder; registry, admission, authoring provenance, static review evidence,
   trace reports, metrics, review state, and activation pointers stay outside
   the pure definition so they cannot alter the definition digest.
+- `navigation.destination.v1.schema.json` and
+  `navigation.resolution.v1.schema.json` - canonical client navigation
+  destination and resolution contracts for login, registration, Webspace open,
+  public Drive view, and direct Drive download intents.
+- `public_grant.v1.schema.json` - generic root-visible public access grant
+  descriptor used by public faces such as readonly AdaOS Drive sharing.
 - `webui.v1.schema.json` - skill WebUI contributions (`webui.json`), including
   staged readiness hints, stream receiver budget/guard metadata, runtime
   data sources, skill-owned UI view interfaces, modal address contracts, and

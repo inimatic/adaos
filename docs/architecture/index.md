@@ -59,6 +59,7 @@ Current target-state control-plane extensions are documented in:
 - [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md): target boundary between distributable Projects, ProjectRelease, Application/presentation entry points, local model-facing artifact groups, registry classification, and policy-scoped Builder Development Sessions
 - [Infrascope](infrascope.md): human-facing control-plane architecture over the canonical system model
 - [UI Addressing](ui-addressing.md): target typed ref vocabulary for browser-facing state, projections, domain identity, and actions
+- [Public Access Grants](public-access.md): root-visible public grants, public faces, Drive readonly sharing, guest device identity, and the no-YJS public rendering direction
 - [Named Entities and Canonical Naming](named-entities.md): target architecture and roadmap for display names, localized labels, observed names, aliases, canonical refs, and NLU entity canonicalization
 - [AdaOS Builder](builder.md): canonical role and end-to-end workflow for turning ideas into governed skills, scenarios, UI descriptors, NLU hints, tests, and runtime-ready changes
 - [Builder Conversational Development Architecture](builder-conversational-development.md): chat-first, state-backed development control plane; Project/Issue/Change/Run model; statechart; context packets; semantic UI/data changes; negotiated interactions; rich views; and multi-user proposal seams

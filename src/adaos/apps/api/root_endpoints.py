@@ -10,7 +10,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -74,12 +74,16 @@ from adaos.services.browser_assets import (
 from adaos.services.drive_public_links import (
     DrivePublicLinkError,
     build_root_public_content_url,
+    build_root_public_list_url,
+    list_hub_public_link,
     map_public_link_exception,
     register_root_public_link,
+    revoke_root_public_link,
     resolve_root_public_link,
     root_public_link_metadata,
     stream_hub_public_link,
 )
+from adaos.services.zone_hosts import DEFAULT_PUBLIC_APP_BASE_URL, canonical_zone_id
 
 router = APIRouter()
 root_router = APIRouter(prefix="/v1/root", tags=["root"])
@@ -1650,14 +1654,36 @@ class DrivePublicLinkRegisterRequest(BaseModel):
     size_bytes: int | None = None
     mime_type: str | None = None
     mime: str | None = None
+    resource_kind: str | None = None
+    capabilities: list[str] | None = None
     modified_at: str | None = None
     expires_at: str | float | int | None = None
     ttl_seconds: int | None = None
     url: str | None = None
     view_url: str | None = None
+    app_base: str | None = None
+    public_app_base_url: str | None = None
     download_url: str | None = None
     root_download_url: str | None = None
+    list_url: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+def _drive_public_app_url(public_token: str, zone_id: str | None, app_base: Any = None) -> str:
+    base = str(app_base or os.getenv("ADAOS_PUBLIC_APP_URL") or DEFAULT_PUBLIC_APP_BASE_URL).strip().rstrip("/")
+    if not base:
+        base = DEFAULT_PUBLIC_APP_BASE_URL
+    if "://" not in base:
+        base = f"https://{base}"
+    zone = canonical_zone_id(zone_id) or "lo"
+    query = urlencode(
+        {
+            "intent": "drive.view",
+            "zone": zone,
+            "public_token": str(public_token or "").strip(),
+        }
+    )
+    return f"{base}/?{query}"
 
 
 def _drive_public_http_error(exc: Exception) -> HTTPException:
@@ -1682,20 +1708,37 @@ async def drive_public_link_register(
         dump = getattr(body, "model_dump", None)
         payload = dump(exclude_none=True) if callable(dump) else body.dict(exclude_none=True)
         public_token = str(payload.get("public_token") or "")
+        zone_id = str(payload.get("zone") or payload.get("zone_id") or "").strip()
         root_base = str(request.base_url).rstrip("/")
         root_download_url = build_root_public_content_url(root_base, public_token, download=True)
-        payload.setdefault("view_url", build_root_public_content_url(root_base, public_token, download=False))
+        root_list_url = build_root_public_list_url(root_base, public_token)
+        app_view_url = _drive_public_app_url(
+            public_token,
+            zone_id,
+            payload.get("app_base") or payload.get("public_app_base_url"),
+        )
+        payload.setdefault("url", app_view_url)
+        payload.setdefault("view_url", app_view_url)
         payload.setdefault("root_download_url", root_download_url)
-        payload.setdefault("download_url", root_download_url)
+        payload.setdefault("download_url", app_view_url)
+        payload.setdefault("list_url", root_list_url)
         record = register_root_public_link(payload, ctx=get_ctx())
         link = dict(record)
         link["root_download_url"] = root_download_url
-        link.setdefault("download_url", str(payload.get("download_url") or root_download_url))
+        if not str(link.get("url") or "").strip():
+            link["url"] = app_view_url
+        if not str(link.get("view_url") or "").strip():
+            link["view_url"] = str(link.get("url") or app_view_url)
+        if not str(link.get("download_url") or "").strip():
+            link["download_url"] = str(payload.get("download_url") or app_view_url)
+        if not str(link.get("list_url") or "").strip():
+            link["list_url"] = root_list_url
         return {
             "ok": True,
             "auth": {"method": auth.get("method")},
             "link": link,
             "root_download_url": root_download_url,
+            "list_url": root_list_url,
         }
     except Exception as exc:
         if isinstance(exc, (ValueError, DrivePublicLinkError)):
@@ -1705,6 +1748,8 @@ async def drive_public_link_register(
 
 @router.get("/v1/drive/public-links/{public_token}/meta")
 @router.get("/v1/drive/public-links/{public_token}/resolve")
+@router.get("/v1/public/grants/{public_token}/meta")
+@router.get("/v1/public/grants/{public_token}/resolve")
 async def drive_public_link_meta(public_token: str) -> dict[str, Any]:
     try:
         return {"ok": True, "link": root_public_link_metadata(public_token, ctx=get_ctx())}
@@ -1731,6 +1776,7 @@ async def _drive_public_link_content_response(
 
 
 @router.get("/v1/drive/public-links/{public_token}/content")
+@router.get("/v1/public/grants/{public_token}/content")
 async def drive_public_link_content(
     public_token: str,
     request: Request,
@@ -1740,12 +1786,53 @@ async def drive_public_link_content(
 
 
 @router.head("/v1/drive/public-links/{public_token}/content")
+@router.head("/v1/public/grants/{public_token}/content")
 async def drive_public_link_content_head(
     public_token: str,
     request: Request,
     download: bool = False,
 ):
     return await _drive_public_link_content_response(public_token, request, download=download)
+
+
+@router.get("/v1/drive/public-links/{public_token}/list")
+@router.get("/v1/drive/public-links/{public_token}/tree")
+@router.get("/v1/public/grants/{public_token}/list")
+async def drive_public_link_list(
+    public_token: str,
+    path: str = "",
+    limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        root_record = resolve_root_public_link(public_token, ctx=get_ctx())
+        hub_token = str(root_record.get("hub_token") or "").strip()
+        return list_hub_public_link(public_token, hub_token, rel_path=path, limit=limit, ctx=get_ctx())
+    except Exception as exc:
+        if isinstance(exc, (ValueError, DrivePublicLinkError)):
+            raise _drive_public_http_error(exc) from exc
+        raise
+
+
+@router.post("/v1/drive/public-links/{public_token}/revoke")
+@router.post("/v1/public/grants/{public_token}/revoke")
+async def drive_public_link_revoke(
+    public_token: str,
+    authorization: str | None = Header(default=None),
+    owner_token: str | None = Header(default=None, alias="X-Owner-Token"),
+    root_token: str | None = Header(default=None, alias="X-Root-Token"),
+) -> dict[str, Any]:
+    auth = _require_root_read_auth_or_legacy_root_token(
+        authorization=authorization,
+        owner_token=owner_token,
+        root_token=root_token,
+    )
+    try:
+        link = revoke_root_public_link(public_token, ctx=get_ctx())
+        return {"ok": True, "auth": {"method": auth.get("method")}, "link": link}
+    except Exception as exc:
+        if isinstance(exc, (ValueError, DrivePublicLinkError)):
+            raise _drive_public_http_error(exc) from exc
+        raise
 
 
 @router.post("/v1/hub/control/report")

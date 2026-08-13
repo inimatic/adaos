@@ -22,8 +22,9 @@ CONNECT_REGISTER = "connect.register"
 AUTH_LOGIN = "auth.login"
 WEBSPACE_OPEN = "webspace.open"
 DRIVE_DOWNLOAD = "drive.download"
+DRIVE_VIEW = "drive.view"
 
-INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN, DRIVE_DOWNLOAD})
+INTENTS = frozenset({CONNECT_REGISTER, AUTH_LOGIN, WEBSPACE_OPEN, DRIVE_DOWNLOAD, DRIVE_VIEW})
 SPACE_KINDS = frozenset({"workspace", "development", "preview", "trial"})
 PREVIEW_STAGES = frozenset({"prototype", "automation", "trial", "publication"})
 
@@ -106,10 +107,10 @@ def validate_destination(destination: Mapping[str, Any]) -> dict[str, Any]:
         normalized["preview_stage"] = stage
     if intent == CONNECT_REGISTER and not _text(normalized.get("user_code")):
         raise ValueError("connect.register requires user_code")
-    if intent == DRIVE_DOWNLOAD:
+    if intent in {DRIVE_DOWNLOAD, DRIVE_VIEW}:
         missing = [key for key in ("zone", "public_token") if not _text(normalized.get(key))]
         if missing:
-            raise ValueError(f"drive.download requires: {', '.join(missing)}")
+            raise ValueError(f"{intent} requires: {', '.join(missing)}")
     if intent == WEBSPACE_OPEN:
         missing = [
             key
@@ -189,6 +190,20 @@ def drive_download_destination(
     return validate_destination(
         {
             "intent": DRIVE_DOWNLOAD,
+            "zone": zone,
+            "public_token": public_token,
+        }
+    )
+
+
+def drive_view_destination(
+    public_token: str,
+    *,
+    zone: str,
+) -> dict[str, Any]:
+    return validate_destination(
+        {
+            "intent": DRIVE_VIEW,
             "zone": zone,
             "public_token": public_token,
         }
@@ -284,6 +299,8 @@ def resolve_destination(
         return _resolution("ready", "login", "login_intent_ready", target, context)
     if intent == DRIVE_DOWNLOAD:
         return _resolution("ready", "download", "drive_download_intent_ready", target, context)
+    if intent == DRIVE_VIEW:
+        return _resolution("ready", "open", "drive_view_intent_ready", target, context)
 
     if _text(context.get("zone")).lower() != target["zone"]:
         return _resolution(
@@ -355,6 +372,7 @@ __all__ = [
     "CONNECT_REGISTER",
     "DESTINATION_SCHEMA",
     "DRIVE_DOWNLOAD",
+    "DRIVE_VIEW",
     "INTENTS",
     "PREVIEW_STAGES",
     "RESOLUTION_SCHEMA",
@@ -362,6 +380,7 @@ __all__ = [
     "WEBSPACE_OPEN",
     "build_url",
     "drive_download_destination",
+    "drive_view_destination",
     "login_destination",
     "parse_url",
     "registration_destination",

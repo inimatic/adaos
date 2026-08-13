@@ -3183,15 +3183,24 @@ class NatsRouteTunnelRuntime:
                                 return
 
                             drive_public_token = ""
+                            drive_public_action = ""
                             for _prefix in (
                                 "/media/drive-public-links/",
                                 "/v1/drive/public-links/",
                                 "/api/skills/adaos_drive/public-links/",
+                                "/v1/public/grants/",
                             ):
                                 if method in ("GET", "HEAD") and path_norm.startswith(_prefix):
                                     suffix0 = unquote(path_norm[len(_prefix):])
                                     if suffix0.endswith("/content"):
                                         drive_public_token = suffix0[: -len("/content")].strip("/")
+                                        drive_public_action = "content"
+                                    elif suffix0.endswith("/list"):
+                                        drive_public_token = suffix0[: -len("/list")].strip("/")
+                                        drive_public_action = "list"
+                                    elif suffix0.endswith("/tree"):
+                                        drive_public_token = suffix0[: -len("/tree")].strip("/")
+                                        drive_public_action = "list"
                                     break
                             if drive_public_token:
                                 try:
@@ -3199,6 +3208,7 @@ class NatsRouteTunnelRuntime:
                                         DrivePublicLinkExpired,
                                         DrivePublicLinkForbidden,
                                         DrivePublicLinkNotFound,
+                                        list_hub_public_link,
                                         resolve_hub_public_link,
                                     )
 
@@ -3207,7 +3217,25 @@ class NatsRouteTunnelRuntime:
                                         or headers.get("X-AdaOS-Drive-Link-Token")
                                         or ""
                                     ).strip()
-                                    record, target = resolve_hub_public_link(drive_public_token, hub_token, ctx=service.ctx)
+                                    requested_rel_path = str(_query_param(search, "path") or "").strip()
+                                    if drive_public_action == "list":
+                                        listing = list_hub_public_link(
+                                            drive_public_token,
+                                            hub_token,
+                                            rel_path=requested_rel_path,
+                                            limit=_query_param(search, "limit") or 500,
+                                            ctx=service.ctx,
+                                        )
+                                        await _route_media_reply_json(key, status=200, payload=listing)
+                                        route_outcome = "drive_public_list_replied"
+                                        return
+                                    record, target = resolve_hub_public_link(
+                                        drive_public_token,
+                                        hub_token,
+                                        rel_path=requested_rel_path,
+                                        require_file=True,
+                                        ctx=service.ctx,
+                                    )
                                     download_flag = str(_query_param(search, "download") or "").strip().lower() in {
                                         "1",
                                         "true",

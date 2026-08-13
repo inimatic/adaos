@@ -13,6 +13,7 @@
         "open",
         "register",
         "login",
+        "download",
         "authenticate",
         "switch_zone",
         "switch_subnet",

@@ -8,9 +8,10 @@
   "properties": {
     "schema": { "const": "adaos.navigation.destination.v1" },
     "intent": {
-      "enum": ["connect.register", "auth.login", "webspace.open"]
+      "enum": ["connect.register", "auth.login", "webspace.open", "drive.download", "drive.view"]
     },
     "zone": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+    "public_token": { "type": "string", "minLength": 1, "maxLength": 256 },
     "subnet_id": { "type": "string", "minLength": 1, "maxLength": 128 },
     "webspace_id": { "type": "string", "minLength": 1, "maxLength": 128 },
     "space_kind": {
@@ -19,7 +20,7 @@
     "expected_scenario_id": { "type": "string", "minLength": 1, "maxLength": 128 },
     "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
     "preview_stage": {
-      "enum": ["prototype", "automation", "publication"]
+      "enum": ["prototype", "automation", "trial", "publication"]
     },
     "user_code": { "type": "string", "minLength": 1, "maxLength": 128 },
     "pair_code": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -34,6 +35,10 @@
     {
       "if": { "properties": { "intent": { "const": "webspace.open" } } },
       "then": { "required": ["zone", "subnet_id", "webspace_id", "space_kind"] }
+    },
+    {
+      "if": { "properties": { "intent": { "enum": ["drive.download", "drive.view"] } } },
+      "then": { "required": ["zone", "public_token"] }
     }
   ]
 }
