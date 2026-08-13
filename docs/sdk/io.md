@@ -254,6 +254,26 @@ Common options:
 - `vad: true`, `vadThreshold`, `vadSilenceMs` (hub provider only)
 - `autoSend: true` (send without confirmation)
 
+## Node STT providers and models
+
+`node.voice.listening.v1.stt.provider_mode` accepts `system`, `vosk`, or
+`auto`. `system` is the initial/default mode. `auto` selects only an installed
+Vosk model carrying verification evidence for the current device; it otherwise
+continues to use system STT.
+
+Stationary model management is exposed at:
+
+- `GET /api/stt/models`;
+- `POST /api/stt/models/install` with `model_id` and optional custom
+  `descriptor` containing an exact `archive_sha256`;
+- `POST /api/stt/models/select` with `language` and `model_id`;
+- `POST /api/stt/models/verify` with `device_id` and bounded metrics.
+
+Android exposes the same catalog and selection semantics at
+`/api/node/voice/stt/models*`; installation is asynchronous and its state is
+returned by the GET endpoint. Model files live under the node data root and are
+not Python packages or part of core A/B slots.
+
 ## ReDevice Endpoint Transport
 
 ReDevice skills should address endpoint services, not Android, iOS, browser, or

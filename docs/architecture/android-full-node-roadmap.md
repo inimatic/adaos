@@ -10,6 +10,10 @@ Android 16 arm64 phone. PoC16 and PoC17 established the shared voice contracts;
 PoC18 adds native foreground recognition/TTS and Hub winner leases. Its
 automated, build, install, transport, and bounded physical voice gates pass,
 while repeatable simultaneous acoustic and barge-in gates remain open. The
+PoC19 artifact adds a switchable system/Vosk/auto policy, verified multilingual
+model catalog, continuous native PCM path, AEC, explicit render ownership, and
+compact communication-route UI. Vosk runs on the physical Samsung; reliability,
+accuracy comparison, Hub/CDN delivery, and the 2 GB memory gate remain open. The
 phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -50,10 +54,13 @@ later can:
     learned stop intent;
 16. expose honest browser/native AEC evidence without allowing two capture
     owners to compete for the Android microphone.
+17. start on system STT, install language/quality-specific Vosk models as data,
+    and migrate in `auto` only after on-device verification;
+18. expose one factual communication route and assign exactly one TTS render
+    owner per voice turn.
 
 Production distribution, arbitrary skill installation, media, phone-as-hub,
-and production background speech recognition without a visible browser are
-outside this proof.
+and unrestricted background starts are outside this proof.
 
 ## Delivery Rules
 
@@ -981,6 +988,74 @@ The deployed hosted client reports version `0.0.330` and contains the shared
 claim-before-dispatch change. These results verify transport arbitration, not
 simultaneous acoustic capture.
 
+## PoC19 Extension: Switchable Streaming STT and Communication Ownership
+
+Outcome: remove SpeechRecognizer's one-shot gaps without forking AdaOS voice
+semantics, while keeping the new provider reversible until physical evidence
+justifies making it the default.
+
+- [x] `[must]` add `system`, `vosk`, and `auto` to the shared listening policy;
+  fresh and upgraded installations remain on `system`;
+- [x] `[must]` define one shared verified model catalog with language,
+  quality/resource tier, memory recommendation, archive size, SHA-256, license,
+  and platform metadata; allow custom models only with the same integrity data;
+- [x] `[must]` install models outside the APK/Python environment with safe ZIP
+  extraction, bounded expansion, atomic activation, per-language selection,
+  and per-device verification evidence;
+- [x] `[must]` add Android `AudioRecord(VOICE_COMMUNICATION)` continuous PCM16
+  capture, Vosk streaming recognition, AEC/NS/AGC, an independent bounded
+  dispatch worker, and zero raw-audio retention;
+- [x] `[must]` make system SpeechRecognizer and Vosk mutually exclusive and
+  leave the browser capture path independently selectable;
+- [x] `[must]` permit `auto` to choose only an installed model verified on that
+  device; manual `vosk` remains available for collecting the evidence;
+- [x] `[must]` add the same catalog/install/select/verify API and loaded-model
+  cache to stationary AdaOS;
+- [x] `[must]` carry explicit voice input/output ownership through dialog and
+  Yjs, and prevent browser speechSynthesis from rendering a native-owned turn;
+- [x] `[must]` project `data/communications/current` and render the compact
+  input/STT/channel/assistant/output route in the hosted-client header;
+- [x] `[must]` expose always-on listening, provider selection, install progress,
+  and the communication route in the native node Activity;
+- [x] `[must]` build/install the APK, install the compact Russian model, load it
+  on arm64, verify continuous capture/AEC, and recognize a physical acoustic
+  command from the nearby PC;
+- [x] `[must]` run the same compact Russian model on the stationary Windows
+  environment and recognize a deterministic Russian SAPI probe;
+- [ ] `[physical gate]` collect at least eight admitted commands, mark the model
+  verified, switch to `auto`, and prove it selects Vosk and falls back to system
+  after model removal/failure;
+- [ ] `[physical gate]` compare missed commands, false activations, latency, and
+  memory for system STT versus Vosk over a fixed multilingual command set;
+- [ ] `[physical gate]` hold native Vosk capture for six hours with screen/background
+  transitions, TTS turns, network outages, and zero unbounded growth or deaf gaps;
+- [ ] `[must before auto rollout]` serve resumable signed/hashed model downloads
+  through AdaOS Hub/CDN. Direct upstream download byte-stalled on the Samsung;
+  the identical locally provisioned archive installed successfully;
+- [ ] `[physical gate]` repeat on an actual 2 GB phone. The 7.3 GB Samsung rose
+  to 327-379 MiB PSS with the compact model, so `auto` is gated at 3 GB until
+  this result exists;
+- [ ] `[should]` test at least Russian and English models plus one larger
+  quality tier on a capable device;
+- [ ] `[deferred]` make Vosk the fixed default until the comparison and duration
+  gates pass.
+
+PoC19 verified evidence (2026-08-13): the API 36 Samsung loaded
+`vosk-model-small-ru-0.22`, captured 16 kHz PCM continuously with Android AEC
+and noise suppression enabled, and finalized «а да какая сегодня погода в
+москве». The first probe exposed compact Vosk's split tokenization of «Ада»;
+the acoustic forms are now registry data in both native and hosted-client
+paths. The final APK admitted the repeated probe exactly once. It also heard a
+fragment of its own TTS response, but the address gate rejected that fragment:
+runtime reported one accepted and one rejected utterance, one uninterrupted
+capture cycle, no capture error, and no dropped utterance. The Windows run of
+the same model produced «о да какая сегодня погода в москве». This verifies
+runtime compatibility and loop prevention, not comparative reliability,
+full-duplex barge-in, or the `auto` promotion gate.
+
+The installed debug artifact is 33,565,262 bytes with SHA-256
+`410196a635146e41c6913ec5ca5ec1571aefebd490a77e4e66d39a4626f8faf6`.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
@@ -995,6 +1070,7 @@ the phase which needs it is active.
 | `cryptography` | A6 | build/prove Android arm64 package | Android TLS/Keystore adapter behind existing contract |
 | `psutil` | A7 | isolate import and required metrics | Android diagnostics adapter |
 | Rasa model | PoC9 | export promoted artifact into portable inference data | reject promotion; never retrain on phone |
+| Vosk AAR and models | PoC19 | keep AAR in APK; install verified model data separately | system STT remains the default/fallback |
 | `sounddevice`, `aiortc`, PyAV | deferred | not needed by PoC18 browser/native front end | Android platform speech/audio adapters; explicit media capability unavailable |
 
 The Android lock must be built from imports reached by the selected profile,

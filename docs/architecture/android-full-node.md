@@ -14,6 +14,10 @@ activation, long-form, and audio-processing contracts. PoC18 adds Android
 native speech recognition/TTS and Hub-issued room winner leases. Its automated,
 build, install, transport, and bounded physical voice gates are recorded below;
 simultaneous acoustic two-microphone and barge-in acceptance remain open.
+PoC19 adds a switchable streaming Vosk path, verified model catalog, compact
+communication-route UI, and an explicit input/output owner contract. It has
+loaded the compact Russian model and continuously captured PCM with AEC on the
+same physical phone; comparative accuracy and a six-hour run remain open.
 Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
@@ -52,7 +56,7 @@ Keystore custody and
 the 2 GB device gate remain owned by the
 [Android Full Node Roadmap](android-full-node-roadmap.md).
 
-PoC9-PoC18 deliberately do not introduce Android-specific conversational models.
+PoC9-PoC19 deliberately do not introduce Android-specific conversational models.
 The APK executes a deterministic inference representation exported from the
 same promoted Rasa training artifact used by stationary AdaOS. Training stays
 off-device. When a Hub is reachable, projected companions such as Арсений and
@@ -112,8 +116,8 @@ optimize for learning rather than breadth.
 | Installation | Immutable, versioned bundle packaged with the APK |
 | App identity | Canonical AdaOS mark on indigo for the native node; monochrome mark remains the browser/PWA identity |
 | Core update | Android application update; no `pip` or A/B core switch in the PoC |
-| Voice | Half-duplex browser SpeechRecognition and speechSynthesis while the hosted client is open |
-| Native/background audio, media, WebRTC | Disabled in the first slice |
+| Voice | Switchable system STT / streaming Vosk with one input and one output owner; browser path remains available |
+| Native/background audio, media, WebRTC | Foreground-service microphone implemented; general media and WebRTC remain disabled |
 | Memory hypothesis | A useful node can operate on a 2 GB arm64 phone without `largeHeap` |
 
 Chaquopy is an implementation choice for the first build, not a permanent
@@ -829,7 +833,7 @@ The first profile reports unavailable capabilities explicitly. It does not
 provide fake desktop implementations or allow import failures to crash the
 runtime.
 
-## PoC18 Voice Session Model
+## PoC19 Voice Session Model
 
 The listening policy is shared AdaOS state, not an Android-only preference.
 `node.voice.listening.v1` exposes `off`, `push_to_talk`, `continuous`, and
@@ -854,21 +858,85 @@ native speech owner
   -> Android on-device SpeechRecognizer when available, system fallback otherwise
   -> canonical alias gate -> Hub lease -> portable Rasa -> Android TTS
 
+native Vosk owner
+  -> AudioRecord(VOICE_COMMUNICATION), PCM16 mono at 16 kHz
+  -> platform AcousticEchoCanceler / NoiseSuppressor / AGC when available
+  -> streaming Vosk recognizer on a dedicated capture thread
+  -> bounded dialog dispatch worker -> canonical alias/lease/Rasa path -> Android TTS
+
 native diagnostic owner
   -> AudioRecord(VOICE_COMMUNICATION)
   -> Android AcousticEchoCanceler / NoiseSuppressor / AGC evidence only
 ```
 
+`node.voice.listening.v1.stt.provider_mode` is `system`, `vosk`, or `auto`.
+Fresh installations start with `system`; installing a model does not silently
+change that choice. In `vosk` mode the selected installed model is used
+explicitly. In `auto` mode AdaOS may select Vosk only after that exact model has
+completed the on-device observation gate. The current experimental threshold
+is eight admitted native commands. Until then `auto` retains the system STT.
+This makes migration evidence-driven and immediately reversible.
+
+Models are independently installed data, not APK or Python dependencies. The
+shared `adaos-stt-model-catalog.v1` descriptor records model id, language,
+quality/resource tier, expected memory, URL, exact archive size and SHA-256,
+license, and platforms. The initial verified catalog contains compact Russian
+and English models. Custom language/quality models are accepted only with an
+explicit descriptor and SHA-256. Installation rejects traversal/symlink ZIPs,
+bounds uncompressed size, stages atomically, and writes an immutable install
+marker plus per-language selection. The same code is copied into Android at
+build time and imported directly by stationary AdaOS, preventing a mobile-only
+model manager.
+
+The Android node exposes:
+
+- `GET /api/node/voice/stt/models` for catalog, installed models, device memory,
+  active policy, observation, and install progress;
+- `POST /api/node/voice/stt/models/install` for asynchronous verified install;
+- `POST /api/node/voice/stt/models/select` for per-language selection;
+- `POST /api/node/voice/listening` for listening mode and STT provider policy.
+
+Stationary AdaOS exposes the corresponding catalog/install/select/verify API
+under `/api/stt/models*`, and caches the loaded Vosk model instead of rebuilding
+it for every utterance. A deployment should serve archives through an AdaOS
+Hub/CDN with resumable delivery. Direct download from the upstream model host
+was byte-stalled on the physical Samsung; installing the identical pre-fetched
+archive succeeded after SHA verification. Therefore direct upstream delivery
+is diagnostic fallback, not the target distribution path.
+
 The Samsung physical gate reports Android AEC and noise suppression as
-available and enabled for the diagnostic backend. The functional native path
-does not expose a raw PCM echo reference, so this result must not be read as
-proof that SpeechRecognizer itself applies the same AEC chain. When native
+available and enabled for both the diagnostic backend and functional Vosk
+capture. The system SpeechRecognizer path does not expose a raw PCM echo
+reference, so that result must not be read as proof that SpeechRecognizer
+itself applies the same AEC chain. When native
 capture stops, the service drops the `microphone` foreground type. A boot,
 package-replaced, or sticky receiver restores only the ordinary `specialUse`
 node: modern Android's while-in-use rule forbids it from adding the microphone
 type in the background. Native capture reports `deferred_user_visible_start`
 until the user opens the Activity or notification, which then re-arms the
 persisted policy from an eligible foreground state.
+
+Android 16 may additionally reject `BOOT_COMPLETED` foreground-service
+promotion before any Activity is visible. The receiver preserves desired
+running state and records `autostart_deferred` instead of crashing; opening the
+Activity resumes the node. Package replacement and sticky recreation remain
+best-effort recoveries, not an Android guarantee.
+
+Every voice turn carries `voice_input_owner` and `voice_output_owner`. The
+owner is either a browser endpoint or the native node endpoint. Only the named
+owner may render TTS, which removes the previous double response caused by
+Android TTS and browser speechSynthesis both observing one Yjs message. The
+current session is projected at `data/communications/current` with logical
+channel, assistant, STT provider/model, transport, and input/output owners.
+The hosted client renders the same facts as a compact route capsule:
+
+```text
+● 🎙 Phone · Vosk → General · AdaOS Mobile → 🔊 Phone
+```
+
+Logical channel (`General`, `Conversational`, `Builder`) is deliberately
+separate from modality, capture endpoint, STT provider, transport, assistant,
+and render endpoint.
 
 Assistant gender and speaker gender are separate facts. Projected assistant
 gender/voice selects an appropriate TTS voice and labels the render reference
@@ -900,6 +968,33 @@ assistant completes the current recording and starts a normal turn. The phone
 uses the portable inference bundle exported from the same promoted Rasa model
 that the stationary service loads, so phrases and intent identities do not
 fork by platform.
+
+PoC19 physical evidence (2026-08-13): APK `0.1.0-poc19` installed over the
+persisted PoC18 data on the API 36 Samsung SM-F721N. The shared installer
+verified SHA-256, unpacked, selected, and loaded
+`vosk-model-small-ru-0.22`; runtime reported continuous PCM capture at 16 kHz,
+AEC and noise suppression enabled, one capture cycle, and zero capture errors
+or dropped utterances. A Russian command played by the nearby PC was finalized
+as «а да какая сегодня погода в москве». The canonical registry now includes
+the observed compact-model acoustic forms «а да» and «о да». With that registry
+data, the final APK admitted the repeated probe exactly once. The microphone
+also recognized a distorted fragment of local TTS; it contained no assistant
+address and was rejected, so it did not produce a second answer. This is useful
+evidence that ownership plus activation stops the loop, but also evidence that
+platform AEC does not completely erase rendered speech. The same archive on
+Windows recognized the deterministic SAPI probe as «о да какая сегодня погода
+в москве».
+
+The installed PoC19 debug APK is 33,565,262 bytes with SHA-256
+`410196a635146e41c6913ec5ca5ec1571aefebd490a77e4e66d39a4626f8faf6`.
+
+Loading Vosk is not free: the Samsung process rose from roughly 99 MiB sampled
+PSS before model load to 327 MiB in the AdaOS sampler and 379 MiB in
+`dumpsys meminfo` (about 469 MiB RSS). This exceeds the original 200 MiB idle
+budget. Consequently compact models are installable and manually selectable on
+smaller devices, but `auto` currently requires at least 3 GiB RAM plus verified
+on-device observations. The 2 GiB hypothesis remains a mandatory physical
+gate; it must not be inferred from the 7.3 GiB Samsung.
 
 ## Resource Model
 
