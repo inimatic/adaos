@@ -1742,6 +1742,21 @@ class AndroidSkillRuntime:
                 selected_text = candidate
                 addressed = candidate_addressed
                 break
+        trusted_wake_hint = (
+            str(payload.get("capture_backend") or "") == "vosk_streaming"
+            and payload.get("activation_detected") is True
+        )
+        wake_alias = str(payload.get("activation_alias") or "").strip()
+        wake_agent_id = str(payload.get("activation_agent_id") or "").strip()
+        wake_addressed = self._addressed_dialog_agent(wake_alias) if wake_alias else None
+        if addressed is None and trusted_wake_hint:
+            if wake_addressed is not None:
+                wake_agent, _wake_remainder = wake_addressed
+            elif wake_agent_id in _DIALOG_AGENT_BY_ID:
+                wake_agent = self._dialog_agent(wake_agent_id)
+            else:
+                wake_agent = self._dialog_agent(_GENERAL_DIALOG_AGENT_ID)
+            addressed = (wake_agent, primary_text)
         activation_session: dict[str, Any] = {}
         try:
             stored_activation = json.loads(self._setting(_NATIVE_ACTIVATION_SETTING, "{}"))
@@ -1786,6 +1801,12 @@ class AndroidSkillRuntime:
             }
         if addressed is not None:
             agent, command_text = addressed
+            if trusted_wake_hint:
+                command_text = (
+                    primary_text
+                    if payload.get("activation_has_command") is not False
+                    else ""
+                )
             agent_id = str(agent.get("id") or "")
             self._activate_dialog_agent(
                 agent_id,
@@ -1822,7 +1843,12 @@ class AndroidSkillRuntime:
                         for alias in agent.get("aliases") or ()
                         if selected_text.casefold().startswith(str(alias).casefold())
                     ),
-                    "",
+                    wake_alias if trusted_wake_hint else "",
+                ),
+                "voice_activation_detector": (
+                    str(payload.get("activation_detector") or "vosk_wake_grammar")
+                    if trusted_wake_hint
+                    else "transcript_address"
                 ),
                 "addressed_agent_id": agent_id,
                 "follow_up_expires_in_s": _NATIVE_ACTIVATION_FOLLOW_UP_SECONDS if not command_text else 0,
@@ -1838,6 +1864,23 @@ class AndroidSkillRuntime:
             "arbitration_text": primary_text,
             "command_text": primary_text,
             "voice_activation": False,
+        }
+
+    @staticmethod
+    def native_voice_activation_catalog() -> dict[str, Any]:
+        """Return the canonical agent aliases consumed by native wake detection."""
+
+        return {
+            "schema_version": "adaos-native-activation-catalog.v1",
+            "agents": [
+                {
+                    "id": str(agent["id"]),
+                    "label": str(agent["label"]),
+                    "aliases": [str(alias) for alias in agent.get("aliases") or ()],
+                }
+                for agent in _DIALOG_AGENTS
+            ],
+            "updated_at": _utc_now(),
         }
 
     def handle_dialog_message(self, payload: dict[str, Any]) -> dict[str, Any]:

@@ -34,6 +34,7 @@ class VoskVoiceAssistant(
 ) {
     private val policyFile = dataRoot.resolve("voice-listening-policy.json")
     private val runtimeFile = dataRoot.resolve("voice-vosk-runtime.json")
+    private val activationCatalogFile = dataRoot.resolve("voice-activation-catalog.json")
     private val main = Handler(Looper.getMainLooper())
     private val captureWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "adaos-vosk-capture").apply { isDaemon = true }
@@ -53,6 +54,7 @@ class VoskVoiceAssistant(
     private var currentModelId = ""
     private var currentModel: Model? = null
     private var currentRecognizer: Recognizer? = null
+    private var currentWakeRecognizer: Recognizer? = null
     private var audioRecord: AudioRecord? = null
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
@@ -67,7 +69,9 @@ class VoskVoiceAssistant(
     private var droppedUtterances = 0L
     private var echoSuppressed = 0L
     private var captureErrors = 0L
+    private var wakeDetections = 0L
     private var partialText = ""
+    private var lastWakeAlias = ""
     private var lastTranscript = ""
     private var lastError = ""
 
@@ -157,10 +161,18 @@ class VoskVoiceAssistant(
                     currentModelId = modelId
                 }
                 val loadedModel = currentModel ?: throw IllegalStateException("vosk_model_not_loaded")
+                val wakeAliases = loadWakeAliases()
+                if (wakeAliases.isEmpty()) throw IllegalStateException("activation_catalog_empty")
                 val recognizer = Recognizer(loadedModel, SAMPLE_RATE.toFloat()).also {
                     it.setWords(true)
                 }
+                val wakeRecognizer = Recognizer(
+                    loadedModel,
+                    SAMPLE_RATE.toFloat(),
+                    wakeGrammar(wakeAliases),
+                ).also { it.setWords(true) }
                 currentRecognizer = recognizer
+                currentWakeRecognizer = wakeRecognizer
                 val minimum = AudioRecord.getMinBufferSize(
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
@@ -189,6 +201,7 @@ class VoskVoiceAssistant(
                         .put("aec_enabled", aecEnabled),
                 )
                 val pcm = ByteArray(bufferSize)
+                var pendingWake: WakeMatch? = null
                 while (!stopped.get() && desired && captureRunning.get()) {
                     if (speaking && !aecEnabled) {
                         Thread.sleep(40)
@@ -199,9 +212,37 @@ class VoskVoiceAssistant(
                         if (count < 0) throw IllegalStateException("audio_record_read:$count")
                         continue
                     }
+                    val wakeFinal = wakeRecognizer.acceptWaveForm(pcm, count)
+                    val wakePayload = JSONObject(
+                        if (wakeFinal) wakeRecognizer.result else wakeRecognizer.partialResult,
+                    )
+                    val wakeText = wakePayload.optString(if (wakeFinal) "text" else "partial", "")
+                    detectWake(wakeText, wakeAliases)?.let { detected ->
+                        pendingWake = pendingWake?.let { existing ->
+                            if (existing.alias == detected.alias) {
+                                existing.copy(hasCommand = existing.hasCommand || detected.hasCommand)
+                            } else {
+                                detected
+                            }
+                        } ?: detected
+                    }
                     if (recognizer.acceptWaveForm(pcm, count)) {
                         val text = JSONObject(recognizer.result).optString("text", "").trim()
-                        if (text.isNotEmpty()) handleFinalText(text, modelId)
+                        if (text.isNotEmpty()) {
+                            val activation = pendingWake?.let { detected ->
+                                detected.copy(
+                                    hasCommand = detected.hasCommand ||
+                                        normalizeSpeech(text).split(" ").size >
+                                        normalizeSpeech(detected.alias).split(" ").size + 1,
+                                )
+                            }
+                            if (activation != null) {
+                                wakeDetections += 1
+                                lastWakeAlias = activation.alias
+                            }
+                            handleFinalText(text, modelId, activation)
+                        }
+                        pendingWake = null
                     } else {
                         val nextPartial = JSONObject(recognizer.partialResult).optString("partial", "").trim()
                         if (nextPartial != partialText) partialText = nextPartial.take(180)
@@ -220,13 +261,15 @@ class VoskVoiceAssistant(
                 if (audioRecord === record) audioRecord = null
                 currentRecognizer?.close()
                 currentRecognizer = null
+                currentWakeRecognizer?.close()
+                currentWakeRecognizer = null
                 captureRunning.set(false)
                 if (!stopped.get() && desired) main.postDelayed({ evaluatePolicy() }, RETRY_MS)
             }
         }
     }
 
-    private fun handleFinalText(text: String, modelId: String) {
+    private fun handleFinalText(text: String, modelId: String, activation: WakeMatch?) {
         finalizedUtterances += 1
         lastTranscript = text.take(240)
         partialText = ""
@@ -242,7 +285,7 @@ class VoskVoiceAssistant(
         }
         val captureId = "android-vosk:${UUID.randomUUID().toString().replace("-", "").take(16)}"
         dispatchWorker.execute {
-            val result = postTranscript(text, captureId, modelId)
+            val result = postTranscript(text, captureId, modelId, activation)
             dispatchedUtterances += 1
             dispatchBusy.set(false)
             val accepted = result.optBoolean("accepted", false)
@@ -255,7 +298,9 @@ class VoskVoiceAssistant(
                     .put("transcript", lastTranscript)
                     .put("model_id", modelId)
                     .put("accepted", accepted)
-                    .put("render_here", renderHere),
+                    .put("render_here", renderHere)
+                    .put("activation_detected", activation != null)
+                    .put("activation_alias", activation?.alias ?: ""),
             )
             if (accepted && renderHere && response.isNotEmpty()) main.post {
                 speak(response, result.optString("active_agent_voice", ""))
@@ -263,7 +308,12 @@ class VoskVoiceAssistant(
         }
     }
 
-    private fun postTranscript(text: String, captureId: String, modelId: String): JSONObject {
+    private fun postTranscript(
+        text: String,
+        captureId: String,
+        modelId: String,
+        activation: WakeMatch?,
+    ): JSONObject {
         val connection = URL(TRANSCRIPT_URL).openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "POST"
@@ -280,6 +330,11 @@ class VoskVoiceAssistant(
                 .put("capture_backend", "vosk_streaming")
                 .put("stt_model_id", modelId)
                 .put("stt_language", readPolicy().optJSONObject("stt")?.optString("language", "ru-RU"))
+                .put("activation_detected", activation != null)
+                .put("activation_alias", activation?.alias ?: "")
+                .put("activation_agent_id", activation?.agentId ?: "")
+                .put("activation_has_command", activation?.hasCommand ?: false)
+                .put("activation_detector", "vosk_wake_grammar")
                 .put("window_ms", 280)
             connection.outputStream.use { it.write(request.toString().toByteArray(Charsets.UTF_8)) }
             val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
@@ -372,6 +427,50 @@ class VoskVoiceAssistant(
         .trim()
         .replace(Regex("\\s+"), " ")
 
+    private fun loadWakeAliases(): List<WakeAlias> = try {
+        val agents = JSONObject(activationCatalogFile.readText()).optJSONArray("agents") ?: JSONArray()
+        val aliases = mutableListOf<WakeAlias>()
+        for (agentIndex in 0 until agents.length()) {
+            val agent = agents.optJSONObject(agentIndex) ?: continue
+            val agentId = agent.optString("id", "")
+            val values = agent.optJSONArray("aliases") ?: JSONArray()
+            for (aliasIndex in 0 until values.length()) {
+                val phrase = values.optString(aliasIndex, "").trim()
+                if (phrase.length in 2..40) aliases.add(WakeAlias(phrase, agentId))
+            }
+        }
+        aliases.distinctBy { normalizeSpeech(it.phrase) }
+    } catch (_: Throwable) {
+        emptyList()
+    }
+
+    private fun wakeGrammar(aliases: List<WakeAlias>): String {
+        val phrases = JSONArray()
+        aliases.forEach { alias ->
+            phrases.put(normalizeSpeech(alias.phrase))
+            phrases.put("${normalizeSpeech(alias.phrase)} [unk]")
+        }
+        phrases.put("[unk]")
+        return phrases.toString()
+    }
+
+    private fun detectWake(text: String, aliases: List<WakeAlias>): WakeMatch? {
+        val candidate = normalizeSpeech(text)
+        if (candidate.isBlank()) return null
+        for (alias in aliases.sortedByDescending { normalizeSpeech(it.phrase).length }) {
+            val phrase = normalizeSpeech(alias.phrase)
+            if (candidate == phrase || candidate.startsWith("$phrase ")) {
+                val remainder = candidate.removePrefix(phrase).trim()
+                return WakeMatch(
+                    alias = alias.phrase,
+                    agentId = alias.agentId,
+                    hasCommand = remainder.isNotBlank(),
+                )
+            }
+        }
+        return null
+    }
+
     private fun selectedModelForLanguage(language: String): String {
         return try {
             val selection = JSONObject(dataRoot.resolve("models/vosk/selection.json").readText())
@@ -410,6 +509,8 @@ class VoskVoiceAssistant(
             .put("dropped_utterances", droppedUtterances)
             .put("echo_suppressed", echoSuppressed)
             .put("capture_errors", captureErrors)
+            .put("wake_detections", wakeDetections)
+            .put("last_wake_alias", lastWakeAlias)
             .put("partial", partialText)
             .put("last_transcript", lastTranscript)
             .put("last_error", lastError)
@@ -436,4 +537,7 @@ class VoskVoiceAssistant(
         private const val TRANSCRIPT_URL = "http://127.0.0.1:8777/api/node/voice/native/transcript"
         private const val TAG = "AdaOSVoskVoice"
     }
+
+    private data class WakeAlias(val phrase: String, val agentId: String)
+    private data class WakeMatch(val alias: String, val agentId: String, val hasCommand: Boolean)
 }

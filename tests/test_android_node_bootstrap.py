@@ -556,6 +556,37 @@ def test_native_voice_transcript_requires_address_and_dispatches_only_after_leas
         assert acoustic_alias["accepted"] is True
         assert acoustic_alias["prepared"]["command_text"] == "какая погода в москве"
 
+        status, wake_hint = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {
+                "text": "а если какая погода в москве",
+                "confidence": None,
+                "capture_id": "native-vosk-wake-hint",
+                "capture_backend": "vosk_streaming",
+                "stt_model_id": "vosk-model-small-ru-0.22",
+                "activation_detected": True,
+                "activation_alias": "Ада",
+                "activation_agent_id": "agent:android:local",
+                "activation_has_command": True,
+                "activation_detector": "vosk_wake_grammar",
+            },
+        )
+        assert status == 200
+        assert wake_hint["accepted"] is True
+        assert wake_hint["prepared"]["voice_activation_alias"] == "Ада"
+        assert wake_hint["prepared"]["voice_activation_detector"] == "vosk_wake_grammar"
+        assert wake_hint["prepared"]["command_text"] == "а если какая погода в москве"
+
+        activation_catalog = json.loads(
+            (tmp_path / "voice-activation-catalog.json").read_text(encoding="utf-8")
+        )
+        assert activation_catalog["schema_version"] == "adaos-native-activation-catalog.v1"
+        assert any(
+            "ада" in agent["aliases"]
+            for agent in activation_catalog["agents"]
+            if agent["id"] == "agent:android:local"
+        )
+
         status, armed = _post_json(
             f"{base_url}/api/node/voice/native/transcript",
             {"text": "Арсений", "confidence": 0.88, "capture_id": "native-armed"},

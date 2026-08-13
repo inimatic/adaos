@@ -2020,6 +2020,18 @@ def start(
             publish_yjs=_publish_yjs_update,
             publish_event=_broadcast_control_event,
         )
+        activation_catalog_path = root / "voice-activation-catalog.json"
+        activation_catalog_tmp = activation_catalog_path.with_suffix(".tmp")
+        activation_catalog_tmp.write_text(
+            json.dumps(
+                _skills.native_voice_activation_catalog(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        activation_catalog_tmp.replace(activation_catalog_path)
         _resource_sampler.sample()
         server = _LoopbackServer(("127.0.0.1", int(port)), _Handler)
         _resource_sampler.sample()
