@@ -155,6 +155,7 @@ class NatsRouteTunnelRuntime:
             tunnels = self.tunnels
             tunnel_tasks = self.tunnel_tasks
             media_relay_sessions: dict[str, dict[str, Any]] = {}
+            media_relay_tasks: dict[str, asyncio.Task] = {}
             http_body_relay_sessions: dict[str, dict[str, Any]] = {}
             pending_chunks: dict[str, dict[str, Any]] = {}
             outbound_chunk_cache: dict[str, dict[str, Any]] = {}
@@ -1102,6 +1103,7 @@ class NatsRouteTunnelRuntime:
                                 *[str(k) for k in pending_tunnel_events.keys()],
                                 *[str(k) for k in reply_subjects.keys()],
                                 *[str(k) for k in media_relay_sessions.keys()],
+                                *[str(k) for k in media_relay_tasks.keys()],
                                 *[str(k) for k in http_body_relay_sessions.keys()],
                                 *[
                                     str(st.get("key"))
@@ -1147,6 +1149,12 @@ class NatsRouteTunnelRuntime:
                         pass
                     try:
                         _drop_outbound_chunk_cache_for_key(key)
+                    except Exception:
+                        pass
+                    try:
+                        task2 = media_relay_tasks.pop(key, None)
+                        if task2:
+                            task2.cancel()
                     except Exception:
                         pass
                     try:
@@ -2013,6 +2021,66 @@ class NatsRouteTunnelRuntime:
                         "truncated": False,
                     },
                 )
+
+            def _start_route_media_reply_file(
+                key: str,
+                *,
+                target: Path,
+                method: str,
+                request_headers: dict[str, Any] | None,
+                display_name: str | None = None,
+                mime_type: str | None = None,
+                download: bool = False,
+            ) -> None:
+                async def _run() -> None:
+                    try:
+                        await _route_media_reply_file(
+                            key,
+                            target=target,
+                            method=method,
+                            request_headers=request_headers,
+                            display_name=display_name,
+                            mime_type=mime_type,
+                            download=download,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        try:
+                            await _route_reply(
+                                key,
+                                {
+                                    "t": "media_http_error",
+                                    "status": 502,
+                                    "error": "media_file_reply_failed",
+                                    "detail": str(e),
+                                },
+                            )
+                        except Exception:
+                            pass
+                    finally:
+                        try:
+                            current = asyncio.current_task()
+                            if media_relay_tasks.get(key) is current:
+                                media_relay_tasks.pop(key, None)
+                            route_diag_state["media_file_tasks"] = int(len(media_relay_tasks))
+                            _update_route_protocol_runtime()
+                        except Exception:
+                            pass
+
+                previous = media_relay_tasks.pop(key, None)
+                try:
+                    if previous:
+                        previous.cancel()
+                except Exception:
+                    pass
+                task = asyncio.create_task(_run(), name=f"hub-route-media-file-{_key_tag(key)}")
+                media_relay_tasks[key] = task
+                try:
+                    route_diag_state["media_file_tasks"] = int(len(media_relay_tasks))
+                    _update_route_protocol_runtime()
+                except Exception:
+                    pass
 
             try:
                 service._hub_root_route_reset = _reset_route_runtime
@@ -3194,7 +3262,7 @@ class NatsRouteTunnelRuntime:
                                     )
                                     route_outcome = "drive_public_content_missing"
                                     return
-                                await _route_media_reply_file(
+                                _start_route_media_reply_file(
                                     key,
                                     target=target,
                                     method=method,
@@ -3203,7 +3271,7 @@ class NatsRouteTunnelRuntime:
                                     mime_type=str(record.get("mime_type") or ""),
                                     download=download_flag,
                                 )
-                                route_outcome = "drive_public_content_replied"
+                                route_outcome = "drive_public_content_started"
                                 return
 
                             media_indexer_content_prefixes = (
@@ -3244,7 +3312,7 @@ class NatsRouteTunnelRuntime:
                                     )
                                     route_outcome = "media_indexer_content_missing"
                                     return
-                                await _route_media_reply_file(
+                                _start_route_media_reply_file(
                                     key,
                                     target=resource.path,
                                     method=method,
@@ -3252,7 +3320,7 @@ class NatsRouteTunnelRuntime:
                                     display_name=resource.name,
                                     mime_type=resource.mime_type,
                                 )
-                                route_outcome = "media_indexer_content_replied"
+                                route_outcome = "media_indexer_content_started"
                                 return
 
                             if method in ("GET", "HEAD") and path_norm.startswith("/media/files/content/"):
@@ -3326,7 +3394,7 @@ class NatsRouteTunnelRuntime:
                                     target = resource.path
                                     display_name = resource.name
                                     mime_type = resource.mime_type
-                                await _route_media_reply_file(
+                                _start_route_media_reply_file(
                                     key,
                                     target=target,
                                     method=method,
@@ -3334,7 +3402,7 @@ class NatsRouteTunnelRuntime:
                                     display_name=display_name,
                                     mime_type=mime_type,
                                 )
-                                route_outcome = "media_content_replied"
+                                route_outcome = "media_content_started"
                                 return
 
                             if method == "DELETE" and path_norm.startswith("/media/files/"):
@@ -3512,6 +3580,12 @@ class NatsRouteTunnelRuntime:
                         return
 
                     if t == "media_http_abort":
+                        try:
+                            task0 = media_relay_tasks.pop(key, None)
+                            if task0:
+                                task0.cancel()
+                        except Exception:
+                            pass
                         _cleanup_media_relay_session(key, remove_temp=True)
                         route_outcome = "media_http_abort"
                         return
