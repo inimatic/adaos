@@ -533,6 +533,28 @@ def test_native_voice_transcript_requires_address_and_dispatches_only_after_leas
         assert accepted["prepared"]["command_text"] == "статус ноды"
         assert claims[0]["text"] == "статус ноды"
         assert accepted["response"]
+        assert accepted["voice_render_here"] is True
+        assert accepted["voice_output_owner"] == {
+            "kind": "android_native",
+            "endpoint_id": runtime["node_id"],
+            "label": "Android node",
+        }
+        assert accepted["communication"]["input_owner"] == accepted["voice_output_owner"]
+        assert accepted["communication"]["stt"]["provider"] == "android_speech_recognizer"
+
+        status, acoustic_alias = _post_json(
+            f"{base_url}/api/node/voice/native/transcript",
+            {
+                "text": "а да какая погода в москве",
+                "confidence": 0.8,
+                "capture_id": "native-vosk-alias",
+                "capture_backend": "vosk_streaming",
+                "stt_model_id": "vosk-model-small-ru-0.22",
+            },
+        )
+        assert status == 200
+        assert acoustic_alias["accepted"] is True
+        assert acoustic_alias["prepared"]["command_text"] == "какая погода в москве"
 
         status, armed = _post_json(
             f"{base_url}/api/node/voice/native/transcript",

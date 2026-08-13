@@ -80,7 +80,10 @@ _DIALOG_AGENTS: tuple[dict[str, Any], ...] = (
         "gender": "neutral",
         "voice": "ru-RU",
         "icon": "sparkles-outline",
-        "aliases": ("adaos", "ада", "ассистент", "adaos mobile"),
+        # "а да" is a recurring acoustic tokenization of the name "Ада" in
+        # compact Russian STT models; keep it in the agent registry rather than
+        # hard-coding activation behavior in the capture loop.
+        "aliases": ("adaos", "ада", "а да", "о да", "ассистент", "adaos mobile"),
         "capabilities": ("node_status", "weather", "notebook_create"),
     },
     {
@@ -1842,6 +1845,16 @@ class AndroidSkillRuntime:
         if not text:
             raise AndroidSkillError("voice_assistant_text_required")
         meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+        input_owner = (
+            dict(meta.get("voice_input_owner") or {})
+            if isinstance(meta.get("voice_input_owner"), dict)
+            else {}
+        )
+        output_owner = (
+            dict(meta.get("voice_output_owner") or {})
+            if isinstance(meta.get("voice_output_owner"), dict)
+            else {}
+        )
         webspace_id = str(payload.get("webspace_id") or meta.get("webspace_id") or "desktop")
         nlu_result = self._parse_nlu(text)
         requested_agent_id = str(
@@ -1989,6 +2002,8 @@ class AndroidSkillRuntime:
             "used_llm": used_llm,
             "llm_route": self._last_dialog_route,
             "llm_route_error": self._last_dialog_error,
+            "voice_input_owner": input_owner or None,
+            "voice_output_owner": output_owner or None,
         }
         if client_directives:
             assistant_message["client_directives"] = [dict(item) for item in client_directives]
@@ -2001,6 +2016,7 @@ class AndroidSkillRuntime:
                     "ts": now,
                     "dialog_channel_id": active_agent["channel_id"],
                     "active_agent_id": active_agent["id"],
+                    "voice_input_owner": input_owner or None,
                 },
                 assistant_message,
             ]
@@ -2014,6 +2030,34 @@ class AndroidSkillRuntime:
             "updated_at": _utc_now(),
         }
         dialog = self._dialog_snapshot(event="turn")
+        communication = {
+            "schema_version": "adaos-communication-session.v1",
+            "session_id": f"dialog:{turn_id}",
+            "state": "ready",
+            "modality": "voice" if input_owner else "text",
+            "logical_channel": {
+                "id": active_agent["channel_id"],
+                "label": next(
+                    (
+                        str(item.get("label") or active_agent["channel_id"])
+                        for item in dialog.get("channels") or []
+                        if isinstance(item, dict)
+                        and str(item.get("id") or "") == active_agent["channel_id"]
+                    ),
+                    active_agent["channel_id"],
+                ),
+            },
+            "assistant": self._dialog_agent_projection(active_agent),
+            "input_owner": input_owner or None,
+            "stt": {
+                "provider": str(meta.get("capture_backend") or "text"),
+                "model_id": meta.get("stt_model_id"),
+                "language": meta.get("stt_language") or "ru-RU",
+            },
+            "output_owner": output_owner or None,
+            "transport": "member_link" if self._member_link_connected() else "local",
+            "updated_at": _utc_now(),
+        }
         nlu_projection = {
             "provider": "rasa",
             "mode": "always",
@@ -2045,6 +2089,7 @@ class AndroidSkillRuntime:
                 "data/voice_chat": snapshot,
                 "data/dialog": dialog,
                 "data/nlu/current": nlu_projection,
+                "data/communications/current": communication,
             }
         )
         return {
@@ -2064,6 +2109,9 @@ class AndroidSkillRuntime:
             "client_directives": client_directives,
             "long_form_action": long_form_action,
             "long_form": dict(long_form.get("session") or {}),
+            "voice_input_owner": input_owner or None,
+            "voice_output_owner": output_owner or None,
+            "communication": communication,
         }
 
     def _voice_response(self, text: str, agent: dict[str, Any]) -> str:

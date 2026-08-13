@@ -18,11 +18,20 @@ class NodeBootReceiver : BroadcastReceiver() {
             return
         }
         Log.i(TAG, "Restoring AdaOS node after $reason")
-        context.startForegroundService(
-            Intent(context, NodeService::class.java)
-                .setAction(NodeService.ACTION_START)
-                .putExtra(NodeService.EXTRA_START_REASON, reason)
-        )
+        try {
+            context.startForegroundService(
+                Intent(context, NodeService::class.java)
+                    .setAction(NodeService.ACTION_START)
+                    .putExtra(NodeService.EXTRA_START_REASON, reason)
+            )
+        } catch (error: RuntimeException) {
+            // Android 15+ may reject BOOT_COMPLETED FGS promotion even for a
+            // persisted user request. Preserve that request and resume when
+            // the user next opens the Activity instead of crashing the app.
+            val detail = "Autostart deferred by Android: ${error.javaClass.simpleName}"
+            NodeLifecycleStore.recordStop(context, "autostart_deferred", detail)
+            Log.w(TAG, detail, error)
+        }
     }
 
     companion object {

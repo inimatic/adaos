@@ -65,6 +65,8 @@ _install_descriptor: dict[str, Any] = {}
 _websocket_peers: set["_WebSocketPeer"] = set()
 _resource_sampler = AndroidResourceSampler()
 _dialog_command_slot = threading.BoundedSemaphore(1)
+_stt_model_lock = threading.RLock()
+_stt_model_install: dict[str, Any] = {"state": "idle"}
 
 
 class _LoopbackServer(ThreadingHTTPServer):
@@ -305,6 +307,7 @@ class _Handler(BaseHTTPRequestHandler):
             if _voice_policy is None:
                 self._json(503, {"ok": False, "error": "voice_policy_not_ready"})
                 return
+            _refresh_android_stt_policy()
             self._json(
                 200,
                 {
@@ -314,6 +317,12 @@ class _Handler(BaseHTTPRequestHandler):
                     "runtime": _android_voice_runtime_snapshot(),
                 },
             )
+            return
+        if path == "/api/node/voice/stt/models":
+            try:
+                self._json(200, _android_stt_models_snapshot())
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": f"{type(exc).__name__}:{exc}"})
             return
         if path == "/api/subnet/alias":
             runtime = _snapshot()
@@ -470,11 +479,32 @@ class _Handler(BaseHTTPRequestHandler):
                     body,
                     source=str(body.get("source") or "node_api"),
                 )
+                policy = _refresh_android_stt_policy()
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc)})
                 return
             _member_link_request_state_refresh()
             self._json(200, {"ok": True, "policy": policy, "service": _voice_policy.service()})
+            return
+        if path == "/api/node/voice/stt/models/install":
+            model_id = str(body.get("model_id") or "vosk-model-small-ru-0.22").strip()
+            try:
+                task = _start_android_stt_model_install(model_id, body)
+            except (ValueError, RuntimeError) as exc:
+                self._json(409, {"ok": False, "error": str(exc)})
+                return
+            self._json(202, {"ok": True, "accepted": True, "install": task})
+            return
+        if path == "/api/node/voice/stt/models/select":
+            try:
+                result = _select_android_stt_model(
+                    str(body.get("language") or "ru-RU"),
+                    str(body.get("model_id") or ""),
+                )
+            except (ValueError, FileNotFoundError) as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            self._json(200, result)
             return
         if path == "/api/node/voice/native/transcript":
             if _voice_policy is None or _skills is None:
@@ -538,6 +568,12 @@ class _Handler(BaseHTTPRequestHandler):
                 request_payload["text"] = str(prepared.get("text") or body.get("text") or "")
                 request_payload.setdefault("webspace_id", "desktop")
                 meta = dict(request_payload.get("_meta") or {})
+                native_node_id = str(_snapshot().get("node_id") or "android-local")
+                native_owner = {
+                    "kind": "android_native",
+                    "endpoint_id": native_node_id,
+                    "label": "Android node",
+                }
                 meta.update(
                     {
                         "voice_activation": bool(prepared.get("voice_activation")),
@@ -548,12 +584,25 @@ class _Handler(BaseHTTPRequestHandler):
                         "voice_activation_winner_device_id": arbitration.get("winner_device_id"),
                         "voice_listening_mode": listening_mode,
                         "capture_backend": body.get("capture_backend") or "android_speech_recognizer",
+                        "voice_input_owner": native_owner,
+                        "voice_output_owner": native_owner,
                     }
                 )
                 request_payload["_meta"] = meta
                 if prepared.get("addressed_agent_id"):
                     request_payload["active_agent_id"] = prepared.get("addressed_agent_id")
                 result = _skills.handle_dialog_message(request_payload)
+                if str(body.get("capture_backend") or "") == "vosk_streaming":
+                    result["stt_observation"] = _record_android_vosk_observation(
+                        str(body.get("stt_model_id") or ""),
+                        accepted=True,
+                    )
+                result["voice_render_here"] = (
+                    str((result.get("voice_output_owner") or {}).get("kind") or "")
+                    == "android_native"
+                    and str((result.get("voice_output_owner") or {}).get("endpoint_id") or "")
+                    == native_node_id
+                )
                 stop_listening = any(
                     str(item.get("type") or "") == "voice.listening.stop"
                     for item in result.get("client_directives") or []
@@ -1167,12 +1216,216 @@ def _android_voice_runtime_snapshot() -> dict[str, Any]:
 
     audio = _read("voice-audio-runtime.json")
     native = _read("voice-native-runtime.json")
+    vosk = _read("voice-vosk-runtime.json")
+    states = [str(vosk.get("state") or ""), str(native.get("state") or ""), str(audio.get("state") or "")]
+    active_state = next(
+        (state for state in states if state in {"listening", "processing", "accepted", "failed"}),
+        next((state for state in states if state), "not_started"),
+    )
     return {
         "schema_version": "android-voice-runtime.v1",
-        "state": str(native.get("state") or audio.get("state") or "not_started"),
+        "state": active_state,
         "native_assistant": native,
+        "vosk_assistant": vosk,
         "audio_record": audio,
     }
+
+
+def _android_stt_models_root() -> Path:
+    root_text = str(_snapshot().get("data_root") or "").strip()
+    if not root_text:
+        raise RuntimeError("android_data_root_not_ready")
+    return Path(root_text) / "models" / "vosk"
+
+
+def _refresh_android_stt_policy() -> dict[str, Any]:
+    if _voice_policy is None:
+        return {}
+    from adaos.adapters.audio.stt.model_manager import recommend_model
+
+    policy = _voice_policy.read()
+    stt = dict(policy.get("stt") or {})
+    mode = str(stt.get("provider_mode") or "system")
+    active = "system"
+    selected_model_id = str(stt.get("selected_model_id") or "").strip()
+    if mode == "vosk":
+        active = "vosk"
+    elif mode == "auto":
+        resources = _resource_sampler.sample()
+        memory_mb = int((resources.get("device") or {}).get("memory_total_kib") or 0) // 1024
+        recommended = recommend_model(
+            str(stt.get("language") or "ru-RU"),
+            _android_stt_models_root(),
+            total_memory_mb=memory_mb or None,
+            device_id=str(_snapshot().get("node_id") or "android-local"),
+            require_verified=True,
+        )
+        if recommended:
+            active = "vosk"
+            selected_model_id = str(recommended.get("id") or selected_model_id)
+    if active != stt.get("active_provider") or selected_model_id != str(stt.get("selected_model_id") or ""):
+        policy = _voice_policy.configure(
+            {
+                "listening_mode": policy.get("listening_mode"),
+                "stt": {
+                    **stt,
+                    "active_provider": active,
+                    "selected_model_id": selected_model_id,
+                },
+            },
+            source="stt_provider_resolver",
+        )
+    return policy
+
+
+def _android_stt_models_snapshot() -> dict[str, Any]:
+    from adaos.adapters.audio.stt.model_manager import installed_models, model_catalog
+
+    policy = _refresh_android_stt_policy()
+    with _stt_model_lock:
+        install = dict(_stt_model_install)
+    resources = _resource_sampler.sample()
+    return {
+        "ok": True,
+        "schema_version": "android-stt-model-runtime.v1",
+        "provider_modes": ["system", "vosk", "auto"],
+        "default_provider_mode": "system",
+        "auto_activation_rule": "installed_and_verified_on_this_device",
+        "policy": dict(policy.get("stt") or {}),
+        "catalog": model_catalog(),
+        "installed": installed_models(_android_stt_models_root()),
+        "install": install,
+        "observation": _read_android_vosk_observation(),
+        "device_memory_mb": int((resources.get("device") or {}).get("memory_total_kib") or 0) // 1024,
+    }
+
+
+def _android_vosk_observation_path() -> Path:
+    return _android_stt_models_root().parent / "vosk-observation.json"
+
+
+def _read_android_vosk_observation() -> dict[str, Any]:
+    try:
+        value = json.loads(_android_vosk_observation_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _record_android_vosk_observation(model_id: str, *, accepted: bool) -> dict[str, Any]:
+    from adaos.adapters.audio.stt.model_manager import mark_model_verified
+
+    if not model_id:
+        return {}
+    with _stt_model_lock:
+        value = _read_android_vosk_observation()
+        if value.get("model_id") != model_id:
+            value = {
+                "schema_version": "android-vosk-observation.v1",
+                "model_id": model_id,
+                "accepted_commands": 0,
+                "started_at": time.time(),
+            }
+        if accepted:
+            value["accepted_commands"] = int(value.get("accepted_commands") or 0) + 1
+        value["updated_at"] = time.time()
+        value["verification_threshold"] = 8
+        value["verified"] = bool(value.get("verified"))
+        if int(value["accepted_commands"]) >= int(value["verification_threshold"]) and not value["verified"]:
+            mark_model_verified(
+                model_id,
+                _android_stt_models_root(),
+                device_id=str(_snapshot().get("node_id") or "android-local"),
+                metrics={
+                    "accepted_commands": int(value["accepted_commands"]),
+                    "method": "native_activation_acceptance",
+                },
+            )
+            value["verified"] = True
+            value["verified_at"] = time.time()
+        path = _android_vosk_observation_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+    if value.get("verified"):
+        _refresh_android_stt_policy()
+    return value
+
+
+def _start_android_stt_model_install(model_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from adaos.adapters.audio.stt.model_manager import get_model_descriptor
+
+    descriptor = payload.get("descriptor") if isinstance(payload.get("descriptor"), dict) else None
+    get_model_descriptor(model_id, descriptor)
+    with _stt_model_lock:
+        if _stt_model_install.get("state") in {"downloading", "installing"}:
+            raise RuntimeError("stt_model_install_already_running")
+        _stt_model_install.clear()
+        _stt_model_install.update(
+            {
+                "state": "downloading",
+                "model_id": model_id,
+                "started_at": time.time(),
+                "error": None,
+            }
+        )
+
+    def _install() -> None:
+        from adaos.adapters.audio.stt.model_manager import install_vosk_model
+
+        try:
+            with _stt_model_lock:
+                _stt_model_install["state"] = "installing"
+            path = install_vosk_model(
+                model_id,
+                _android_stt_models_root(),
+                local_zip=payload.get("local_zip"),
+                descriptor=descriptor,
+                select=payload.get("select") is not False,
+            )
+            _select_android_stt_model(
+                str((descriptor or get_model_descriptor(model_id)).get("language") or "ru-RU"),
+                model_id,
+            )
+            with _stt_model_lock:
+                _stt_model_install.update(
+                    {"state": "installed", "path": str(path), "completed_at": time.time()}
+                )
+        except Exception as exc:
+            with _stt_model_lock:
+                _stt_model_install.update(
+                    {
+                        "state": "failed",
+                        "error": f"{type(exc).__name__}:{str(exc)[:240]}",
+                        "completed_at": time.time(),
+                    }
+                )
+
+    threading.Thread(target=_install, name="adaos-vosk-model-install", daemon=True).start()
+    with _stt_model_lock:
+        return dict(_stt_model_install)
+
+
+def _select_android_stt_model(language: str, model_id: str) -> dict[str, Any]:
+    from adaos.adapters.audio.stt.model_manager import select_vosk_model
+
+    if _voice_policy is None:
+        raise RuntimeError("voice_policy_not_ready")
+    selection = select_vosk_model(language, model_id, _android_stt_models_root())
+    policy = _voice_policy.read()
+    updated = _voice_policy.configure(
+        {
+            "listening_mode": policy.get("listening_mode"),
+            "stt": {
+                **dict(policy.get("stt") or {}),
+                "language": language,
+                "selected_model_id": model_id,
+            },
+        },
+        source="stt_model_selection",
+    )
+    return {"ok": True, "selection": selection, "policy": updated.get("stt")}
 
 
 def _claim_voice_activation(candidate: dict[str, Any]) -> dict[str, Any]:

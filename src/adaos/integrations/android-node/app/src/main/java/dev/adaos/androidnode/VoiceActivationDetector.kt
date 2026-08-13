@@ -59,13 +59,31 @@ class VoiceActivationDetector(
                 ?.optString("native_detector", "android_on_device_speech")
                 ?: "android_on_device_speech"
             if (!nativeEnabled || mode !in setOf("activation", "continuous") || detector != "audio_record_vad") {
+                val stt = policy.optJSONObject("stt") ?: JSONObject()
+                val providerMode = stt.optString("provider_mode", "system")
+                val activeProvider = if (providerMode == "auto") {
+                    stt.optString("active_provider", "system")
+                } else {
+                    providerMode
+                }
+                val delegatedOwner = when {
+                    !nativeEnabled -> "browser"
+                    activeProvider == "vosk" -> "vosk_streaming"
+                    else -> "android_speech_recognizer"
+                }
                 publishRuntime(
-                    if (mode == "off") "disabled" else if (nativeEnabled) "delegated_native_speech" else "parked_browser_owns_mic",
+                    when {
+                        mode == "off" -> "disabled"
+                        !nativeEnabled -> "parked_browser_owns_mic"
+                        activeProvider == "vosk" -> "delegated_vosk"
+                        else -> "delegated_native_speech"
+                    },
                     JSONObject()
                         .put("listening_mode", mode)
                         .put("native_detector_enabled", nativeEnabled)
                         .put("native_detector", detector)
-                        .put("capture_owner", if (nativeEnabled) "android_speech_recognizer" else "browser"),
+                        .put("capture_owner", delegatedOwner)
+                        .put("stt_provider", activeProvider),
                 )
                 sleepBounded(1000)
                 continue

@@ -87,3 +87,24 @@ def test_catalog_has_verified_mobile_language_choices() -> None:
     assert {item["language"] for item in catalog["models"]} >= {"ru-RU", "en-US"}
     assert all(len(item["archive_sha256"]) == 64 for item in catalog["models"])
 
+
+def test_installed_builtin_uses_current_catalog_policy(tmp_path: Path) -> None:
+    model_id = "vosk-model-small-ru-0.22"
+    model_dir = tmp_path / model_id
+    model_dir.mkdir()
+    (model_dir / model_manager.MODEL_MARKER).write_text(
+        json.dumps(
+            {
+                "id": model_id,
+                "language": "ru-RU",
+                "recommended_min_memory_mb": 1_024,
+                "verification": {"phone": {"verified": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    installed = model_manager.installed_models(tmp_path)
+
+    assert installed[0]["recommended_min_memory_mb"] == 3_072
+    assert installed[0]["verification"]["phone"]["verified"] is True

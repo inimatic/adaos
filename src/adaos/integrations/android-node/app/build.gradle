@@ -6,8 +6,13 @@ plugins {
 def portableRasaPython = layout.buildDirectory.dir("generated/portable-rasa-python")
 
 tasks.register("syncPortableRasaRuntime", Copy) {
-    from(file("../../../services/nlu/portable_rasa.py"))
-    into(portableRasaPython.map { it.dir("adaos/services/nlu") })
+    into(portableRasaPython)
+    into("adaos/services/nlu") {
+        from(file("../../../services/nlu/portable_rasa.py"))
+    }
+    into("adaos/adapters/audio/stt") {
+        from(file("../../../adapters/audio/stt/model_manager.py"))
+    }
 }
 
 android {
@@ -18,8 +23,8 @@ android {
         applicationId = "dev.adaos.androidnode"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.1.0-poc18"
+        versionCode = 19
+        versionName = "0.1.0-poc19"
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -65,4 +70,9 @@ chaquopy {
             src = false
         }
     }
+}
+
+dependencies {
+    implementation "com.alphacephei:vosk-android:0.3.75@aar"
+    implementation "net.java.dev.jna:jna:5.18.1@aar"
 }

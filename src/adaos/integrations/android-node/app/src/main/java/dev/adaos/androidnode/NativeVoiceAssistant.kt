@@ -113,11 +113,18 @@ class NativeVoiceAssistant(
         val policy = readPolicy()
         listeningMode = policy.optString("listening_mode", "activation")
         val activation = policy.optJSONObject("activation") ?: JSONObject()
+        val stt = policy.optJSONObject("stt") ?: JSONObject()
+        val providerMode = stt.optString("provider_mode", "system")
+        val activeProvider = if (providerMode == "auto") {
+            stt.optString("active_provider", "system")
+        } else {
+            providerMode
+        }
         bargeInEnabled = activation.optBoolean("barge_in_enabled", true)
         val backend = activation.optString("native_detector", "android_on_device_speech")
         val enabled = policy.optBoolean("native_detector_enabled", false)
         val configured = enabled && listeningMode in setOf("activation", "continuous") &&
-            backend == "android_on_device_speech"
+            backend == "android_on_device_speech" && activeProvider == "system"
         if (configured && !captureEligible) {
             desired = false
             stopRecognizer()
@@ -235,6 +242,7 @@ class NativeVoiceAssistant(
                 processing = false
                 val accepted = result.optBoolean("accepted", false)
                 val response = result.optString("response", "").trim()
+                val renderHere = result.optBoolean("voice_render_here", false)
                 lastDecision = if (accepted) "accepted" else result.optString("state", "suppressed")
                 if (accepted) acceptedCount += 1 else ignoredCount += 1
                 if (accepted && speaking) {
@@ -253,7 +261,7 @@ class NativeVoiceAssistant(
                         .put("response_source", result.optString("response_source", ""))
                         .put("arbitration", result.optJSONObject("arbitration")),
                 )
-                if (accepted && response.isNotEmpty()) {
+                if (accepted && renderHere && response.isNotEmpty()) {
                     speak(response, result.optString("active_agent_voice", ""))
                 } else {
                     scheduleRestart(if (accepted) 250 else 450)

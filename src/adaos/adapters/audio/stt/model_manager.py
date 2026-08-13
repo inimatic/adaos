@@ -41,7 +41,9 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "archive_bytes": 46_236_750,
         "unpacked_folder": "vosk-model-small-ru-0.22",
         "expected_runtime_memory_mb": 300,
-        "recommended_min_memory_mb": 1_024,
+        # Manual testing remains possible below this gate. Auto migration is
+        # conservative until the dedicated 2 GB physical run is complete.
+        "recommended_min_memory_mb": 3_072,
         "license": "Apache-2.0",
         "platforms": ["android-arm64", "linux", "windows", "macos"],
     },
@@ -56,7 +58,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "archive_bytes": 41_205_931,
         "unpacked_folder": "vosk-model-small-en-us-0.15",
         "expected_runtime_memory_mb": 300,
-        "recommended_min_memory_mb": 1_024,
+        "recommended_min_memory_mb": 3_072,
         "license": "Apache-2.0",
         "platforms": ["android-arm64", "linux", "windows", "macos"],
     },
@@ -154,7 +156,10 @@ def _download(url: str, destination: Path) -> None:
     for candidate in candidates:
         try:
             request = Request(candidate, headers={"User-Agent": "AdaOS/1.0"})
-            with urlopen(request, timeout=60) as response, destination.open("wb") as output:
+            # Model hosts can be deliberately bandwidth-limited.  The timeout
+            # applies to socket operations, so leave enough headroom for a
+            # verified 40-100 MB mobile model on a modest connection.
+            with urlopen(request, timeout=300) as response, destination.open("wb") as output:
                 total = int(response.headers.get("Content-Length") or 0) or None
                 downloaded = 0
                 while True:
@@ -328,7 +333,18 @@ def installed_models(base_dir: Path | str = "models/vosk") -> list[dict[str, Any
         except (OSError, ValueError, TypeError):
             continue
         if isinstance(marker, dict):
-            result.append({**marker, "path": str(marker_path.parent.resolve())})
+            model_id = str(marker.get("id") or marker_path.parent.name).strip().lower()
+            catalog_descriptor = MODEL_CATALOG.get(model_id)
+            # Catalog policy (for example the automatic memory threshold) may
+            # evolve independently from an already-installed archive.  Keep
+            # installation/verification evidence from the marker, but expose
+            # current policy and immutable download metadata from the app.
+            effective = (
+                {**marker, **catalog_descriptor}
+                if catalog_descriptor is not None
+                else marker
+            )
+            result.append({**effective, "path": str(marker_path.parent.resolve())})
     return result
 
 

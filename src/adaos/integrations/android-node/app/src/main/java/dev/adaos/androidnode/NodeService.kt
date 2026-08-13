@@ -16,6 +16,7 @@ class NodeService : Service() {
     private lateinit var pythonHost: PythonHost
     private lateinit var voiceActivationDetector: VoiceActivationDetector
     private lateinit var nativeVoiceAssistant: NativeVoiceAssistant
+    private lateinit var voskVoiceAssistant: VoskVoiceAssistant
     private var stopping = false
     private var stopReason = STOP_REASON_SYSTEM_DESTROY
     private val microphoneOwners = mutableSetOf<String>()
@@ -33,6 +34,10 @@ class NodeService : Service() {
             this,
             filesDir.resolve("adaos"),
         ) { active -> setNativeCaptureActive("speech_recognizer", active) }
+        voskVoiceAssistant = VoskVoiceAssistant(
+            this,
+            filesDir.resolve("adaos"),
+        ) { active -> setNativeCaptureActive("vosk_streaming", active) }
         createNotificationChannel()
     }
 
@@ -58,6 +63,7 @@ class NodeService : Service() {
             voiceActivationDetector.deferUntilUserVisible(startReason)
         }
         nativeVoiceAssistant.start(userVisibleCapture)
+        voskVoiceAssistant.start(userVisibleCapture)
         val current = NodeStateStore.snapshot()
         if (current.phase == NodePhase.STARTING || current.phase == NodePhase.READY) {
             return START_STICKY
@@ -88,6 +94,7 @@ class NodeService : Service() {
                     )
                     voiceActivationDetector.stop()
                     nativeVoiceAssistant.stop()
+                    voskVoiceAssistant.stop()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 },
@@ -107,6 +114,7 @@ class NodeService : Service() {
         }
         voiceActivationDetector.stop()
         nativeVoiceAssistant.stop()
+        voskVoiceAssistant.stop()
         super.onDestroy()
     }
 
@@ -126,6 +134,7 @@ class NodeService : Service() {
         stopReason = reason
         voiceActivationDetector.stop()
         nativeVoiceAssistant.stop()
+        voskVoiceAssistant.stop()
         publish(NodeStatus(NodePhase.STOPPING, "Flushing and stopping Python"))
         pythonHost.stop { result ->
             val detail = result.exceptionOrNull()?.message?.let { "Stopped with warning: $it" }
