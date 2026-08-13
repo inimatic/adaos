@@ -18,6 +18,23 @@ def test_voice_policy_round_trip_and_public_projection(tmp_path, monkeypatch) ->
     assert projection["settings"]["tool"] == "node.voice.configure"
 
 
+def test_stt_provider_policy_starts_with_system_and_is_switchable(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "voice-policy.json"
+    monkeypatch.setenv("ADAOS_VOICE_POLICY_PATH", str(path))
+
+    initial = voice_runtime.read_voice_policy()
+    assert initial["stt"]["provider_mode"] == "system"
+    assert initial["stt"]["active_provider"] == "system"
+
+    updated = voice_runtime.set_voice_policy(
+        listening_mode="activation",
+        source="test",
+        updates={"stt": {"provider_mode": "auto", "language": "en-US"}},
+    )
+    assert updated["stt"]["provider_mode"] == "auto"
+    assert voice_runtime.listening_service_projection(updated)["stt"]["language"] == "en-US"
+
+
 def test_long_form_is_started_by_nlu_and_finished_by_nlu() -> None:
     started = voice_runtime.advance_long_form_session(
         None,

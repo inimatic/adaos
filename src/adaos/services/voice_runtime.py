@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 
 
 LISTENING_MODES = frozenset({"off", "push_to_talk", "continuous", "activation"})
+STT_PROVIDER_MODES = frozenset({"system", "vosk", "auto"})
 LONG_FORM_START_INTENT = "voice.long_form.start"
 LONG_FORM_NOTE_START_INTENT = "voice.long_form.note.start"
 LONG_FORM_DIALOG_START_INTENT = "voice.long_form.dialog.start"
@@ -52,6 +53,13 @@ def normalize_listening_mode(value: Any, *, default: str = "activation") -> str:
     }
     normalized = aliases.get(token, token)
     return normalized if normalized in LISTENING_MODES else default
+
+
+def normalize_stt_provider_mode(value: Any, *, default: str = "system") -> str:
+    token = _text(value).lower().replace("-", "_")
+    aliases = {"native": "system", "on_device": "system", "automatic": "auto"}
+    normalized = aliases.get(token, token)
+    return normalized if normalized in STT_PROVIDER_MODES else default
 
 
 def voice_policy_path() -> Path:
@@ -158,6 +166,14 @@ def default_voice_policy() -> dict[str, Any]:
             "require_address": True,
             "aliases_source": "dialog_agent_registry",
         },
+        "stt": {
+            "provider_mode": "system",
+            "active_provider": "system",
+            "migration_mode": "observe_then_verified_vosk",
+            "language": "ru-RU",
+            "selected_model_id": "",
+            "fallback_provider": "system",
+        },
         "audio_processing": {
             "aec": "required_when_output_active",
             "noise_suppression": True,
@@ -185,7 +201,7 @@ def read_voice_policy() -> dict[str, Any]:
             payload = {}
     policy = default_voice_policy()
     if isinstance(payload, Mapping):
-        for key in ("activation", "audio_processing", "speaker_separation", "room_arbitration"):
+        for key in ("activation", "stt", "audio_processing", "speaker_separation", "room_arbitration"):
             policy[key] = {**_mapping(policy.get(key)), **_mapping(payload.get(key))}
         policy.update(
             {
@@ -195,6 +211,11 @@ def read_voice_policy() -> dict[str, Any]:
             }
         )
     policy["listening_mode"] = normalize_listening_mode(policy.get("listening_mode"))
+    stt = _mapping(policy.get("stt"))
+    stt["provider_mode"] = normalize_stt_provider_mode(stt.get("provider_mode"))
+    if stt["provider_mode"] == "system":
+        stt["active_provider"] = "system"
+    policy["stt"] = stt
     return policy
 
 
@@ -211,10 +232,15 @@ def set_voice_policy(
         if not mode:
             raise ValueError("voice_listening_mode_invalid")
         policy["listening_mode"] = mode
-        for key in ("activation", "audio_processing", "speaker_separation", "room_arbitration"):
+        for key in ("activation", "stt", "audio_processing", "speaker_separation", "room_arbitration"):
             incoming = _mapping(_mapping(updates).get(key))
             if incoming:
                 policy[key] = {**_mapping(policy.get(key)), **incoming}
+        stt = _mapping(policy.get("stt"))
+        stt["provider_mode"] = normalize_stt_provider_mode(stt.get("provider_mode"))
+        if stt["provider_mode"] == "system":
+            stt["active_provider"] = "system"
+        policy["stt"] = stt
         policy["source"] = _text(source) or "device_registry"
         policy["updated_at"] = _now()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +258,7 @@ def listening_service_projection(policy: Mapping[str, Any] | None = None) -> dic
         "listening_mode": normalize_listening_mode(current.get("listening_mode")),
         "modes": sorted(LISTENING_MODES),
         "activation": _mapping(current.get("activation")),
+        "stt": _mapping(current.get("stt")),
         "audio_processing": _mapping(current.get("audio_processing")),
         "speaker_separation": _mapping(current.get("speaker_separation")),
         "room_arbitration": _mapping(current.get("room_arbitration")),
@@ -584,6 +611,7 @@ def audio_processing_report(
 
 __all__ = [
     "LISTENING_MODES",
+    "STT_PROVIDER_MODES",
     "LONG_FORM_START_INTENT",
     "LONG_FORM_NOTE_START_INTENT",
     "LONG_FORM_DIALOG_START_INTENT",
@@ -601,6 +629,7 @@ __all__ = [
     "long_form_sessions_path",
     "new_long_form_state",
     "normalize_listening_mode",
+    "normalize_stt_provider_mode",
     "read_voice_policy",
     "read_long_form_session",
     "set_voice_policy",

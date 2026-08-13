@@ -4,6 +4,9 @@ import io
 import os
 import base64
 import json
+import asyncio
+import threading
+import time
 import wave
 from pathlib import Path
 from typing import Optional
@@ -14,37 +17,122 @@ from adaos.apps.api.auth import require_token
 from adaos.services.agent_context import get_ctx
 
 router = APIRouter(prefix="/stt", tags=["stt"])
+_MODEL_CACHE: dict[str, object] = {}
+_MODEL_CACHE_LOCK = threading.RLock()
 
 
 def _resolve_lang(lang: Optional[str]) -> str:
     raw = (lang or "").strip().lower()
     if raw.startswith("ru"):
-        return "ru-ru"
+        return "ru-RU"
     if raw.startswith("en"):
-        return "en-us"
-    return "ru-ru"
+        return "en-US"
+    return "ru-RU"
 
 
-def _model_dir(target: str) -> Path:
+def _models_root() -> Path:
     ctx = get_ctx()
-    base = Path(ctx.paths.base_dir()) / "models" / "vosk" / target
-    return base
+    return Path(ctx.paths.base_dir()) / "models" / "vosk"
 
 
-def _ensure_model(target: str) -> Path:
-    path = _model_dir(target)
-    if path.exists() and any(path.iterdir()):
+def _ensure_model(language: str, model_id: str | None = None) -> Path:
+    from adaos.adapters.audio.stt.model_manager import resolve_vosk_model
+
+    path = resolve_vosk_model(language, _models_root(), model_id=model_id)
+    if path is not None:
         return path
 
     if os.getenv("ADAOS_VOSK_AUTO_DOWNLOAD", "").strip() == "1":
         from adaos.adapters.audio.stt.model_manager import ensure_vosk_model
 
-        return ensure_vosk_model(target, base_dir=Path(get_ctx().paths.base_dir()) / "models" / "vosk")
+        return ensure_vosk_model(language, base_dir=_models_root(), model_id=model_id)
 
     raise HTTPException(
         status_code=503,
-        detail=f"vosk model not found for '{target}'. Install it under {path} or set ADAOS_VOSK_AUTO_DOWNLOAD=1",
+        detail=f"vosk model not found for '{language}'. Install it through /api/stt/models/install",
     )
+
+
+def _load_model(vosk_module, path: Path):
+    key = str(path.resolve())
+    with _MODEL_CACHE_LOCK:
+        model = _MODEL_CACHE.get(key)
+        if model is None:
+            model = vosk_module.Model(key)
+            _MODEL_CACHE.clear()
+            _MODEL_CACHE[key] = model
+        return model
+
+
+@router.get("/models", dependencies=[Depends(require_token)])
+def stt_models() -> dict:
+    from adaos.adapters.audio.stt.model_manager import installed_models, model_catalog
+
+    return {
+        "ok": True,
+        "provider_modes": ["system", "vosk", "auto"],
+        "default_provider_mode": "system",
+        "auto_activation_rule": "installed_and_verified_on_device",
+        "catalog": model_catalog(),
+        "installed": installed_models(_models_root()),
+    }
+
+
+@router.post("/models/install", dependencies=[Depends(require_token)])
+async def stt_model_install(request: Request) -> dict:
+    from adaos.adapters.audio.stt.model_manager import install_vosk_model
+
+    payload = await request.json()
+    model_id = str(payload.get("model_id") or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id_required")
+    descriptor = payload.get("descriptor") if isinstance(payload.get("descriptor"), dict) else None
+    local_zip = payload.get("local_zip")
+    try:
+        path = await asyncio.to_thread(
+            install_vosk_model,
+            model_id,
+            _models_root(),
+            local_zip=local_zip,
+            descriptor=descriptor,
+            select=payload.get("select") is not False,
+        )
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "model_id": model_id, "path": str(path)}
+
+
+@router.post("/models/select", dependencies=[Depends(require_token)])
+async def stt_model_select(request: Request) -> dict:
+    from adaos.adapters.audio.stt.model_manager import select_vosk_model
+
+    payload = await request.json()
+    try:
+        selection = select_vosk_model(
+            str(payload.get("language") or "ru-RU"),
+            str(payload.get("model_id") or ""),
+            _models_root(),
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "selection": selection}
+
+
+@router.post("/models/verify", dependencies=[Depends(require_token)])
+async def stt_model_verify(request: Request) -> dict:
+    from adaos.adapters.audio.stt.model_manager import mark_model_verified
+
+    payload = await request.json()
+    try:
+        marker = mark_model_verified(
+            str(payload.get("model_id") or ""),
+            _models_root(),
+            device_id=str(payload.get("device_id") or "local"),
+            metrics=payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {},
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "model": marker}
 
 
 def _read_wav_mono16k(data: bytes) -> bytes:
@@ -148,8 +236,7 @@ async def stt_transcribe(
     except Exception as exc:
         raise HTTPException(status_code=501, detail=f"vosk is not available: {exc}")
 
-    target = _resolve_lang(lang)
-    model_path = _ensure_model(target)
+    language = _resolve_lang(lang)
     try:
         body = await request.body()
     except Exception as exc:
@@ -159,13 +246,15 @@ async def stt_transcribe(
     # Content-Type is missing but body looks like JSON).
     obj = _try_parse_json(body)
     if isinstance(obj, dict) and isinstance(obj.get("lang"), str) and obj.get("lang").strip():
-        target = _resolve_lang(obj.get("lang"))
-        model_path = _ensure_model(target)
+        language = _resolve_lang(obj.get("lang"))
+    model_id = str(obj.get("model_id") or "").strip() if isinstance(obj, dict) else ""
+    model_path = _ensure_model(language, model_id=model_id or None)
     body = _decode_audio_from_request(body, ct)
     pcm = _read_wav_mono16k(body)
 
     try:
-        model = vosk.Model(str(model_path))
+        started = time.perf_counter()
+        model = _load_model(vosk, model_path)
         # Use the model-native rate (16k) regardless of input; the frontend
         # encodes 16kHz WAV, and we also accept other rates for debugging.
         rec = vosk.KaldiRecognizer(model, 16000)
@@ -175,7 +264,14 @@ async def stt_transcribe(
 
         res = json.loads(rec.FinalResult() or "{}")
         text = (res.get("text") or "").strip()
-        return {"ok": True, "text": text}
+        return {
+            "ok": True,
+            "text": text,
+            "provider": "vosk",
+            "model_id": model_path.name,
+            "language": language,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
     except HTTPException:
         raise
     except Exception as exc:

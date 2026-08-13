@@ -10,6 +10,7 @@ from typing import Any
 
 
 _MODES = {"off", "push_to_talk", "continuous", "activation"}
+_STT_MODES = {"system", "vosk", "auto"}
 
 
 def _now() -> str:
@@ -21,6 +22,14 @@ def _mode(value: Any) -> str:
     token = {"ptt": "push_to_talk", "wake": "activation", "wake_word": "activation"}.get(token, token)
     if token not in _MODES:
         raise ValueError("voice_listening_mode_invalid")
+    return token
+
+
+def _stt_mode(value: Any) -> str:
+    token = str(value or "system").strip().lower().replace("-", "_")
+    token = {"native": "system", "on_device": "system", "automatic": "auto"}.get(token, token)
+    if token not in _STT_MODES:
+        raise ValueError("voice_stt_provider_mode_invalid")
     return token
 
 
@@ -49,6 +58,14 @@ class AndroidVoicePolicyStore:
                 "require_address": True,
                 "aliases_source": "dialog_agent_registry",
             },
+            "stt": {
+                "provider_mode": "system",
+                "active_provider": "system",
+                "migration_mode": "observe_then_verified_vosk",
+                "language": "ru-RU",
+                "selected_model_id": "",
+                "fallback_provider": "system",
+            },
             "audio_processing": {
                 "aec": "android_acoustic_echo_canceler",
                 "noise_suppression": True,
@@ -72,7 +89,7 @@ class AndroidVoicePolicyStore:
         policy = self.default()
         if isinstance(raw, dict):
             for key, value in raw.items():
-                if key in {"activation", "audio_processing", "speaker_separation", "room_arbitration"} and isinstance(value, dict):
+                if key in {"activation", "stt", "audio_processing", "speaker_separation", "room_arbitration"} and isinstance(value, dict):
                     policy[key] = {**dict(policy.get(key) or {}), **value}
                 else:
                     policy[key] = value
@@ -81,6 +98,12 @@ class AndroidVoicePolicyStore:
         except ValueError:
             policy["listening_mode"] = "activation"
         policy["native_detector_enabled"] = policy.get("native_detector_enabled") is True
+        try:
+            policy["stt"]["provider_mode"] = _stt_mode(policy["stt"].get("provider_mode"))
+        except ValueError:
+            policy["stt"]["provider_mode"] = "system"
+        if policy["stt"]["provider_mode"] == "system":
+            policy["stt"]["active_provider"] = "system"
         return policy
 
     def configure(self, payload: dict[str, Any], *, source: str) -> dict[str, Any]:
@@ -89,10 +112,13 @@ class AndroidVoicePolicyStore:
             policy["listening_mode"] = _mode(payload.get("listening_mode") or payload.get("mode"))
             if "native_detector_enabled" in payload:
                 policy["native_detector_enabled"] = payload.get("native_detector_enabled") is True
-            for key in ("activation", "audio_processing", "speaker_separation", "room_arbitration"):
+            for key in ("activation", "stt", "audio_processing", "speaker_separation", "room_arbitration"):
                 value = payload.get(key)
                 if isinstance(value, dict):
                     policy[key] = {**dict(policy.get(key) or {}), **value}
+            policy["stt"]["provider_mode"] = _stt_mode(policy["stt"].get("provider_mode"))
+            if policy["stt"]["provider_mode"] == "system":
+                policy["stt"]["active_provider"] = "system"
             policy["source"] = str(source or "device_registry")
             policy["updated_at"] = _now()
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +136,7 @@ class AndroidVoicePolicyStore:
             "modes": sorted(_MODES),
             "native_detector_enabled": policy["native_detector_enabled"],
             "activation": dict(policy.get("activation") or {}),
+            "stt": dict(policy.get("stt") or {}),
             "audio_processing": dict(policy.get("audio_processing") or {}),
             "speaker_separation": dict(policy.get("speaker_separation") or {}),
             "room_arbitration": dict(policy.get("room_arbitration") or {}),
