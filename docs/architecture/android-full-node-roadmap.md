@@ -14,6 +14,9 @@ PoC19 artifact adds a switchable system/Vosk/auto policy, verified multilingual
 model catalog, continuous native PCM path, AEC, explicit render ownership, and
 compact communication-route UI. Vosk runs on the physical Samsung; reliability,
 accuracy comparison, Hub/CDN delivery, and the 2 GB memory gate remain open. The
+PoC20 artifact adds a registry-driven, grammar-biased wake decoder alongside
+free-form Vosk transcription; its deterministic acoustic gate passes, while a
+natural-speaker command set and false-activation run remain open. The
 phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -1055,6 +1058,28 @@ full-duplex barge-in, or the `auto` promotion gate.
 
 The installed debug artifact is 33,565,262 bytes with SHA-256
 `410196a635146e41c6913ec5ca5ec1571aefebd490a77e4e66d39a4626f8faf6`.
+
+## PoC20 Extension: Separate Wake Detection
+
+- [x] reproduce the silent failure without a node, Hub, Rasa, or TTS failure:
+  the compact full-vocabulary decoder rendered «Ада» as «а если», so the exact
+  address gate correctly rejected the turn;
+- [x] export wake aliases from the canonical dialog-agent registry to an atomic
+  Android data file instead of embedding assistant names in capture code;
+- [x] feed the same PCM stream to a grammar-biased wake recognizer and the
+  existing free-form command recognizer;
+- [x] accept the wake result only as a trusted `vosk_streaming` activation hint;
+  retain room arbitration, NLU, and TTS ownership checks;
+- [x] build and install `0.1.0-poc20` on the API 36 Samsung; a control command
+  produced one wake detection, one admitted turn and one response with no
+  capture error or dropped utterance;
+- [ ] repeat a fixed natural-speaker set for Ада, Арсений, Ника, Мира and
+  Строитель, and record misses and false activations;
+- [ ] measure the second decoder's steady memory/CPU cost and run the six-hour
+  background/TTS test.
+
+The installed PoC20 debug APK is 33,177,221 bytes with SHA-256
+`7190015c8b43c64975dd6e05c07db3905e0db3c82d231dfdf1bd00f06062b3aa`.
 
 ## Dependency Work Queue
 
