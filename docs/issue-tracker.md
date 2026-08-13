@@ -1,6 +1,6 @@
 # Issue Tracker
 
-Snapshot: 2026-08-06.
+Snapshot: 2026-08-13.
 
 This document contains only active AdaOS execution work. Architecture,
 sequencing, and milestone completion are owned by the documents listed in the
@@ -64,7 +64,8 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `HMG-007` | open | Preserve correlation/generation IDs and reject guard behavior that hides overload rather than reducing it. | [Runtime Guarding](architecture/runtime-guarding.md) |
 | `ROOT-MCP-TARGET` / `F3M-006A` / `F3M-006C` | open | Keep selectors out of managed target IDs and separate direct remote MCP health from bearer validity with deployed-session evidence. | [Root MCP Roadmap](architecture/root-mcp-roadmap.md) |
 | `ROOT-PUBLIC-SPLIT` / `F3M-006D` | open | Separate public bearer/bootstrap/Codex surfaces from mTLS API surfaces and add deploy smoke for both hosts. | [Security](architecture/security.md), [Root MCP Roadmap](architecture/root-mcp-roadmap.md) |
-| `RT-DIAGNOSTICS` / `F3M-002` / `F3M-010` | conditional | Add compact route-timeout summaries and prevent raw diagnostic probes from superseding live runtime connections when the symptom is reproducible. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
+| `RT-DIAGNOSTICS` / `F3M-002` / `F3M-010` | ready for stand | The reproduced sidecar/direct-WSS incident now has identity-aware control-port readiness, protocol roundtrip liveness, bounded process/network-I/O lookback, and durable incident persistence. Prove on the target stand that readiness creates no NATS session and that an outbound-only direct WSS session is not recycled by raw-RX idleness. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
+| `RT-POST-INCIDENT-001` / `LRLT-008` | queued | After deploying the transport hardening, run a correlated node/Root fault and soak campaign, then repeat the log analysis. Preserve a run id and aligned node, sidecar, Root HTTP/nginx/NATS, incident-registry, clock-offset, and process CPU/RSS/disk/network-I/O evidence for at least six minutes before and after the fault. Explicitly evaluate skill activity, subprocesses, and large downloads as possible contributors; verify direct WSS stays healthy, sidecar projects `standby`, and controlled failback creates no competing remote sessions. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 | `UI-RT-001` | in progress | Group repeated UI contract issues for diagnosis and prove the standard skill-log path can read the node-side UI runtime tail on stand. | [UI Runtime Diagnostics](architecture/ui-runtime-diagnostics.md) |
 | `NER-001` | in progress | Complete the canonical read model across device, node, workspace, scenario, skill, and manifest sources. | [Named Entities](architecture/named-entities.md), [NLU Roadmap](architecture/nlu-roadmap.md) |
 | `NER-005` | in progress | Finish authoritative lifecycle/conflict events and use `entity.registry.changed` as the shared invalidation signal. | [Operational Event Model](architecture/operational-event-model-roadmap.md) |
@@ -95,7 +96,6 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `BUILDER-AUTONOMOUS-REPRODUCTION` | Resume only after the non-Builder pipeline has also passed human Web/Telegram acceptance and a separate characterization plan prevents self-hosting regressions. | [Builder Roadmap](architecture/builder-roadmap.md) |
 | `BUILDER-MODULE-DECOMPOSITION` | Resume under a separate characterization-test plan after MVP behavior is stable. | [Builder Roadmap](architecture/builder-roadmap.md) |
 | `UILOG-LLM-DEBUG-WORKFLOW` | Resume when the governed Builder repair loop consumes skill-scoped diagnostics. | [Governed Evolution Roadmap](architecture/governed-evolution-roadmap.md) |
-| `RT-SYMPTOM-REOPEN` / `LRLT-008` | Reopen only if a new run reproduces NATS/route/Yjs/event-loop symptoms with a run id and correlated evidence. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 
 ## Evidence Rules
 

@@ -535,6 +535,11 @@ Make readiness and degradation visible before changing protocol ownership.
   source in diagnostics.
 - [ ] `[should]` Keep remote and direct hub diagnostics consistent when
   browser is connected to `:8777`.
+- [x] `[should]` Keep a bounded pre-incident process CPU/RSS/I/O and system
+  network/disk-I/O history, and persist it with hub-root transport failures.
+- [ ] `[should]` Complete `RT-POST-INCIDENT-001`: repeat the correlated
+  node/Root log analysis after deployment and explicitly assess skills,
+  subprocesses, and large downloads in the pre-failure window.
 
 ### Candidate code areas
 
@@ -781,8 +786,16 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   and an independent watchdog rearms a missing bridge task.
 - [x] `[must]` Preserve transparent NATS byte-stream integrity. Sidecar does
   not synthesize application-level NATS keepalive commands; protocol keepalive
-  stays with the runtime NATS client and transport liveness uses WebSocket
-  control ping/pong.
+  stays with the runtime NATS client and end-to-end liveness uses bounded NATS
+  protocol roundtrips rather than raw inbound-frame idleness.
+- [x] `[must]` Probe sidecar readiness through the identity-aware loopback
+  control endpoint. PID fallback remains non-invasive; a raw connection to the
+  NATS listener is an explicit legacy opt-in and cannot be the default probe.
+- [x] `[must]` Treat a connected direct WSS fallback as the effective transport
+  and project the idle sidecar as `standby`, not as a failed remote session.
+- [ ] `[must]` Prove controlled direct-WSS-to-sidecar failback on the target
+  stand after the stable window and quarantine expiry, with no competing
+  remote sessions and bounded subscription recovery.
 - [x] `[must]` Stop automatic oscillation between a healthy local sidecar
   listener and direct WSS after transient remote EOF. Direct fallback is used
   when the listener is unavailable; transient failover is explicit opt-in.

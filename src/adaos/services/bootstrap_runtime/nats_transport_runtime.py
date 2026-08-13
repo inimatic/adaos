@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json as _json
 import logging
@@ -39,6 +40,10 @@ from adaos.services.hub_root_outbox_store import (
     load_outbox_items,
     outbox_store_path,
     save_outbox_items,
+)
+from adaos.services.incident_registry import (
+    capture_process_activity_sample,
+    record_hub_root_transport_incident,
 )
 from adaos.services.nats_config import (
     nats_url_uses_websocket,
@@ -123,6 +128,88 @@ def _sidecar_tail_summary(lines: list[str], *, max_chars: int = 480) -> str:
     if len(last) > limit:
         last = f"{last[:limit]}..."
     return last
+
+
+class _ControlledSidecarFailback(RuntimeError):
+    pass
+
+
+async def _probe_nats_protocol_roundtrip(nc: Any, *, timeout_s: float) -> dict[str, Any]:
+    """Verify bidirectional NATS progress without leaving a cancelled PONG waiter."""
+
+    started_at = time.monotonic()
+    attempt_total = int(getattr(nc, "_adaos_roundtrip_attempt_total", 0) or 0) + 1
+    setattr(nc, "_adaos_roundtrip_attempt_total", attempt_total)
+    send_ping = getattr(nc, "_send_ping", None)
+    flush = getattr(nc, "flush", None)
+    if not callable(send_ping) and not callable(flush):
+        error = RuntimeError("NATS client does not expose a roundtrip primitive")
+        setattr(nc, "_adaos_roundtrip_failure_total", int(getattr(nc, "_adaos_roundtrip_failure_total", 0) or 0) + 1)
+        setattr(nc, "_adaos_roundtrip_consecutive_failures", int(getattr(nc, "_adaos_roundtrip_consecutive_failures", 0) or 0) + 1)
+        setattr(nc, "_adaos_last_roundtrip_error", f"{type(error).__name__}: {error}")
+        setattr(nc, "_adaos_last_roundtrip_error_at", time.monotonic())
+        return {"ok": False, "error": error, "duration_s": 0.0}
+
+    try:
+        bounded_timeout = max(0.1, float(timeout_s))
+        if callable(send_ping):
+            pong_waiter = asyncio.get_running_loop().create_future()
+            await send_ping(pong_waiter)
+            done, _pending = await asyncio.wait((pong_waiter,), timeout=bounded_timeout)
+            if pong_waiter not in done:
+                # nats-py flush() cancels its waiter but leaves it in `_pongs`;
+                # a later PONG then raises InvalidStateError in the read loop.
+                # Remove our waiter before cancelling it so a late PONG is
+                # ignored instead of corrupting the active connection.
+                pongs = getattr(nc, "_pongs", None)
+                if isinstance(pongs, list):
+                    with contextlib.suppress(ValueError):
+                        pongs.remove(pong_waiter)
+                pong_waiter.cancel()
+                raise asyncio.TimeoutError("NATS protocol roundtrip timed out")
+            await pong_waiter
+        else:
+            await asyncio.wait_for(flush(timeout=bounded_timeout), timeout=bounded_timeout + 0.5)
+    except Exception as exc:
+        finished_at = time.monotonic()
+        failures = int(getattr(nc, "_adaos_roundtrip_failure_total", 0) or 0) + 1
+        consecutive = int(getattr(nc, "_adaos_roundtrip_consecutive_failures", 0) or 0) + 1
+        setattr(nc, "_adaos_roundtrip_failure_total", failures)
+        setattr(nc, "_adaos_roundtrip_consecutive_failures", consecutive)
+        setattr(nc, "_adaos_last_roundtrip_error", f"{type(exc).__name__}: {exc}")
+        setattr(nc, "_adaos_last_roundtrip_error_at", finished_at)
+        return {"ok": False, "error": exc, "duration_s": finished_at - started_at}
+
+    finished_at = time.monotonic()
+    setattr(nc, "_adaos_roundtrip_success_total", int(getattr(nc, "_adaos_roundtrip_success_total", 0) or 0) + 1)
+    setattr(nc, "_adaos_roundtrip_consecutive_failures", 0)
+    setattr(nc, "_adaos_last_roundtrip_ok_at", finished_at)
+    setattr(nc, "_adaos_last_roundtrip_duration_s", finished_at - started_at)
+    setattr(nc, "_adaos_last_roundtrip_error", None)
+    transport = getattr(nc, "_transport", None)
+    if transport is not None:
+        setattr(transport, "_adaos_last_protocol_roundtrip_at", finished_at)
+    return {"ok": True, "error": None, "duration_s": finished_at - started_at}
+
+
+def _sidecar_failback_due(
+    *,
+    selected_server: str | None,
+    local_sidecar_url: str,
+    connected_for_s: float,
+    stable_window_s: float,
+    local_ready: bool,
+    quarantine_until: float,
+    now_monotonic: float,
+) -> bool:
+    selected = str(selected_server or "").strip().lower()
+    return bool(
+        selected.startswith(("ws://", "wss://"))
+        and str(local_sidecar_url or "").strip()
+        and local_ready
+        and float(connected_for_s) >= max(5.0, float(stable_window_s))
+        and float(now_monotonic) >= float(quarantine_until or 0.0)
+    )
 
 
 async def _run_nats_root_transport(
@@ -828,6 +915,15 @@ async def _run_nats_root_transport(
                                     return None
                                 return None
 
+                            def _nc_ago(attr: str) -> float | None:
+                                try:
+                                    value = getattr(nc_for_diag, attr, None)
+                                    if isinstance(value, (int, float)):
+                                        return round(now_mono - float(value), 3)
+                                except Exception:
+                                    return None
+                                return None
+
                             connected_attr = getattr(nc_for_diag, "is_connected", None)
                             closed_attr = getattr(nc_for_diag, "is_closed", None)
                             connect_url = server if server is not None else nats_last_server
@@ -849,6 +945,25 @@ async def _run_nats_root_transport(
                                 "ws_closed": getattr(ws, "closed", None) if ws is not None else None,
                                 "ws_close_code": getattr(ws, "close_code", None) if ws is not None else None,
                                 "last_rx_ago_s": _ago("_adaos_last_rx_at"),
+                                "last_protocol_roundtrip_ago_s": _nc_ago("_adaos_last_roundtrip_ok_at"),
+                                "protocol_roundtrip_attempt_total": int(
+                                    getattr(nc_for_diag, "_adaos_roundtrip_attempt_total", 0) or 0
+                                ),
+                                "protocol_roundtrip_success_total": int(
+                                    getattr(nc_for_diag, "_adaos_roundtrip_success_total", 0) or 0
+                                ),
+                                "protocol_roundtrip_failure_total": int(
+                                    getattr(nc_for_diag, "_adaos_roundtrip_failure_total", 0) or 0
+                                ),
+                                "protocol_roundtrip_consecutive_failures": int(
+                                    getattr(nc_for_diag, "_adaos_roundtrip_consecutive_failures", 0) or 0
+                                ),
+                                "last_protocol_roundtrip_duration_s": getattr(
+                                    nc_for_diag, "_adaos_last_roundtrip_duration_s", None
+                                ),
+                                "last_protocol_roundtrip_error": getattr(
+                                    nc_for_diag, "_adaos_last_roundtrip_error", None
+                                ),
                                 "last_tx_ago_s": _ago("_adaos_last_tx_at"),
                                 "last_ping_rx_ago_s": _ago("_adaos_last_ping_rx_at"),
                                 "last_pong_tx_ago_s": _ago("_adaos_last_pong_tx_at"),
@@ -1725,6 +1840,18 @@ async def _run_nats_root_transport(
                         try:
                             # Expose for external forced reconnect requests (debug/ops).
                             service._hub_root_nc = nc
+                        except Exception:
+                            pass
+                        bridge_connected_at = time.monotonic()
+                        last_roundtrip_probe_at = bridge_connected_at
+                        last_sidecar_failback_probe_at = 0.0
+                        try:
+                            setattr(nc, "_adaos_last_roundtrip_ok_at", bridge_connected_at)
+                            setattr(nc, "_adaos_roundtrip_attempt_total", 0)
+                            setattr(nc, "_adaos_roundtrip_success_total", 0)
+                            setattr(nc, "_adaos_roundtrip_failure_total", 0)
+                            setattr(nc, "_adaos_roundtrip_consecutive_failures", 0)
+                            setattr(nc, "_adaos_last_roundtrip_error", None)
                         except Exception:
                             pass
 
@@ -2753,11 +2880,25 @@ async def _run_nats_root_transport(
                 # keep task alive
                 try:
                     last_watchdog_tick_at = time.monotonic()
+                    last_process_activity_sample_at = 0.0
                     while True:
                         await asyncio.sleep(1.0)
                         now = time.monotonic()
                         tick_gap = now - last_watchdog_tick_at
                         last_watchdog_tick_at = now
+                        try:
+                            process_sample_interval_s = max(
+                                5.0,
+                                float(os.getenv("HUB_NATS_PROCESS_SAMPLE_S", "15") or "15"),
+                            )
+                        except Exception:
+                            process_sample_interval_s = 15.0
+                        if (now - last_process_activity_sample_at) >= process_sample_interval_s:
+                            last_process_activity_sample_at = now
+                            try:
+                                await asyncio.to_thread(capture_process_activity_sample)
+                            except Exception:
+                                pass
                         try:
                             await asyncio.to_thread(
                                 _write_nats_ws_diag_file,
@@ -2788,6 +2929,124 @@ async def _run_nats_root_transport(
                                     setattr(tr, "_adaos_last_rx_at", now)
                             except Exception:
                                 pass
+                        try:
+                            roundtrip_interval_s = float(
+                                os.getenv("HUB_NATS_ROUNDTRIP_PROBE_S", "30") or "30"
+                            )
+                        except Exception:
+                            roundtrip_interval_s = 30.0
+                        roundtrip_enabled = roundtrip_interval_s > 0.0
+                        if roundtrip_enabled and (now - last_roundtrip_probe_at) >= max(5.0, roundtrip_interval_s):
+                            last_roundtrip_probe_at = now
+                            try:
+                                roundtrip_timeout_s = float(
+                                    os.getenv("HUB_NATS_ROUNDTRIP_TIMEOUT_S", "5") or "5"
+                                )
+                            except Exception:
+                                roundtrip_timeout_s = 5.0
+                            try:
+                                roundtrip_failure_limit = int(
+                                    os.getenv("HUB_NATS_ROUNDTRIP_FAILURES", "1") or "1"
+                                )
+                            except Exception:
+                                roundtrip_failure_limit = 1
+                            roundtrip_failure_limit = max(1, min(roundtrip_failure_limit, 5))
+                            previous_failures = int(
+                                getattr(nc, "_adaos_roundtrip_consecutive_failures", 0) or 0
+                            )
+                            roundtrip = await _probe_nats_protocol_roundtrip(
+                                nc,
+                                timeout_s=max(0.2, roundtrip_timeout_s),
+                            )
+                            if roundtrip.get("ok"):
+                                if previous_failures:
+                                    record_hub_root_transport_event(
+                                        "liveness_recovered",
+                                        transport=_hub_root_transport_kind(nats_last_server),
+                                        server=nats_last_server,
+                                        summary="hub-root NATS protocol roundtrip recovered",
+                                        details={
+                                            "previous_consecutive_failures": previous_failures,
+                                            "duration_s": round(float(roundtrip.get("duration_s") or 0.0), 3),
+                                        },
+                                    )
+                            else:
+                                consecutive_failures = int(
+                                    getattr(nc, "_adaos_roundtrip_consecutive_failures", 0) or 0
+                                )
+                                error = roundtrip.get("error")
+                                record_hub_root_transport_event(
+                                    "liveness_probe_failed",
+                                    transport=_hub_root_transport_kind(nats_last_server),
+                                    server=nats_last_server,
+                                    summary="hub-root NATS protocol roundtrip failed",
+                                    error=f"{type(error).__name__}: {error}" if error is not None else None,
+                                    details={
+                                        "consecutive_failures": consecutive_failures,
+                                        "failure_limit": roundtrip_failure_limit,
+                                        "timeout_s": max(0.2, roundtrip_timeout_s),
+                                    },
+                                )
+                                if consecutive_failures >= roundtrip_failure_limit:
+                                    _msg = (
+                                        "[hub-io] nats watchdog: protocol roundtrip failed "
+                                        f"{consecutive_failures} consecutive times"
+                                    )
+                                    _emit_down(
+                                        kind="watchdog.protocol_roundtrip",
+                                        err=error if isinstance(error, Exception) else None,
+                                    )
+                                    raise RuntimeError(_msg) from error
+
+                        failback_enabled = _env_truthy(
+                            os.getenv("HUB_NATS_SIDECAR_FAILBACK_ENABLE"),
+                            default=True,
+                        )
+                        if (
+                            failback_enabled
+                            and realtime_enabled
+                            and (now - last_sidecar_failback_probe_at) >= 5.0
+                        ):
+                            last_sidecar_failback_probe_at = now
+                            try:
+                                failback_stable_s = float(
+                                    os.getenv("HUB_NATS_SIDECAR_FAILBACK_STABLE_S", "120") or "120"
+                                )
+                            except Exception:
+                                failback_stable_s = 120.0
+                            local_sidecar_url = realtime_sidecar_local_url()
+                            selected_is_direct = str(nats_last_server or "").strip().lower().startswith(
+                                ("ws://", "wss://")
+                            )
+                            local_ready = False
+                            if selected_is_direct and (now - bridge_connected_at) >= max(5.0, failback_stable_s):
+                                local_ready = await probe_realtime_sidecar_ready(
+                                    host=realtime_sidecar_host(),
+                                    port=realtime_sidecar_port(),
+                                    timeout_s=0.75,
+                                )
+                            if _sidecar_failback_due(
+                                selected_server=nats_last_server,
+                                local_sidecar_url=local_sidecar_url,
+                                connected_for_s=now - bridge_connected_at,
+                                stable_window_s=failback_stable_s,
+                                local_ready=local_ready,
+                                quarantine_until=float(nats_server_quarantine_until.get(local_sidecar_url, 0.0)),
+                                now_monotonic=now,
+                            ):
+                                record_hub_root_transport_event(
+                                    "failback_started",
+                                    transport="sidecar",
+                                    server=local_sidecar_url,
+                                    summary="controlled failback from direct WSS to local sidecar started",
+                                    details={
+                                        "previous_server": nats_last_server,
+                                        "stable_for_s": round(now - bridge_connected_at, 3),
+                                    },
+                                )
+                                raise _ControlledSidecarFailback(
+                                    "controlled failback from direct WSS to local sidecar"
+                                )
                         # Watchdog: nats-py can silently lose its internal loops on unexpected WS/control frames
                         # (or other exceptions), leaving the socket open but the client effectively dead.
                         # If any core task terminates unexpectedly, restart the bridge.
@@ -2856,8 +3115,9 @@ async def _run_nats_root_transport(
                             raise
                         except Exception:
                             pass
-                        # RX watchdog: if we stop receiving WS frames (including keepalives) for too long,
-                        # treat the connection as dead even if `nc.is_closed()` is still False.
+                        # Raw RX idleness is diagnostic only when protocol roundtrips are enabled. A
+                        # valid NATS connection can be outbound-only for long periods, so raw frame
+                        # timing alone must not tear it down.
                         try:
                             if skip_rx_watchdog:
                                 raise StopIteration()
@@ -2870,9 +3130,16 @@ async def _run_nats_root_transport(
                                     rx_timeout_s = 90.0
                                 if rx_timeout_s >= 10.0 and (time.monotonic() - float(last_rx)) > rx_timeout_s:
                                     _idle = time.monotonic() - float(last_rx)
-                                    _msg = f"[hub-io] nats watchdog: no RX for {_idle:.1f}s (timeout={rx_timeout_s:.1f}s)"
-                                    _rl_log("nats.watchdog", _msg, every_s=1.0)
-                                    raise RuntimeError(_msg)
+                                    if roundtrip_enabled:
+                                        _msg = (
+                                            f"[hub-io] nats watchdog: raw RX idle for {_idle:.1f}s "
+                                            "while protocol roundtrip watchdog remains authoritative"
+                                        )
+                                        _rl_log("nats.watchdog.raw_rx_idle", _msg, every_s=60.0)
+                                    else:
+                                        _msg = f"[hub-io] nats watchdog: no RX for {_idle:.1f}s (timeout={rx_timeout_s:.1f}s)"
+                                        _rl_log("nats.watchdog", _msg, every_s=1.0)
+                                        raise RuntimeError(_msg)
                         except StopIteration:
                             pass
                         except RuntimeError:
@@ -3426,10 +3693,77 @@ async def _run_nats_root_transport(
                         continue
                     except Exception as e:
                         ran_for_s = time.monotonic() - started_at
-                        is_transient = is_transient_nats_error(e)
+                        controlled_failback = isinstance(e, _ControlledSidecarFailback)
+                        is_transient = False if controlled_failback else is_transient_nats_error(e)
                         error_summary = nats_error_summary(e)
                         try:
-                            if is_transient:
+                            incident_capture_interval_s = max(
+                                5.0,
+                                float(os.getenv("HUB_NATS_INCIDENT_CAPTURE_S", "30") or "30"),
+                            )
+                        except Exception:
+                            incident_capture_interval_s = 30.0
+                        incident_capture_now = time.monotonic()
+                        last_incident_capture_at = float(
+                            getattr(service, "_hub_root_last_incident_capture_at", 0.0) or 0.0
+                        )
+                        capture_incident = bool(
+                            not controlled_failback
+                            and (incident_capture_now - last_incident_capture_at) >= incident_capture_interval_s
+                        )
+                        if capture_incident:
+                            setattr(service, "_hub_root_last_incident_capture_at", incident_capture_now)
+                            incident_event = "transient_disconnect" if is_transient else "supervisor_error"
+                            incident_server = _resolve_nats_log_server(
+                                current_attempt=nats_attempt_server,
+                                connected_server=nats_last_server,
+                            )
+                            incident_details = {
+                                "exception_type": type(e).__name__,
+                                "ran_for_s": round(ran_for_s, 3),
+                                "ws_tag": ws_connect_tag,
+                                "last_transport": last_ws_transport,
+                            }
+
+                            async def _persist_transport_incident(
+                                event: str = incident_event,
+                                server: str | None = incident_server,
+                                error: str = error_summary,
+                                details: dict[str, Any] = incident_details,
+                            ) -> None:
+                                await asyncio.to_thread(
+                                    record_hub_root_transport_incident,
+                                    event=event,
+                                    server=server,
+                                    error=error,
+                                    details=details,
+                                )
+
+                            try:
+                                incident_task = asyncio.create_task(
+                                    _persist_transport_incident(),
+                                    name="adaos-hub-root-incident-persist",
+                                )
+                                incident_tasks = getattr(service, "_hub_root_incident_tasks", None)
+                                if not isinstance(incident_tasks, set):
+                                    incident_tasks = set()
+                                    setattr(service, "_hub_root_incident_tasks", incident_tasks)
+                                incident_tasks.add(incident_task)
+                                incident_task.add_done_callback(incident_tasks.discard)
+                            except Exception:
+                                pass
+                        try:
+                            if controlled_failback:
+                                service._log.info(
+                                    "nats controlled sidecar failback hub_id=%s previous_server=%s ran_for_s=%.1f",
+                                    hub_id,
+                                    _resolve_nats_log_server(
+                                        current_attempt=nats_attempt_server,
+                                        connected_server=nats_last_server,
+                                    ),
+                                    ran_for_s,
+                                )
+                            elif is_transient:
                                 service._log.warning(
                                     "nats transient disconnect hub_id=%s server=%s type=%s err=%s ran_for_s=%.1f",
                                     hub_id,
@@ -3455,7 +3789,7 @@ async def _run_nats_root_transport(
                         except Exception:
                             pass
                         try:
-                            if not is_transient:
+                            if not is_transient and not controlled_failback:
                                 service._log.warning(
                                     "nats encountered error hub_id=%s server=%s type=%s err=%s",
                                     hub_id,
@@ -3469,7 +3803,9 @@ async def _run_nats_root_transport(
                         except Exception:
                             pass
                         try:
-                            if os.getenv("HUB_NATS_VERBOSE", "0") == "1" or not is_transient:
+                            if not controlled_failback and (
+                                os.getenv("HUB_NATS_VERBOSE", "0") == "1" or not is_transient
+                            ):
                                 print(f"[hub-io] nats: encountered error: {error_summary}")
                         except Exception:
                             pass

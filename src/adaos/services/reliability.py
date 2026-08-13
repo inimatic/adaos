@@ -863,7 +863,15 @@ def record_hub_root_transport_event(
         if evt in {"connected", "ready", "reconnected"}:
             state["last_connected_at"] = ts
             state["last_error"] = ""
-        if evt in {"connect_failed", "down", "disconnected", "watchdog_error", "supervisor_error", "reader_terminated"}:
+        if evt in {
+            "connect_failed",
+            "down",
+            "disconnected",
+            "watchdog_error",
+            "supervisor_error",
+            "reader_terminated",
+            "liveness_probe_failed",
+        }:
             state["last_failure_at"] = ts
         state["updated_at"] = ts
         _HUB_ROOT_TRANSPORT_HISTORY.append(record)
@@ -877,6 +885,7 @@ def _hub_root_transport_assessment(history: list[dict[str, Any]], *, now_ts: flo
         "watchdog_error",
         "supervisor_error",
         "reader_terminated",
+        "liveness_probe_failed",
     }
     connect_events = {"connected", "ready", "reconnected"}
     threshold_5m = now_ts - 300.0
@@ -4628,6 +4637,27 @@ def sidecar_runtime_snapshot(
         "selected_server": transport_strategy.get("selected_server"),
         "last_transport_event": transport_strategy.get("last_event"),
     }
+    selected_server = str(transport_strategy.get("selected_server") or "").strip()
+    direct_fallback_active = False
+    if selected_server.lower().startswith(("ws://", "wss://")):
+        for event in reversed(list(transport_strategy.get("recent_events") or [])):
+            if not isinstance(event, dict) or str(event.get("server") or "").strip() != selected_server:
+                continue
+            event_name = str(event.get("event") or "").strip().lower()
+            if event_name in {"connected", "ready", "reconnected", "liveness_recovered"}:
+                direct_fallback_active = True
+                break
+            if event_name in {
+                "connect_failed",
+                "down",
+                "disconnected",
+                "watchdog_error",
+                "supervisor_error",
+                "reader_terminated",
+                "liveness_probe_failed",
+            }:
+                break
+    transport_owner = "runtime" if direct_fallback_active else "sidecar" if enabled else "runtime"
     try:
         process_snapshot = realtime_sidecar_listener_snapshot(role=role)
     except TypeError:
@@ -4651,7 +4681,7 @@ def sidecar_runtime_snapshot(
     route_ready = _sidecar_route_tunnel_state(enabled=enabled, entry=ws_route_contract)
     sync_ready = _sidecar_route_tunnel_state(enabled=enabled, entry=yws_route_contract)
     delegations = {
-        "hub_root_transport": bool(enabled),
+        "hub_root_transport": bool(enabled and not direct_fallback_active),
         "route_tunnel_transport": str(ws_route_contract.get("current_owner") or "").strip().lower() == "sidecar",
         "sync_transport": str(yws_route_contract.get("current_owner") or "").strip().lower() == "sidecar",
         "media_transport": False,
@@ -4694,9 +4724,17 @@ def sidecar_runtime_snapshot(
         status_reason = str(classification.get("status_reason") or summary)
         remote_session_state = str(classification.get("remote_session_state") or "unknown")
         transport_ready = bool(classification.get("transport_ready"))
+        if direct_fallback_active:
+            status = "standby"
+            summary = "sidecar is ready on loopback while direct WSS carries hub-root traffic"
+            session_state = "standby"
+            status_reason = "direct WSS fallback is active; sidecar is awaiting controlled failback"
+            remote_session_state = "standby"
         control_authority = hub_root_protocol.get("control_authority") if isinstance(hub_root_protocol.get("control_authority"), dict) else {}
         control_authority_state = str(control_authority.get("state") or "").strip().lower()
-        if not transport_ready:
+        if direct_fallback_active:
+            control_ready = "delegated"
+        elif not transport_ready:
             control_ready = "down"
         elif control_authority_state in {"fresh", "aging"}:
             control_ready = "ready"
@@ -4729,7 +4767,7 @@ def sidecar_runtime_snapshot(
             "enabled": enabled,
             "enablement": enablement,
             "phase": "nats_transport_sidecar",
-            "transport_owner": "sidecar" if enabled else "runtime",
+            "transport_owner": transport_owner,
             "lifecycle_manager": lifecycle_manager,
             "ownership_boundary": "transport_only",
             "ownership": ownership,
@@ -4758,11 +4796,19 @@ def sidecar_runtime_snapshot(
             "last_diag": record,
         }
 
+    if direct_fallback_active:
+        status = "standby"
+        summary = "sidecar is ready on loopback while direct WSS carries hub-root traffic"
+        session_state = "standby"
+        status_reason = "direct WSS fallback is active; sidecar is awaiting controlled failback"
+        remote_session_state = "standby"
+        control_ready = "delegated"
+
     return {
         "enabled": enabled,
         "enablement": enablement,
         "phase": "nats_transport_sidecar",
-        "transport_owner": "sidecar" if enabled else "runtime",
+        "transport_owner": transport_owner,
         "lifecycle_manager": lifecycle_manager,
         "ownership_boundary": "transport_only",
         "ownership": ownership,
@@ -6032,6 +6078,7 @@ def _connectivity_snapshot(
 
 def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
     runtime = sync_runtime if isinstance(sync_runtime, dict) else {}
+    diagnostic_timed_out = bool(runtime.get("_timed_out"))
     assessment = runtime.get("assessment") if isinstance(runtime.get("assessment"), dict) else {}
     transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
     selected_webspace = (
@@ -6170,6 +6217,11 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
         if semantic_state == "stale"
         else semantic_state
     )
+    if diagnostic_timed_out:
+        transport_state = "unknown"
+        first_sync_state = "unknown"
+        semantic_state = "unknown"
+        freshness_state = "unknown"
     last_materialization_at = rebuild.get("finished_at") or rebuild.get("updated_at") or load_mark.get("updated_at")
     if gateway_effective_ready and not last_materialization_at:
         last_materialization_at = gateway_room.get("last_bootstrap_finished_at") or gateway_room.get("last_open_at")
@@ -6209,6 +6261,7 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
 
     return {
         "webspace_id": selected_webspace_id,
+        "diagnostic_status": "timed_out" if diagnostic_timed_out else "available",
         "transport_state": transport_state,
         "first_sync_state": first_sync_state,
         "semantic_state": semantic_state,
@@ -6228,7 +6281,9 @@ def _state_sync_snapshot(sync_runtime: dict[str, Any] | None) -> dict[str, Any]:
             "cursor": f"{replay_entries}/{replay_limit}" if replay_limit > 0 else f"{replay_entries}/0",
         },
         "fallback_mode": (
-            "hard_degraded_recovery"
+            "diagnostic_unavailable"
+            if diagnostic_timed_out
+            else "hard_degraded_recovery"
             if not bool(runtime.get("available")) and assessment_state != "not_applicable"
             else "off"
         ),
@@ -7652,9 +7707,14 @@ def _run_bounded_runtime_section(
             **fallback,
             "available": False,
             "assessment": {
-                "state": "degraded",
-                "reason": f"{section} runtime timed out after {round(float(timeout_sec), 3)}s",
+                "state": "unknown",
+                "reason": (
+                    f"{section} diagnostic collection timed out after "
+                    f"{round(float(timeout_sec), 3)}s; runtime health was not disproved"
+                ),
             },
+            "diagnostic_status": "timed_out",
+            "readiness_impact": "none",
             "_timed_out": True,
             "_section": section,
         }

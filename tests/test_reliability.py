@@ -1496,6 +1496,32 @@ def test_sidecar_runtime_snapshot_reports_local_only_and_connect_error_details(m
     assert snapshot["progress"]["completed_milestones"] == 2
     assert snapshot["progress"]["current_milestone"] == "browser_events_ws_handoff"
 
+    fallback_snapshot = sidecar_runtime_snapshot(
+        role="hub",
+        readiness_tree={},
+        hub_root_protocol={},
+        transport_strategy={
+            "selected_server": "wss://ru.api.inimatic.com/nats",
+            "effective_transport": "ws",
+            "last_event": "connected",
+            "recent_events": [
+                {
+                    "event": "connected",
+                    "server": "wss://ru.api.inimatic.com/nats",
+                    "transport": "ws",
+                }
+            ],
+        },
+        media_runtime={},
+    )
+
+    assert fallback_snapshot["status"] == "standby"
+    assert fallback_snapshot["session_state"] == "standby"
+    assert fallback_snapshot["remote_session_state"] == "standby"
+    assert fallback_snapshot["transport_owner"] == "runtime"
+    assert fallback_snapshot["control_ready"] == "delegated"
+    assert fallback_snapshot["delegations"]["hub_root_transport"] is False
+
 
 def test_sidecar_runtime_snapshot_does_not_reuse_historical_remote_connect_as_readiness(
     monkeypatch, tmp_path
@@ -4309,6 +4335,11 @@ def test_reliability_snapshot_times_out_slow_sync_and_media_sections(monkeypatch
 
     assert snapshot["runtime"]["sync_runtime"]["available"] is False
     assert snapshot["runtime"]["sync_runtime"]["_timed_out"] is True
+    assert snapshot["runtime"]["sync_runtime"]["assessment"]["state"] == "unknown"
+    assert snapshot["runtime"]["sync_runtime"]["readiness_impact"] == "none"
+    assert snapshot["runtime"]["state_sync"]["diagnostic_status"] == "timed_out"
+    assert snapshot["runtime"]["state_sync"]["transport_state"] == "unknown"
+    assert snapshot["runtime"]["state_sync"]["semantic_state"] == "unknown"
     assert snapshot["runtime"]["media_runtime"]["available"] is False
     assert snapshot["runtime"]["media_runtime"]["_timed_out"] is True
 

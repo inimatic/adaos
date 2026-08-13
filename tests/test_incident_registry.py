@@ -184,6 +184,89 @@ def test_process_io_delta_sample_reports_deltas(monkeypatch) -> None:
     assert top["domain"] == "skill:test_skill"
 
 
+def test_process_activity_history_keeps_pre_failure_cpu_io_and_network_deltas(monkeypatch) -> None:
+    process_rows = iter(
+        [
+            [
+                {
+                    "pid": 12,
+                    "name": "curl",
+                    "domain": "system.process",
+                    "cmdline": "curl https://example.invalid/large.bin",
+                    "rss_bytes": 1000,
+                    "cpu_time_s": 2.0,
+                    "read_bytes": 100,
+                    "write_bytes": 50,
+                }
+            ],
+            [
+                {
+                    "pid": 12,
+                    "name": "curl",
+                    "domain": "system.process",
+                    "cmdline": "curl https://example.invalid/large.bin",
+                    "rss_bytes": 1200,
+                    "cpu_time_s": 3.0,
+                    "read_bytes": 5100,
+                    "write_bytes": 70,
+                }
+            ],
+        ]
+    )
+    system_rows = iter(
+        [
+            {"network_recv_bytes": 1000, "network_sent_bytes": 200},
+            {"network_recv_bytes": 9000, "network_sent_bytes": 500},
+        ]
+    )
+    monkeypatch.setattr(incidents, "_process_rows", lambda: next(process_rows))
+    monkeypatch.setattr(incidents, "_system_activity_counters", lambda: next(system_rows))
+
+    incidents.capture_process_activity_sample(ts=100.0)
+    second = incidents.capture_process_activity_sample(ts=110.0)
+    history = incidents.process_activity_history_snapshot()
+
+    assert history["sample_total"] == 2
+    assert second["system_delta"]["network_recv_bytes_delta"] == 8000
+    activity = second["top_activity"][0]
+    assert activity["pid"] == 12
+    assert activity["cpu_percent"] == 10.0
+    assert activity["read_delta_bytes"] == 5000
+
+
+def test_process_activity_attributes_windows_skill_runtime_paths() -> None:
+    command = r"C:\Python\python.exe C:\node\.adaos\workspace\skills\.runtime\downloader_skill\handlers\main.py"
+
+    assert incidents._domain_from_cmdline(command) == "skill:downloader_skill"
+
+
+def test_transport_incident_persists_process_lookback(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "transport-incidents.json"
+    monkeypatch.setenv("ADAOS_INCIDENT_REGISTRY_PATH", str(target))
+    monkeypatch.setattr(incidents, "_process_rows", lambda: [])
+    monkeypatch.setattr(incidents, "_system_activity_counters", lambda: {})
+    monkeypatch.setattr(
+        incidents,
+        "local_blocking_evidence",
+        lambda include_processes=True: {"pressure": {"cpu": {}}},
+    )
+    incidents.capture_process_activity_sample(ts=100.0)
+
+    recorded = incidents.record_hub_root_transport_incident(
+        event="transient_disconnect",
+        server="wss://ru.api.inimatic.com/nats?token=secret-value",
+        error="WinError 10054 password=secret-value",
+        details={"ran_for_s": 31.0},
+    )
+
+    assert recorded["persistence"]["ok"] is True
+    assert target.is_file()
+    item = incidents.incident_registry_snapshot()["items"][0]
+    evidence = item["latest_evidence"]
+    assert evidence["process_activity_history"]["sample_total"] == 2
+    assert "secret-value" not in str(evidence)
+
+
 def test_incident_registry_persists_and_loads_snapshot(tmp_path) -> None:
     target = tmp_path / "incidents.json"
     incidents.record_member_link_stale(node_id="member-1", last_seen_ago_s=60)

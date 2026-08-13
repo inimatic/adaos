@@ -1186,25 +1186,36 @@ def test_realtime_sidecar_ws_heartbeat_defaults_to_transport_keepalive(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_probe_realtime_sidecar_ready_accepts_open_listener() -> None:
-    async def _handle(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        writer.close()
-        await writer.wait_closed()
-
-    server = await asyncio.start_server(_handle, "127.0.0.1", 0)
+async def test_probe_realtime_sidecar_ready_uses_control_endpoint_without_opening_nats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_PROXY_ENABLE", "0")
+    monkeypatch.setenv("ADAOS_REALTIME_MEDIA_PROXY_ENABLE", "0")
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
+    await server.start()
     try:
-        sock = server.sockets[0].getsockname()
-        assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(host=sock[0], port=sock[1], timeout_s=1.0)
+        assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
+            host=server.listen_host,
+            port=server.listen_port,
+            control_port=server.control_port,
+            timeout_s=1.0,
+        )
+        assert server._stats.local_client_total == 0
+        assert server._stats.session_open_total == 0
     finally:
-        server.close()
-        await server.wait_closed()
+        await server.close()
 
 
 @pytest.mark.asyncio
 async def test_probe_realtime_sidecar_ready_rejects_closed_port() -> None:
     port = _free_port()
 
-    assert not await realtime_sidecar_mod.probe_realtime_sidecar_ready(host="127.0.0.1", port=port, timeout_s=0.2)
+    assert not await realtime_sidecar_mod.probe_realtime_sidecar_ready(
+        host="127.0.0.1",
+        port=port,
+        control_port=port,
+        timeout_s=0.2,
+    )
 
 
 @pytest.mark.asyncio
@@ -1225,7 +1236,7 @@ async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
     monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.05")
 
-    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
     await server.start()
     try:
         reader, writer = await asyncio.open_connection(server.listen_host, server.listen_port)
@@ -1237,6 +1248,7 @@ async def test_realtime_sidecar_probe_does_not_supersede_active_local_client(
         assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
             host=server.listen_host,
             port=server.listen_port,
+            control_port=server.control_port,
             timeout_s=1.0,
         )
         await asyncio.sleep(0.1)
@@ -1275,7 +1287,7 @@ async def test_realtime_sidecar_keeps_two_local_nats_sessions_during_runtime_han
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
     monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.02")
 
-    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
     await server.start()
     first_reader = first_writer = second_reader = second_writer = None
     try:
@@ -1331,12 +1343,13 @@ async def test_realtime_sidecar_probe_does_not_break_immediate_nats_connect(
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
 
-    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
     await server.start()
     try:
         assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
             host=server.listen_host,
             port=server.listen_port,
+            control_port=server.control_port,
             timeout_s=1.0,
         )
 
@@ -1505,7 +1518,7 @@ async def test_realtime_sidecar_closes_broken_local_session_and_accepts_reconnec
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
 
-    server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
     await server.start()
     first_writer = second_writer = None
     try:
@@ -1517,6 +1530,13 @@ async def test_realtime_sidecar_closes_broken_local_session_and_accepts_reconnec
                 break
             await asyncio.sleep(0.01)
         assert not server._live_session_tasks()
+        assert await realtime_sidecar_mod.probe_realtime_sidecar_ready(
+            host=server.listen_host,
+            port=server.listen_port,
+            control_port=server.control_port,
+            timeout_s=1.0,
+        )
+        assert server._stats.local_client_total == 1
 
         _second_reader, second_writer = await asyncio.open_connection(server.listen_host, server.listen_port)
         second_writer.write(b"PING\r\n")

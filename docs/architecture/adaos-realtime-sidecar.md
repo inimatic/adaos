@@ -218,8 +218,16 @@ Success criteria:
 - [x] `[must]` Never inject sidecar-originated NATS `PING` bytes into the
   transparent relay. A relay read boundary is not a NATS frame boundary, so a
   timer can insert `PING\r\n` inside a fragmented `PUB` payload and invalidate
-  its declared size. Runtime-owned NATS keepalive and WebSocket control
-  ping/pong provide liveness without modifying the relayed byte stream.
+  its declared size. Runtime-owned bounded NATS protocol roundtrips provide
+  end-to-end liveness without an independent writer modifying the relayed byte
+  stream. Defaults are one probe every 30 seconds, a five-second response
+  timeout, and reconnect after the first failed roundtrip; the timeout path
+  removes its PONG waiter so a late PONG cannot terminate the nats-py reader.
+- [x] `[must]` Probe process readiness with `GET /ready` on the loopback control
+  port (`ADAOS_REALTIME_CONTROL_PORT`, default NATS port plus four). The response
+  carries `adaos.realtime_sidecar.control.v1`; readiness must not open the NATS
+  listener or increment local/remote session counters. PID ownership remains a
+  non-invasive fallback, while raw TCP connect is legacy opt-in only.
 - [x] `[must]` Request graceful sidecar process shutdown before forced
   termination. Managed restart gives each live relay time to close its remote
   WebSocket with a close frame; the peer must not observe synthetic `1006`
@@ -234,6 +242,12 @@ Success criteria:
   remote EOF is disabled by default; direct fallback remains available when
   the local sidecar listener is unavailable and transient failover remains an
   explicit emergency opt-in.
+- [x] `[must]` Keep a healthy direct WSS fallback authoritative in reliability
+  and project the idle sidecar as `standby`. After
+  `HUB_NATS_SIDECAR_FAILBACK_STABLE_S` (default 120 seconds) and local
+  quarantine expiry, close direct WSS before reconnecting sidecar so the two
+  remote sessions do not overlap. `HUB_NATS_SIDECAR_FAILBACK_ENABLE=0` is the
+  explicit rollback switch.
 - [ ] `[should]` Complete a target-stand soak that injects abnormal WS close,
   proves automatic bridge recreation and subscription restoration, and
   observes no sidecar/direct-WSS oscillation. The 2026-08-04 local incident was

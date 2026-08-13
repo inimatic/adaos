@@ -21,6 +21,10 @@ _ACTIVE_WINDOW_S = 10 * 60
 _LOCK = RLock()
 _INCIDENTS: dict[str, dict[str, Any]] = {}
 _ORDER: deque[str] = deque(maxlen=_MAX_INCIDENTS)
+_PROCESS_ACTIVITY_HISTORY: deque[dict[str, Any]] = deque(maxlen=25)
+_PROCESS_ACTIVITY_PREVIOUS: dict[int, dict[str, Any]] = {}
+_PROCESS_ACTIVITY_PREVIOUS_SYSTEM: dict[str, int] = {}
+_PROCESS_ACTIVITY_PREVIOUS_AT: float | None = None
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(token|authorization|password|secret|key)=([^&\s]+)"),
@@ -47,7 +51,7 @@ def _redact_text(value: Any, *, limit: int = 320) -> str:
 
 
 def _json_safe(value: Any, *, depth: int = 0) -> Any:
-    if depth >= 5:
+    if depth >= 8:
         return _redact_text(value, limit=160)
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -156,7 +160,7 @@ def is_yjs_thread_affinity_fault(value: Any) -> bool:
 
 
 def _domain_from_cmdline(cmdline: str) -> str:
-    text = str(cmdline or "")
+    text = str(cmdline or "").replace("\\", "/")
     marker = "/.adaos/workspace/skills/.runtime/"
     if marker in text:
         tail = text.split(marker, 1)[1]
@@ -207,7 +211,7 @@ def _process_rows() -> list[dict[str, Any]]:
         return []
 
     rows: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "status", "memory_info"]):
+    for proc in psutil.process_iter(["pid", "name", "cmdline", "status", "memory_info", "cpu_times"]):
         try:
             info = proc.info
             cmdline_items = info.get("cmdline") or []
@@ -216,7 +220,11 @@ def _process_rows() -> list[dict[str, Any]]:
                 cmdline = str(info.get("name") or "")
             io = proc.io_counters() if hasattr(proc, "io_counters") else None
             mem = info.get("memory_info")
+            cpu_times = info.get("cpu_times")
             rss = int(getattr(mem, "rss", 0) or 0)
+            cpu_time_s = float(getattr(cpu_times, "user", 0.0) or 0.0) + float(
+                getattr(cpu_times, "system", 0.0) or 0.0
+            )
             read_bytes = int(getattr(io, "read_bytes", 0) or 0) if io is not None else 0
             write_bytes = int(getattr(io, "write_bytes", 0) or 0) if io is not None else 0
             rows.append(
@@ -225,6 +233,7 @@ def _process_rows() -> list[dict[str, Any]]:
                     "name": _redact_text(info.get("name") or "", limit=80),
                     "status": _redact_text(info.get("status") or "", limit=40),
                     "rss_bytes": rss,
+                    "cpu_time_s": round(cpu_time_s, 6),
                     "read_bytes": read_bytes,
                     "write_bytes": write_bytes,
                     "domain": _domain_from_cmdline(cmdline),
@@ -234,6 +243,149 @@ def _process_rows() -> list[dict[str, Any]]:
         except Exception:
             continue
     return rows
+
+
+def _system_activity_counters() -> dict[str, int]:
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return {}
+    counters: dict[str, int] = {}
+    try:
+        network = psutil.net_io_counters()
+        counters["network_recv_bytes"] = int(getattr(network, "bytes_recv", 0) or 0)
+        counters["network_sent_bytes"] = int(getattr(network, "bytes_sent", 0) or 0)
+    except Exception:
+        pass
+    try:
+        disk = psutil.disk_io_counters()
+        counters["disk_read_bytes"] = int(getattr(disk, "read_bytes", 0) or 0)
+        counters["disk_write_bytes"] = int(getattr(disk, "write_bytes", 0) or 0)
+    except Exception:
+        pass
+    return counters
+
+
+def capture_process_activity_sample(*, limit: int = 10, ts: float | None = None) -> dict[str, Any]:
+    """Capture one bounded process/system activity sample for incident lookback."""
+
+    global _PROCESS_ACTIVITY_PREVIOUS_AT
+    now_ts = float(ts if ts is not None else _now())
+    rows = _process_rows()
+    system = _system_activity_counters()
+    with _LOCK:
+        previous = dict(_PROCESS_ACTIVITY_PREVIOUS)
+        previous_system = dict(_PROCESS_ACTIVITY_PREVIOUS_SYSTEM)
+        previous_at = _PROCESS_ACTIVITY_PREVIOUS_AT
+
+    interval_s = max(0.0, now_ts - float(previous_at)) if isinstance(previous_at, (int, float)) else 0.0
+    activity: list[dict[str, Any]] = []
+    current_by_pid: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        pid = int(row.get("pid") or 0)
+        if pid <= 0:
+            continue
+        current_by_pid[pid] = row
+        prior = previous.get(pid)
+        read_delta = (
+            max(0, int(row.get("read_bytes") or 0) - int(prior.get("read_bytes") or 0))
+            if prior is not None
+            else 0
+        )
+        write_delta = (
+            max(0, int(row.get("write_bytes") or 0) - int(prior.get("write_bytes") or 0))
+            if prior is not None
+            else 0
+        )
+        cpu_delta_s = (
+            max(0.0, float(row.get("cpu_time_s") or 0.0) - float(prior.get("cpu_time_s") or 0.0))
+            if prior is not None
+            else 0.0
+        )
+        activity.append(
+            {
+                "pid": pid,
+                "name": row.get("name"),
+                "domain": row.get("domain"),
+                "cmdline": row.get("cmdline"),
+                "rss_bytes": int(row.get("rss_bytes") or 0),
+                "cpu_delta_s": round(cpu_delta_s, 6),
+                "cpu_percent": round((cpu_delta_s / interval_s) * 100.0, 3) if interval_s > 0.0 else 0.0,
+                "read_delta_bytes": read_delta,
+                "write_delta_bytes": write_delta,
+                "io_delta_bytes": read_delta + write_delta,
+            }
+        )
+    system_delta = {
+        f"{key}_delta": max(0, int(value) - int(previous_system.get(key) or 0))
+        for key, value in system.items()
+        if key in previous_system
+    }
+    bounded_limit = max(1, min(int(limit or 10), 25))
+    ranked: list[dict[str, Any]] = []
+    seen_pids: set[int] = set()
+    rank_sources = (
+        sorted(activity, key=lambda item: float(item.get("cpu_delta_s") or 0.0), reverse=True),
+        sorted(activity, key=lambda item: int(item.get("io_delta_bytes") or 0), reverse=True),
+        sorted(activity, key=lambda item: int(item.get("rss_bytes") or 0), reverse=True),
+    )
+    per_source = max(1, bounded_limit // len(rank_sources))
+    for source in rank_sources:
+        for item in source[:per_source]:
+            pid = int(item.get("pid") or 0)
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            ranked.append(item)
+    if len(ranked) < bounded_limit:
+        combined = sorted(
+            activity,
+            key=lambda item: (
+                float(item.get("cpu_delta_s") or 0.0),
+                int(item.get("io_delta_bytes") or 0),
+                int(item.get("rss_bytes") or 0),
+            ),
+            reverse=True,
+        )
+        for item in combined:
+            pid = int(item.get("pid") or 0)
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            ranked.append(item)
+            if len(ranked) >= bounded_limit:
+                break
+    sample = _json_safe(
+        {
+            "ts": now_ts,
+            "interval_s": round(interval_s, 3),
+            "process_total": len(current_by_pid),
+            "system_delta": system_delta,
+            "top_activity": ranked[:bounded_limit],
+        }
+    )
+    with _LOCK:
+        _PROCESS_ACTIVITY_PREVIOUS.clear()
+        _PROCESS_ACTIVITY_PREVIOUS.update(current_by_pid)
+        _PROCESS_ACTIVITY_PREVIOUS_SYSTEM.clear()
+        _PROCESS_ACTIVITY_PREVIOUS_SYSTEM.update(system)
+        _PROCESS_ACTIVITY_PREVIOUS_AT = now_ts
+        _PROCESS_ACTIVITY_HISTORY.append(dict(sample))
+    return dict(sample)
+
+
+def process_activity_history_snapshot(*, limit: int = 25) -> dict[str, Any]:
+    with _LOCK:
+        samples = list(_PROCESS_ACTIVITY_HISTORY)
+    bounded_limit = max(1, min(int(limit or 25), 25))
+    selected = samples[-bounded_limit:]
+    return {
+        "sample_total": len(samples),
+        "returned": len(selected),
+        "window_started_at": selected[0].get("ts") if selected else None,
+        "window_ended_at": selected[-1].get("ts") if selected else None,
+        "samples": selected,
+    }
 
 
 def _process_samples(limit: int = 8) -> dict[str, Any]:
@@ -379,6 +531,40 @@ def record_incident(
             old = _ORDER.popleft()
             _INCIDENTS.pop(old, None)
         return _snapshot_item(item, now_ts=now_ts, include_evidence=True)
+
+
+def record_hub_root_transport_incident(
+    *,
+    event: str,
+    server: str | None,
+    error: BaseException | str | None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    capture_process_activity_sample()
+    error_text = _redact_text(error, limit=500) if error is not None else None
+    incident = record_incident(
+        incident_class="hub_root_transport",
+        signal=str(event or "transport_failure"),
+        severity="degraded",
+        domain="hub_root.transport",
+        component="nats_bridge",
+        source="hub_io",
+        summary=f"Hub-root transport incident: {str(event or 'transport_failure')}",
+        evidence={
+            "server": _redact_text(server, limit=240) if server else None,
+            "error": error_text,
+            "details": details or {},
+            "process_activity_history": process_activity_history_snapshot(),
+            "failure_snapshot": local_blocking_evidence(include_processes=True),
+        },
+        fingerprint_parts=("hub_root_transport", str(event or "transport_failure"), server or ""),
+        tags=("hub-root", "transport", "process-lookback", "durable"),
+    )
+    try:
+        persisted = persist_incident_registry()
+    except Exception as exc:
+        persisted = {"ok": False, "error": type(exc).__name__}
+    return {**incident, "persistence": persisted}
 
 
 def record_runtime_api_timeout(
@@ -873,12 +1059,18 @@ def load_incident_registry(
 
 
 def reset_incident_registry() -> None:
+    global _PROCESS_ACTIVITY_PREVIOUS_AT
     with _LOCK:
         _INCIDENTS.clear()
         _ORDER.clear()
+        _PROCESS_ACTIVITY_HISTORY.clear()
+        _PROCESS_ACTIVITY_PREVIOUS.clear()
+        _PROCESS_ACTIVITY_PREVIOUS_SYSTEM.clear()
+        _PROCESS_ACTIVITY_PREVIOUS_AT = None
 
 
 __all__ = [
+    "capture_process_activity_sample",
     "default_incident_registry_path",
     "incident_domain_from_owner",
     "incident_registry_snapshot",
@@ -887,11 +1079,13 @@ __all__ = [
     "load_incident_registry",
     "persist_incident_registry",
     "process_io_delta_sample",
+    "process_activity_history_snapshot",
     "record_action_timeout",
     "record_browser_transport_fallback",
     "record_channel_incident",
     "record_event_handler_crash",
     "record_incident",
+    "record_hub_root_transport_incident",
     "record_member_link_stale",
     "record_runtime_api_timeout",
     "record_slow_event_handler",

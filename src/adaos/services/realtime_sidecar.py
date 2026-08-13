@@ -1489,18 +1489,81 @@ async def _is_port_open(host: str, port: int) -> bool:
     return True
 
 
-async def probe_realtime_sidecar_ready(*, host: str, port: int, timeout_s: float = 2.0) -> bool:
+async def _probe_realtime_sidecar_control_ready(
+    *,
+    host: str,
+    control_port: int,
+    timeout_s: float,
+) -> bool:
+    writer: asyncio.StreamWriter | None = None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, int(control_port)),
+            timeout=max(0.1, float(timeout_s)),
+        )
+        writer.write(
+            b"GET /ready HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Accept: application/json\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        await asyncio.wait_for(writer.drain(), timeout=max(0.1, float(timeout_s)))
+        head = await asyncio.wait_for(
+            reader.readuntil(b"\r\n\r\n"),
+            timeout=max(0.1, float(timeout_s)),
+        )
+        if not head.startswith(b"HTTP/1.1 200"):
+            return False
+        content_length = 0
+        for line in head.split(b"\r\n"):
+            name, separator, value = line.partition(b":")
+            if separator and name.strip().lower() == b"content-length":
+                content_length = int(value.strip() or b"0")
+                break
+        if content_length <= 0 or content_length > 2048:
+            return False
+        body = await asyncio.wait_for(
+            reader.readexactly(content_length),
+            timeout=max(0.1, float(timeout_s)),
+        )
+        payload = json.loads(body.decode("utf-8", errors="strict"))
+        return bool(
+            isinstance(payload, dict)
+            and payload.get("schema") == "adaos.realtime_sidecar.control.v1"
+            and payload.get("ready") is True
+        )
+    except Exception:
+        return False
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def probe_realtime_sidecar_ready(
+    *,
+    host: str,
+    port: int,
+    control_port: int | None = None,
+    timeout_s: float = 2.0,
+) -> bool:
+    resolved_control_port = int(control_port) if control_port is not None else realtime_sidecar_control_port()
+    if await _probe_realtime_sidecar_control_ready(
+        host=host,
+        control_port=resolved_control_port,
+        timeout_s=timeout_s,
+    ):
+        return True
     pid_scan_skipped = _skip_realtime_listener_pid_scan()
     try:
         if not pid_scan_skipped and _find_realtime_listener_pid(host, port):
             return True
     except Exception:
         pass
-    if pid_scan_skipped:
-        try:
-            return bool(await asyncio.wait_for(_is_port_open(host, port), timeout=max(0.1, float(timeout_s))))
-        except Exception:
-            return False
+    # A connect-only probe is indistinguishable from a real local NATS client
+    # and can create a remote websocket session. Keep it as an explicit legacy
+    # escape hatch only.
     if not _truthy(os.getenv("ADAOS_REALTIME_READY_PROBE_CONNECT"), default=False):
         return False
     try:
@@ -1524,7 +1587,11 @@ async def wait_realtime_sidecar_bound(*, host: str, port: int, timeout_s: float 
     while time.monotonic() < deadline:
         if _find_realtime_listener_pid(host, port):
             return True
-        if _skip_realtime_listener_pid_scan() and await _is_port_open(host, port):
+        if _skip_realtime_listener_pid_scan() and await probe_realtime_sidecar_ready(
+            host=host,
+            port=port,
+            timeout_s=min(0.5, max(0.1, deadline - time.monotonic())),
+        ):
             return True
         await asyncio.sleep(0.1)
     return False
@@ -2096,9 +2163,10 @@ def _post_sidecar_lifecycle_report(payload: dict[str, Any]) -> None:
 
 
 class RealtimeSidecarServer:
-    def __init__(self, *, host: str, port: int) -> None:
+    def __init__(self, *, host: str, port: int, control_port: int | None = None) -> None:
         self._host = str(host or "127.0.0.1")
         self._port = int(port)
+        self._control_port = int(control_port) if control_port is not None else realtime_sidecar_control_port()
         self._server: asyncio.AbstractServer | None = None
         self._control_server: asyncio.AbstractServer | None = None
         self._route_servers: dict[str, Any] = {}
@@ -2157,6 +2225,16 @@ class RealtimeSidecarServer:
         except Exception:
             pass
         return int(self._port)
+
+    @property
+    def control_port(self) -> int:
+        try:
+            if self._control_server is not None and getattr(self._control_server, "sockets", None):
+                sock = self._control_server.sockets[0]
+                return int(sock.getsockname()[1])
+        except Exception:
+            pass
+        return int(self._control_port)
 
     def _diag_snapshot(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -2358,15 +2436,13 @@ class RealtimeSidecarServer:
             self._control_server = await asyncio.start_server(
                 self._handle_control_client,
                 self._host,
-                realtime_sidecar_control_port(),
+                self._control_port,
             )
-            self._log(
-                f"control ready listen=http://{self._host}:{realtime_sidecar_control_port()}"
-            )
+            self._log(f"control ready listen=http://{self._host}:{self.control_port}")
         except Exception as exc:
             self._control_server = None
             self._log(
-                f"control bind failed listen={self._host}:{realtime_sidecar_control_port()} "
+                f"control bind failed listen={self._host}:{self._control_port} "
                 f"err={type(exc).__name__}: {exc}"
             )
         await self._start_route_tunnel_listeners()
@@ -2422,16 +2498,42 @@ class RealtimeSidecarServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        accepted = False
+        shutdown_accepted = False
         try:
             request = await asyncio.wait_for(reader.read(4096), timeout=2.0)
             request_line = request.split(b"\r\n", 1)[0]
-            accepted = request_line == b"POST /shutdown HTTP/1.1"
-            status = b"202 Accepted" if accepted else b"404 Not Found"
+            shutdown_accepted = request_line == b"POST /shutdown HTTP/1.1"
+            readiness_requested = request_line == b"GET /ready HTTP/1.1"
+            ready = bool(
+                readiness_requested
+                and self._server is not None
+                and self._server.is_serving()
+                and not self._stopped.is_set()
+            )
+            if readiness_requested:
+                body = json.dumps(
+                    {
+                        "schema": "adaos.realtime_sidecar.control.v1",
+                        "ready": ready,
+                        "listen_host": self.listen_host,
+                        "listen_port": self.listen_port,
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                status = b"200 OK" if ready else b"503 Service Unavailable"
+                content_type = b"Content-Type: application/json\r\n"
+            else:
+                body = b""
+                status = b"202 Accepted" if shutdown_accepted else b"404 Not Found"
+                content_type = b""
             writer.write(
                 b"HTTP/1.1 "
                 + status
-                + b"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                + b"\r\nConnection: close\r\n"
+                + content_type
+                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+                + body
             )
             await writer.drain()
         except Exception:
@@ -2440,7 +2542,7 @@ class RealtimeSidecarServer:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
-        if accepted:
+        if shutdown_accepted:
             self._log("graceful shutdown requested through local control endpoint")
             self._shutdown_requested.set()
 
