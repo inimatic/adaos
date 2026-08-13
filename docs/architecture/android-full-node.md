@@ -932,10 +932,20 @@ owner may render TTS, which removes the previous double response caused by
 Android TTS and browser speechSynthesis both observing one Yjs message. The
 current session is projected at `data/communications/current` with logical
 channel, assistant, STT provider/model, transport, and input/output owners.
-The hosted client renders the same facts as a compact route capsule:
+Inside one browser page, the root-scoped media and voice runtimes additionally
+ensure that the header, Voice modal, Chat, WebRTC, CV, QR, diagnostics, and
+media player do not create private capture/output owners. Voice and Chat use a
+shared response-id output key, and opening a transient Voice modal does not
+replace the persistent header controller. The complete contract and verified
+host evidence are recorded in
+[Browser Media Runtime](browser-media-runtime.md).
+
+The hosted client renders the same facts as a compact graphical informer. Its
+state is visible as an icon/dot in the header; clicking it opens the full route
+and diagnostics instead of occupying the header with this text:
 
 ```text
-● 🎙 Phone · Vosk → General · AdaOS Mobile → 🔊 Phone
+🎙 Phone · Vosk → General · AdaOS Mobile → 🔊 Phone
 ```
 
 Logical channel (`General`, `Conversational`, `Builder`) is deliberately

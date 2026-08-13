@@ -1106,6 +1106,46 @@ The installed PoC20 debug APK is 33,177,221 bytes with SHA-256
 The installed PoC21 debug APK is 33,240,364 bytes with SHA-256
 `1502dbb807dd2a74cd92e672b0a532441f765b93b22a31fa180a9887858f536f`.
 
+## PoC22 Extension: Browser Media Ownership And Compact Informer
+
+- [x] add one root-scoped browser media runtime with logical input leases,
+  compatible physical-source sharing, a serialized speech/audio queue, response
+  deduplication, and long-running media-output activity;
+- [x] add one root-scoped browser voice coordinator so the persistent header
+  owns continuous listening while transient Voice modals act as lower-priority
+  controllers;
+- [x] migrate Browser SpeechRecognition, Hub WAV capture, WebRTC, CV, QR,
+  browser media tests, Chat/Voice TTS, and media-player output to the shared
+  runtime;
+- [x] replace the long communication route pill with a 30 px graphical
+  informer and a viewport-owned detail overlay;
+- [x] audit all 46 skills installed on the development node. The only combined
+  Voice/Chat auto-output declaration is `voice_chat_skill`; response-id
+  deduplication and controller ownership cover it without changing its WebUI
+  ABI. `cv_descriptor` and media surfaces retain their existing contracts;
+- [x] pass TypeScript compilation, the production build, 211 focused tests, and
+  the complete 1059-test client suite;
+- [x] verify through Chrome DevTools on the stationary node at 1424 x 749 and a
+  360 x 780 emulated mobile viewport. The informer measured 30/28 px and the
+  overlay had no content overflow;
+- [x] open the real Voice application on the stationary node and return to the
+  desktop. Controller count changed from one to two and back to one while the
+  header remained the sole owner, with zero handoffs and one physical input;
+- [ ] publish the client through its normal CI/CD path, load the resulting
+  hosted revision in Android Chrome, and repeat the Voice modal -> desktop
+  sequence on the physical phone;
+- [ ] prove one rendered response with both Voice and Chat projections mounted,
+  then exercise Voice plus WebRTC and CV plus QR conflict combinations;
+- [ ] define and validate preemption for incompatible input constraints. The
+  first runtime records priority/preemptibility but does not claim to enforce
+  this policy.
+
+This slice changes the common hosted client, not the APK core or skill bundle.
+It therefore avoids a second mobile media implementation. Verified design and
+host evidence live in [Browser Media Runtime](browser-media-runtime.md); Android
+microphone and output evidence remains a physical gate until the client revision
+is deployed.
+
 ## Dependency Work Queue
 
 These tasks may begin early, but a dependency is admitted to the APK only when
