@@ -39,6 +39,13 @@ the transport contract.
     legacy sources that do not yet declare invalidation tags.
 11. Every retry, stale result, lifecycle wait, and policy mismatch is visible
     in diagnostics or validation evidence.
+12. A manifest tool is callable only from a completely imported handler
+    module. Concurrent first calls cannot observe a module while its body is
+    still executing, and a failed import cannot poison the process cache.
+13. The generic widget status distinguishes lifecycle wait, routed-node
+    unavailability, authorization, missing declarations, manifest/handler
+    skew, and server failure. The bounded technical detail remains available
+    as a tooltip and runtime diagnostic.
 
 ## Trusted read intent
 
@@ -151,6 +158,10 @@ or migrated scenarios cannot publish policy drift.
 | Explicit Retry without tags | exactly the selected semantic source reloads |
 | Read routed to a member | intent reaches RPC/HTTP target and is re-verified there |
 | Manifest/WebUI policy differs in strict mode | scenario validation fails |
+| First handler import fails | partial module is evicted; a later valid import can recover |
+| Two widgets cause a concurrent first import | both wait for one complete module and resolve the declared callable |
+| Two skills contain the same short local package name | each handler imports its own package; the active skill path has priority |
+| Active manifest names an absent runtime callable | source state is `error` and names manifest/runtime skew, not a valid empty value |
 
 The 2026-08-12 catalog audit found no newly introduced policy errors. Two
 scenarios remain invalid for pre-existing missing dependency-tool declarations.
@@ -170,3 +181,54 @@ This contract improves bounded request/response data. It does not turn
 MLflow, database providers, or research skills remain above this boundary.
 They may provide typed data, but they do not own browser transport, lifecycle
 gating, retry, or source-state semantics.
+
+## 2026-08-13 handler-import incident
+
+The TLP experiment page exposed the same generic error on both Conditions and
+Status. A direct call to the live API proved the actual failure:
+`research_manager_skill:get_experiment` resolved in the active manifest, but
+the cached synthetic Python module had no `get_experiment` attribute. The
+workspace CLI succeeded because it started a fresh process.
+
+The loader inserted a synthetic module into `sys.modules` before executing its
+body, as Python import machinery requires, but it neither serialized
+concurrent first imports nor removed the object after an interrupted/failed
+execution. A second caller could therefore retain a partial module for the
+rest of the API process lifetime. The core loader now serializes source
+snapshot/import work, marks only completed modules reusable, and evicts the
+exact module object on every `BaseException`. Skill execution remains outside
+the import lock. Regression tests cover failed-import recovery and concurrent
+first calls.
+
+The repaired live call then exposed a second process-global import hazard.
+Both research skills legitimately contain a top-level `research` package and
+use short sibling imports. A package loaded by one skill could remain in
+`sys.modules`; because an already-present path was not promoted, the next
+skill could resolve `research.manager` against the wrong package. Handler
+loading now atomically promotes the active skill paths and evicts conflicting
+short-name modules owned by another skill before import. Existing LLM-authored
+skills therefore receive load-time compatibility isolation. New skills should
+still prefer a unique package namespace: Python imports performed dynamically
+after handler loading remain process-global, and strict process isolation is a
+separate runtime boundary.
+
+`research_manager_skill` additionally treats runner dataset status and tracker
+health as degradable dependency projections. Their failure no longer erases
+the immutable experiment, revision, lifecycle, runs, or results from the
+control-plane read model. This is defense in depth; it does not replace the
+core import correction.
+
+After installation and API restart, an authenticated read through
+`/api/tools/call` returned the exact E002 record, finalized lifecycle
+generation 5, ready tracker state, and a verified result. This exercises the
+same manifest/tool/runtime path as the page data source rather than a direct
+domain call.
+
+A deliberately unknown experiment id exposed a related routing ambiguity. A
+domain `KeyError` from an already resolved local read runtime entered the
+“skill absent on hub” fallback and was reclassified as a cross-node action.
+The bridge now distinguishes a ready local runtime from an absent runtime:
+resolved read failures return a typed non-retryable 404/500 locally, while
+cross-node discovery remains available only when the local runtime cannot be
+resolved. Read-only classification is retained across a legitimate fallback,
+so a snapshot never becomes approval-requiring merely because it is remote.

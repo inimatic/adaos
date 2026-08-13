@@ -6,10 +6,13 @@ import hashlib
 import importlib
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 _SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
+_MODULE_LOAD_LOCK = threading.RLock()
+_MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
 
 
 def execute_tool(
@@ -23,21 +26,24 @@ def execute_tool(
     """Execute a tool callable inside the skill package and return the result."""
 
     skill_path = Path(skill_dir).resolve()
-    # Ensure both the skill package root and its parent (which usually
-    # contains the ``skills.<name>`` namespace) are visible on sys.path.
-    for p in (skill_path, skill_path.parent):
-        p_str = str(p)
-        if p_str not in sys.path:
-            sys.path.insert(0, p_str)
-
-    for extra in extra_paths or ():
-        extra_path = Path(extra).resolve()
-        if str(extra_path) not in sys.path:
-            sys.path.insert(0, str(extra_path))
-
-    _reload_skill_modules_if_sources_changed(skill_path)
-    module_name = module or "handlers.main"
-    mod = _load_skill_module(skill_path, module_name)
+    # Importing a source-backed skill is process-global work: importlib writes
+    # the module into ``sys.modules`` before executing its body. Concurrent
+    # first calls must therefore not observe that half-initialized module.
+    # Keep execution outside this lock; only source snapshotting and import are
+    # serialized.
+    with _MODULE_LOAD_LOCK:
+        # Skill handlers commonly import sibling packages by their short name
+        # (for example ``from research.manager import ...``). Keep the active
+        # skill first and evict a same-named package left by another skill before
+        # executing the handler. Without both operations, process-global import
+        # state can route an otherwise valid skill to a sibling's package.
+        import_paths = [skill_path, skill_path.parent]
+        import_paths.extend(Path(extra).resolve() for extra in extra_paths or ())
+        _prioritize_import_paths(import_paths)
+        _purge_conflicting_local_modules(skill_path)
+        _reload_skill_modules_if_sources_changed(skill_path)
+        module_name = module or "handlers.main"
+        mod = _load_skill_module(skill_path, module_name)
     func = getattr(mod, attr)
     if not callable(func):
         raise TypeError(f"attribute '{attr}' from module '{module_name}' is not callable")
@@ -151,6 +157,54 @@ def _module_file_is_under(module: Any, root: Path) -> bool:
     return True
 
 
+def _prioritize_import_paths(paths: Iterable[Path]) -> None:
+    ordered = [str(Path(path).resolve()) for path in paths]
+    for path_text in reversed(ordered):
+        path_key = str(Path(path_text)).casefold()
+        sys.path[:] = [
+            existing
+            for existing in sys.path
+            if str(Path(existing or ".").resolve()).casefold() != path_key
+        ]
+        sys.path.insert(0, path_text)
+
+
+def _local_import_roots(skill_path: Path) -> set[str]:
+    roots: set[str] = set()
+    try:
+        children = list(skill_path.iterdir())
+    except OSError:
+        return roots
+    for child in children:
+        name = child.name
+        if name.startswith(".") or name in {"__pycache__", "adaos", "skills"}:
+            continue
+        if child.is_dir() and (child / "__init__.py").is_file():
+            roots.add(name)
+        elif child.is_file() and child.suffix == ".py" and child.stem != "__init__":
+            roots.add(child.stem)
+    return roots
+
+
+def _purge_conflicting_local_modules(skill_path: Path) -> None:
+    """Evict short-name imports owned by another skill runtime.
+
+    This is compatibility isolation for existing skills that use absolute
+    sibling imports. New skills should still prefer a unique package namespace;
+    Python's module table remains process-global outside handler loading.
+    """
+
+    local_roots = _local_import_roots(skill_path)
+    if not local_roots:
+        return
+    for key, loaded in list(sys.modules.items()):
+        root = key.split(".", 1)[0]
+        if root not in local_roots:
+            continue
+        if not _module_file_is_under(loaded, skill_path):
+            sys.modules.pop(key, None)
+
+
 def _purge_skill_source_modules(skill_path: Path) -> None:
     skill_pkg = skill_path.name
     for key, module in list(sys.modules.items()):
@@ -224,12 +278,26 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     path_key = hashlib.sha256(str(skill_path.resolve()).encode("utf-8")).hexdigest()[:12]
     synthetic_name = f"_adaos_runtime.{skill_path.name}.{path_key}.{module_name}"
     existing = sys.modules.get(synthetic_name)
-    if existing is not None and _module_file_is_under(existing, skill_path):
+    if (
+        existing is not None
+        and _module_file_is_under(existing, skill_path)
+        and getattr(existing, _MODULE_LOAD_COMPLETE, False) is True
+    ):
         return existing
+    # A failed or interrupted import may have left a module object in the
+    # cache. Never reuse it as an active skill handler.
+    if existing is not None:
+        sys.modules.pop(synthetic_name, None)
     spec = importlib.util.spec_from_file_location(synthetic_name, candidate_file)
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
     sys.modules[synthetic_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if sys.modules.get(synthetic_name) is module:
+            sys.modules.pop(synthetic_name, None)
+        raise
+    setattr(module, _MODULE_LOAD_COMPLETE, True)
     return module

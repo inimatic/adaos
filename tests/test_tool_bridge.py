@@ -387,6 +387,51 @@ def test_call_tool_does_not_repeat_or_proxy_failed_mutation(monkeypatch) -> None
     assert calls == ["run"]
 
 
+def test_call_tool_does_not_proxy_domain_failure_from_ready_read_runtime(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def run_tool(self, *_args, **_kwargs):
+            calls.append("run")
+            raise KeyError("missing-experiment")
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_declared_tool_side_effects", lambda *_args, **_kwargs: "read_only")
+    monkeypatch.setattr(tool_bridge_module, "_runtime_ready", lambda *_args: True)
+    monkeypatch.setattr(
+        tool_bridge_module,
+        "get_directory",
+        lambda: (_ for _ in ()).throw(AssertionError("resolved local read failure must not be proxied")),
+    )
+    ctx = _fake_ctx()
+    ctx.config = SimpleNamespace(role="hub", node_id="hub-1", token="hub-token")
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            tool_bridge_module.call_tool(
+                tool_bridge_module.ToolCall(
+                    tool="research_manager_skill:get_experiment",
+                    arguments={"experiment_id": "missing-experiment"},
+                    intent="read",
+                ),
+                SimpleNamespace(headers={}),
+                Response(),
+                ctx=ctx,
+            )
+        )
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail["error"] == "tool_domain_value_not_found"
+    assert excinfo.value.detail["retryable"] is False
+    assert calls == ["run"]
+
+
 def test_builder_chat_is_dispatched_to_builder_skill_owner(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 

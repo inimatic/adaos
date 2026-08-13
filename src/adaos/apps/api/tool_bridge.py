@@ -1646,11 +1646,17 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 float(local_timings.get("run_tool_ms") or 0.0),
             )
     except (FileNotFoundError, RuntimeError, KeyError) as e:
-        if local_execution_started and mutating_call:
+        local_runtime_resolved = local_execution_started and _runtime_ready(mgr, skill_name)
+        if local_execution_started and (mutating_call or local_runtime_resolved):
+            missing_domain_value = isinstance(e, (FileNotFoundError, KeyError))
             raise HTTPException(
-                status_code=409,
+                status_code=409 if mutating_call else (404 if missing_domain_value else 500),
                 detail={
-                    "error": "tool_execution_failed_no_retry",
+                    "error": (
+                        "tool_execution_failed_no_retry"
+                        if mutating_call
+                        else ("tool_domain_value_not_found" if missing_domain_value else "tool_execution_failed")
+                    ),
                     "tool": body.tool,
                     "retryable": False,
                     "detail": str(e),
@@ -1681,7 +1687,11 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
             payload=payload,
             target_node_id=target_node_id,
             local_node_id=local_node_id,
-            forced_side_effect_class="" if _is_readonly_snapshot_tool(body.tool) else "cross_node",
+            forced_side_effect_class=(
+                "safe"
+                if trusted_read_only or _looks_readonly_tool(public_tool)
+                else ("" if _is_readonly_snapshot_tool(body.tool) else "cross_node")
+            ),
             ctx=ctx,
         )
 

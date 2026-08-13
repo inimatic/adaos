@@ -1097,6 +1097,22 @@ not substitute for this operator path.
   drafts, human-review a corrected exact revision, and pass the strengthened
   deterministic gate before creating AutomationBrief/Development Session.
   The model is not required or allowed to self-certify admission.
+- [x] `[must]` `ARF7.1-20m` Persist every caller-visible formulation directive
+  with stable actor, invocation origin, bounded text and digest. Project
+  API/CLI/Codex directives into the same research chat while avoiding a
+  duplicate of an ordinary conversation message. Never journal the hidden
+  system prompt or source excerpts as a caller directive.
+- [x] `[must]` `ARF7.1-20n` Make formulation completion state deterministic:
+  an admitted candidate is ready only for human acceptance; a blocked
+  candidate is explicitly a reviewable draft; an invalid candidate exhausted
+  after bounded repair is rejected without creating a revision. Do not trust
+  the model-authored `assistant_message` as lifecycle truth.
+- [x] `[must]` `ARF7.1-20o` Harden the generic source-backed skill loader
+  against failed and concurrent first imports and collisions between identical
+  short local package names in different skills; expose categorized
+  runtime-data failures in the shared widget host; and keep the experiment
+  control-plane snapshot available when runner/tracker health dependencies
+  degrade.
 - [ ] `[must]` `ARF7.1-20l` In an authenticated operator browser, record the
   published portfolio -> direction -> back -> reload fallback and the exact
   CRLF Markdown/KaTeX preview. Automated layout/math regressions, production

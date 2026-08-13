@@ -3,8 +3,12 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from adaos.skills import runtime_runner as runtime_runner_module
 
@@ -61,6 +65,22 @@ def _write_skill_with_service_helper(root: Path, name: str, marker: str) -> Path
     return skill_dir
 
 
+def _write_skill_with_shared_package_name(root: Path, name: str, marker: str) -> Path:
+    skill_dir = root / name
+    (skill_dir / "handlers").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "research").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "handlers" / "__init__.py").write_text("", encoding="utf-8")
+    (skill_dir / "research" / "__init__.py").write_text("", encoding="utf-8")
+    (skill_dir / "research" / "local.py").write_text(f"MARKER = '{marker}'\n", encoding="utf-8")
+    (skill_dir / "handlers" / "main.py").write_text(
+        "from research.local import MARKER\n\n"
+        "def get_snapshot():\n"
+        "    return {'marker': MARKER}\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
 def test_execute_tool_isolates_generic_handlers_main_between_skills(tmp_path: Path) -> None:
     alpha = _write_skill(tmp_path, "alpha_skill", "alpha")
     beta = _write_skill(tmp_path, "beta_skill", "beta")
@@ -78,6 +98,38 @@ def test_execute_tool_isolates_generic_handlers_main_between_skills(tmp_path: Pa
     assert first["skill"] == "alpha_skill"
     assert second["skill"] == "beta_skill"
     assert second["marker"] == "beta"
+
+
+def test_execute_tool_isolates_same_named_local_packages_between_skills(tmp_path: Path) -> None:
+    alpha = _write_skill_with_shared_package_name(tmp_path, "alpha_skill", "alpha")
+    beta = _write_skill_with_shared_package_name(tmp_path, "beta_skill", "beta")
+    tracked_prefixes = ("handlers", "research", "_adaos_runtime.alpha_skill", "_adaos_runtime.beta_skill")
+    before_modules = {
+        key: sys.modules[key]
+        for key in list(sys.modules.keys())
+        if key.startswith(tracked_prefixes)
+    }
+    before_path = list(sys.path)
+    try:
+        first = runtime_runner_module.execute_tool(
+            alpha, module="handlers.main", attr="get_snapshot", payload={}
+        )
+        second = runtime_runner_module.execute_tool(
+            beta, module="handlers.main", attr="get_snapshot", payload={}
+        )
+        first_again = runtime_runner_module.execute_tool(
+            alpha, module="handlers.main", attr="get_snapshot", payload={}
+        )
+    finally:
+        sys.path[:] = before_path
+        for key in list(sys.modules.keys()):
+            if key.startswith(tracked_prefixes):
+                sys.modules.pop(key, None)
+        sys.modules.update(before_modules)
+
+    assert first["marker"] == "alpha"
+    assert second["marker"] == "beta"
+    assert first_again["marker"] == "alpha"
 
 
 def test_execute_tool_reloads_skill_modules_when_source_changes(tmp_path: Path) -> None:
@@ -235,3 +287,67 @@ def test_execute_tool_supports_bare_tool_decorator(tmp_path: Path) -> None:
     assert ping_result == {
         "ok": True,
     }
+
+
+def test_execute_tool_discards_a_partially_imported_skill_module(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "recoverable_skill"
+    (skill_dir / "handlers").mkdir(parents=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "import builtins\n"
+        "if not getattr(builtins, '_adaos_runtime_allow_test_import', False):\n"
+        "    raise RuntimeError('first import fails')\n"
+        "def get_snapshot():\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    marker = "_adaos_runtime_allow_test_import"
+    before = getattr(__import__("builtins"), marker, None)
+    had_before = hasattr(__import__("builtins"), marker)
+    try:
+        with pytest.raises(RuntimeError, match="first import fails"):
+            runtime_runner_module.execute_tool(
+                skill_dir,
+                module="handlers.main",
+                attr="get_snapshot",
+                payload={},
+            )
+        setattr(__import__("builtins"), marker, True)
+
+        assert runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={},
+        ) == {"ok": True}
+    finally:
+        if had_before:
+            setattr(__import__("builtins"), marker, before)
+        else:
+            delattr(__import__("builtins"), marker)
+
+
+def test_execute_tool_serializes_concurrent_first_imports(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "concurrent_skill"
+    (skill_dir / "handlers").mkdir(parents=True)
+    (skill_dir / "handlers" / "main.py").write_text(
+        "import time\n"
+        "time.sleep(0.15)\n"
+        "def get_snapshot(value=None):\n"
+        "    return {'value': value}\n",
+        encoding="utf-8",
+    )
+    start = threading.Barrier(2)
+
+    def invoke(value: int) -> dict[str, int]:
+        start.wait(timeout=2)
+        return runtime_runner_module.execute_tool(
+            skill_dir,
+            module="handlers.main",
+            attr="get_snapshot",
+            payload={"value": value},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(invoke, (1, 2)))
+
+    assert sorted(item["value"] for item in results) == [1, 2]

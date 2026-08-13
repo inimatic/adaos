@@ -176,6 +176,94 @@ surface but had no WebAuthn session; its websocket received 404 before Desktop
 materialization. That run proves neither success nor failure of the Workbench
 layout and is not presented as an authenticated black-box receipt.
 
+### 2026-08-13 formulation-journal and live-runtime audit
+
+The durable activity journal for `tlp_research_03` was replayed through event
+172. Revisions 2 and 3 were not a self-running autonomous research loop. Each
+was produced by a Root-LLM job started by an external CLI/API invocation during
+the implementation audit. The old handler default collapsed those callers to
+`user:local`, and only `llm_submitted`/progress/completion appeared in chat.
+That made Codex/operator participation invisible. New formulation calls first
+persist `adaos.research.directive.v1` with actor, origin, visible text and
+digest. Non-conversation directives are projected into the same chat. Callers
+must pass stable `actor` and `invocation_origin`; missing API identity is now
+`api:local`, never an asserted human user.
+
+The messages “revision 2/3 is ready” were also too strong. Both journal entries
+were `candidate_draft` and retained admission blockers; the phrase came from a
+model-authored assistant message/fallback, not from the deterministic gate.
+Completion text is now derived from `admission_review`: a draft says it is not
+ready for automation, an admitted candidate says it is ready for human
+acceptance, and the model explanation is attached only as explanation.
+
+The reported schema error was a successful safety rejection, not a persisted
+corrupt revision. After two bounded repair attempts, the candidate still used
+undeclared convenience fields (`smoke`, `confirmatory_seeds`, and
+`primary_population`), omitted a required paired allocation, supplied no
+decision rule, and left implementation requirements unclassified. Transport
+normalization already repairs conservative JSON/enum/nesting aliases and can
+derive allocation only from explicitly enumerated units. It deliberately does
+not invent decision criteria, unit allocation, or requirement categories.
+Those are scientific/implementation decisions and remain contract failures.
+The journal now classifies this as
+`prototype_contract_validation_failed`, bounds the technical payload, and
+states that no invalid revision was accepted.
+
+The historical failure audit is therefore:
+
+| Observed failure | Current disposition |
+| --- | --- |
+| raw provider payload and token-limit detail flooded chat | bounded provider error summary; fixed and tested |
+| JSON fences/trailing commas and known nested transport shape | conservatively normalized; fixed and tested |
+| enum spelling and decision-rule object wrappers | conservatively normalized; fixed and tested |
+| missing scientific decisions or invented schema fields after two repairs | rejected by design; now classified and explained |
+| draft called “ready” | deterministic completion projection; fixed and tested |
+| API/Codex directive absent and actor shown as `user:local` | durable directive provenance plus chat projection; fixed and tested |
+
+The TLP experiment screenshot with “Data is temporarily unavailable” was
+independently traced through the live API. The active resolved manifest named
+`get_experiment`, but a partially imported synthetic handler module cached in
+the long-running API process had no such attribute. A fresh-process CLI call
+succeeded, explaining the discrepancy. Core now makes source-backed handler
+import atomic and recoverable; `research_manager_skill` also degrades runner
+and tracker health independently instead of discarding the experiment read
+model. The client status banner exposes this distinction and keeps the bounded
+diagnostic detail in its title.
+
+The first corrected live restart exposed one further core issue rather than a
+TLP workaround: `research_orchestrator_skill` and `research_manager_skill`
+both own a local package named `research`. The in-process loader could retain
+the first skill's package and then fail to resolve a module in the second.
+Core now promotes the active skill's paths and evicts conflicting local
+package roots during serialized handler loading. A two-skill regression test
+alternates the same package name in both directions. The subsequent
+authenticated API read returned E002 with finalized generation 5, tracker
+`ready`, and result verification `ok=true`.
+
+An unknown experiment probe also demonstrated that a resolved local domain
+error could fall through to member discovery and be misreported as an
+approval-requiring cross-node action. The tool bridge now returns that local
+read failure directly and reserves member fallback for an actually unresolved
+runtime.
+
+Finally, the formula itself was already parsed into KaTeX; the remaining visual
+defect was CSS clipping of vertical operator limits by
+`overflow-y: hidden`. Display math now preserves vertical overflow and adds
+block padding/line height while retaining horizontal scrolling for long
+equations.
+
+The release receipt for this audit is:
+
+| Artifact | Version | Registry push |
+| --- | --- | --- |
+| `research_orchestrator_skill` | `0.10.3` | `73fafe8` |
+| `research_manager_skill` | `0.9.1` | `aa6ff04` |
+| `tlp_research` | `0.3.5` | `1c448e3` |
+
+Both skills passed install-time tests and became active in their normal A/B
+runtime slots. TLP scenario tests and strict validation passed; focused Chrome
+tests and a production client build covered the Markdown and source-state UI.
+
 ## Verification commands
 
 The proof used ordinary AdaOS lifecycle and runtime commands, including:
