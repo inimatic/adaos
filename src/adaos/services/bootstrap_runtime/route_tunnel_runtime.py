@@ -3117,6 +3117,7 @@ class NatsRouteTunnelRuntime:
                             drive_public_token = ""
                             for _prefix in (
                                 "/media/drive-public-links/",
+                                "/v1/drive/public-links/",
                                 "/api/skills/adaos_drive/public-links/",
                             ):
                                 if method in ("GET", "HEAD") and path_norm.startswith(_prefix):
