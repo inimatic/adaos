@@ -16,7 +16,9 @@ compact communication-route UI. Vosk runs on the physical Samsung; reliability,
 accuracy comparison, Hub/CDN delivery, and the 2 GB memory gate remain open. The
 PoC20 artifact adds a registry-driven, grammar-biased wake decoder alongside
 free-form Vosk transcription; its deterministic acoustic gate passes, while a
-natural-speaker command set and false-activation run remain open. The
+natural-speaker command set and false-activation run remain open. PoC21 adds a
+strict TTS/decode turn boundary and removes the old 2.5-second echo tail;
+full-duplex interruption remains open. The
 phone renders `web_desktop` from
 native `y-py`, executes the fixed skill profile and offline Rasa inference
 in-process, and maintains an outbound member link through the deployed regional
@@ -1080,6 +1082,29 @@ The installed debug artifact is 33,565,262 bytes with SHA-256
 
 The installed PoC20 debug APK is 33,177,221 bytes with SHA-256
 `7190015c8b43c64975dd6e05c07db3905e0db3c82d231dfdf1bd00f06062b3aa`.
+
+## PoC21 Extension: Deterministic TTS Turn Boundary
+
+- [x] correlate the reported post-answer deaf period with runtime evidence:
+  capture remained active, while 11 of 19 finalized fragments were local TTS;
+- [x] drain PCM without decoding while local TTS is active, retain one
+  `AudioRecord` capture cycle, and reset full/wake recognizers after `onDone`;
+- [x] replace the 2.5-second lexical echo tail with a bounded 180 ms output
+  drain and expose guarded-frame/reset counters;
+- [x] report Vosk as turn-taking with `barge_in_available=false` instead of
+  implying proven full duplex;
+- [x] restrict the recovery grammar to Ada aliases and use the full transcript
+  to attribute longer companion names;
+- [x] build and install `0.1.0-poc21`; two back-to-back local commands were
+  admitted with zero rejected, echo-suppressed, dropped, or capture-error
+  utterances;
+- [x] repeat the immediate-follow-up gate with Арсений: both turns reached the
+  remote root LLM, returned `root_llm`, and resumed listening after TTS;
+- [ ] implement and physically validate true barge-in using a trustworthy
+  render reference or dedicated wake-word detector during TTS.
+
+The installed PoC21 debug APK is 33,240,364 bytes with SHA-256
+`1502dbb807dd2a74cd92e672b0a532441f765b93b22a31fa180a9887858f536f`.
 
 ## Dependency Work Queue
 

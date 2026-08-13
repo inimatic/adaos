@@ -20,6 +20,8 @@ loaded the compact Russian model and continuously captured PCM with AEC on the
 same physical phone; comparative accuracy and a six-hour run remain open.
 PoC20 separates wake-name detection from free-form transcription after the
 compact model repeatedly rendered a naturally spoken «Ада» as «а если».
+PoC21 isolates local TTS from decoder state and creates a clean recognition
+boundary immediately after each response.
 Together they prove the Android lifecycle, embedded CPython
 3.11, app-private identity, loopback discovery, hosted-client LO connection,
 browser control channel, native Android `y-py`, an SQLite-backed YStore, and
@@ -1008,6 +1010,29 @@ with zero errors or drops. Its locally rendered response did not trigger the
 wake decoder. Natural-speaker and long-duration false-activation measurements
 remain physical gates. The installed PoC20 debug APK is 33,177,221 bytes with
 SHA-256 `7190015c8b43c64975dd6e05c07db3905e0db3c82d231dfdf1bd00f06062b3aa`.
+
+PoC21 diagnosis (2026-08-13): continuous capture had not stopped, but 11 of 19
+finalized fragments were local TTS and were marked as echo. A command spoken
+immediately after the response could be joined to that TTS tail and rejected as
+one echo fragment. The Vosk path now keeps `AudioRecord` drained without feeding
+PCM to either decoder while Android TTS is active, waits 180 ms after `onDone`,
+then recreates both decoders on a clean utterance boundary. This is explicit
+turn-taking, not full duplex: runtime reports `barge_in_available=false` for
+this backend. Interruption during TTS remains deferred until a trustworthy
+render reference can separate user speech from the assistant.
+
+The final physical sequence submitted two acoustic commands back-to-back, with
+the second starting immediately after the first decoder reset. Both were
+admitted with zero rejected, echo-suppressed, dropped, or capture-error
+utterances. A second sequence addressed Арсений twice: both full transcripts
+selected `agent:conversation_companions:arseni`, both Hub calls returned
+`used_llm=true` and `llm_route=root_llm`, and capture returned to `listening`
+after each local TTS response. The wake fallback is restricted to short aliases
+of the general Ada assistant; longer companion names are attributed by the full
+transcript rather than risking a cross-agent guess.
+
+The installed PoC21 debug APK is 33,240,364 bytes with SHA-256
+`1502dbb807dd2a74cd92e672b0a532441f765b93b22a31fa180a9887858f536f`.
 
 Loading Vosk is not free: the Samsung process rose from roughly 99 MiB sampled
 PSS before model load to 327 MiB in the AdaOS sampler and 379 MiB in
