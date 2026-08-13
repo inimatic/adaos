@@ -45,10 +45,12 @@ class VoskVoiceAssistant(
     private val stopped = AtomicBoolean(true)
     private val captureRunning = AtomicBoolean(false)
     private val dispatchBusy = AtomicBoolean(false)
+    private val recognizerResetRequested = AtomicBoolean(false)
     @Volatile private var desired = false
     @Volatile private var captureEligible = false
     @Volatile private var speaking = false
     @Volatile private var aecEnabled = false
+    @Volatile private var resumeRecognitionAt = 0L
     private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
     private var currentModelId = ""
@@ -70,6 +72,8 @@ class VoskVoiceAssistant(
     private var echoSuppressed = 0L
     private var captureErrors = 0L
     private var wakeDetections = 0L
+    private var ttsGuardedFrames = 0L
+    private var recognizerResets = 0L
     private var partialText = ""
     private var lastWakeAlias = ""
     private var lastTranscript = ""
@@ -163,10 +167,10 @@ class VoskVoiceAssistant(
                 val loadedModel = currentModel ?: throw IllegalStateException("vosk_model_not_loaded")
                 val wakeAliases = loadWakeAliases()
                 if (wakeAliases.isEmpty()) throw IllegalStateException("activation_catalog_empty")
-                val recognizer = Recognizer(loadedModel, SAMPLE_RATE.toFloat()).also {
+                var recognizer = Recognizer(loadedModel, SAMPLE_RATE.toFloat()).also {
                     it.setWords(true)
                 }
-                val wakeRecognizer = Recognizer(
+                var wakeRecognizer = Recognizer(
                     loadedModel,
                     SAMPLE_RATE.toFloat(),
                     wakeGrammar(wakeAliases),
@@ -211,6 +215,41 @@ class VoskVoiceAssistant(
                     if (count <= 0) {
                         if (count < 0) throw IllegalStateException("audio_record_read:$count")
                         continue
+                    }
+                    // Android AEC reduces rendered speech but does not remove it
+                    // completely. Decoding local TTS contaminated the current
+                    // utterance and made an immediately-following command look
+                    // like echo. Keep AudioRecord drained, but create a clean
+                    // decoder boundary as soon as TTS finishes.
+                    if (speaking || System.currentTimeMillis() < resumeRecognitionAt) {
+                        ttsGuardedFrames += 1
+                        continue
+                    }
+                    if (recognizerResetRequested.compareAndSet(true, false)) {
+                        recognizer.close()
+                        wakeRecognizer.close()
+                        recognizer = Recognizer(loadedModel, SAMPLE_RATE.toFloat()).also {
+                            it.setWords(true)
+                        }
+                        wakeRecognizer = Recognizer(
+                            loadedModel,
+                            SAMPLE_RATE.toFloat(),
+                            wakeGrammar(wakeAliases),
+                        ).also { it.setWords(true) }
+                        currentRecognizer = recognizer
+                        currentWakeRecognizer = wakeRecognizer
+                        pendingWake = null
+                        partialText = ""
+                        recognizerResets += 1
+                        recentSpeechText = ""
+                        echoGuardUntil = 0L
+                        publishRuntime(
+                            "listening",
+                            JSONObject()
+                                .put("reason", "tts_decoder_reset")
+                                .put("model_id", modelId)
+                                .put("capture_owner", "vosk_streaming"),
+                        )
                     }
                     val wakeFinal = wakeRecognizer.acceptWaveForm(pcm, count)
                     val wakePayload = JSONObject(
@@ -399,14 +438,31 @@ class VoskVoiceAssistant(
         speaking = true
         recentSpeechText = text
         echoGuardUntil = Long.MAX_VALUE
+        publishRuntime(
+            "tts_output_guard",
+            JSONObject().put("capture_owner", "vosk_streaming").put("decode_paused", true),
+        )
         val language = if (voiceProfile.startsWith("en", ignoreCase = true)) "en-US" else "ru-RU"
         textToSpeech?.language = Locale.forLanguageTag(language)
-        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "adaos-vosk-${System.currentTimeMillis()}")
+        val result = textToSpeech?.speak(
+            text,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "adaos-vosk-${System.currentTimeMillis()}",
+        )
+        if (result == TextToSpeech.ERROR) finishSpeaking()
     }
 
     private fun finishSpeaking() {
         speaking = false
-        echoGuardUntil = System.currentTimeMillis() + ECHO_TAIL_MS
+        resumeRecognitionAt = System.currentTimeMillis() + TTS_DRAIN_MS
+        recognizerResetRequested.set(true)
+        publishRuntime(
+            "listening_resume_pending",
+            JSONObject()
+                .put("capture_owner", "vosk_streaming")
+                .put("resume_in_ms", TTS_DRAIN_MS),
+        )
     }
 
     private fun isLikelyEcho(text: String): Boolean {
@@ -433,6 +489,12 @@ class VoskVoiceAssistant(
         for (agentIndex in 0 until agents.length()) {
             val agent = agents.optJSONObject(agentIndex) ?: continue
             val agentId = agent.optString("id", "")
+            // The grammar decoder is a recovery path for the short name Ada,
+            // which the compact Russian model often expands to unrelated
+            // words. Longer companion names remain reliably attributable by
+            // the full transcript; allowing the tiny grammar to choose among
+            // all agents produced unsafe cross-agent guesses.
+            if (agentId != GENERAL_AGENT_ID) continue
             val values = agent.optJSONArray("aliases") ?: JSONArray()
             for (aliasIndex in 0 until values.length()) {
                 val phrase = values.optString(aliasIndex, "").trim()
@@ -511,6 +573,11 @@ class VoskVoiceAssistant(
             .put("capture_errors", captureErrors)
             .put("wake_detections", wakeDetections)
             .put("last_wake_alias", lastWakeAlias)
+            .put("tts_guarded_frames", ttsGuardedFrames)
+            .put("recognizer_resets", recognizerResets)
+            .put("recognition_resume_at_epoch_ms", resumeRecognitionAt)
+            .put("duplex_mode", "turn_taking")
+            .put("barge_in_available", false)
             .put("partial", partialText)
             .put("last_transcript", lastTranscript)
             .put("last_error", lastError)
@@ -533,8 +600,9 @@ class VoskVoiceAssistant(
         private const val SAMPLE_RATE = 16_000
         private const val POLICY_POLL_MS = 750L
         private const val RETRY_MS = 1_500L
-        private const val ECHO_TAIL_MS = 2_500L
+        private const val TTS_DRAIN_MS = 180L
         private const val TRANSCRIPT_URL = "http://127.0.0.1:8777/api/node/voice/native/transcript"
+        private const val GENERAL_AGENT_ID = "agent:android:local"
         private const val TAG = "AdaOSVoskVoice"
     }
 
