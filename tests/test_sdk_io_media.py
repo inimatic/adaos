@@ -237,3 +237,24 @@ def test_sdk_io_media_lists_normalized_resources(monkeypatch, tmp_path):
     assert sdk_media.list_media_resources(source="media_indexer", limit=1)[0]["resource_id"] == "e" * 32
     with pytest.raises(ValueError, match="unsupported_media_source"):
         sdk_media.list_media_resources(source="catalog")
+
+
+def test_sdk_io_media_discovers_references_when_managed_store_is_unavailable(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+    from adaos.services import media_core
+
+    referenced_clip = tmp_path / "referenced.mp4"
+    referenced_clip.write_bytes(b"reference")
+    referenced_resource = media_core.media_resource_from_path(
+        referenced_clip,
+        source="media_server",
+        resource_id="ref_clip",
+        content_path="/api/node/media/resources/content/ref_clip",
+        routed_content_path="/media/resources/content/ref_clip",
+    )
+    monkeypatch.setattr(sdk_media, "iter_media_store_resources", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr(sdk_media, "iter_media_reference_resources", lambda: iter([referenced_resource]))
+
+    items = sdk_media.list_media_resources(source="media_server")
+
+    assert [item["resource_id"] for item in items] == ["ref_clip"]

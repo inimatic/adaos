@@ -175,13 +175,11 @@ def list_media_resources(
         try:
             resources.extend(iter_media_store_resources())
         except Exception:
-            if source_norm == "media_server":
-                return []
+            pass
         try:
             resources.extend(iter_media_reference_resources())
         except Exception:
-            if source_norm == "media_server" and not resources:
-                return []
+            pass
     if source_norm in {"all", "media_indexer"}:
         try:
             from adaos.services.media_indexer_library import iter_media_indexer_resources
