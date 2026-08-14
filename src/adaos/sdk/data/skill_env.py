@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -19,6 +20,11 @@ __all__ = [
     "read_env",
     "write_env",
     "skill_env_path",
+    "async_get_env",
+    "async_set_env",
+    "async_delete_env",
+    "async_read_env",
+    "async_write_env",
 ]
 
 
@@ -285,3 +291,23 @@ def delete_env(key: str) -> None:
         if key in payload:
             payload.pop(key, None)
             _write_json_object_unlocked(target, payload)
+
+
+async def async_read_env() -> dict[str, Any]:
+    return await asyncio.to_thread(read_env)
+
+
+async def async_write_env(payload: Mapping[str, Any]) -> None:
+    await asyncio.to_thread(write_env, payload)
+
+
+async def async_get_env(key: str, default: Any | None = None) -> Any:
+    return await asyncio.to_thread(get_env, key, default)
+
+
+async def async_set_env(key: str, value: Any) -> None:
+    await asyncio.to_thread(set_env, key, value)
+
+
+async def async_delete_env(key: str) -> None:
+    await asyncio.to_thread(delete_env, key)

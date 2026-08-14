@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -11,7 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaos.sdk.data.skill_memory import get as skill_memory_get, set as skill_memory_set
+from adaos.sdk.data.skill_memory import (
+    async_get as skill_memory_async_get,
+    async_set as skill_memory_async_set,
+    get as skill_memory_get,
+    set as skill_memory_set,
+)
 from adaos.sdk.skill_env import get_env, read_env, set_env, skill_env_path
 from adaos.services.agent_context import get_ctx
 from adaos.services.skill import manager as skill_manager_module
@@ -411,6 +417,27 @@ def test_skill_memory_and_skill_env_share_same_store(tmp_path: Path, monkeypatch
             ctx.skill_ctx.clear()
         else:
             ctx.skill_ctx.set(previous.name, previous.path)
+
+
+def test_async_skill_memory_keeps_context_and_moves_io_off_loop(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
+    skill_dir = tmp_path / "skills" / "demo_skill"
+    skill_dir.mkdir(parents=True)
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(tmp_path / "skill_env.json"))
+
+    ctx.skill_ctx.set("demo_skill", skill_dir)
+    try:
+        asyncio.run(skill_memory_async_set("status", {"ready": True}))
+        value = asyncio.run(skill_memory_async_get("status", {}))
+    finally:
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+    assert value == {"ready": True}
 
 
 def test_skill_memory_concurrent_writes_share_atomic_store(tmp_path: Path, monkeypatch) -> None:

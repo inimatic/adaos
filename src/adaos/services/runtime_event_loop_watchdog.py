@@ -123,6 +123,8 @@ class RuntimeEventLoopWatchdog:
                 observed_at = time.monotonic()
                 stall_ms = (observed_at - probe_started) * 1000.0
                 record_runtime_event_loop_watchdog_probe(elapsed_ms=stall_ms, stalled=True)
+                frames: list[dict[str, Any]] = []
+                process_sample: dict[str, Any] = {}
                 if observed_at - last_report_at >= self._report_interval_sec:
                     last_report_at = observed_at
                     frames = _stack_frames(self._loop_thread_id)
@@ -155,10 +157,26 @@ class RuntimeEventLoopWatchdog:
                 while not self._stop.is_set() and not acknowledged.wait(self._interval_sec):
                     continue
                 if acknowledged.is_set():
+                    completed_stall_ms = (time.monotonic() - probe_started) * 1000.0
                     record_runtime_event_loop_watchdog_probe(
-                        elapsed_ms=(time.monotonic() - probe_started) * 1000.0,
+                        elapsed_ms=completed_stall_ms,
                         stalled=False,
+                        completed_stall=True,
                     )
+                    if frames:
+                        try:
+                            record_runtime_event_loop_stall(
+                                stall_ms=completed_stall_ms,
+                                threshold_ms=self._threshold_sec * 1000.0,
+                                interval_sec=self._interval_sec,
+                                stack_frames=frames,
+                                loop_thread_id=self._loop_thread_id,
+                                watchdog_thread_id=watchdog_thread_id,
+                                process_sample=process_sample,
+                                increment_occurrence=False,
+                            )
+                        except Exception:
+                            _LOG.exception("event-loop watchdog incident completion recording failed")
         finally:
             set_runtime_event_loop_watchdog_state(
                 running=False,

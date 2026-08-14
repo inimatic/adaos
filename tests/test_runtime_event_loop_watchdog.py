@@ -99,13 +99,49 @@ def test_watchdog_reliability_signal_tracks_stalls() -> None:
         threshold_ms=250.0,
     )
     reliability.record_runtime_event_loop_watchdog_probe(elapsed_ms=251.5, stalled=True)
+    reliability.record_runtime_event_loop_watchdog_probe(
+        elapsed_ms=2104.25,
+        stalled=False,
+        completed_stall=True,
+    )
 
     snapshot = reliability.runtime_event_loop_watchdog_snapshot()
 
     assert snapshot["running"] is True
-    assert snapshot["status"] == "stalled"
+    assert snapshot["status"] == "watching"
     assert snapshot["stall_total"] == 1
-    assert snapshot["last_stall_ms"] == 251.5
+    assert snapshot["last_stall_ms"] == 2104.25
+    assert snapshot["max_stall_ms"] == 2104.25
+
+
+def test_stall_incident_completion_updates_duration_without_double_count(monkeypatch) -> None:
+    incident_registry.reset_incident_registry()
+    monkeypatch.setattr(incident_registry, "process_activity_history_snapshot", lambda limit=8: {})
+    kwargs = {
+        "threshold_ms": 250.0,
+        "interval_sec": 0.5,
+        "stack_frames": [
+            {
+                "filename": "/root/.adaos/workspace/skills/.runtime/demo_skill/v1/handlers/main.py",
+                "lineno": 42,
+                "function": "refresh",
+            }
+        ],
+        "loop_thread_id": 11,
+        "watchdog_thread_id": 22,
+        "process_sample": {},
+    }
+
+    incident_registry.record_runtime_event_loop_stall(stall_ms=250.0, **kwargs)
+    completed = incident_registry.record_runtime_event_loop_stall(
+        stall_ms=2200.0,
+        increment_occurrence=False,
+        **kwargs,
+    )
+
+    assert completed["occurrence_count"] == 1
+    assert completed["latest_evidence"]["stall_ms"] == 2200.0
+    assert "2200.0 ms" in completed["summary"]
 
 
 def test_stall_incident_attributes_runtime_skill_stack(monkeypatch) -> None:

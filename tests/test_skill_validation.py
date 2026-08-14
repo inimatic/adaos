@@ -291,6 +291,98 @@ async def on_demo_changed(evt):
     assert "runtime.async_subscription_blocking_call" in {issue.code for issue in report.issues}
 
 
+def test_strict_skill_validation_rejects_blocking_detached_task_through_helper(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+import asyncio
+from pathlib import Path
+
+from adaos.sdk.core.decorators import tool
+from adaos.sdk.data import skill_memory_get
+
+def read_state():
+    return skill_memory_get("state", {})
+
+def read_payload():
+    return Path("payload.json").read_text(encoding="utf-8")
+
+async def background_refresh():
+    read_state()
+    read_payload()
+
+@tool(summary="ping")
+def ping():
+    asyncio.get_running_loop().create_task(background_refresh())
+    return {"ok": True}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    issues = [issue for issue in report.issues if issue.code == "runtime.async_task_blocking_call"]
+
+    assert report.ok is False
+    assert len(issues) == 1
+    assert "adaos.sdk.data.skill_memory_get" in issues[0].message
+    assert "read_text" in issues[0].message
+
+
+def test_strict_skill_validation_allows_blocking_helper_via_to_thread(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+import asyncio
+from pathlib import Path
+
+from adaos.sdk.core.decorators import tool
+
+def read_payload():
+    return Path("payload.json").read_text(encoding="utf-8")
+
+async def background_refresh():
+    return await asyncio.to_thread(read_payload)
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert "runtime.async_task_blocking_call" not in {issue.code for issue in report.issues}
+
+
+def test_strict_skill_validation_follows_async_class_method_helpers(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from pathlib import Path
+
+from adaos.sdk.core.decorators import tool
+
+class BackgroundWorker:
+    def read_payload(self):
+        return Path("payload.json").read_text(encoding="utf-8")
+
+    async def run(self):
+        return self.read_payload()
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+    issues = [issue for issue in report.issues if issue.code == "runtime.async_task_blocking_call"]
+
+    assert report.ok is False
+    assert len(issues) == 1
+    assert "BackgroundWorker.run" in issues[0].message
+    assert "read_text" in issues[0].message
+
+
 def test_skill_validation_allows_declared_stream_receiver_and_bounded_state(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

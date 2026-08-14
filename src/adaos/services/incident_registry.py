@@ -485,6 +485,7 @@ def record_incident(
     fingerprint_parts: Iterable[Any] | None = None,
     tags: Iterable[str] | None = None,
     ts: float | None = None,
+    increment_occurrence: bool = True,
 ) -> dict[str, Any]:
     now_ts = float(ts if ts is not None else _now())
     inc_class = _clean_token(incident_class, fallback="unknown")
@@ -522,7 +523,8 @@ def record_incident(
             _INCIDENTS[fingerprint] = item
             _ORDER.append(fingerprint)
         item["last_seen_at"] = now_ts
-        item["occurrence_count"] = int(item.get("occurrence_count") or 0) + 1
+        if increment_occurrence or int(item.get("occurrence_count") or 0) <= 0:
+            item["occurrence_count"] = int(item.get("occurrence_count") or 0) + 1
         if _severity_rank(severity_token) >= _severity_rank(item.get("severity")):
             item["severity"] = severity_token
         if summary:
@@ -699,6 +701,7 @@ def record_runtime_event_loop_stall(
     loop_thread_id: int,
     watchdog_thread_id: int,
     process_sample: dict[str, Any] | None = None,
+    increment_occurrence: bool = True,
 ) -> dict[str, Any]:
     frames = [dict(frame) for frame in list(stack_frames)[-40:]]
     domain = _domain_from_runtime_stack(frames)
@@ -729,6 +732,7 @@ def record_runtime_event_loop_stall(
         },
         fingerprint_parts=("runtime_event_loop_stall", domain),
         tags=("event-loop", "latency", "channel-protection", "blocking-stack"),
+        increment_occurrence=increment_occurrence,
     )
 
 

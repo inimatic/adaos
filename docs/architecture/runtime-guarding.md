@@ -432,9 +432,16 @@ instead of embedded into Yjs.
 - [x] Run synchronous skill subscription handlers in a dedicated bounded
   executor with owner/topic/handler admission, active-thread, wall-time,
   outcome, overload, and blocking-watchdog accounting.
-- [x] Preserve slow async subscription owner and pre-incident process evidence,
-  and reject obvious synchronous blocking APIs in async subscriptions during
-  strict skill validation.
+- [x] Preserve slow async subscription owner and pre-incident process evidence.
+  Strict skill validation walks the local helper call graph of every async
+  skill function, including detached background tasks, and rejects known
+  synchronous filesystem, network, subprocess, future wait, and skill-memory
+  calls unless they cross `asyncio.to_thread(...)` or a bounded SDK worker.
+- [x] Provide async skill-env and skill-memory SDK operations that preserve the
+  active skill context while moving persistent JSON I/O off the event loop.
+- [x] Probe the event loop from an independent daemon thread, capture the live
+  blocked stack and owner, then finalize the same incident with the full stall
+  duration after recovery without double-counting the occurrence.
 - [ ] Add cooperative async subscription aggregate accounting and quarantine
   without moving loop-affine SDK/Yjs state onto worker event loops.
 - [ ] Wrap projection and Yjs write boundaries with owner accounting.

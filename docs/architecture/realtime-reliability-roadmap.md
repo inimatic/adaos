@@ -693,16 +693,30 @@ obsolete queued revisions do not amplify subscriber work. Synchronous skill
 subscriptions now execute in a dedicated bounded worker pool after their event
 payload is converted to a thread-safe plain value on the owner loop. Admission,
 active thread identity, duration, failure, overload, and pre-incident process
-activity remain visible in reliability and durable incidents. Async
-subscriptions remain cooperative event-loop code; strict skill validation
-rejects direct known blocking calls and slow-handler incidents preserve owner
-and process evidence.
+activity remain visible in reliability and durable incidents. Async skill code
+remains cooperative event-loop code; strict validation now follows local helper
+calls from subscriptions and detached tasks and rejects known synchronous
+filesystem, network, subprocess, future wait, and skill-memory operations. The
+SDK provides context-preserving async skill-memory operations for the common
+persistent-state path.
 An independent daemon-thread watchdog now probes the runtime loop every 500 ms.
 When the loop cannot acknowledge within the configured lag threshold, the
 watchdog captures the loop thread stack while it is still blocked, attributes
 skill paths as `skill:<name>`, and records bounded process and skill-execution
-evidence. Its runtime counters are exposed separately from the cooperative
-async lag monitor, and it performs no automatic recovery.
+evidence. Recovery finalizes that same incident and the runtime maximum with the
+full observed duration rather than the first threshold sample. Its runtime
+counters are exposed separately from the cooperative async lag monitor, and it
+performs no automatic recovery.
+
+The first `.30` deployment of the independent watchdog produced direct evidence
+for the remaining channel stalls: `infrastate_skill` background refresh called
+`skill_memory_get`, which synchronously reached `pathlib.Path.read_text` on the
+runtime loop while update-related disk writes were active. A registry-wide
+audit then found 22 known blocking async paths across nine skills. Those paths
+were moved behind bounded workers, and the same validation pass now reports
+zero known blocking async paths for workspace skills. This does not prove that
+arbitrary CPU loops are impossible; the independent runtime stack capture
+remains the diagnostic backstop for evolved or generated skill code.
 NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
 `sys.ready` also run in workers. Target-stand pressure evidence is still needed
 before closing the tracking items.

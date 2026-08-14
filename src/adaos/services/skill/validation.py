@@ -36,6 +36,27 @@ _DIRECT_PROJECTION_WRITE_CALLS = {
     "y_py.apply_update",
 }
 _ASYNC_SUBSCRIPTION_BLOCKING_CALLS = {
+    "adaos.sdk.data.skill_env_get",
+    "adaos.sdk.data.skill_env_set",
+    "adaos.sdk.data.skill_memory_get",
+    "adaos.sdk.data.skill_memory_set",
+    "adaos.sdk.data.skill_env.delete_env",
+    "adaos.sdk.data.skill_env.get_env",
+    "adaos.sdk.data.skill_env.read_env",
+    "adaos.sdk.data.skill_env.set_env",
+    "adaos.sdk.data.skill_env.write_env",
+    "adaos.sdk.data.skill_memory.get",
+    "adaos.sdk.data.skill_memory.set",
+    "builtins.open",
+    "httpx.delete",
+    "httpx.get",
+    "httpx.head",
+    "httpx.patch",
+    "httpx.post",
+    "httpx.put",
+    "open",
+    "os.popen",
+    "os.replace",
     "os.system",
     "requests.delete",
     "requests.get",
@@ -47,13 +68,35 @@ _ASYNC_SUBSCRIPTION_BLOCKING_CALLS = {
     "shutil.copy2",
     "shutil.copyfile",
     "shutil.copytree",
+    "shutil.move",
+    "shutil.rmtree",
+    "socket.create_connection",
     "subprocess.call",
     "subprocess.check_call",
     "subprocess.check_output",
+    "subprocess.Popen",
     "subprocess.run",
     "time.sleep",
     "urllib.request.urlopen",
     "urllib.request.urlretrieve",
+}
+_ASYNC_BLOCKING_METHOD_SUFFIXES = {
+    ".exists",
+    ".glob",
+    ".is_dir",
+    ".is_file",
+    ".iterdir",
+    ".mkdir",
+    ".open",
+    ".read_bytes",
+    ".read_text",
+    ".rename",
+    ".rglob",
+    ".stat",
+    ".touch",
+    ".unlink",
+    ".write_bytes",
+    ".write_text",
 }
 _TRANSCRIPT_FILE_RE = re.compile(r"(transcript|chat_history|conversation_history|voice_chat|dialog_history)", re.I)
 _UNBOUNDED_NAME_RE = re.compile(r"(cache|history|histories|events|logs|frames|sessions|state|buffer|queue|transcript)", re.I)
@@ -417,7 +460,13 @@ def _direct_projection_write_issues(skill_dir: Path) -> List[Issue]:
 
 
 def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
-    """Reject obvious synchronous I/O in async event handlers under strict validation."""
+    """Find synchronous I/O reachable from any async skill function.
+
+    Detached tasks share the core event loop with channel handling just like
+    async subscriptions do. The local call graph catches common helper
+    wrappers so moving a blocking call one function away does not bypass
+    strict validation.
+    """
 
     issues: List[Issue] = []
     for path in sorted(skill_dir.rglob("*.py")):
@@ -439,51 +488,138 @@ def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
                 for alias in node.names:
                     symbol_aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
 
-        for node in ast.walk(tree):
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        function_class_scopes: dict[str, str | None] = {}
+
+        def _collect_functions(
+            body: list[ast.stmt],
+            *,
+            prefix: str = "",
+            class_scope: str | None = None,
+        ) -> None:
+            for statement in body:
+                if isinstance(statement, ast.ClassDef):
+                    nested_class = f"{prefix}{statement.name}"
+                    _collect_functions(
+                        statement.body,
+                        prefix=f"{nested_class}.",
+                        class_scope=nested_class,
+                    )
+                    continue
+                if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                key = f"{prefix}{statement.name}"
+                functions[key] = statement
+                function_class_scopes[key] = class_scope
+                _collect_functions(
+                    statement.body,
+                    prefix=f"{key}.",
+                    class_scope=class_scope,
+                )
+
+        _collect_functions(tree.body)
+        direct_blocking: dict[str, list[tuple[int, str]]] = {name: [] for name in functions}
+        local_calls: dict[str, set[str]] = {name: set() for name in functions}
+
+        def _resolve_call(call: ast.Call) -> str:
+            called = _ast_dotted_name(call.func)
+            resolved = symbol_aliases.get(called, called)
+            root, dot, suffix = resolved.partition(".")
+            if dot and root in module_aliases:
+                resolved = f"{module_aliases[root]}.{suffix}"
+            return resolved
+
+        def _local_function_key(called: str, *, function_key: str) -> str | None:
+            class_scope = function_class_scopes.get(function_key)
+            if class_scope and called.startswith(("self.", "cls.")):
+                candidate = f"{class_scope}.{called.split('.', 1)[1]}"
+                if candidate in functions:
+                    return candidate
+            if called in functions:
+                return called
+            parent = function_key.rpartition(".")[0]
+            while parent:
+                candidate = f"{parent}.{called}"
+                if candidate in functions:
+                    return candidate
+                parent = parent.rpartition(".")[0]
+            return None
+
+        class _BlockingCallVisitor(ast.NodeVisitor):
+            def __init__(self, function_name: str) -> None:
+                self.function_name = function_name
+
+            def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
+                return
+
+            def visit_AsyncFunctionDef(self, nested: ast.AsyncFunctionDef) -> None:
+                return
+
+            def visit_Lambda(self, nested: ast.Lambda) -> None:
+                return
+
+            def visit_Call(self, call: ast.Call) -> None:
+                resolved = _resolve_call(call)
+                called = _ast_dotted_name(call.func)
+                local_function = _local_function_key(called, function_key=self.function_name)
+                if local_function:
+                    local_calls[self.function_name].add(local_function)
+                is_blocking = (
+                    resolved in _ASYNC_SUBSCRIPTION_BLOCKING_CALLS
+                    or resolved.endswith(".result")
+                    or any(
+                        resolved == suffix.lstrip(".") or resolved.endswith(suffix)
+                        for suffix in _ASYNC_BLOCKING_METHOD_SUFFIXES
+                    )
+                )
+                if is_blocking:
+                    direct_blocking[self.function_name].append(
+                        (int(getattr(call, "lineno", 0) or 0), resolved)
+                    )
+                self.generic_visit(call)
+
+        for name, function in functions.items():
+            visitor = _BlockingCallVisitor(name)
+            for statement in function.body:
+                visitor.visit(statement)
+
+        reachable_blocking = {name: list(items) for name, items in direct_blocking.items()}
+        changed = True
+        while changed:
+            changed = False
+            for name, calls in local_calls.items():
+                inherited = list(reachable_blocking[name])
+                for called in calls:
+                    inherited.extend(reachable_blocking.get(called) or [])
+                deduped = list(dict.fromkeys(inherited))
+                if deduped != reachable_blocking[name]:
+                    reachable_blocking[name] = deduped
+                    changed = True
+
+        for function_name, node in functions.items():
             if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            violations = reachable_blocking.get(function_name) or []
+            if not violations:
                 continue
             subscribed = any(
                 isinstance(decorator, ast.Call)
                 and _ast_dotted_name(decorator.func).split(".")[-1] == "subscribe"
                 for decorator in node.decorator_list
             )
-            if not subscribed:
-                continue
-
-            violations: list[tuple[int, str]] = []
-
-            class _BlockingCallVisitor(ast.NodeVisitor):
-                def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
-                    return
-
-                def visit_AsyncFunctionDef(self, nested: ast.AsyncFunctionDef) -> None:
-                    return
-
-                def visit_Lambda(self, nested: ast.Lambda) -> None:
-                    return
-
-                def visit_Call(self, call: ast.Call) -> None:
-                    called = _ast_dotted_name(call.func)
-                    resolved = symbol_aliases.get(called, called)
-                    root, dot, suffix = resolved.partition(".")
-                    if dot and root in module_aliases:
-                        resolved = f"{module_aliases[root]}.{suffix}"
-                    if resolved in _ASYNC_SUBSCRIPTION_BLOCKING_CALLS or resolved.endswith(".result"):
-                        violations.append((int(getattr(call, "lineno", 0) or 0), resolved))
-                    self.generic_visit(call)
-
-            visitor = _BlockingCallVisitor()
-            for statement in node.body:
-                visitor.visit(statement)
-            if not violations:
-                continue
-            first_line = min(line for line, _call in violations if line > 0)
+            positive_lines = [line for line, _call in violations if line > 0]
+            first_line = min(positive_lines) if positive_lines else int(getattr(node, "lineno", 0) or 0)
             calls = ", ".join(sorted({call for _line, call in violations}))
+            issue_code = (
+                "runtime.async_subscription_blocking_call"
+                if subscribed
+                else "runtime.async_task_blocking_call"
+            )
             issues.append(
                 Issue(
                     "warning",
-                    "runtime.async_subscription_blocking_call",
-                    f"async @subscribe handler '{node.name}' calls synchronous blocking APIs ({calls}); "
+                    issue_code,
+                    f"async skill function '{function_name}' can reach synchronous blocking APIs ({calls}); "
                     "move the operation behind await asyncio.to_thread(...) or a bounded SDK worker",
                     f"{rel}:{first_line}",
                 )

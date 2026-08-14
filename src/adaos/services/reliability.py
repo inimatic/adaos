@@ -1529,7 +1529,12 @@ def set_runtime_event_loop_watchdog_state(
         return dict(state)
 
 
-def record_runtime_event_loop_watchdog_probe(*, elapsed_ms: float, stalled: bool) -> dict[str, Any]:
+def record_runtime_event_loop_watchdog_probe(
+    *,
+    elapsed_ms: float,
+    stalled: bool,
+    completed_stall: bool = False,
+) -> dict[str, Any]:
     now = time.time()
     normalized_elapsed_ms = round(max(0.0, float(elapsed_ms)), 3)
     with _LOCK:
@@ -1545,6 +1550,9 @@ def record_runtime_event_loop_watchdog_probe(*, elapsed_ms: float, stalled: bool
             state["status"] = "stalled"
         else:
             state["last_ack_at"] = now
+            if completed_stall:
+                state["last_stall_ms"] = normalized_elapsed_ms
+                state["max_stall_ms"] = max(float(state.get("max_stall_ms") or 0.0), normalized_elapsed_ms)
             state["status"] = "watching" if state.get("running") else "stopped"
         return dict(state)
 
