@@ -20,9 +20,26 @@ _MAX_EVIDENCE_SAMPLES = 3
 _ACTIVE_WINDOW_S = 10 * 60
 _LOCK = RLock()
 _PROCESS_ACTIVITY_CAPTURE_LOCK = RLock()
+try:
+    _PROCESS_ACTIVITY_HISTORY_MAX = max(
+        24,
+        min(int(str(os.getenv("ADAOS_INCIDENT_PROCESS_HISTORY_MAX") or "96").strip()), 720),
+    )
+except Exception:
+    _PROCESS_ACTIVITY_HISTORY_MAX = 96
+try:
+    _PROCESS_ACTIVITY_HISTORY_DEFAULT_LIMIT = max(
+        24,
+        min(
+            int(str(os.getenv("ADAOS_INCIDENT_PROCESS_HISTORY_LIMIT") or "75").strip()),
+            _PROCESS_ACTIVITY_HISTORY_MAX,
+        ),
+    )
+except Exception:
+    _PROCESS_ACTIVITY_HISTORY_DEFAULT_LIMIT = min(75, _PROCESS_ACTIVITY_HISTORY_MAX)
 _INCIDENTS: dict[str, dict[str, Any]] = {}
 _ORDER: deque[str] = deque(maxlen=_MAX_INCIDENTS)
-_PROCESS_ACTIVITY_HISTORY: deque[dict[str, Any]] = deque(maxlen=25)
+_PROCESS_ACTIVITY_HISTORY: deque[dict[str, Any]] = deque(maxlen=_PROCESS_ACTIVITY_HISTORY_MAX)
 _PROCESS_ACTIVITY_PREVIOUS: dict[int, dict[str, Any]] = {}
 _PROCESS_ACTIVITY_PREVIOUS_SYSTEM: dict[str, int] = {}
 _PROCESS_ACTIVITY_PREVIOUS_AT: float | None = None
@@ -382,16 +399,25 @@ def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None
     return dict(sample)
 
 
-def process_activity_history_snapshot(*, limit: int = 25) -> dict[str, Any]:
+def process_activity_history_snapshot(*, limit: int = _PROCESS_ACTIVITY_HISTORY_DEFAULT_LIMIT) -> dict[str, Any]:
     with _LOCK:
         samples = list(_PROCESS_ACTIVITY_HISTORY)
-    bounded_limit = max(1, min(int(limit or 25), 25))
+    bounded_limit = max(1, min(int(limit or _PROCESS_ACTIVITY_HISTORY_DEFAULT_LIMIT), _PROCESS_ACTIVITY_HISTORY_MAX))
     selected = samples[-bounded_limit:]
+    window_started_at = selected[0].get("ts") if selected else None
+    window_ended_at = selected[-1].get("ts") if selected else None
+    coverage_s = (
+        max(0.0, float(window_ended_at) - float(window_started_at))
+        if isinstance(window_started_at, (int, float)) and isinstance(window_ended_at, (int, float))
+        else 0.0
+    )
     return {
         "sample_total": len(samples),
         "returned": len(selected),
-        "window_started_at": selected[0].get("ts") if selected else None,
-        "window_ended_at": selected[-1].get("ts") if selected else None,
+        "history_capacity": _PROCESS_ACTIVITY_HISTORY_MAX,
+        "window_started_at": window_started_at,
+        "window_ended_at": window_ended_at,
+        "coverage_s": round(coverage_s, 3),
         "samples": selected,
     }
 

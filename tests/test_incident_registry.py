@@ -255,6 +255,25 @@ def test_process_activity_history_keeps_pre_failure_cpu_io_and_network_deltas(mo
     assert activity["read_delta_bytes"] == 5000
 
 
+def test_process_activity_history_default_covers_six_minutes_at_runtime_sample_rate() -> None:
+    incidents.reset_incident_registry()
+    for index in range(80):
+        incidents._PROCESS_ACTIVITY_HISTORY.append(
+            {
+                "ts": 100.0 + index * 5.0,
+                "interval_s": 5.0,
+                "top_activity": [],
+                "system_delta": {},
+            }
+        )
+
+    history = incidents.process_activity_history_snapshot()
+
+    assert history["returned"] >= 73
+    assert history["coverage_s"] >= 360.0
+    assert history["history_capacity"] >= history["returned"]
+
+
 def test_process_activity_attributes_windows_skill_runtime_paths() -> None:
     command = r"C:\Python\python.exe C:\node\.adaos\workspace\skills\.runtime\downloader_skill\handlers\main.py"
 
