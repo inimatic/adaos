@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
 import logging
 import os
 import threading
@@ -261,6 +262,136 @@ async def run_sync_subscription(
     return await asyncio.shield(future)
 
 
+async def run_async_subscription(
+    callback: Callable[[], Any],
+    *,
+    skill: str,
+    topic: str,
+    handler: str,
+) -> Any:
+    """Observe and bound an async skill handler running on the owner loop.
+
+    Async handlers may legitimately await runtime-owned asyncio objects, so
+    moving them to a worker thread would violate object affinity. Admission and
+    timing still make an evolved blocking handler attributable after the loop
+    recovers.
+    """
+
+    key = _handler_key(skill, topic, handler)
+    max_pending = _env_int("ADAOS_SKILL_SUBSCRIPTION_MAX_PENDING_PER_HANDLER", 2, minimum=1, maximum=64)
+    now = time.time()
+    with _LOCK:
+        pending = int(_PENDING_BY_HANDLER.get(key) or 0)
+        stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
+        stats["execution_mode"] = "async_owner_loop"
+        if pending >= max_pending:
+            stats["overload_total"] = int(stats.get("overload_total") or 0) + 1
+            stats["last_overload_at"] = now
+            last_log = float(_LAST_OVERLOAD_LOG_AT.get(key) or 0.0)
+            should_log = now - last_log >= 5.0
+            if should_log:
+                _LAST_OVERLOAD_LOG_AT[key] = now
+        else:
+            should_log = False
+            _PENDING_BY_HANDLER[key] = pending + 1
+            stats["submitted_total"] = int(stats.get("submitted_total") or 0) + 1
+    if pending >= max_pending:
+        if should_log:
+            _LOG.warning(
+                "async skill subscription admission rejected skill=%s topic=%s handler=%s pending=%s limit=%s",
+                skill,
+                topic,
+                handler,
+                pending,
+                max_pending,
+            )
+            await asyncio.to_thread(
+                _record_pressure,
+                skill=skill,
+                topic=topic,
+                handler=handler,
+                signal="pending_limit_exceeded",
+                pending=pending,
+            )
+        return None
+
+    token = uuid.uuid4().hex
+    started_at = time.time()
+    with _LOCK:
+        _ACTIVE[token] = {
+            "token": token,
+            "handler_key": key,
+            "skill": skill,
+            "topic": topic,
+            "handler": handler,
+            "execution_mode": "async_owner_loop",
+            "state": "running",
+            "queued_at": started_at,
+            "running_at": started_at,
+            "thread_id": threading.get_ident(),
+            "thread_name": threading.current_thread().name,
+            "pending_at_submit": pending + 1,
+            "watchdog_reported": False,
+        }
+        stats = _STATS.get(key)
+        if stats is not None:
+            stats["last_started_at"] = started_at
+
+    threshold_s = _env_float("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", 1.0, minimum=0.05, maximum=300.0)
+    watchdog = asyncio.create_task(
+        _watch_blocking_handler(token, threshold_s),
+        name=f"skill-async-subscription-watchdog:{skill}:{topic}",
+    )
+    error: BaseException | None = None
+    try:
+        result = callback()
+        if inspect.isawaitable(result):
+            return await result
+        return result
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        finished_at = time.time()
+        duration_s = max(0.0, finished_at - started_at)
+        with _LOCK:
+            active = _ACTIVE.pop(token, None) or {}
+            watchdog_reported = bool(active.get("watchdog_reported"))
+            _PENDING_BY_HANDLER[key] = max(0, int(_PENDING_BY_HANDLER.get(key) or 0) - 1)
+            if _PENDING_BY_HANDLER[key] <= 0:
+                _PENDING_BY_HANDLER.pop(key, None)
+            stats = _STATS.get(key)
+            if stats is not None:
+                stats["completed_total"] = int(stats.get("completed_total") or 0) + 1
+                stats["failed_total"] = int(stats.get("failed_total") or 0) + (1 if error is not None else 0)
+                stats["last_duration_s"] = round(duration_s, 6)
+                stats["max_duration_s"] = round(max(float(stats.get("max_duration_s") or 0.0), duration_s), 6)
+                stats["last_finished_at"] = finished_at
+                stats["last_error"] = type(error).__name__ if error is not None else None
+                if duration_s >= threshold_s and not watchdog_reported:
+                    stats["blocking_total"] = int(stats.get("blocking_total") or 0) + 1
+        watchdog.cancel()
+        if duration_s >= threshold_s and not watchdog_reported:
+            _LOG.warning(
+                "async skill subscription exceeded execution budget skill=%s topic=%s handler=%s duration=%.3fs threshold=%.3fs",
+                skill,
+                topic,
+                handler,
+                duration_s,
+                threshold_s,
+            )
+            await asyncio.to_thread(
+                _record_pressure,
+                skill=skill,
+                topic=topic,
+                handler=handler,
+                signal="async_execution_budget_exceeded",
+                duration_s=duration_s,
+                pending=pending + 1,
+                threshold_s=threshold_s,
+            )
+
+
 def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
     now = time.time()
     bounded_limit = max(1, min(int(limit or 25), 100))
@@ -308,6 +439,7 @@ def reset_subscription_execution_runtime() -> None:
 
 __all__ = [
     "reset_subscription_execution_runtime",
+    "run_async_subscription",
     "run_sync_subscription",
     "subscription_execution_snapshot",
 ]

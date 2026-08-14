@@ -28,6 +28,75 @@ def test_sync_subscription_runs_on_dedicated_worker() -> None:
     assert snapshot["top_handlers"][0]["completed_total"] == 1
 
 
+def test_async_subscription_reports_active_handler_and_owner_loop_budget(monkeypatch) -> None:
+    subscription_execution.reset_subscription_execution_runtime()
+    incident_registry.reset_incident_registry()
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", "0.05")
+
+    async def run() -> dict:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler() -> None:
+            started.set()
+            await release.wait()
+
+        task = asyncio.create_task(
+            subscription_execution.run_async_subscription(
+                handler,
+                skill="async_skill",
+                topic="custom.changed",
+                handler="handlers.main.on_changed",
+            )
+        )
+        await started.wait()
+        await asyncio.sleep(0.08)
+        active = subscription_execution.subscription_execution_snapshot()
+        release.set()
+        await task
+        return active
+
+    try:
+        active = asyncio.run(run())
+        incidents = incident_registry.incident_registry_snapshot()
+
+        assert active["active_total"] == 1
+        assert active["active"][0]["skill"] == "async_skill"
+        assert active["active"][0]["execution_mode"] == "async_owner_loop"
+        assert incidents["items"][0]["domain"] == "skill:async_skill"
+    finally:
+        incident_registry.reset_incident_registry()
+
+
+def test_async_subscription_attributes_handler_that_blocks_event_loop(monkeypatch) -> None:
+    subscription_execution.reset_subscription_execution_runtime()
+    incident_registry.reset_incident_registry()
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", "0.05")
+
+    async def blocking_handler() -> None:
+        time.sleep(0.08)
+
+    try:
+        asyncio.run(
+            subscription_execution.run_async_subscription(
+                blocking_handler,
+                skill="evolved_skill",
+                topic="operations.changed",
+                handler="handlers.main.on_operations_changed",
+            )
+        )
+        execution = subscription_execution.subscription_execution_snapshot()
+        incidents = incident_registry.incident_registry_snapshot()
+
+        assert execution["active_total"] == 0
+        assert execution["top_handlers"][0]["execution_mode"] == "async_owner_loop"
+        assert execution["top_handlers"][0]["blocking_total"] == 1
+        assert incidents["items"][0]["signal"] == "async_execution_budget_exceeded"
+        assert incidents["items"][0]["domain"] == "skill:evolved_skill"
+    finally:
+        incident_registry.reset_incident_registry()
+
+
 def test_sync_subscription_reports_active_blocker(monkeypatch) -> None:
     subscription_execution.reset_subscription_execution_runtime()
     incident_registry.reset_incident_registry()

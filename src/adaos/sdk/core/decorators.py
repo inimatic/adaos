@@ -688,12 +688,22 @@ async def register_subscriptions(
                     _log_subscription_critical_bypass(_skill, _topic, admission)
                 pushed = _maybe_push_skill(_fn, _skill)
                 try:
-                    payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
-                    meta = payload.get("_meta") if isinstance(payload, dict) else None
-                    if isinstance(meta, dict):
-                        with io_meta(meta):
-                            return await _fn(evt)
-                    return await _fn(evt)
+                    async def _call_async_handler():
+                        payload = getattr(evt, "payload", None) if hasattr(evt, "payload") else None
+                        meta = payload.get("_meta") if isinstance(payload, dict) else None
+                        if isinstance(meta, dict):
+                            with io_meta(meta):
+                                return await _fn(evt)
+                        return await _fn(evt)
+
+                    from adaos.services.skill.subscription_execution import run_async_subscription
+
+                    return await run_async_subscription(
+                        _call_async_handler,
+                        skill=_skill or "<unknown>",
+                        topic=_topic,
+                        handler=f"{_fn.__module__}.{_fn.__name__}",
+                    )
                 finally:
                     if pushed:
                         clear_current_skill()
