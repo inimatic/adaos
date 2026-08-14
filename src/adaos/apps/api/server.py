@@ -1926,7 +1926,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
             "reason": disabled_reason,
             "status": read_core_update_status(),
         }
-    supervisor_payload = _try_forward_update_start_to_supervisor(body)
+    supervisor_payload = await asyncio.to_thread(_try_forward_update_start_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)
@@ -1971,7 +1971,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
 @app.post("/api/admin/update/cancel", dependencies=[Depends(require_token)])
 async def admin_update_cancel(body: CoreUpdateCancelRequest):
     _ensure_runtime_admin_mutation_allowed("update.cancel")
-    supervisor_payload = _try_forward_update_cancel_to_supervisor(body)
+    supervisor_payload = await asyncio.to_thread(_try_forward_update_cancel_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
     task = getattr(app.state, "core_update_task", None)
@@ -2015,7 +2015,7 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
             "reason": disabled_reason,
             "status": read_core_update_status(),
         }
-    supervisor_payload = _try_forward_update_rollback_to_supervisor(body)
+    supervisor_payload = await asyncio.to_thread(_try_forward_update_rollback_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)

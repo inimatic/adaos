@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 import types
 
 import pytest
@@ -490,6 +491,43 @@ def test_admin_update_start_forwards_to_supervisor_when_autostart_managed(monkey
 
     assert payload["_served_by"] == "supervisor"
     assert calls == [("http://127.0.0.1:8776/api/supervisor/update/start", "dev-token", "abc123")]
+
+
+def test_admin_update_start_does_not_block_runtime_event_loop(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_PORT", "8776")
+    monkeypatch.setenv("ADAOS_TOKEN", "dev-token")
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "accepted": True, "_served_by": "supervisor"}
+
+    def _slow_post(*_args, **_kwargs):
+        time.sleep(0.2)
+        return _Resp()
+
+    monkeypatch.setattr("requests.post", _slow_post)
+
+    async def _exercise() -> dict[str, object]:
+        task = asyncio.create_task(
+            api_server.admin_update_start(
+                api_server.CoreUpdateStartRequest(reason="test.supervisor.nonblocking")
+            )
+        )
+        started = asyncio.get_running_loop().time()
+        await asyncio.sleep(0.03)
+        assert asyncio.get_running_loop().time() - started < 0.12
+        assert not task.done()
+        return await task
+
+    payload = asyncio.run(_exercise())
+
+    assert payload["_served_by"] == "supervisor"
 
 
 def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable(monkeypatch) -> None:
