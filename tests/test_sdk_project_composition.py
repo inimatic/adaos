@@ -198,6 +198,40 @@ def test_artifact_context_reports_line_level_coverage_for_bounded_text(project_s
     assert "#lines=" in extracted["provenance"][0]["ref"]
 
 
+def test_notebook_query_selection_reaches_relevant_late_cells_instead_of_prefix_truncation(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    source = tmp_path / "long.ipynb"
+    source.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {"cell_type": "markdown", "source": ["unrelated introduction " * 500], "metadata": {}},
+                    {"cell_type": "code", "source": ["noise = 'x' * 10000\n"], "outputs": [], "metadata": {}},
+                    {"cell_type": "markdown", "source": ["# Paired shift sensitivity\nCompare TropicalMaxPool with MaxPool using paired seeds."], "metadata": {}},
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    added = artifact_context.add_path("tlp_direction", "part0", source)
+
+    extracted = artifact_context.extract_text(
+        "tlp_direction",
+        "part0",
+        added["artifact"]["artifact_id"],
+        max_characters=1_500,
+        query="paired shift sensitivity TLP MaxPool seeds",
+    )
+
+    assert "Paired shift sensitivity" in extracted["content"]
+    assert extracted["coverage"]["selection_strategy"] == "query_relevance_then_source_order"
+    assert "cell-2" in extracted["coverage"]["selected_unit_ids"]
+    assert "cell-0" in extracted["coverage"]["omitted_unit_ids"]
+
+
 def test_local_artifact_group_explicitly_replaces_an_unlocked_intake_path(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "review.md"
