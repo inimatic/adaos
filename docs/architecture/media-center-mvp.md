@@ -10,9 +10,10 @@ The first production-oriented slice is intentionally small:
 - `media_center` owns the user-facing workbench: source/kind/search/sort
   controls, catalog selection, playback surface, item details, and next-step
   guidance.
-- `adaos.sdk.io.media.list_media_resources(...)` is the only discovery seam
-  used by the skill. Core remains responsible for descriptors, content paths,
-  MIME detection, route contracts, and bounded streaming.
+- `adaos.sdk.io.media.list_media_resources(...)` is the discovery seam used by
+  the skill. `register_media_file(...)` registers an original file in place;
+  core remains responsible for descriptors, root-bound path validation,
+  content paths, MIME detection, route contracts, and ranged streaming.
 
 This gives us a durable base for a state-of-the-art media center without moving
 movie, album, episode, recommendation, or watch-history semantics into core.
@@ -32,10 +33,28 @@ It supports:
 - favorite toggles
 - playback planning through the core media content path
 - a read-only browser media surface for catalog-backed playback
+- in-place library registration: AdaOS stores only reference metadata in
+  `state/media_references.sqlite3`; audio and video bytes remain under the
+  configured source folder
 
 The skill keeps the original resource descriptor JSON. That preserves producer
 details for future migrations while letting the media center add its own product
 state independently.
+
+## Storage Semantics
+
+The SDK exposes two intentionally different operations:
+
+- `publish_media_file(...)` copies a generated or uploaded artifact into the
+  managed Media Server store. The managed copy becomes the source of truth.
+- `register_media_file(...)` registers a file owned by an external library.
+  It records the resolved file and root paths, revalidates that boundary on
+  every read, and streams the original file with HTTP Range support. It never
+  copies media bytes into `.adaos`.
+
+Media Center folder imports must use `register_media_file(...)`. This keeps
+large and slow libraries in their original location while preserving the same
+`adaos.media.resource.v1` playback contract for clients and other skills.
 
 ## Deferred Product Capabilities
 

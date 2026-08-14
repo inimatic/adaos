@@ -15,11 +15,14 @@ from adaos.services.media_core import (
     MEDIA_STORE_SKILL_NAME,
     MediaResource,
     iter_media_store_resources,
+    iter_media_reference_resources,
     media_indexer_content_path as _core_media_indexer_content_path,
+    media_reference_content_path as _core_media_reference_content_path,
     media_resource_content_path as _core_media_resource_content_path,
     media_resource_descriptor as _core_media_resource_descriptor,
     media_store_content_path,
     media_store_file_path,
+    register_media_reference as _core_register_media_reference,
     sanitize_media_filename,
 )
 from adaos.services.runtime_paths import current_base_dir
@@ -99,6 +102,10 @@ def media_indexer_content_path(playback_id: str, *, browser: bool = True) -> str
     return _core_media_indexer_content_path(playback_id, browser=browser)
 
 
+def media_reference_content_path(resource_id: str, *, browser: bool = True) -> str:
+    return _core_media_reference_content_path(resource_id, browser=browser)
+
+
 def media_resource_content_path(
     resource_id: str,
     *,
@@ -169,6 +176,11 @@ def list_media_resources(
             resources.extend(iter_media_store_resources())
         except Exception:
             if source_norm == "media_server":
+                return []
+        try:
+            resources.extend(iter_media_reference_resources())
+        except Exception:
+            if source_norm == "media_server" and not resources:
                 return []
     if source_norm in {"all", "media_indexer"}:
         try:
@@ -297,6 +309,13 @@ def direct_media_content_urls(filename: str, *, api_token: str | None = None) ->
     return [base.rstrip("/") + path for base in direct_media_base_urls()]
 
 
+def direct_media_reference_urls(resource_id: str, *, api_token: str | None = None) -> list[str]:
+    token = str(api_token or _api_token() or "").strip()
+    query = f"?token={quote(token)}" if token else ""
+    path = media_reference_content_path(resource_id, browser=False) + query
+    return [base.rstrip("/") + path for base in direct_media_base_urls()]
+
+
 def _media_file_path_for_publish(filename: str) -> Path:
     try:
         return media_file_path(filename)
@@ -376,6 +395,58 @@ def publish_media_file(
     return descriptor
 
 
+def register_media_file(
+    path: str | Path,
+    *,
+    root: str | Path,
+    content_ref: str = "",
+    namespace: str = "media",
+    mime: str = "",
+    metadata: dict[str, Any] | None = None,
+    api_token: str | None = None,
+) -> dict[str, Any]:
+    """Register an original media file for playback without copying its bytes."""
+
+    resource = _core_register_media_reference(
+        path,
+        root=root,
+        content_ref=content_ref,
+        namespace=namespace,
+        mime_type=mime,
+        metadata=metadata,
+    )
+    token = str(api_token or _api_token() or "").strip()
+    query = f"?token={quote(token)}" if token else ""
+    node_url = media_reference_content_path(resource.id, browser=False) + query
+    browser_url = media_reference_content_path(resource.id, browser=True) + query
+    direct_urls = direct_media_reference_urls(resource.id, api_token=api_token)
+    descriptor = resource.to_public_dict()
+    descriptor.update(
+        {
+            "ok": True,
+            "filename": resource.name,
+            "path": str(resource.path),
+            "url": browser_url,
+            "node_url": node_url,
+            "browser_url": browser_url,
+            "browser_path": resource.routed_content_path,
+            "direct_urls": direct_urls,
+            "content_url_candidates": [*direct_urls, node_url],
+            "mime": resource.mime_type,
+            "route": "node_media_reference",
+            "browser_route": "hub_browser_media_reference",
+            "delivery": {
+                "schema_version": "media-delivery.v1",
+                "preferred_route": "hub_direct_http" if direct_urls else "node_media_reference",
+                "fallback_route": "root_relay_range",
+                "direct_candidate_count": len(direct_urls),
+                "storage_mode": "reference",
+            },
+        }
+    )
+    return descriptor
+
+
 def browser_media_descriptor(media: dict[str, Any], *, content_ref: str | None = None) -> dict[str, Any]:
     return {
         "route": media.get("browser_route") or media.get("route") or "hub_browser_media",
@@ -403,13 +474,16 @@ __all__ = [
     "cached_image_variant",
     "direct_media_base_urls",
     "direct_media_content_urls",
+    "direct_media_reference_urls",
     "image_fingerprint",
     "list_media_resources",
     "media_content_path",
     "media_content_url",
     "media_indexer_content_path",
+    "media_reference_content_path",
     "media_resource_content_path",
     "media_resource_descriptor",
     "publish_media_file",
+    "register_media_file",
     "source_image_cache_dir",
 ]

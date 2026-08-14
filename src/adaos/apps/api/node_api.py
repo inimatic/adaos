@@ -55,6 +55,7 @@ from adaos.services.media_core import (
     media_content_response_parts,
     media_resource_from_path,
     parse_media_range,
+    resolve_media_reference,
 )
 from adaos.services.media_indexer_library import (
     resolve_media_indexer_resource,
@@ -6120,6 +6121,30 @@ async def media_indexer_file_content(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return _stream_media_resource(resource, request)
+
+
+@router.get("/media/resources/content/{resource_id}")
+async def media_reference_content(
+    resource_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_adaos_token: str | None = Header(default=None),
+):
+    await _require_request_token(
+        request,
+        authorization=authorization,
+        x_adaos_token=x_adaos_token,
+    )
+    try:
+        resource = resolve_media_reference(resource_id)
+    except ValueError as exc:
+        _raise_400(str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except (FileNotFoundError, NotADirectoryError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     return _stream_media_resource(resource, request)

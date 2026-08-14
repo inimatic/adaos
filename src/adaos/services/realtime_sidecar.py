@@ -866,6 +866,8 @@ def realtime_sidecar_media_proxy_contract(*, role: str | None = None) -> dict[st
             "/media/files/content/{filename}",
             "/api/node/media-indexer/content/{playback_id}",
             "/media/media-indexer/content/{playback_id}",
+            "/api/node/media/resources/content/{resource_id}",
+            "/media/resources/content/{resource_id}",
         ],
         "auth": {
             "query_token": True,
@@ -2835,6 +2837,70 @@ class RealtimeSidecarServer:
                 )
                 return
             path = unquote(str(parsed.path or ""))
+            reference_prefixes = (
+                "/api/node/media/resources/content/",
+                "/media/resources/content/",
+            )
+            reference_id = ""
+            for prefix in reference_prefixes:
+                if path.startswith(prefix):
+                    reference_id = path[len(prefix):]
+                    break
+            if reference_id:
+                try:
+                    from adaos.services.media_core import resolve_media_reference
+
+                    resource = resolve_media_reference(reference_id)
+                    target = resource.path
+                    mime_type = resource.mime_type
+                except ValueError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=400,
+                        reason="Bad Request",
+                        body=b"invalid_media_reference_id",
+                        method=method,
+                    )
+                    return
+                except PermissionError:
+                    await self._media_proxy_response(
+                        writer,
+                        status=403,
+                        reason="Forbidden",
+                        body=b"path_outside_media_reference_root",
+                        method=method,
+                    )
+                    return
+                except (FileNotFoundError, NotADirectoryError):
+                    await self._media_proxy_response(
+                        writer,
+                        status=404,
+                        reason="Not Found",
+                        body=b"media_reference_not_found",
+                        method=method,
+                    )
+                    return
+                try:
+                    byte_range = self._media_proxy_parse_range(headers.get("range"), size=int(target.stat().st_size))
+                except Exception:
+                    await self._media_proxy_response(
+                        writer,
+                        status=416,
+                        reason="Range Not Satisfiable",
+                        headers={"Content-Range": f"bytes */{int(target.stat().st_size)}"},
+                        body=b"range_not_satisfiable",
+                        method=method,
+                    )
+                    return
+                await self._stream_media_proxy_file(
+                    writer,
+                    target=target,
+                    mime_type=mime_type,
+                    method=method,
+                    byte_range=byte_range,
+                )
+                return
+
             indexer_prefixes = (
                 "/api/node/media-indexer/content/",
                 "/media/media-indexer/content/",

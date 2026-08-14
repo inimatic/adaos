@@ -192,6 +192,14 @@ rows. Skill-backed `dataSource.kind: skill` catalogs should set
 surface to begin preparing the first item for playback. `showDiagnostics` should
 be reserved for diagnostic views because it renders live media preview elements.
 
+Skills that expose files through that surface use the media SDK storage contract:
+
+- `adaos.sdk.io.media.publish_media_file(...)` creates a managed Media Server
+  copy and is appropriate for generated artifacts and uploads.
+- `adaos.sdk.io.media.register_media_file(...)` keeps bytes at the original
+  path, stores only a root-bound reference, and returns local and browser-routed
+  ranged content paths. Library/indexing skills should prefer this operation.
+
 ### Skill UI interfaces and modal addressing
 
 `webui.interface.views` declares stable skill-domain UI views. Concrete

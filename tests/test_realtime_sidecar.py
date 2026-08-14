@@ -7,6 +7,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -661,6 +662,7 @@ def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
     assert contract["listener"]["port"] == media_port
     assert contract["public_bases"] == [f"http://192.0.2.10:{media_port}"]
     assert "/media/media-indexer/content/{playback_id}" in contract["route_paths"]
+    assert "/media/resources/content/{resource_id}" in contract["route_paths"]
     assert contract["range_requests"] is True
 
 
@@ -714,6 +716,10 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
         "adaos.services.media_indexer_library.resolve_media_indexer_content_by_name",
         lambda filename: (media_file, {"mime_type": "audio/mpeg"}),
     )
+    monkeypatch.setattr(
+        "adaos.services.media_core.resolve_media_reference",
+        lambda resource_id: SimpleNamespace(path=media_file, mime_type="video/mp4"),
+    )
 
     async def _request(raw: bytes) -> bytes:
         reader, writer = await asyncio.open_connection("127.0.0.1", media_port)
@@ -761,6 +767,15 @@ def test_realtime_sidecar_media_proxy_serves_token_protected_content(
             assert b"Content-Type: audio/mpeg" in indexer_media
             assert b"Content-Range: bytes 2-5/6" in indexer_media
             assert indexer_media.endswith(b"cdef")
+
+            referenced_media = await _request(
+                b"GET /media/resources/content/ref_clip?token=dev-token HTTP/1.1\r\n"
+                b"Host: local\r\nRange: bytes=1-4\r\n\r\n"
+            )
+            assert b"HTTP/1.1 206 Partial Content" in referenced_media
+            assert b"Content-Type: video/mp4" in referenced_media
+            assert b"Content-Range: bytes 1-4/6" in referenced_media
+            assert referenced_media.endswith(b"bcde")
 
             indexer_compat = await _request(
                 b"GET /media/files/content/song.mp3?token=dev-token HTTP/1.1\r\n"

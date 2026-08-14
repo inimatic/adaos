@@ -3302,6 +3302,55 @@ class NatsRouteTunnelRuntime:
                                 route_outcome = "drive_public_content_started"
                                 return
 
+                            media_reference_content_prefixes = (
+                                "/media/resources/content/",
+                                "/api/node/media/resources/content/",
+                            )
+                            media_reference_id = ""
+                            for _prefix in media_reference_content_prefixes:
+                                if method in ("GET", "HEAD") and path_norm.startswith(_prefix):
+                                    media_reference_id = unquote(path_norm[len(_prefix):])
+                                    break
+                            if media_reference_id:
+                                try:
+                                    from adaos.services.media_core import resolve_media_reference
+
+                                    resource = resolve_media_reference(media_reference_id)
+                                except ValueError as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=400,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "media_reference_content_bad_request"
+                                    return
+                                except PermissionError as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=403,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "media_reference_content_forbidden"
+                                    return
+                                except (FileNotFoundError, NotADirectoryError) as exc:
+                                    await _route_media_reply_json(
+                                        key,
+                                        status=404,
+                                        payload={"ok": False, "detail": str(exc)},
+                                    )
+                                    route_outcome = "media_reference_content_missing"
+                                    return
+                                _start_route_media_reply_file(
+                                    key,
+                                    target=resource.path,
+                                    method=method,
+                                    request_headers=headers,
+                                    display_name=resource.name,
+                                    mime_type=resource.mime_type,
+                                )
+                                route_outcome = "media_reference_content_started"
+                                return
+
                             media_indexer_content_prefixes = (
                                 "/media/media-indexer/content/",
                                 "/api/node/media-indexer/content/",

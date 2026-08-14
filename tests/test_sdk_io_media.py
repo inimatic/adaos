@@ -175,6 +175,37 @@ def test_sdk_io_media_exposes_resource_descriptor_helpers():
     )
 
 
+def test_sdk_io_media_registers_original_file_without_copy(monkeypatch, tmp_path):
+    from adaos.sdk.io import media as sdk_media
+
+    library = tmp_path / "library"
+    library.mkdir()
+    source = library / "movie.mp4"
+    source.write_bytes(b"movie")
+    monkeypatch.setenv("ADAOS_MEDIA_REFERENCE_DB_PATH", str(tmp_path / "state" / "references.sqlite3"))
+    monkeypatch.setenv("ADAOS_REDEVICE_MEDIA_BASES", "http://192.168.0.30:8778")
+
+    descriptor = sdk_media.register_media_file(
+        source,
+        root=library,
+        content_ref="movie",
+        namespace="media-center",
+        mime="video/mp4",
+        api_token="token",
+    )
+
+    assert descriptor["ok"] is True
+    assert descriptor["path"] == str(source.resolve())
+    assert descriptor["source_path"] == str(source.resolve())
+    assert descriptor["metadata"]["storage_mode"] == "reference"
+    assert descriptor["content_path"].startswith("/api/node/media/resources/content/ref_")
+    assert descriptor["routed_content_path"].startswith("/media/resources/content/ref_")
+    assert descriptor["direct_urls"][0].startswith(
+        "http://192.168.0.30:8778/api/node/media/resources/content/ref_"
+    )
+    assert [path for path in tmp_path.rglob("movie.mp4")] == [source]
+
+
 def test_sdk_io_media_lists_normalized_resources(monkeypatch, tmp_path):
     from adaos.sdk.io import media as sdk_media
     from adaos.services import media_core, media_indexer_library
@@ -195,6 +226,7 @@ def test_sdk_io_media_lists_normalized_resources(monkeypatch, tmp_path):
         playback_id="e" * 32,
     )
     monkeypatch.setattr(sdk_media, "iter_media_store_resources", lambda: iter([server_resource]))
+    monkeypatch.setattr(sdk_media, "iter_media_reference_resources", lambda: iter([]))
     monkeypatch.setattr(media_indexer_library, "iter_media_indexer_resources", lambda: iter([indexer_resource]))
 
     items = sdk_media.list_media_resources(source="all")

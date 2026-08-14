@@ -18,10 +18,12 @@ __all__ = [
     "browser_media_descriptor",
     "cached_image_variant",
     "media_indexer_content_path",
+    "media_reference_content_path",
     "list_media_resources",
     "media_resource_content_path",
     "media_resource_descriptor",
     "publish_media_file",
+    "register_media_file",
     "stt_listen",
     "tts_speak",
     "build_capture_command",
@@ -45,9 +47,11 @@ if TYPE_CHECKING:
         cached_image_variant,
         list_media_resources,
         media_indexer_content_path,
+        media_reference_content_path,
         media_resource_content_path,
         media_resource_descriptor,
         publish_media_file,
+        register_media_file,
     )
     from .voice import stt_listen, tts_speak
     from .endpoint_audio import (
@@ -82,19 +86,23 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         "browser_media_descriptor",
         "cached_image_variant",
         "media_indexer_content_path",
+        "media_reference_content_path",
         "list_media_resources",
         "media_resource_content_path",
         "media_resource_descriptor",
         "publish_media_file",
+        "register_media_file",
     ):
         from .media import (
             browser_media_descriptor,
             cached_image_variant,
             list_media_resources,
             media_indexer_content_path,
+            media_reference_content_path,
             media_resource_content_path,
             media_resource_descriptor,
             publish_media_file,
+            register_media_file,
         )
 
         return {
@@ -102,9 +110,11 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
             "cached_image_variant": cached_image_variant,
             "list_media_resources": list_media_resources,
             "media_indexer_content_path": media_indexer_content_path,
+            "media_reference_content_path": media_reference_content_path,
             "media_resource_content_path": media_resource_content_path,
             "media_resource_descriptor": media_resource_descriptor,
             "publish_media_file": publish_media_file,
+            "register_media_file": register_media_file,
         }[name]
     if name in ("stt_listen", "tts_speak"):
         from .voice import stt_listen, tts_speak
