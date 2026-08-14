@@ -136,6 +136,7 @@ class NatsRouteTunnelRuntime:
         _build_hub_route_http_bases = route_policy.build_http_bases
         _build_hub_route_ws_bases = route_policy.build_ws_bases
         _hub_route_force_close_no_upstream_s = route_policy.force_close_no_upstream_s
+        _hub_route_upstream_close_payload = route_policy.upstream_close_payload
         # Browser<->Hub routing over NATS (root proxy fallback).
         # Root publishes `route.to_hub.<key>` where key is "<hub_id>--<conn_id|http--req_id>" (no dots).
         # Hub responds on `route.to_browser.<same-key>`.
@@ -2400,13 +2401,14 @@ class NatsRouteTunnelRuntime:
                             pass
                     _route_observe_flow("control", "upstream_closed")
                     try:
-                        close_payload: dict[str, Any] = {"t": "close"}
+                        close_err = None
                         try:
                             rec0 = tunnels.get(key) or {}
                             if isinstance(rec0, dict) and rec0.get("close_err"):
-                                close_payload["err"] = str(rec0.get("close_err") or "")
+                                close_err = rec0.get("close_err")
                         except Exception:
                             pass
+                        close_payload = _hub_route_upstream_close_payload(ws, error=close_err)
                         await _route_reply(key, close_payload)
                     except Exception:
                         pass

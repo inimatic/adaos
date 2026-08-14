@@ -918,6 +918,26 @@ def _hub_route_force_close_no_upstream_s() -> float:
     return value
 
 
+def _hub_route_upstream_close_payload(ws: Any, *, error: Any = None) -> dict[str, Any]:
+    """Preserve an upstream WebSocket close across the routed NATS tunnel."""
+    payload: dict[str, Any] = {"t": "close"}
+    try:
+        code = int(getattr(ws, "close_code", None))
+    except (TypeError, ValueError):
+        code = 0
+    if 1000 <= code <= 4999:
+        payload["code"] = code
+
+    reason = str(getattr(ws, "close_reason", None) or "").strip()
+    if reason:
+        payload["reason"] = reason[:512]
+
+    error_text = str(error or "").strip()
+    if error_text:
+        payload["err"] = error_text[:512]
+    return payload
+
+
 class HubRouteProxyPolicy:
     """Typed route policy with an instance-owned discovery cache."""
 
@@ -942,6 +962,7 @@ class HubRouteProxyPolicy:
     should_resend_http_resp = staticmethod(_hub_route_should_resend_http_resp)
     http_base_to_ws_base = staticmethod(_http_base_to_ws_base)
     force_close_no_upstream_s = staticmethod(_hub_route_force_close_no_upstream_s)
+    upstream_close_payload = staticmethod(_hub_route_upstream_close_payload)
 
     def observe_local_base(self, **details: Any) -> None:
         _observe_route_local_base_diag(state=self.discovery, **details)

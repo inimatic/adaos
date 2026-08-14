@@ -178,6 +178,31 @@ def test_hub_route_force_close_no_upstream_can_disable(monkeypatch) -> None:
     assert _hub_route_proxy._hub_route_force_close_no_upstream_s() == 0.0
 
 
+def test_hub_route_upstream_close_payload_preserves_guard_signal() -> None:
+    ws = SimpleNamespace(
+        close_code=1013,
+        close_reason="yws_guard_client_recovery_in_progress",
+    )
+
+    assert _hub_route_proxy._hub_route_upstream_close_payload(ws) == {
+        "t": "close",
+        "code": 1013,
+        "reason": "yws_guard_client_recovery_in_progress",
+    }
+
+
+def test_hub_route_upstream_close_payload_keeps_explicit_relay_error() -> None:
+    ws = SimpleNamespace(close_code=None, close_reason=None)
+
+    assert _hub_route_proxy._hub_route_upstream_close_payload(
+        ws,
+        error="route_sync_backpressure",
+    ) == {
+        "t": "close",
+        "err": "route_sync_backpressure",
+    }
+
+
 @pytest.mark.asyncio
 async def test_hub_root_reconnect_rearms_completed_bridge_task() -> None:
     service = bootstrap_mod.BootstrapService(

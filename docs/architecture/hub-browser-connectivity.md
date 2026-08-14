@@ -45,6 +45,15 @@ for `/ws` and `/yws`. It remains a transport-only proxy: application semantics
 still terminate in the runtime. Root-routed browsers reach the hub through the
 root route proxy and the hub-root NATS tunnel.
 
+The routed tunnel preserves WebSocket close semantics end to end. A Hub close
+message carries the upstream standard close code and UTF-8 reason through NATS;
+Root validates the code, bounds the reason to the WebSocket control-frame
+budget, and closes the browser socket with the same signal. Root may normalize
+missing, reserved, or malformed values, but it must not flatten an upstream
+`1013 yws_guard_*` into a clean `1000 upstream_close`. Client backoff and guard
+cooldowns depend on this contract, and losing it can turn one rejected YWS
+session into an unbounded reconnect loop.
+
 ## Protocol Ladder
 
 The client should treat the ladder as a quality model, not as a binary online
@@ -165,6 +174,8 @@ The browser should apply these rules consistently:
 - Direct WebRTC failure must not block correctness; it should degrade to WS/YWS.
 - Yjs provider closure must not be treated as harmless if it repeats or if first
   sync never completed.
+- Routed proxies must preserve upstream close code/reason so the client can
+  distinguish backoff, authorization, planned transition, and transport loss.
 - Runtime restart or slot promotion must force session and epoch reconciliation
   before the browser reports quality-ready.
 - Diagnostics must expose the selected transport per semantic channel and the
