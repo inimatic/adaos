@@ -53,6 +53,9 @@ The SDK exposes two intentionally different operations:
   copies media bytes into `.adaos`.
 - Non-ASCII media names use an ASCII `Content-Disposition` fallback and an RFC
   5987 UTF-8 filename, so browser streaming headers remain valid.
+- Root-routed playback records the installed route subscription explicitly;
+  a fresh acknowledged lifecycle stream is valid control authority even when
+  the selected topology has no inbound control-class subscription.
 
 Media Center folder imports must use `register_media_file(...)`. This keeps
 large and slow libraries in their original location while preserving the same

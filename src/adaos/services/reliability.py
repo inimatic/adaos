@@ -4272,7 +4272,11 @@ def _hub_root_protocol_assessment(protocol: dict[str, Any]) -> dict[str, Any]:
 
     reasons: list[str] = []
     state = "nominal"
-    if int(control.get("active_subscriptions") or 0) <= 0:
+    control_authority = _hub_root_control_authority_snapshot(protocol)
+    if (
+        int(control.get("active_subscriptions") or 0) <= 0
+        and str(control_authority.get("state") or "") != "fresh"
+    ):
         state = "degraded"
         reasons.append("control_subscription_missing")
     if int(control.get("handler_errors") or 0) > 0:

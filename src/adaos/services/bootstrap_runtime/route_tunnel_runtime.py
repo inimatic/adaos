@@ -4326,6 +4326,20 @@ class NatsRouteTunnelRuntime:
                 route_sub_v2 = None
             if route_sub_v2 is None:
                 raise RuntimeError("hub route v2 subscription was not installed")
+            try:
+                route_policy = hub_root_protocol_class_policy("route")
+                route_subjects = [f"route.v2.to_hub.{hub_id}.*"]
+                if route_sub is not None:
+                    route_subjects.append("route.to_hub.*")
+                for route_subject in route_subjects:
+                    observe_hub_root_protocol_subscription(
+                        route_subject,
+                        traffic_class="route",
+                        pending_msgs_limit=int(route_policy.get("pending_msgs_limit") or 0),
+                        pending_bytes_limit=int(route_policy.get("pending_bytes_limit") or 0),
+                    )
+            except Exception:
+                pass
             if hub_nats_verbose or not hub_nats_quiet:
                 if route_sub is not None:
                     print("[hub-io] NATS subscribe route.to_hub.* (hub route proxy, legacy v1)")

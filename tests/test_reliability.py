@@ -808,6 +808,35 @@ def test_hub_root_control_authority_uses_latest_lifecycle_stream() -> None:
     assert assessment["state"] == "nominal"
 
 
+def test_hub_root_protocol_accepts_fresh_acked_authority_without_control_subscription() -> None:
+    protocol = {
+        "traffic_classes": {
+            "control": {
+                "active_subscriptions": 0,
+                "policy": {"stale_authority_after_s": 60},
+            },
+            "route": {"active_subscriptions": 1},
+        },
+        "streams": {
+            "hub-control:lifecycle:sn_1:current": {
+                "stream_id": "hub-control:lifecycle:sn_1:current",
+                "flow_id": "hub_root.control.lifecycle",
+                "ack_total": 5,
+                "last_issued_cursor": 5,
+                "last_acked_cursor": 5,
+                "last_issue_at": 2_000.0,
+                "last_ack_at": 2_001.0,
+                "updated_at": 2_001.0,
+                "last_ack_ago_s": 2.0,
+            },
+        },
+    }
+
+    assessment = _hub_root_protocol_assessment(protocol)
+
+    assert assessment == {"state": "nominal", "reason": "no_active_protocol_pressure"}
+
+
 def test_hub_member_connection_state_uses_persisted_runtime_projection_for_linkless_members(monkeypatch) -> None:
     class _FakeDirectory:
         def list_known_nodes(self):
