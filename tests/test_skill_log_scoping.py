@@ -10,7 +10,7 @@ import pytest
 from adaos.adapters.fs.path_provider import PathProvider
 from adaos.adapters.sdk.inproc_skill_context import InprocSkillContext
 from adaos.services.agent_context import clear_ctx, set_ctx
-from adaos.services.logging import setup_logging
+from adaos.services.logging import configure_skill_module_logging, logging_queue_snapshot, setup_logging
 from adaos.services.root_mcp.logs import list_local_logs
 from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 import adaos.services.ui_runtime_diagnostics as ui_runtime_diagnostics
@@ -260,4 +260,52 @@ def test_skill_context_logs_route_to_skill_runtime_log_not_platform_log(tmp_path
         logger.handlers[:] = previous_handlers
         logger.setLevel(previous_level)
         logger.propagate = previous_propagate
+        clear_ctx()
+
+
+def test_skill_exception_capture_avoids_traceback_formatter_and_cross_thread_frames(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    skill_ctx = InprocSkillContext()
+    set_ctx(SimpleNamespace(paths=paths, skill_ctx=skill_ctx))
+    logger = setup_logging(paths, level="DEBUG")
+    monkeypatch.setattr(
+        logging.Formatter,
+        "formatException",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("queued exception must not retain or format traceback objects")
+        ),
+    )
+    configure_skill_module_logging("adaos_skill_slow_logging_test")
+    skill_logger = logging.getLogger("adaos_skill_slow_logging_test")
+    try:
+        assert skill_ctx.set("demo_skill", skill_dir)
+        try:
+            raise RuntimeError("slow traceback source")
+        except RuntimeError:
+            skill_logger.warning("deferred traceback", exc_info=True)
+        for handler in logger.handlers:
+            handler.flush()
+
+        records = [
+            json.loads(line)
+            for line in paths.skill_runtime_log_path("demo_skill").read_text(encoding="utf-8").splitlines()
+        ]
+        captured = next(item for item in records if item.get("msg") == "deferred traceback")
+        assert captured["exception"]["type"] == "RuntimeError"
+        assert captured["exception"]["message"] == "slow traceback source"
+        assert captured["exception"]["frames"][-1]["function"].startswith("test_skill_exception_capture")
+        snapshot = logging_queue_snapshot()
+        assert snapshot["configured"] is True
+        assert snapshot["enqueued_total"] >= 1
+        assert snapshot["dropped_total"] == 0
+    finally:
+        for handler in logger.handlers:
+            handler.flush()
+        skill_ctx.clear()
         clear_ctx()

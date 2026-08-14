@@ -469,6 +469,7 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
     supervisor_runtime = runtime.get("supervisor_runtime") if isinstance(runtime.get("supervisor_runtime"), dict) else {}
     signals = runtime.get("signals") if isinstance(runtime.get("signals"), dict) else {}
     event_loop_signal = signals.get("event_loop") if isinstance(signals.get("event_loop"), dict) else {}
+    logging_queue = signals.get("logging_queue") if isinstance(signals.get("logging_queue"), dict) else {}
     strategy_assessment = strategy.get("assessment") if isinstance(strategy.get("assessment"), dict) else {}
     integration = tree.get("integration") if isinstance(tree.get("integration"), dict) else {}
 
@@ -486,6 +487,16 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             f"breaches={event_loop_signal.get('breach_total') or 0} "
             f"threshold_ms={event_loop_signal.get('threshold_ms') if event_loop_signal.get('threshold_ms') is not None else '-'} "
             f"last_breach_ago_s={event_loop_signal.get('last_breach_ago_s') if event_loop_signal.get('last_breach_ago_s') is not None else '-'}"
+        )
+    if logging_queue:
+        typer.echo(
+            "runtime.logging_queue: "
+            f"listener={'ready' if logging_queue.get('listener_alive') else 'down'} "
+            f"queued={logging_queue.get('queued') or 0}/{logging_queue.get('capacity') or 0} "
+            f"high_watermark={logging_queue.get('high_watermark') or 0} "
+            f"enqueued={logging_queue.get('enqueued_total') or 0} "
+            f"dropped={logging_queue.get('dropped_total') or 0} "
+            f"last_drop_at={logging_queue.get('last_drop_at') or '-'}"
         )
     hub_root_zone = runtime.get("hub_root_zone") if isinstance(runtime.get("hub_root_zone"), dict) else {}
     if hub_root_zone:

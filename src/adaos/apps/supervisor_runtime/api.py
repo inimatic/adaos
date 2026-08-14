@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import time
@@ -43,16 +44,16 @@ class SupervisorApiAdapter:
         return {"ok": True, "ts": time.time(), "service": "adaos-supervisor"}
 
     async def supervisor_status(self) -> dict[str, Any]:
-        return self._manager().status()
+        return await asyncio.to_thread(self._manager().status)
 
     async def supervisor_memory_status(self) -> dict[str, Any]:
-        return self._manager().memory_status()
+        return await asyncio.to_thread(self._manager().memory_status)
 
     async def supervisor_memory_telemetry(self, limit: int = 100) -> dict[str, Any]:
-        return self._manager().memory_telemetry(limit=limit)
+        return await asyncio.to_thread(self._manager().memory_telemetry, limit=limit)
 
     async def supervisor_public_memory_status(self) -> dict[str, Any]:
-        return self._manager().public_memory_status()
+        return await asyncio.to_thread(self._manager().public_memory_status)
 
     async def supervisor_memory_sessions(self, limit: int = 100) -> dict[str, Any]:
         manager = self._manager()
@@ -62,7 +63,7 @@ class SupervisorApiAdapter:
             return manager.memory_sessions()
 
     async def supervisor_memory_incidents(self, limit: int = 50) -> dict[str, Any]:
-        return self._manager().memory_incidents(limit=limit)
+        return await asyncio.to_thread(self._manager().memory_incidents, limit=limit)
 
     async def supervisor_memory_session(self, session_id: str) -> dict[str, Any]:
         payload = self._manager().memory_session(session_id)
@@ -135,7 +136,7 @@ class SupervisorApiAdapter:
         )
 
     async def supervisor_sidecar_status(self) -> dict[str, Any]:
-        return self._manager().sidecar_status()
+        return await asyncio.to_thread(self._manager().sidecar_status)
 
     async def supervisor_runtime_restart(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         body = payload if isinstance(payload, dict) else {}
@@ -163,10 +164,10 @@ class SupervisorApiAdapter:
         )
 
     async def supervisor_update_status(self) -> dict[str, Any]:
-        return self._manager().supervisor_update_status()
+        return await asyncio.to_thread(self._manager().supervisor_update_status)
 
     async def supervisor_public_update_status(self) -> dict[str, Any]:
-        return self._manager().public_update_status()
+        return await asyncio.to_thread(self._manager().public_update_status)
 
     async def supervisor_update_start(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._manager().start_update(

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import queue
 from types import MethodType
 
-from adaos.services.logging import TolerantRotatingFileHandler
+from adaos.services.logging import NonBlockingQueueHandler, TolerantRotatingFileHandler
 
 
 def test_tolerant_rotating_file_handler_writes_when_rollover_is_locked(tmp_path):
@@ -48,3 +49,24 @@ def test_tolerant_rotating_file_handler_does_not_stat_path_during_rollover_check
         handler.close()
 
     assert "no stat" in logfile.read_text(encoding="utf-8")
+
+
+def test_nonblocking_queue_handler_reports_bounded_queue_drops() -> None:
+    log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=1)
+    handler = NonBlockingQueueHandler(log_queue, level=logging.DEBUG)
+    first = logging.LogRecord("skills.test", logging.INFO, __file__, 1, "first", (), None)
+    second = logging.LogRecord("skills.test", logging.WARNING, __file__, 2, "second", (), None)
+
+    handler.handle(first)
+    handler.handle(second)
+    snapshot = handler.snapshot()
+
+    assert snapshot["capacity"] == 1
+    assert snapshot["queued"] == 1
+    assert snapshot["enqueued_total"] == 1
+    assert snapshot["dropped_total"] == 1
+    assert snapshot["dropped_by_level"] == {"WARNING": 1}
+
+    log_queue.get_nowait()
+    log_queue.task_done()
+    handler.close()

@@ -3431,6 +3431,35 @@ def test_node_reliability_summary_runtime_mode_skips_diagnostic_details(monkeypa
     assert unchanged.status_code == 304
 
 
+def test_node_reliability_runtime_builder_does_not_block_event_loop(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+
+    build_started = threading.Event()
+    release_build = threading.Event()
+    build_finished = threading.Event()
+
+    def _slow_payload(*args, **kwargs):  # noqa: ANN002, ANN003
+        build_started.set()
+        release_build.wait(timeout=1.0)
+        build_finished.set()
+        return {"ok": True, "schema": "test.runtime.v1"}
+
+    monkeypatch.setattr(node_api, "_thin_runtime_reliability_payload", _slow_payload)
+
+    async def _run() -> bool:
+        response_task = asyncio.create_task(node_api.node_reliability_runtime(webspace_id="desktop"))
+        while not build_started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.01)
+        responsive_during_build = not build_finished.is_set()
+        release_build.set()
+        response = await response_task
+        assert response.status_code == 200
+        return responsive_during_build
+
+    assert asyncio.run(_run()) is True
+
+
 def test_node_reliability_summary_details_adds_on_demand_diagnostics(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router

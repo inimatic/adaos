@@ -1291,6 +1291,51 @@ def _thin_runtime_reliability_payload(
     return payload
 
 
+def _thin_runtime_reliability_response(
+    *,
+    webspace_id: str | None,
+    mode: str,
+    if_none_match: str | None,
+    started_at: float,
+    include_status_registry: bool,
+    endpoint: str | None = None,
+) -> Response:
+    resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
+    status_registry = (
+        _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
+        if include_status_registry
+        else None
+    )
+    payload = _thin_runtime_reliability_payload(
+        status_registry,
+        webspace_id=resolved_webspace_id,
+        mode=mode,
+    )
+    return _json_response_with_etag(
+        payload,
+        if_none_match=if_none_match,
+        mode=mode,
+        started_at=started_at,
+        endpoint=endpoint,
+    )
+
+
+def _compact_reliability_summary_payload(
+    reliability: dict[str, Any],
+    *,
+    webspace_id: str | None,
+    mode: str,
+) -> dict[str, Any]:
+    status_registry = _current_status_registry_snapshot(webspace_id=webspace_id)
+    payload = _compact_runtime_reliability_payload(
+        reliability,
+        webspace_id=webspace_id,
+        status_registry=status_registry,
+    )
+    payload["mode"] = mode
+    return payload
+
+
 def _webrtc_yjs_env_enabled() -> tuple[bool, str | None, str]:
     raw = os.getenv("ADAOS_WEBRTC_YJS_CHANNEL_ENABLED")
     if raw is None:
@@ -4168,17 +4213,14 @@ async def node_reliability_runtime(
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
     started_at = time.time()
-    payload = _thin_runtime_reliability_payload(
-        None,
+    return await asyncio.to_thread(
+        _thin_runtime_reliability_response,
         webspace_id=webspace_id,
         mode="runtime",
-    )
-    return _json_response_with_etag(
-        payload,
         if_none_match=if_none_match,
-        mode="runtime",
         started_at=started_at,
         endpoint="/api/node/reliability/runtime",
+        include_status_registry=False,
     )
 
 
@@ -4188,19 +4230,14 @@ async def node_reliability_details(
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
     started_at = time.time()
-    resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
-    status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
-    payload = _thin_runtime_reliability_payload(
-        status_registry,
-        webspace_id=resolved_webspace_id,
+    return await asyncio.to_thread(
+        _thin_runtime_reliability_response,
+        webspace_id=webspace_id,
         mode="details",
-    )
-    return _json_response_with_etag(
-        payload,
         if_none_match=if_none_match,
-        mode="details",
         started_at=started_at,
         endpoint="/api/node/reliability/details",
+        include_status_registry=True,
     )
 
 
@@ -4213,56 +4250,44 @@ async def node_reliability_summary(
     started_at = time.time()
     requested_mode = str(mode or "compat").strip().lower()
     if requested_mode in {"runtime", "beacon"}:
-        payload = _thin_runtime_reliability_payload(
-            None,
+        return await asyncio.to_thread(
+            _thin_runtime_reliability_response,
             webspace_id=webspace_id,
             mode="runtime",
-        )
-        return _json_response_with_etag(
-            payload,
             if_none_match=if_none_match,
-            mode="runtime",
             started_at=started_at,
+            include_status_registry=False,
         )
 
     if requested_mode in {"details", "detail"}:
-        resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
-        status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
-        payload = _thin_runtime_reliability_payload(
-            status_registry,
-            webspace_id=resolved_webspace_id,
+        return await asyncio.to_thread(
+            _thin_runtime_reliability_response,
+            webspace_id=webspace_id,
             mode="details",
-        )
-        return _json_response_with_etag(
-            payload,
             if_none_match=if_none_match,
-            mode="details",
             started_at=started_at,
+            include_status_registry=True,
         )
 
     if requested_mode in {"thin", "status", "status_plane"}:
-        resolved_webspace_id = _coerce_node_webspace_id(webspace_id)
-        status_registry = _current_status_registry_snapshot(webspace_id=resolved_webspace_id)
-        payload = _thin_runtime_reliability_payload(
-            status_registry,
-            webspace_id=resolved_webspace_id,
-        )
-        return _json_response_with_etag(
-            payload,
-            if_none_match=if_none_match,
+        return await asyncio.to_thread(
+            _thin_runtime_reliability_response,
+            webspace_id=webspace_id,
             mode="thin",
+            if_none_match=if_none_match,
             started_at=started_at,
+            include_status_registry=True,
         )
 
     reliability = await _current_reliability_payload_async(webspace_id=webspace_id)
-    status_registry = _current_status_registry_snapshot(webspace_id=webspace_id)
-    payload = _compact_runtime_reliability_payload(
+    payload = await asyncio.to_thread(
+        _compact_reliability_summary_payload,
         reliability,
         webspace_id=webspace_id,
-        status_registry=status_registry,
+        mode="full" if requested_mode == "full" else "compat",
     )
-    payload["mode"] = "full" if requested_mode == "full" else "compat"
-    return _json_response_with_etag(
+    return await asyncio.to_thread(
+        _json_response_with_etag,
         payload,
         if_none_match=if_none_match,
         mode=str(payload["mode"]),

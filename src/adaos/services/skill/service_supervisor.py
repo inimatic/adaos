@@ -398,6 +398,25 @@ def _service_health_ok(spec: ServiceSpec) -> bool:
     return 200 <= status_code < 300
 
 
+def _spawn_service_process(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    log_path: Path,
+) -> subprocess.Popen:
+    """Perform filesystem and process-launch I/O outside the runtime event loop."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as logf:
+        return subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=dict(env),
+            stdout=logf,
+            stderr=logf,
+        )
+
+
 def _listener_host_matches(expected: str, actual: str) -> bool:
     expected_token = str(expected or "").strip().lower()
     actual_token = str(actual or "").strip().lower()
@@ -1080,7 +1099,7 @@ class ServiceSkillSupervisor:
         self._external_ready_specs.pop(name, None)
         self._external_ready_at.pop(name, None)
 
-        python = self._select_python(spec)
+        python = await asyncio.to_thread(self._select_python, spec)
         env = os.environ.copy()
         env["ADAOS_SERVICE_SKILL"] = name
         env["ADAOS_SERVICE_HOST"] = spec.host
@@ -1119,21 +1138,19 @@ class ServiceSkillSupervisor:
         cmd = self._build_command(python, spec.command)
         logs_dir = self._ctx.paths.logs_dir()
         logs_dir = Path(logs_dir() if callable(logs_dir) else logs_dir)
-        logs_dir.mkdir(parents=True, exist_ok=True)
         log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
         log_path = Path(log_path_fn(name)) if callable(log_path_fn) else logs_dir / f"service.{name}.log"
 
         if self._shutdown_requested:
             return
         _log.info("starting service skill=%s cmd=%s cwd=%s", name, cmd, spec.workdir)
-        with open(log_path, "a", encoding="utf-8") as logf:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(spec.workdir),
-                env=env,
-                stdout=logf,
-                stderr=logf,
-            )
+        proc = await asyncio.to_thread(
+            _spawn_service_process,
+            cmd,
+            cwd=spec.workdir,
+            env=env,
+            log_path=log_path,
+        )
         self._procs[name] = proc
         self._proc_specs[name] = spec_key
         emit(self._ctx.bus, "skill.service.started", {"skill": name, "pid": proc.pid}, source="skill.service")
@@ -1372,7 +1389,7 @@ class ServiceSkillSupervisor:
         return payload
 
     async def _run_hook(self, spec: ServiceSpec, entrypoint: str, *, payload: dict[str, Any]) -> dict[str, Any] | None:
-        python = self._select_python(spec)
+        python = await asyncio.to_thread(self._select_python, spec)
         helper = r"""
 import asyncio
 import importlib

@@ -5922,6 +5922,20 @@ def _webspace_info_from_row(
     )
 
 
+def _describe_webspace_manifest_state_sync(
+    target_webspace_id: str,
+) -> tuple[workspace_index.WebspaceManifest, str | None, dict[str, Any]]:
+    row = workspace_index.get_workspace(target_webspace_id) or workspace_index.ensure_workspace(target_webspace_id)
+    current_scenario = _workspace_manifest_current_scenario(row)
+    validation = _build_webspace_validation(
+        source_mode=row.effective_source_mode,
+        stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
+        effective_home_scenario=row.effective_home_scenario,
+        current_scenario=current_scenario,
+    )
+    return row, current_scenario, validation
+
+
 async def describe_webspace_operational_state(webspace_id: str) -> WebspaceOperationalState:
     """
     Return the combined manifest + live scenario state for a webspace.
@@ -5932,14 +5946,9 @@ async def describe_webspace_operational_state(webspace_id: str) -> WebspaceOpera
     surfaces.
     """
     target_webspace_id = str(webspace_id or "").strip() or default_webspace_id()
-    row = workspace_index.get_workspace(target_webspace_id) or workspace_index.ensure_workspace(target_webspace_id)
-
-    current_scenario: str | None = _workspace_manifest_current_scenario(row)
-    validation = _build_webspace_validation(
-        source_mode=row.effective_source_mode,
-        stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
-        effective_home_scenario=row.effective_home_scenario,
-        current_scenario=current_scenario,
+    row, current_scenario, validation = await asyncio.to_thread(
+        _describe_webspace_manifest_state_sync,
+        target_webspace_id,
     )
     if current_scenario is not None:
         return WebspaceOperationalState(
@@ -5970,7 +5979,8 @@ async def describe_webspace_operational_state(webspace_id: str) -> WebspaceOpera
         except Exception:
             current_scenario = None
 
-    validation = _build_webspace_validation(
+    validation = await asyncio.to_thread(
+        _build_webspace_validation,
         source_mode=row.effective_source_mode,
         stored_home_scenario=str(row.home_scenario).strip() if row.home_scenario else None,
         effective_home_scenario=row.effective_home_scenario,

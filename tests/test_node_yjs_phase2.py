@@ -4,6 +4,7 @@ import asyncio
 import copy
 import importlib
 import sys
+import threading
 import types
 from types import SimpleNamespace
 
@@ -2047,6 +2048,56 @@ def test_describe_webspace_operational_state_prefers_manifest_overlay(monkeypatc
     assert result.webspace_id == "default"
     assert result.current_scenario == "infrascope"
     assert result.effective_home_scenario == "web_desktop"
+
+
+def test_describe_webspace_operational_state_keeps_sqlite_off_event_loop(monkeypatch) -> None:
+    row = SimpleNamespace(
+        title="Desktop",
+        effective_kind="workspace",
+        effective_source_mode="workspace",
+        is_dev=False,
+        home_scenario="web_desktop",
+        effective_home_scenario="web_desktop",
+        has_current_scenario_overlay=True,
+        current_scenario_overlay="infrascope",
+    )
+    read_started = threading.Event()
+    release_read = threading.Event()
+    read_finished = threading.Event()
+
+    def _slow_get_workspace(_webspace_id: str):
+        read_started.set()
+        release_read.wait(timeout=1.0)
+        read_finished.set()
+        return row
+
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "get_workspace", _slow_get_workspace)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_build_webspace_validation",
+        lambda **_kwargs: {
+            "stored_home_scenario_exists": True,
+            "home_scenario_exists": True,
+            "current_scenario_exists": True,
+            "degraded": False,
+            "validation_reason": None,
+            "recommended_action": None,
+        },
+    )
+
+    async def _run() -> bool:
+        describe_task = asyncio.create_task(
+            webspace_runtime_module.describe_webspace_operational_state("default")
+        )
+        while not read_started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.01)
+        responsive_during_read = not read_finished.is_set()
+        release_read.set()
+        await describe_task
+        return responsive_during_read
+
+    assert asyncio.run(_run()) is True
 
 
 def test_switch_webspace_scenario_defers_pointer_to_atomic_materialization(monkeypatch) -> None:

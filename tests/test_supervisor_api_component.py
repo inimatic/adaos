@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 from fastapi.testclient import TestClient
 
 from adaos.apps.supervisor_runtime import (
@@ -108,10 +111,27 @@ def test_supervisor_api_adapter_delegates_and_validates_payloads() -> None:
 
     adapter = SupervisorApiAdapter(lambda: _Manager())
 
-    import asyncio
-
     result = asyncio.run(adapter.supervisor_update_start({"target_rev": "rev-a"}))
 
     assert result["action"] == "update"
     assert result["target_rev"] == "rev-a"
     assert result["countdown_sec"] == 60.0
+
+
+def test_supervisor_api_status_does_not_block_event_loop() -> None:
+    class _Manager:
+        def status(self):
+            time.sleep(0.2)
+            return {"runtime_state": "ready"}
+
+    adapter = SupervisorApiAdapter(lambda: _Manager())
+
+    async def _exercise() -> dict[str, str]:
+        task = asyncio.create_task(adapter.supervisor_status())
+        started = asyncio.get_running_loop().time()
+        await asyncio.sleep(0.03)
+        assert asyncio.get_running_loop().time() - started < 0.12
+        assert not task.done()
+        return await task
+
+    assert asyncio.run(_exercise()) == {"runtime_state": "ready"}

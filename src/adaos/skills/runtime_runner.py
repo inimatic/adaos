@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from adaos.services.logging import configure_skill_module_logging
+
 _SKILL_SOURCE_SNAPSHOTS: dict[str, int] = {}
 _MODULE_LOAD_LOCK = threading.RLock()
 _MODULE_LOAD_COMPLETE = "__adaos_runtime_load_complete__"
@@ -292,6 +294,7 @@ def _load_module_from_skill_source(skill_path: Path, module_name: str):
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
+    configure_skill_module_logging(synthetic_name)
     sys.modules[synthetic_name] = module
     try:
         spec.loader.exec_module(module)

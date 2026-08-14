@@ -5545,6 +5545,46 @@ def test_supervisor_promote_root_marks_update_succeeded(monkeypatch, tmp_path) -
     assert attempt["last_status"]["phase"] == "root_promoted"
 
 
+def test_supervisor_root_promotion_does_not_block_event_loop(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "B")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {
+            "slot": "B",
+            "repo_dir": str(tmp_path / "slots" / "B" / "repo"),
+            "bootstrap_update": {"required": True, "changed_paths": ["src/adaos/apps/supervisor.py"]},
+        },
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "resolved_root_promotion_requirement",
+        lambda _manifest: (True, {"required": True, "effective_required": True}),
+    )
+
+    def _slow_promotion(**kwargs):
+        time.sleep(0.2)
+        return {"ok": True, "slot": kwargs["slot"], "required": True, "restart_required": True}
+
+    monkeypatch.setattr(supervisor, "_promote_root_with_validated_candidate", _slow_promotion)
+    supervisor._write_update_attempt({"state": "active", "action": "update", "updated_at": 1.0})
+    write_status({"state": "validated", "phase": "root_promotion_pending", "target_slot": "B"})
+
+    async def _exercise() -> dict[str, object]:
+        task = asyncio.create_task(manager.promote_root(reason="test.nonblocking"))
+        started = asyncio.get_running_loop().time()
+        await asyncio.sleep(0.03)
+        assert asyncio.get_running_loop().time() - started < 0.12
+        assert not task.done()
+        return await task
+
+    payload = asyncio.run(_exercise())
+
+    assert payload["accepted"] is True
+
+
 def test_supervisor_promote_root_preserves_subsequent_transition_request(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -5760,6 +5800,18 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
         },
     )
 
+    async def _terminal_migration(*, timeout=None):  # noqa: ANN001, ARG001
+        return {
+            "skill_runtime_migration": {
+                "state": "failed",
+                "phase": "complete",
+                "pending": False,
+                "failed_total": 1,
+            }
+        }
+
+    monkeypatch.setattr(manager, "_runtime_reliability_payload_async", _terminal_migration)
+
     restart_reasons: list[str] = []
 
     def _schedule_service_restart(
@@ -5791,6 +5843,53 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
     assert attempt["root_promotion_supervisor_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
     assert attempt["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
     assert payload["status"]["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+
+
+def test_supervisor_complete_update_defers_root_promotion_during_skill_migration(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(
+        manager,
+        "status",
+        lambda: {
+            "root_promotion_required": True,
+            "active_slot": "B",
+            "runtime_state": "ready",
+            "runtime_url": "http://127.0.0.1:8778",
+            "runtime_port": 8778,
+        },
+    )
+
+    async def _pending_migration(*, timeout=None):  # noqa: ANN001, ARG001
+        return {
+            "skill_runtime_migration": {
+                "operation_id": "skill-migrate-test",
+                "state": "running",
+                "phase": "tests",
+                "pending": True,
+                "current": {"skill": "media_indexer_skill", "stage": "tests"},
+                "completed_total": 3,
+                "total": 7,
+            }
+        }
+
+    async def _unexpected_promote_root(*, reason):  # noqa: ANN001, ARG001
+        raise AssertionError("root promotion must wait for skill migration")
+
+    monkeypatch.setattr(manager, "_runtime_reliability_payload_async", _pending_migration)
+    monkeypatch.setattr(manager, "promote_root", _unexpected_promote_root)
+    supervisor._write_update_attempt({"state": "active", "action": "update", "updated_at": 1.0})
+    write_status({"state": "validated", "phase": "root_promotion_pending", "action": "update"})
+
+    payload = asyncio.run(manager.complete_update(reason="supervisor.auto_update_complete", auto=True))
+
+    assert payload["accepted"] is False
+    assert payload["deferred"] is True
+    assert payload["retryable"] is True
+    assert payload["promotion_gate"]["reason"] == "skill_runtime_migration_pending"
+    assert payload["promotion_gate"]["migration"]["operation_id"] == "skill-migrate-test"
+    assert payload["restart"]["requested"] is False
+    assert read_status()["phase"] == "root_promotion_pending"
 
 
 def test_supervisor_auto_complete_does_not_repeat_root_restart(monkeypatch, tmp_path) -> None:

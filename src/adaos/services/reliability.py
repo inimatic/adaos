@@ -1721,6 +1721,8 @@ def set_integration_readiness(
 
 
 def runtime_signal_snapshot() -> dict[str, Any]:
+    from adaos.services.logging import logging_queue_snapshot
+
     with _LOCK:
         return {
             "root_control": _ROOT_CONTROL.to_dict(),
@@ -1728,6 +1730,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "integrations": {name: signal.to_dict() for name, signal in sorted(_INTEGRATIONS.items())},
             "event_loop": runtime_event_loop_lag_snapshot(),
             "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
+            "logging_queue": logging_queue_snapshot(),
         }
 
 

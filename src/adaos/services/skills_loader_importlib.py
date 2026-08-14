@@ -14,6 +14,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.logging import configure_skill_module_logging
 import yaml
 
 _LOG = logging.getLogger("adaos.services.skills_loader")
@@ -102,6 +103,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         spec = importlib.util.spec_from_file_location(mod_name, handler)
         module = importlib.util.module_from_spec(spec)
         assert spec and spec.loader
+        configure_skill_module_logging(mod_name)
         sys.modules[mod_name] = module
         try:
             spec.loader.exec_module(module)  # type: ignore[attr-defined]

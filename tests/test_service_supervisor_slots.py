@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import threading
 import time
 
 import pytest
@@ -628,6 +629,76 @@ def test_service_supervisor_serializes_concurrent_starts(monkeypatch):
     asyncio.run(_run())
 
     assert max_active == 1
+
+
+def test_service_supervisor_dependency_setup_does_not_block_event_loop(monkeypatch, tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "slow_service"
+    skill_root.mkdir(parents=True)
+    spec = mod.ServiceSpec(
+        skill="slow_service",
+        skill_root=skill_root,
+        host="127.0.0.1",
+        port=18131,
+        command=["-m", "handlers.main"],
+        workdir=skill_root,
+        env_mode="venv",
+        python_selector="3.11",
+        venv_dir=tmp_path / "venv",
+        dependencies=["slow-dependency==1"],
+        requirements_file=None,
+        health_path="/health",
+        health_timeout_ms=1000,
+        self_managed_enabled=False,
+        crash_max_in_window=3,
+        crash_window_s=60,
+        crash_cooloff_s=60,
+        health_interval_s=10,
+        health_failures_before_issue=3,
+        hook_on_issue=None,
+        hook_on_self_heal=None,
+        hook_timeout_s=10.0,
+        doctor_enabled=False,
+        doctor_cooldown_s=300,
+        doctor_issue_types=[],
+        doctor_include_log_tail_lines=0,
+    )
+    setup_started = threading.Event()
+    release_setup = threading.Event()
+    setup_finished = threading.Event()
+
+    class _Proc:
+        pid = 9131
+
+        def poll(self):
+            return None
+
+    def _slow_select_python(_spec):
+        setup_started.set()
+        release_setup.wait(timeout=1.0)
+        setup_finished.set()
+        return Path(os.sys.executable)
+
+    monkeypatch.setattr(mod, "_service_health_ok", lambda _spec: False)
+    monkeypatch.setattr(mod, "_service_listener_snapshot", lambda _spec: {"pid": 0})
+    monkeypatch.setattr(mod, "_spawn_service_process", lambda *args, **kwargs: _Proc())
+
+    supervisor = mod.ServiceSkillSupervisor()
+    monkeypatch.setattr(supervisor, "_select_python", _slow_select_python)
+    monkeypatch.setattr(supervisor, "_wait_ready", lambda _spec: asyncio.sleep(0))
+
+    async def _run() -> bool:
+        start_task = asyncio.create_task(supervisor.ensure_started(spec.skill, spec, force=True))
+        while not setup_started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.01)
+        responsive_during_setup = not setup_finished.is_set()
+        release_setup.set()
+        await start_task
+        return responsive_during_setup
+
+    assert asyncio.run(_run()) is True
 
 
 def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):

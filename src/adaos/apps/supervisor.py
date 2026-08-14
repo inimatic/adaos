@@ -3481,13 +3481,70 @@ class SupervisorManager:
     async def complete_update(self, *, reason: str, auto: bool = False) -> dict[str, Any]:
         status = read_core_update_status()
         attempt = _read_update_attempt() or {}
-        runtime = self.status()
+        runtime = await asyncio.to_thread(self.status)
         promotion: dict[str, Any] | None = None
+        promotion_gate: dict[str, Any] | None = None
         if _is_root_promotion_pending_status(status) or bool(runtime.get("root_promotion_required")):
+            reliability = await self._runtime_reliability_payload_async()
+            migration = (
+                reliability.get("skill_runtime_migration")
+                if isinstance(reliability.get("skill_runtime_migration"), dict)
+                else {}
+            )
+            if not reliability or bool(migration.get("pending")):
+                gate_reason = "runtime_reliability_unavailable" if not reliability else "skill_runtime_migration_pending"
+                promotion_gate = {
+                    "ok": False,
+                    "ready": False,
+                    "retryable": True,
+                    "reason": gate_reason,
+                    "migration": {
+                        "operation_id": migration.get("operation_id"),
+                        "state": migration.get("state"),
+                        "phase": migration.get("phase"),
+                        "pending": bool(migration.get("pending")),
+                        "current": migration.get("current"),
+                        "completed_total": migration.get("completed_total"),
+                        "total": migration.get("total"),
+                    },
+                }
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "deferred": True,
+                    "retryable": True,
+                    "auto": bool(auto),
+                    "restart_required": False,
+                    "status": status,
+                    "attempt": attempt,
+                    "runtime": runtime,
+                    "promotion": None,
+                    "promotion_gate": promotion_gate,
+                    "restart": {"ok": True, "requested": False, "mode": "deferred"},
+                    "message": (
+                        "root promotion deferred until skill runtime migration completes"
+                        if gate_reason == "skill_runtime_migration_pending"
+                        else "root promotion deferred because candidate reliability is unavailable"
+                    ),
+                    "_served_by": "supervisor",
+                }
+            promotion_gate = {
+                "ok": True,
+                "ready": True,
+                "retryable": False,
+                "reason": "skill_runtime_migration_not_pending",
+                "migration": {
+                    "operation_id": migration.get("operation_id"),
+                    "state": migration.get("state"),
+                    "phase": migration.get("phase"),
+                    "pending": False,
+                    "failed_total": migration.get("failed_total"),
+                },
+            }
             promotion = await self.promote_root(reason=reason)
             status = promotion.get("status") if isinstance(promotion.get("status"), dict) else read_core_update_status()
             attempt = _read_update_attempt() or {}
-            runtime = self.status()
+            runtime = await asyncio.to_thread(self.status)
         if not (_is_root_restart_pending_status(status) or _is_root_restart_pending_attempt(attempt)):
             return {
                 "ok": True,
@@ -3499,6 +3556,7 @@ class SupervisorManager:
                 "attempt": attempt,
                 "runtime": runtime,
                 "promotion": promotion,
+                "promotion_gate": promotion_gate,
                 "restart": {"ok": True, "requested": False, "mode": "none"},
                 "message": "root promotion is not required for the current update state",
                 "_served_by": "supervisor",
@@ -3516,6 +3574,7 @@ class SupervisorManager:
                 "attempt": attempt,
                 "runtime": runtime,
                 "promotion": promotion,
+                "promotion_gate": promotion_gate,
                 "restart": {
                     "ok": True,
                     "requested": False,
@@ -3581,6 +3640,7 @@ class SupervisorManager:
             "attempt": attempt,
             "runtime": runtime,
             "promotion": promotion,
+            "promotion_gate": promotion_gate,
             "restart": restart,
             "message": str(status.get("message") or "").strip(),
             "_served_by": "supervisor",
@@ -4033,6 +4093,9 @@ class SupervisorManager:
 
         return None
 
+    async def _transition_continuity_guard_decision_async(self, *, operation: str) -> dict[str, Any] | None:
+        return await asyncio.to_thread(self._transition_continuity_guard_decision, operation=operation)
+
     def _schedule_continuity_guarded_transition(
         self,
         request: dict[str, Any],
@@ -4428,7 +4491,8 @@ class SupervisorManager:
         }
         record: dict[str, Any]
         try:
-            result = self._runtime_request_json(
+            result = await asyncio.to_thread(
+                self._runtime_request_json,
                 path="/api/admin/update/reconcile",
                 method="POST",
                 payload=payload,
@@ -4534,7 +4598,8 @@ class SupervisorManager:
         payload = {"reason": str(trigger or "supervisor.member_hub.recovered")[:128]}
         record: dict[str, Any]
         try:
-            result = self._runtime_request_json(
+            result = await asyncio.to_thread(
+                self._runtime_request_json,
                 path="/api/node/member-hub/refresh",
                 method="POST",
                 payload=payload,
@@ -4633,7 +4698,8 @@ class SupervisorManager:
             if action == "sidecar_restart":
                 result = await self.restart_sidecar(reconnect_hub_root=True)
             elif action == "runtime_route_reset":
-                result = self._runtime_request_json(
+                result = await asyncio.to_thread(
+                    self._runtime_request_json,
                     path="/api/node/hub-root/route-reset",
                     method="POST",
                     payload={
@@ -4643,7 +4709,8 @@ class SupervisorManager:
                     timeout=5.0,
                 )
             else:
-                result = self._runtime_request_json(
+                result = await asyncio.to_thread(
+                    self._runtime_request_json,
                     path="/api/node/hub-root/reconnect",
                     method="POST",
                     payload={},
@@ -4751,7 +4818,8 @@ class SupervisorManager:
         self._member_hub_watchdog_last_reconnect_at = time.time()
         self._member_hub_watchdog_reconnect_total += 1
         try:
-            result = self._runtime_request_json(
+            result = await asyncio.to_thread(
+                self._runtime_request_json,
                 path="/api/node/member-hub/reconnect",
                 method="POST",
                 payload={},
@@ -5821,7 +5889,8 @@ class SupervisorManager:
             profile_mode=profile_mode,
             profile_session_id=profile_session_id,
         )
-        proc = subprocess.Popen(
+        proc = await asyncio.to_thread(
+            subprocess.Popen,
             argv or command or [],
             shell=bool(command),
             cwd=cwd or os.getcwd(),
@@ -5933,7 +6002,8 @@ class SupervisorManager:
             profile_trigger=None,
             skip_pending_update=True,
         )
-        proc = subprocess.Popen(
+        proc = await asyncio.to_thread(
+            subprocess.Popen,
             argv or command or [],
             shell=bool(command),
             cwd=cwd or os.getcwd(),
@@ -6156,7 +6226,7 @@ class SupervisorManager:
         return task
 
     async def restart_runtime(self, *, reason: str = "supervisor.restart") -> dict[str, Any]:
-        decision = self._transition_continuity_guard_decision(operation="restart")
+        decision = await self._transition_continuity_guard_decision_async(operation="restart")
         if decision is not None:
             self._raise_restart_continuity_block(decision)
         async with self._lock:
@@ -6286,7 +6356,7 @@ class SupervisorManager:
                 "message": "candidate prewarm skipped: target slot is unavailable",
             }
 
-        runtime_snapshot = self.status()
+        runtime_snapshot = await asyncio.to_thread(self.status)
         candidate_slot = str(runtime_snapshot.get("candidate_slot") or "").strip().upper()
         transition_mode = str(runtime_snapshot.get("transition_mode") or "").strip().lower()
         warm_switch_allowed = bool(runtime_snapshot.get("warm_switch_allowed"))
@@ -6302,9 +6372,9 @@ class SupervisorManager:
         await self.start_candidate_runtime(slot=resolved_target, reason="supervisor.candidate.prewarm")
         timeout_sec = _warm_switch_candidate_ready_timeout_sec()
         deadline = time.time() + timeout_sec
-        snapshot = self.status()
+        snapshot = await asyncio.to_thread(self.status)
         while timeout_sec > 0.0 and time.time() < deadline:
-            snapshot = self.status()
+            snapshot = await asyncio.to_thread(self.status)
             if str(snapshot.get("candidate_slot") or "").strip().upper() != resolved_target:
                 break
             memory_guard = self._candidate_memory_guard_snapshot(snapshot)
@@ -6334,7 +6404,7 @@ class SupervisorManager:
                 }
             await asyncio.sleep(0.25)
 
-        snapshot = self.status()
+        snapshot = await asyncio.to_thread(self.status)
         memory_guard = self._candidate_memory_guard_snapshot(snapshot)
         if not bool(memory_guard.get("allowed")):
             cleanup = await self._cleanup_candidate_runtime(
@@ -6387,9 +6457,9 @@ class SupervisorManager:
 
         timeout_sec = _warm_switch_candidate_ready_timeout_sec()
         deadline = time.time() + timeout_sec
-        snapshot = self.status()
+        snapshot = await asyncio.to_thread(self.status)
         while True:
-            snapshot = self.status()
+            snapshot = await asyncio.to_thread(self.status)
             candidate_slot = str(snapshot.get("candidate_slot") or "").strip().upper()
             candidate_url = str(snapshot.get("candidate_runtime_url") or "").strip()
             candidate_alive = bool(snapshot.get("candidate_managed_alive"))
@@ -6656,7 +6726,8 @@ class SupervisorManager:
                 if self.token:
                     headers["X-AdaOS-Token"] = self.token
                 runtime_base_url = self._managed_proc_base_url(proc)
-                response = requests.post(
+                response = await asyncio.to_thread(
+                    requests.post,
                     runtime_base_url + "/api/admin/shutdown",
                     headers=headers,
                     json={
@@ -7049,7 +7120,7 @@ class SupervisorManager:
             {
                 "ok": True,
                 "status": read_core_update_status(),
-                "runtime": self.status(),
+                "runtime": await asyncio.to_thread(self.status),
                 "_served_by": "supervisor_monitor",
             }
         )
@@ -7061,7 +7132,7 @@ class SupervisorManager:
                 {
                     "ok": True,
                     "status": read_core_update_status(),
-                    "runtime": self.status(),
+                    "runtime": await asyncio.to_thread(self.status),
                     "_served_by": "supervisor_monitor",
                 }
             )
@@ -7076,7 +7147,7 @@ class SupervisorManager:
             scheduled_for = _epoch(attempt.get("scheduled_for") or status.get("scheduled_for"))
             if scheduled_for > 0.0 and scheduled_for <= now:
                 request = _request_from_attempt(attempt)
-                decision = self._transition_continuity_guard_decision(
+                decision = await self._transition_continuity_guard_decision_async(
                     operation=str(request.get("action") or "update")
                 )
                 if decision is not None:
@@ -7188,7 +7259,7 @@ class SupervisorManager:
         recovered_status = _recover_active_attempt_target_already_active(
             status=current_status,
             attempt=current_attempt,
-            runtime=self.status(),
+            runtime=await asyncio.to_thread(self.status),
         )
         if isinstance(recovered_status, dict):
             current_status = recovered_status
@@ -7234,7 +7305,7 @@ class SupervisorManager:
                 current_attempt=current_attempt,
             )
 
-        decision = self._transition_continuity_guard_decision(operation=action)
+        decision = await self._transition_continuity_guard_decision_async(operation=action)
         if decision is not None:
             return self._schedule_continuity_guarded_transition(
                 request,
@@ -7387,7 +7458,8 @@ class SupervisorManager:
             _complete_update_attempt(state="completed", status=status, reason=reason)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
         promotion_slot = str((manifest or {}).get("slot") or active_slot() or "")
-        promotion = _promote_root_with_validated_candidate(
+        promotion = await asyncio.to_thread(
+            _promote_root_with_validated_candidate,
             slot=promotion_slot,
             manifest=manifest or {},
             runtime_host=self.runtime_host,

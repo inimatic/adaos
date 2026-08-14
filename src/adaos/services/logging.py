@@ -1,15 +1,22 @@
 from __future__ import annotations
 import json
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 import os
 from pathlib import Path
+import queue
+import threading
+import time
 from typing import Optional
 from datetime import datetime, timezone
 
 from adaos.domain import Event
 from adaos.ports.paths import PathProvider
 from adaos.ports import EventBus
+
+
+_ACTIVE_QUEUE_HANDLER: NonBlockingQueueHandler | None = None
+_ACTIVE_QUEUE_LOCK = threading.RLock()
 
 
 def _json_formatter(record: logging.LogRecord) -> str:
@@ -37,12 +44,187 @@ def _json_formatter(record: logging.LogRecord) -> str:
             base.update(record.extra)  # type: ignore[attr-defined]
         except Exception:
             pass
+    captured_exception = getattr(record, "adaos_exception", None)
+    if isinstance(captured_exception, dict):
+        base["exception"] = captured_exception
+    elif record.exc_info:
+        base["exception"] = logging.Formatter().formatException(record.exc_info)
+    if record.stack_info:
+        base["stack"] = str(record.stack_info)
     return json.dumps(base, ensure_ascii=False)
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         return _json_formatter(record)
+
+
+def _safe_exception_payload(exc_info: tuple[object, object, object] | None) -> dict[str, object] | None:
+    if not exc_info or len(exc_info) != 3:
+        return None
+    exc_type, exc, traceback_obj = exc_info
+    frames: list[dict[str, object]] = []
+    current = traceback_obj
+    while current is not None:
+        frame = getattr(current, "tb_frame", None)
+        code = getattr(frame, "f_code", None)
+        frames.append(
+            {
+                "filename": str(getattr(code, "co_filename", "") or ""),
+                "lineno": int(getattr(current, "tb_lineno", 0) or 0),
+                "function": str(getattr(code, "co_name", "") or ""),
+            }
+        )
+        current = getattr(current, "tb_next", None)
+    return {
+        "type": str(getattr(exc_type, "__name__", "") or type(exc).__name__),
+        "module": str(getattr(exc_type, "__module__", "") or ""),
+        "message": str(exc),
+        "frames": frames[-40:],
+    }
+
+
+def _safe_log_value(value: object, *, depth: int = 0) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if depth >= 4:
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_log_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_safe_log_value(item, depth=depth + 1) for item in list(value)[:100]]
+    return str(value)
+
+
+class SkillContextCaptureFilter(logging.Filter):
+    """Capture contextvars before a record crosses into the listener thread."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        current = _current_skill_context()
+        name = str(getattr(current, "name", "") or "").strip() if current is not None else ""
+        runtime_log_path = getattr(current, "runtime_log_path", None) if current is not None else None
+        record.adaos_skill_name = name
+        record.adaos_skill_runtime_log_path = str(runtime_log_path or "")
+        return True
+
+
+class NonBlockingQueueHandler(QueueHandler):
+    """Bounded, observable logging handoff that never performs output I/O."""
+
+    def __init__(self, log_queue: queue.Queue[logging.LogRecord], *, level: int) -> None:
+        super().__init__(log_queue)
+        self.setLevel(level)
+        self.addFilter(SkillContextCaptureFilter())
+        self._metrics_lock = threading.Lock()
+        self._enqueued_total = 0
+        self._dropped_total = 0
+        self._dropped_by_level: dict[str, int] = {}
+        self._high_watermark = 0
+        self._last_drop_at: float | None = None
+        self._listener: QueueListener | None = None
+        self._output_handlers: tuple[logging.Handler, ...] = ()
+        self._pipeline_closed = False
+
+    def bind_listener(self, listener: QueueListener, handlers: list[logging.Handler]) -> None:
+        self._listener = listener
+        self._output_handlers = tuple(handlers)
+
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        # Never transfer traceback frames, args, or arbitrary custom objects
+        # into the listener thread. y_py objects are thread-affine and may be
+        # referenced by either record args or traceback locals. Capturing only
+        # primitive frame coordinates also avoids linecache disk I/O here.
+        message = record.getMessage()
+        prepared = logging.LogRecord(
+            record.name,
+            record.levelno,
+            record.pathname,
+            record.lineno,
+            message,
+            (),
+            None,
+            record.funcName,
+            record.stack_info,
+        )
+        prepared.created = record.created
+        prepared.msecs = record.msecs
+        prepared.relativeCreated = record.relativeCreated
+        prepared.thread = record.thread
+        prepared.threadName = record.threadName
+        prepared.process = record.process
+        prepared.processName = record.processName
+        prepared.adaos_skill_name = str(getattr(record, "adaos_skill_name", "") or "")
+        prepared.adaos_skill_runtime_log_path = str(
+            getattr(record, "adaos_skill_runtime_log_path", "") or ""
+        )
+        prepared.adaos_exception = _safe_exception_payload(record.exc_info)
+        if hasattr(record, "extra"):
+            prepared.extra = _safe_log_value(getattr(record, "extra", {}))
+        return prepared
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            with self._metrics_lock:
+                self._dropped_total += 1
+                level = str(record.levelname or "UNKNOWN")
+                self._dropped_by_level[level] = self._dropped_by_level.get(level, 0) + 1
+                self._last_drop_at = time.time()
+            return
+        with self._metrics_lock:
+            self._enqueued_total += 1
+            self._high_watermark = max(self._high_watermark, self.queue.qsize())
+
+    def flush(self) -> None:
+        deadline = time.monotonic() + 5.0
+        while int(getattr(self.queue, "unfinished_tasks", 0) or 0) > 0 and time.monotonic() < deadline:
+            thread = getattr(self._listener, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                break
+            time.sleep(0.005)
+
+    def snapshot(self) -> dict[str, object]:
+        with self._metrics_lock:
+            enqueued_total = self._enqueued_total
+            dropped_total = self._dropped_total
+            dropped_by_level = dict(self._dropped_by_level)
+            high_watermark = self._high_watermark
+            last_drop_at = self._last_drop_at
+        thread = getattr(self._listener, "_thread", None)
+        return {
+            "schema": "adaos.logging.queue.v1",
+            "configured": True,
+            "capacity": int(self.queue.maxsize or 0),
+            "queued": self.queue.qsize(),
+            "high_watermark": high_watermark,
+            "enqueued_total": enqueued_total,
+            "dropped_total": dropped_total,
+            "dropped_by_level": dropped_by_level,
+            "last_drop_at": last_drop_at,
+            "listener_alive": bool(thread is not None and thread.is_alive()),
+        }
+
+    def close(self) -> None:
+        if self._pipeline_closed:
+            return
+        self._pipeline_closed = True
+        self.flush()
+        listener = self._listener
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass
+        for handler in self._output_handlers:
+            try:
+                handler.close()
+            except Exception:
+                pass
+        super().close()
 
 
 class TolerantRotatingFileHandler(RotatingFileHandler):
@@ -185,6 +367,9 @@ class SuppressSkillContextFilter(logging.Filter):
     """Keep skill-scoped records out of the platform-wide adaos.log handlers."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        captured = str(getattr(record, "adaos_skill_name", "") or "").strip()
+        if captured:
+            return False
         return _current_skill_context() is None
 
 
@@ -208,11 +393,13 @@ class SkillContextLogRouter(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         current = _current_skill_context()
-        skill_name = str(getattr(current, "name", "") or "").strip() if current is not None else ""
+        skill_name = str(getattr(record, "adaos_skill_name", "") or "").strip()
+        if not skill_name and current is not None:
+            skill_name = str(getattr(current, "name", "") or "").strip()
         if not skill_name:
             return
         try:
-            path = self._resolve_path(current)
+            path = self._resolve_path(record, current, skill_name=skill_name)
             handler = self._handler_for(path)
             handler.handle(record)
         except Exception:
@@ -227,11 +414,12 @@ class SkillContextLogRouter(logging.Handler):
         self._handlers.clear()
         super().close()
 
-    def _resolve_path(self, current: object) -> Path:
-        explicit = getattr(current, "runtime_log_path", None)
+    def _resolve_path(self, record: logging.LogRecord, current: object | None, *, skill_name: str) -> Path:
+        explicit = str(getattr(record, "adaos_skill_runtime_log_path", "") or "").strip()
+        if not explicit and current is not None:
+            explicit = str(getattr(current, "runtime_log_path", "") or "").strip()
         if explicit:
             return Path(explicit)
-        skill_name = str(getattr(current, "name", "") or "").strip()
         fn = getattr(self._paths, "skill_runtime_log_path", None)
         if callable(fn):
             return Path(fn(skill_name))
@@ -255,6 +443,58 @@ class SkillContextLogRouter(logging.Handler):
         return handler
 
 
+def _logging_queue_capacity() -> int:
+    try:
+        value = int(str(os.getenv("ADAOS_LOG_QUEUE_CAPACITY") or "4096").strip())
+    except Exception:
+        value = 4096
+    return max(128, min(value, 65_536))
+
+
+def _detach_queue_handler(handler: NonBlockingQueueHandler) -> None:
+    manager = logging.Logger.manager
+    loggers: list[logging.Logger] = [logging.getLogger()]
+    for candidate in manager.loggerDict.values():
+        if isinstance(candidate, logging.Logger):
+            loggers.append(candidate)
+    for logger in loggers:
+        logger.handlers[:] = [item for item in logger.handlers if item is not handler]
+
+
+def logging_queue_snapshot() -> dict[str, object]:
+    with _ACTIVE_QUEUE_LOCK:
+        handler = _ACTIVE_QUEUE_HANDLER
+        if handler is None:
+            return {
+                "schema": "adaos.logging.queue.v1",
+                "configured": False,
+                "capacity": 0,
+                "queued": 0,
+                "high_watermark": 0,
+                "enqueued_total": 0,
+                "dropped_total": 0,
+                "dropped_by_level": {},
+                "last_drop_at": None,
+                "listener_alive": False,
+            }
+        return handler.snapshot()
+
+
+def configure_skill_module_logging(module_name: str) -> None:
+    """Route a synthetic skill module through the protected logging queue."""
+    name = str(module_name or "").strip()
+    if not name:
+        return
+    with _ACTIVE_QUEUE_LOCK:
+        handler = _ACTIVE_QUEUE_HANDLER
+        if handler is None:
+            return
+        logger = logging.getLogger(name)
+        logger.handlers[:] = [handler]
+        logger.setLevel(handler.level)
+        logger.propagate = False
+
+
 def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     """
     Настройка логов:
@@ -266,10 +506,24 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     logs_dir.mkdir(parents=True, exist_ok=True)
     logfile = logs_dir / "adaos.log"
 
+    global _ACTIVE_QUEUE_HANDLER
+
     logger = logging.getLogger("adaos")
     resolved_level = (os.getenv("ADAOS_LOG_LEVEL") or level or "INFO").upper()
     logger.setLevel(getattr(logging, resolved_level, logging.INFO))
-    logger.handlers.clear()
+
+    with _ACTIVE_QUEUE_LOCK:
+        previous_queue_handler = _ACTIVE_QUEUE_HANDLER
+        _ACTIVE_QUEUE_HANDLER = None
+        if previous_queue_handler is not None:
+            _detach_queue_handler(previous_queue_handler)
+            previous_queue_handler.close()
+        for existing in list(logger.handlers):
+            try:
+                existing.close()
+            except Exception:
+                pass
+        logger.handlers.clear()
 
     stream_h = logging.StreamHandler()
     stream_h.setFormatter(JsonFormatter())
@@ -284,19 +538,46 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
         stream_h.addFilter(skill_filter)
         file_h.addFilter(skill_filter)
         skill_h = SkillContextLogRouter(paths, level=logger.level)
-        logger.addHandler(skill_h)
+    else:
+        skill_h = None
 
-    logger.addHandler(stream_h)
-    logger.addHandler(file_h)
+    output_handlers: list[logging.Handler] = [stream_h, file_h]
+    if skill_h is not None:
+        output_handlers.append(skill_h)
+
+    log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=_logging_queue_capacity())
+    queue_handler = NonBlockingQueueHandler(log_queue, level=logger.level)
+    listener = QueueListener(log_queue, *output_handlers, respect_handler_level=True)
+    queue_handler.bind_listener(listener, output_handlers)
+    listener.start()
+
+    logger.addHandler(queue_handler)
     logger.propagate = False
+
+    # Normal imports use skills.*, while subscription and runtime loaders use
+    # synthetic module names. Parent loggers cover the former; loaders bind the
+    # latter explicitly through configure_skill_module_logging().
+    for namespace in ("skills", "_adaos_runtime"):
+        skill_logger = logging.getLogger(namespace)
+        skill_logger.handlers[:] = [queue_handler]
+        skill_logger.setLevel(logger.level)
+        skill_logger.propagate = False
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logger.level)
+    if queue_handler not in root_logger.handlers:
+        root_logger.addHandler(queue_handler)
+
+    with _ACTIVE_QUEUE_LOCK:
+        _ACTIVE_QUEUE_HANDLER = queue_handler
 
     # Optional noise suppression (apply to handlers so it affects all child loggers).
     try:
         rules = _parse_hide_rules()
         if rules:
             flt = PrefixMinLevelFilter(rules)
-            stream_h.addFilter(flt)
-            file_h.addFilter(flt)
+            for handler in output_handlers:
+                handler.addFilter(flt)
     except Exception:
         pass
     # logger.info("logging.initialized", extra={"extra": {"logfile": str(logfile)}})
