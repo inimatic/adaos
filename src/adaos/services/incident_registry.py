@@ -19,6 +19,7 @@ _MAX_INCIDENTS = 256
 _MAX_EVIDENCE_SAMPLES = 3
 _ACTIVE_WINDOW_S = 10 * 60
 _LOCK = RLock()
+_PROCESS_ACTIVITY_CAPTURE_LOCK = RLock()
 _INCIDENTS: dict[str, dict[str, Any]] = {}
 _ORDER: deque[str] = deque(maxlen=_MAX_INCIDENTS)
 _PROCESS_ACTIVITY_HISTORY: deque[dict[str, Any]] = deque(maxlen=25)
@@ -267,7 +268,14 @@ def _system_activity_counters() -> dict[str, int]:
 
 
 def capture_process_activity_sample(*, limit: int = 10, ts: float | None = None) -> dict[str, Any]:
-    """Capture one bounded process/system activity sample for incident lookback."""
+    """Capture one serialized process/system activity sample for incident lookback."""
+
+    with _PROCESS_ACTIVITY_CAPTURE_LOCK:
+        return _capture_process_activity_sample(limit=limit, ts=ts)
+
+
+def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None) -> dict[str, Any]:
+    """Build a sample while the public capture lock is held."""
 
     global _PROCESS_ACTIVITY_PREVIOUS_AT
     now_ts = float(ts if ts is not None else _now())
@@ -662,6 +670,65 @@ def record_runtime_event_loop_lag(
         },
         fingerprint_parts=("runtime_event_loop_lag",),
         tags=("event-loop", "latency", "channel-protection", "blocking-evidence"),
+    )
+
+
+def _domain_from_runtime_stack(stack_frames: Iterable[dict[str, Any]]) -> str:
+    for frame in reversed(list(stack_frames)):
+        filename = str(frame.get("filename") or "").replace("\\", "/")
+        match = re.search(r"/(?:workspace/)?skills/(?:\.runtime/)?([^/]+)/", filename, re.IGNORECASE)
+        if match:
+            skill = match.group(1).strip()
+            if skill and skill not in {"handlers", ".runtime"}:
+                return f"skill:{skill}"
+    for frame in reversed(list(stack_frames)):
+        filename = str(frame.get("filename") or "").replace("\\", "/")
+        if "/adaos/services/yjs/" in filename:
+            return "core.yjs"
+        if "/adaos/" in filename:
+            return "core.runtime"
+    return "core.runtime"
+
+
+def record_runtime_event_loop_stall(
+    *,
+    stall_ms: float,
+    threshold_ms: float,
+    interval_sec: float,
+    stack_frames: Iterable[dict[str, Any]],
+    loop_thread_id: int,
+    watchdog_thread_id: int,
+    process_sample: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    frames = [dict(frame) for frame in list(stack_frames)[-40:]]
+    domain = _domain_from_runtime_stack(frames)
+    try:
+        from adaos.services.skill.subscription_execution import subscription_execution_snapshot
+
+        skill_execution = subscription_execution_snapshot(limit=10)
+    except Exception as exc:
+        skill_execution = {"available": False, "error": type(exc).__name__}
+    return record_incident(
+        incident_class="runtime_event_loop_stall",
+        signal="event_loop_unresponsive",
+        severity="degraded",
+        domain=domain,
+        component="runtime_event_loop",
+        source="runtime_event_loop_thread_watchdog",
+        summary=f"Runtime event loop did not acknowledge a watchdog probe for {max(0.0, float(stall_ms)):.1f} ms",
+        evidence={
+            "stall_ms": round(max(0.0, float(stall_ms)), 3),
+            "threshold_ms": round(max(0.0, float(threshold_ms)), 3),
+            "interval_sec": round(max(0.0, float(interval_sec)), 3),
+            "loop_thread_id": int(loop_thread_id),
+            "watchdog_thread_id": int(watchdog_thread_id),
+            "stack_frames": frames,
+            "process_sample": process_sample or {},
+            "process_activity_history": process_activity_history_snapshot(limit=8),
+            "skill_subscription_execution": skill_execution,
+        },
+        fingerprint_parts=("runtime_event_loop_stall", domain),
+        tags=("event-loop", "latency", "channel-protection", "blocking-stack"),
     )
 
 
@@ -1157,6 +1224,7 @@ __all__ = [
     "record_member_link_stale",
     "record_runtime_api_timeout",
     "record_runtime_event_loop_lag",
+    "record_runtime_event_loop_stall",
     "record_slow_event_handler",
     "record_skill_handler_pressure",
     "record_yjs_thread_affinity_fault",

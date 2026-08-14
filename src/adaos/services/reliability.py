@@ -444,6 +444,31 @@ def _new_event_loop_lag_runtime() -> dict[str, Any]:
 
 
 _EVENT_LOOP_LAG_RUNTIME: dict[str, Any] = _new_event_loop_lag_runtime()
+
+
+def _new_event_loop_watchdog_runtime() -> dict[str, Any]:
+    return {
+        "schema": "adaos.runtime.event_loop_watchdog.v1",
+        "running": False,
+        "started_at": None,
+        "stopped_at": None,
+        "watchdog_thread_id": None,
+        "loop_thread_id": None,
+        "interval_sec": None,
+        "threshold_ms": None,
+        "last_probe_at": None,
+        "last_ack_at": None,
+        "last_probe_ms": None,
+        "probe_total": 0,
+        "stall_total": 0,
+        "last_stall_at": None,
+        "last_stall_ms": None,
+        "max_stall_ms": 0.0,
+        "status": "unknown",
+    }
+
+
+_EVENT_LOOP_WATCHDOG_RUNTIME: dict[str, Any] = _new_event_loop_watchdog_runtime()
 _SUPERVISOR_SNAPSHOT_PROBE_LOCK = threading.Lock()
 _SUPERVISOR_SNAPSHOT_CACHE: dict[str, Any] = {
     "key": (),
@@ -1410,6 +1435,8 @@ def reset_reliability_runtime_state() -> None:
         _HUB_ROOT_PROTOCOL_RUNTIME.update(_new_protocol_runtime())
         _EVENT_LOOP_LAG_RUNTIME.clear()
         _EVENT_LOOP_LAG_RUNTIME.update(_new_event_loop_lag_runtime())
+        _EVENT_LOOP_WATCHDOG_RUNTIME.clear()
+        _EVENT_LOOP_WATCHDOG_RUNTIME.update(_new_event_loop_watchdog_runtime())
         _SUPERVISOR_SNAPSHOT_CACHE.update(
             {
                 "key": (),
@@ -1469,6 +1496,67 @@ def runtime_event_loop_lag_snapshot() -> dict[str, Any]:
     state["last_sample_ago_s"] = _round_age(now, state.get("last_sample_at"))
     state["last_breach_ago_s"] = _round_age(now, state.get("last_breach_at"))
     state["monitor_uptime_s"] = _round_age(now, state.get("monitor_started_at"))
+    return state
+
+
+def set_runtime_event_loop_watchdog_state(
+    *,
+    running: bool,
+    watchdog_thread_id: int | None = None,
+    loop_thread_id: int | None = None,
+    interval_sec: float | None = None,
+    threshold_ms: float | None = None,
+) -> dict[str, Any]:
+    now = time.time()
+    with _LOCK:
+        state = _EVENT_LOOP_WATCHDOG_RUNTIME
+        state["running"] = bool(running)
+        if running:
+            state["started_at"] = state.get("started_at") or now
+            state["stopped_at"] = None
+            state["status"] = "watching"
+        else:
+            state["stopped_at"] = now
+            state["status"] = "stopped"
+        if watchdog_thread_id is not None:
+            state["watchdog_thread_id"] = int(watchdog_thread_id)
+        if loop_thread_id is not None:
+            state["loop_thread_id"] = int(loop_thread_id)
+        if interval_sec is not None:
+            state["interval_sec"] = round(max(0.01, float(interval_sec)), 3)
+        if threshold_ms is not None:
+            state["threshold_ms"] = round(max(1.0, float(threshold_ms)), 3)
+        return dict(state)
+
+
+def record_runtime_event_loop_watchdog_probe(*, elapsed_ms: float, stalled: bool) -> dict[str, Any]:
+    now = time.time()
+    normalized_elapsed_ms = round(max(0.0, float(elapsed_ms)), 3)
+    with _LOCK:
+        state = _EVENT_LOOP_WATCHDOG_RUNTIME
+        state["last_probe_at"] = now
+        state["last_probe_ms"] = normalized_elapsed_ms
+        state["probe_total"] = int(state.get("probe_total") or 0) + 1
+        if stalled:
+            state["stall_total"] = int(state.get("stall_total") or 0) + 1
+            state["last_stall_at"] = now
+            state["last_stall_ms"] = normalized_elapsed_ms
+            state["max_stall_ms"] = max(float(state.get("max_stall_ms") or 0.0), normalized_elapsed_ms)
+            state["status"] = "stalled"
+        else:
+            state["last_ack_at"] = now
+            state["status"] = "watching" if state.get("running") else "stopped"
+        return dict(state)
+
+
+def runtime_event_loop_watchdog_snapshot() -> dict[str, Any]:
+    now = time.time()
+    with _LOCK:
+        state = dict(_EVENT_LOOP_WATCHDOG_RUNTIME)
+    state["last_probe_ago_s"] = _round_age(now, state.get("last_probe_at"))
+    state["last_ack_ago_s"] = _round_age(now, state.get("last_ack_at"))
+    state["last_stall_ago_s"] = _round_age(now, state.get("last_stall_at"))
+    state["uptime_s"] = _round_age(now, state.get("started_at")) if state.get("running") else None
     return state
 
 
@@ -1631,6 +1719,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "route": _ROUTE.to_dict(),
             "integrations": {name: signal.to_dict() for name, signal in sorted(_INTEGRATIONS.items())},
             "event_loop": runtime_event_loop_lag_snapshot(),
+            "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
         }
 
 

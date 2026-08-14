@@ -538,6 +538,10 @@ Make readiness and degradation visible before changing protocol ownership.
 - [x] `[should]` Keep a bounded pre-incident process CPU/RSS/I/O and system
   network/disk-I/O history, and persist it with hub-root transport failures,
   skill execution pressure, slow event handlers, and event-loop lag.
+- [x] `[must]` Observe event-loop stalls from an independent runtime thread so
+  a blocked loop cannot suppress its own evidence. Persist the live loop stack,
+  attributed skill/core domain, active skill handlers, and process/I/O lookback;
+  the watchdog is diagnostic only and must not restart or hide the offender.
 - [ ] `[should]` Complete `RT-POST-INCIDENT-001`: repeat the correlated
   node/Root log analysis after deployment and explicitly assess skills,
   subprocesses, and large downloads in the pre-failure window.
@@ -693,6 +697,12 @@ activity remain visible in reliability and durable incidents. Async
 subscriptions remain cooperative event-loop code; strict skill validation
 rejects direct known blocking calls and slow-handler incidents preserve owner
 and process evidence.
+An independent daemon-thread watchdog now probes the runtime loop every 500 ms.
+When the loop cannot acknowledge within the configured lag threshold, the
+watchdog captures the loop thread stack while it is still blocked, attributes
+skill paths as `skill:<name>`, and records bounded process and skill-execution
+evidence. Its runtime counters are exposed separately from the cooperative
+async lag monitor, and it performs no automatic recovery.
 NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
 `sys.ready` also run in workers. Target-stand pressure evidence is still needed
 before closing the tracking items.

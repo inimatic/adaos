@@ -164,6 +164,7 @@ import logging
 import platform, time
 import signal
 import sys
+import threading
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -267,6 +268,33 @@ def _runtime_event_loop_lag_threshold_ms() -> float:
         return min(60_000.0, max(10.0, float(str(os.getenv("ADAOS_RUNTIME_EVENT_LOOP_LAG_THRESHOLD_MS") or "250").strip())))
     except Exception:
         return 250.0
+
+
+def _runtime_event_loop_watchdog_enabled() -> bool:
+    raw = os.getenv("ADAOS_RUNTIME_EVENT_LOOP_WATCHDOG")
+    if raw is None:
+        return _runtime_event_loop_lag_monitor_enabled()
+    return _truthy_value(raw)
+
+
+def _runtime_event_loop_watchdog_interval_sec() -> float:
+    try:
+        return min(
+            30.0,
+            max(0.05, float(str(os.getenv("ADAOS_RUNTIME_EVENT_LOOP_WATCHDOG_INTERVAL_SEC") or "0.5").strip())),
+        )
+    except Exception:
+        return 0.5
+
+
+def _runtime_event_loop_watchdog_report_interval_sec() -> float:
+    try:
+        return min(
+            3600.0,
+            max(1.0, float(str(os.getenv("ADAOS_RUNTIME_EVENT_LOOP_WATCHDOG_REPORT_INTERVAL_SEC") or "30").strip())),
+        )
+    except Exception:
+        return 30.0
 
 
 async def _runtime_event_loop_lag_monitor() -> None:
@@ -859,6 +887,24 @@ async def _runtime_context(app: FastAPI):
             name="runtime-event-loop-lag-monitor",
         )
     app.state.runtime_event_loop_lag_task = event_loop_lag_task
+    event_loop_watchdog = None
+    if _runtime_event_loop_watchdog_enabled():
+        from adaos.services.runtime_event_loop_watchdog import (
+            RuntimeEventLoopWatchdog,
+            RuntimeEventLoopWatchdogConfig,
+        )
+
+        event_loop_watchdog = RuntimeEventLoopWatchdog(
+            loop=asyncio.get_running_loop(),
+            loop_thread_id=threading.get_ident(),
+            config=RuntimeEventLoopWatchdogConfig(
+                interval_sec=_runtime_event_loop_watchdog_interval_sec(),
+                threshold_ms=_runtime_event_loop_lag_threshold_ms(),
+                report_interval_sec=_runtime_event_loop_watchdog_report_interval_sec(),
+            ),
+        )
+        event_loop_watchdog.start()
+    app.state.runtime_event_loop_watchdog = event_loop_watchdog
     process_activity_task = asyncio.create_task(
         _runtime_process_activity_monitor(),
         name="runtime-process-activity-monitor",
@@ -1196,6 +1242,12 @@ async def _runtime_context(app: FastAPI):
     try:
         yield
     finally:
+        try:
+            watchdog = getattr(app.state, "runtime_event_loop_watchdog", None)
+            if watchdog is not None:
+                await asyncio.to_thread(watchdog.stop)
+        finally:
+            app.state.runtime_event_loop_watchdog = None
         try:
             from adaos.services.skill.runtime_migration_worker import cancel_background_migration
 
