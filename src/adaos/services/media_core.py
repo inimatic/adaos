@@ -505,7 +505,10 @@ def parse_media_range(raw: str | None, *, size: int) -> tuple[int, int] | None:
 def inline_content_disposition(filename: str) -> str:
     safe = str(filename or "media").replace("\\", "_").replace("/", "_")
     safe = safe.replace('"', "'").replace("\r", "").replace("\n", "").strip() or "media"
-    return f'inline; filename="{safe}"'
+    fallback = safe.encode("ascii", errors="ignore").decode("ascii").strip() or "media"
+    if fallback == safe:
+        return f'inline; filename="{fallback}"'
+    return f'inline; filename="{fallback}"; filename*=UTF-8\'\'{quote(safe, safe="")}'
 
 
 def media_content_response_parts(

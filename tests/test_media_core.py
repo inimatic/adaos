@@ -44,6 +44,14 @@ def test_media_core_content_paths_validate_source_contract() -> None:
         media_core.media_resource_content_path("clip.mp4", source="catalog")
 
 
+def test_inline_content_disposition_encodes_unicode_filename_for_http_headers() -> None:
+    value = media_core.inline_content_disposition("Фильм 01.mp4")
+
+    assert value.startswith('inline; filename="01.mp4"; filename*=UTF-8\'\'')
+    assert "%D0%A4%D0%B8%D0%BB%D1%8C%D0%BC%2001.mp4" in value
+    value.encode("latin-1")
+
+
 def test_media_core_range_parser_matches_http_range_semantics() -> None:
     assert media_core.parse_media_range(None, size=10) is None
     assert media_core.parse_media_range("bytes=2-5", size=10) == (2, 5)

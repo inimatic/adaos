@@ -51,6 +51,8 @@ The SDK exposes two intentionally different operations:
   It records the resolved file and root paths, revalidates that boundary on
   every read, and streams the original file with HTTP Range support. It never
   copies media bytes into `.adaos`.
+- Non-ASCII media names use an ASCII `Content-Disposition` fallback and an RFC
+  5987 UTF-8 filename, so browser streaming headers remain valid.
 
 Media Center folder imports must use `register_media_file(...)`. This keeps
 large and slow libraries in their original location while preserving the same
