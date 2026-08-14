@@ -112,19 +112,36 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _low_priority_io_command(cmd: Sequence[str]) -> list[str]:
+    command = [str(item) for item in cmd]
+    mode = str(os.getenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "best-effort") or "best-effort").strip().lower()
+    if not sys.platform.startswith("linux") or mode in {"", "0", "off", "none", "disabled"}:
+        return command
+    ionice = shutil.which("ionice")
+    if not ionice:
+        return command
+    if mode in {"idle", "3"}:
+        return [ionice, "-c", "3", "--", *command]
+    # BE/7 keeps updates progressing while allowing runtime journal and SQLite
+    # commits to preempt bulk slot copies and package installation.
+    return [ionice, "-c", "2", "-n", "7", "--", *command]
+
+
 def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
-    completed = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
+    run_cmd = _low_priority_io_command(cmd)
+    completed = subprocess.run(run_cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(
-            f"command failed rc={completed.returncode}: {' '.join(cmd)}\n"
+            f"command failed rc={completed.returncode}: {' '.join(run_cmd)}\n"
             f"stdout:\n{completed.stdout[-4000:]}\n"
             f"stderr:\n{completed.stderr[-4000:]}"
         )
 
 
 def _run_json(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> dict[str, object]:
+    run_cmd = _low_priority_io_command(cmd)
     completed = subprocess.run(
-        cmd,
+        run_cmd,
         cwd=str(cwd) if cwd else None,
         env=env,
         capture_output=True,
@@ -132,16 +149,18 @@ def _run_json(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
     )
     if completed.returncode != 0:
         raise RuntimeError(
-            f"command failed rc={completed.returncode}: {' '.join(cmd)}\n"
+            f"command failed rc={completed.returncode}: {' '.join(run_cmd)}\n"
             f"stdout:\n{completed.stdout[-4000:]}\n"
             f"stderr:\n{completed.stderr[-4000:]}"
         )
     try:
         payload = json.loads(completed.stdout or "{}")
     except Exception as exc:
-        raise RuntimeError(f"command returned invalid JSON: {' '.join(cmd)}\nstdout:\n{completed.stdout[-4000:]}") from exc
+        raise RuntimeError(
+            f"command returned invalid JSON: {' '.join(run_cmd)}\nstdout:\n{completed.stdout[-4000:]}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"command returned non-object JSON: {' '.join(cmd)}")
+        raise RuntimeError(f"command returned non-object JSON: {' '.join(run_cmd)}")
     return payload
 
 
@@ -327,8 +346,9 @@ def _run_seed_copy_command(
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True, exist_ok=True)
+    run_cmd = _low_priority_io_command(cmd)
     completed = subprocess.run(
-        list(cmd),
+        run_cmd,
         cwd=str(source.parent),
         capture_output=True,
         text=True,
@@ -337,14 +357,16 @@ def _run_seed_copy_command(
         return {
             "ok": True,
             "method": method,
-            "command": list(cmd),
+            "command": run_cmd,
+            "workload_command": list(cmd),
         }
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)
     return {
         "ok": False,
         "method": method,
-        "command": list(cmd),
+        "command": run_cmd,
+        "workload_command": list(cmd),
         "returncode": int(completed.returncode),
         "stdout_tail": (completed.stdout or "")[-2000:],
         "stderr_tail": (completed.stderr or "")[-2000:],
@@ -629,8 +651,9 @@ def _install_slot_project(
         cmd = [uv, "sync", "--no-dev", "--python", sys.executable]
         if _uv_locked_enabled():
             cmd.insert(2, "--locked")
+        run_cmd = _low_priority_io_command(cmd)
         completed = subprocess.run(
-            cmd,
+            run_cmd,
             cwd=str(checkout_dir),
             env=env,
             capture_output=True,
@@ -639,7 +662,8 @@ def _install_slot_project(
         attempts.append(
             {
                 "installer": "uv",
-                "command": cmd,
+                "command": run_cmd,
+                "workload_command": cmd,
                 "returncode": int(completed.returncode),
                 "stdout_tail": (completed.stdout or "")[-4000:],
                 "stderr_tail": (completed.stderr or "")[-4000:],
