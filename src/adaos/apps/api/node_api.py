@@ -68,6 +68,7 @@ from adaos.services.reliability import (
     media_plane_runtime_snapshot,
     reliability_snapshot,
     sidecar_runtime_snapshot,
+    skill_runtime_migration_update_gate_snapshot,
     skill_runtime_migration_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
@@ -4211,7 +4212,7 @@ async def node_reliability() -> Response:
 
 @router.get("/reliability/update-gate", dependencies=[Depends(require_token)])
 async def node_reliability_update_gate() -> dict[str, Any]:
-    migration = await asyncio.to_thread(skill_runtime_migration_runtime_snapshot)
+    migration = await asyncio.to_thread(skill_runtime_migration_update_gate_snapshot)
     return {
         "ok": True,
         "schema": "adaos.reliability_update_gate.v1",

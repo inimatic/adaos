@@ -6843,6 +6843,34 @@ def skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
     }
 
 
+def skill_runtime_migration_update_gate_snapshot() -> dict[str, Any]:
+    """Return only fields required by the supervisor promotion decision."""
+
+    source = skill_runtime_migration_runtime_snapshot()
+    current = source.get("current") if isinstance(source.get("current"), dict) else {}
+    message = str(source.get("message") or "").strip()
+    return {
+        "available": bool(source.get("available")),
+        "ok": bool(source.get("ok")),
+        "state": str(source.get("state") or "unknown"),
+        "phase": str(source.get("phase") or ""),
+        "pending": bool(source.get("pending")),
+        "operation_id": source.get("operation_id"),
+        "current": {
+            key: current.get(key)
+            for key in ("skill", "stage", "index")
+            if current.get(key) is not None
+        },
+        "completed_total": source.get("completed_total"),
+        "total": source.get("total"),
+        "failed_total": source.get("failed_total"),
+        "deactivated_total": source.get("deactivated_total"),
+        "quarantined_total": source.get("quarantined_total"),
+        "updated_at": source.get("updated_at"),
+        "message": message[:240],
+    }
+
+
 def _skill_subscription_execution_runtime_snapshot() -> dict[str, Any]:
     try:
         from adaos.services.skill.subscription_execution import subscription_execution_snapshot

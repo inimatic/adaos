@@ -2877,7 +2877,7 @@ def test_node_reliability_update_gate_is_compact(monkeypatch) -> None:
 
     monkeypatch.setattr(
         node_api,
-        "skill_runtime_migration_runtime_snapshot",
+        "skill_runtime_migration_update_gate_snapshot",
         lambda: {
             "operation_id": "migration-1",
             "state": "running",
@@ -2896,6 +2896,35 @@ def test_node_reliability_update_gate_is_compact(monkeypatch) -> None:
     assert payload["schema"] == "adaos.reliability_update_gate.v1"
     assert payload["runtime"]["skill_runtime_migration"]["operation_id"] == "migration-1"
     assert len(response.content) < 1024
+
+
+def test_skill_runtime_migration_update_gate_snapshot_omits_failure_details(monkeypatch) -> None:
+    from adaos.services import reliability
+
+    monkeypatch.setattr(
+        reliability,
+        "skill_runtime_migration_runtime_snapshot",
+        lambda: {
+            "available": True,
+            "ok": False,
+            "state": "failed",
+            "phase": "complete",
+            "pending": False,
+            "operation_id": "migration-2",
+            "failed_total": 7,
+            "quarantined_total": 3,
+            "skills": [{"skill": f"skill-{index}", "error": "failure"} for index in range(100)],
+            "diagnostics": {"large": "x" * 10000},
+        },
+    )
+
+    snapshot = reliability.skill_runtime_migration_update_gate_snapshot()
+
+    assert snapshot["operation_id"] == "migration-2"
+    assert snapshot["failed_total"] == 7
+    assert snapshot["pending"] is False
+    assert "skills" not in snapshot
+    assert "diagnostics" not in snapshot
 
 
 def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypatch) -> None:
