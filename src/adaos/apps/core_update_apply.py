@@ -114,7 +114,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _low_priority_io_command(cmd: Sequence[str]) -> list[str]:
     command = [str(item) for item in cmd]
-    mode = str(os.getenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "best-effort") or "best-effort").strip().lower()
+    mode = str(os.getenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "idle") or "idle").strip().lower()
     if not sys.platform.startswith("linux") or mode in {"", "0", "off", "none", "disabled"}:
         return command
     ionice = shutil.which("ionice")
@@ -122,8 +122,8 @@ def _low_priority_io_command(cmd: Sequence[str]) -> list[str]:
         return command
     if mode in {"idle", "3"}:
         return [ionice, "-c", "3", "--", *command]
-    # BE/7 keeps updates progressing while allowing runtime journal and SQLite
-    # commits to preempt bulk slot copies and package installation.
+    # Explicit BE/7 mode keeps updates progressing on hosts where idle I/O can
+    # starve; the default idle class protects channel-critical persistence.
     return [ionice, "-c", "2", "-n", "7", "--", *command]
 
 

@@ -211,7 +211,7 @@ def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_
     assert calls == [["/bin/cp", "-a", "--reflink=always", f"{source}/.", str(target)]]
 
 
-def test_core_update_bulk_io_uses_low_linux_priority(monkeypatch) -> None:
+def test_core_update_bulk_io_uses_idle_linux_priority_by_default(monkeypatch) -> None:
     import adaos.apps.core_update_apply as mod
 
     monkeypatch.setattr(mod.sys, "platform", "linux")
@@ -220,14 +220,31 @@ def test_core_update_bulk_io_uses_low_linux_priority(monkeypatch) -> None:
     assert mod._low_priority_io_command(["cp", "-a", "source", "target"]) == [
         "/usr/bin/ionice",
         "-c",
-        "2",
-        "-n",
-        "7",
+        "3",
         "--",
         "cp",
         "-a",
         "source",
         "target",
+    ]
+
+
+def test_core_update_bulk_io_supports_explicit_best_effort_priority(monkeypatch) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    monkeypatch.setenv("ADAOS_CORE_UPDATE_IO_PRIORITY", "best-effort")
+    monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/ionice" if name == "ionice" else None)
+
+    assert mod._low_priority_io_command(["uv", "sync"]) == [
+        "/usr/bin/ionice",
+        "-c",
+        "2",
+        "-n",
+        "7",
+        "--",
+        "uv",
+        "sync",
     ]
 
 
