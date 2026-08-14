@@ -541,6 +541,10 @@ async def test_member_link_ping_loop_exits_when_pong_goes_stale(monkeypatch) -> 
     await client._ping_loop(ws)
 
     assert ws.sent == [json.dumps({"t": "ping", "ts": 110.0})]
+    semantic_ping = client.snapshot()["outbound"]["semantic_ping"]
+    assert semantic_ping["send_total"] == 1
+    assert semantic_ping["send_failed_total"] == 0
+    assert semantic_ping["last_send"]["succeeded"] is True
 
 
 @pytest.mark.asyncio
@@ -573,6 +577,98 @@ async def test_member_link_ping_loop_exits_when_ping_send_times_out(monkeypatch)
     await client._ping_loop(_SlowWs())
 
     assert waited == [2.5]
+    semantic_ping = client.snapshot()["outbound"]["semantic_ping"]
+    assert semantic_ping["send_total"] == 1
+    assert semantic_ping["send_failed_total"] == 1
+    assert semantic_ping["send_timeout_total"] == 1
+    assert semantic_ping["last_send"]["timed_out"] is True
+
+
+@pytest.mark.asyncio
+async def test_member_link_outbound_snapshot_attributes_active_skill_event_send() -> None:
+    class _BlockingWs:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def send(self, _payload: str) -> None:
+            self.started.set()
+            await self.release.wait()
+
+    client = MemberLinkClient()
+    ws = _BlockingWs()
+    message = {
+        "t": "bus.emit",
+        "event": {
+            "type": "io.out.large_file.progress",
+            "source": "skill:large_file",
+            "payload": {"bytes": 1024},
+        },
+    }
+
+    task = asyncio.create_task(client._send_ws_message(ws, message, lane="queue"))
+    await ws.started.wait()
+    active = client.snapshot()["outbound"]["active_sends"]
+
+    assert len(active) == 1
+    assert active[0]["message_type"] == "bus.emit:io.out.large_file.progress"
+    assert active[0]["source"] == "skill:large_file"
+    assert active[0]["bytes"] > 0
+
+    ws.release.set()
+    await task
+    outbound = client.snapshot()["outbound"]
+    assert outbound["active_sends"] == []
+    assert outbound["send_total"] == 1
+    assert outbound["last_send"]["source"] == "skill:large_file"
+
+
+def test_member_link_outbound_queue_reports_high_watermark_and_drops() -> None:
+    client = MemberLinkClient()
+    client._out_q = asyncio.Queue(maxsize=1)
+
+    client._queue_outbound({"t": "node.status"})
+    with pytest.raises(asyncio.QueueFull):
+        client._queue_outbound(
+            {
+                "t": "bus.emit",
+                "event": {"type": "skill.output", "source": "skill:noisy"},
+            }
+        )
+
+    outbound = client.snapshot()["outbound"]
+    assert outbound["queue_size"] == 1
+    assert outbound["queue_capacity"] == 1
+    assert outbound["queue_high_watermark"] == 1
+    assert outbound["enqueued_total"] == 1
+    assert outbound["drop_total"] == 1
+    assert outbound["drop_by_type"] == {"bus.emit:skill.output": 1}
+
+
+def test_member_link_outbound_queue_rejects_oversized_skill_event_before_enqueue(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_MEMBER_EVENT_MAX_BYTES", "1024")
+    client = MemberLinkClient()
+    pressure: list[dict] = []
+    monkeypatch.setattr(client, "_record_outbound_pressure", lambda **kwargs: pressure.append(dict(kwargs)))
+
+    with pytest.raises(RuntimeError, match="event_payload_too_large"):
+        client._queue_outbound(
+            {
+                "t": "bus.emit",
+                "event": {
+                    "type": "skill.large_payload",
+                    "source": "skill:noisy",
+                    "payload": {"blob": "x" * 2048},
+                },
+            }
+        )
+
+    outbound = client.snapshot()["outbound"]
+    assert outbound["queue_size"] == 0
+    assert outbound["rejected_total"] == 1
+    assert outbound["rejected_by_type"] == {"bus.emit:skill.large_payload": 1}
+    assert outbound["last_rejected"]["source"] == "skill:noisy"
+    assert pressure[0]["signal"] == "event_payload_too_large"
 
 
 def test_member_link_queue_node_snapshot_sends_compact_capacity_status(monkeypatch) -> None:

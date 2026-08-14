@@ -1330,6 +1330,9 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             hub = hub_member_connection_state.get("hub") if isinstance(hub_member_connection_state.get("hub"), dict) else {}
             mirrored = hub.get("last_hub_core_update") if isinstance(hub.get("last_hub_core_update"), dict) else {}
             follow = hub.get("last_follow_result") if isinstance(hub.get("last_follow_result"), dict) else {}
+            outbound = hub.get("outbound") if isinstance(hub.get("outbound"), dict) else {}
+            max_send = outbound.get("max_send") if isinstance(outbound.get("max_send"), dict) else {}
+            semantic_ping = outbound.get("semantic_ping") if isinstance(outbound.get("semantic_ping"), dict) else {}
             typer.echo(
                 "member_link: "
                 f"state={hub_member_connection_state.get('state') or 'unknown'} "
@@ -1338,6 +1341,18 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"follow_ok={follow.get('ok') if isinstance(follow, dict) and 'ok' in follow else '-'} "
                 f"follow_err={hub.get('last_follow_error') or '-'}"
             )
+            if outbound:
+                typer.echo(
+                    "member_link.outbound: "
+                    f"queue={outbound.get('queue_size') or 0}/{outbound.get('queue_capacity') or 0} "
+                    f"hwm={outbound.get('queue_high_watermark') or 0} "
+                    f"drops={outbound.get('drop_total') or 0} "
+                    f"rejected={outbound.get('rejected_total') or 0} "
+                    f"failed={outbound.get('send_failed_total') or 0} "
+                    f"timeouts={outbound.get('send_timeout_total') or 0} "
+                    f"max={max_send.get('message_type') or '-'}:{max_send.get('duration_s') or 0}s "
+                    f"ping_timeouts={semantic_ping.get('send_timeout_total') or 0}"
+                )
     for name in ("hub_local_core", "root_control", "route", "sync", "hub_member", "member_sync", "media"):
         item = tree.get(name) if isinstance(tree.get(name), dict) else {}
         typer.echo(f"{name}: {item.get('status') or 'unknown'}")
@@ -3028,6 +3043,8 @@ def node_members(
             if not isinstance(item, dict):
                 continue
             last_control = item.get("last_control_result") if isinstance(item.get("last_control_result"), dict) else {}
+            outbound = item.get("outbound") if isinstance(item.get("outbound"), dict) else {}
+            max_send = outbound.get("max_total_send") if isinstance(outbound.get("max_total_send"), dict) else {}
             typer.echo(
                 f"- {item.get('label') or item.get('node_id') or 'member'} "
                 f"state={item.get('state') or '-'} "
@@ -3038,16 +3055,29 @@ def node_members(
                 f"control={item.get('last_control_action') or '-'}:{last_control.get('ok') if 'ok' in last_control else '-'} "
                 f"observed_via={item.get('observed_via') or '-'} "
                 f"last_snapshot_ago={item.get('last_snapshot_ago_s') if item.get('last_snapshot_ago_s') is not None else '-'} "
-                f"last_seen_ago={item.get('last_seen_ago_s') if item.get('last_seen_ago_s') is not None else '-'}"
+                f"last_seen_ago={item.get('last_seen_ago_s') if item.get('last_seen_ago_s') is not None else '-'} "
+                f"out_pending={outbound.get('pending') or 0} "
+                f"out_hwm={outbound.get('pending_high_watermark') or 0} "
+                f"out_timeouts={outbound.get('send_timeout_total') or 0} "
+                f"out_rejected={outbound.get('send_rejected_total') or 0} "
+                f"out_max={max_send.get('message_type') or '-'}:{max_send.get('total_s') or 0}s"
             )
         return
     hub = state.get("hub") if isinstance(state.get("hub"), dict) else {}
     follow = hub.get("last_follow_result") if isinstance(hub.get("last_follow_result"), dict) else {}
+    outbound = hub.get("outbound") if isinstance(hub.get("outbound"), dict) else {}
+    max_send = outbound.get("max_send") if isinstance(outbound.get("max_send"), dict) else {}
     typer.echo(
         f"member_link: state={assessment.get('state') or 'unknown'} "
         f"hub={hub.get('hub_node_id') or '-'} "
         f"hub_update={((hub.get('last_hub_core_update') if isinstance(hub.get('last_hub_core_update'), dict) else {}) or {}).get('state') or '-'} "
-        f"follow_ok={follow.get('ok') if 'ok' in follow else '-'}"
+        f"follow_ok={follow.get('ok') if 'ok' in follow else '-'} "
+        f"out_queue={outbound.get('queue_size') or 0}/{outbound.get('queue_capacity') or 0} "
+        f"out_hwm={outbound.get('queue_high_watermark') or 0} "
+        f"out_drops={outbound.get('drop_total') or 0} "
+        f"out_rejected={outbound.get('rejected_total') or 0} "
+        f"out_timeouts={outbound.get('send_timeout_total') or 0} "
+        f"out_max={max_send.get('message_type') or '-'}:{max_send.get('duration_s') or 0}s"
     )
 
 

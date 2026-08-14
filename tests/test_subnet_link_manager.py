@@ -82,6 +82,88 @@ class _FakeWebSocket:
         self.closed.append((code, reason))
 
 
+def test_hub_member_link_observes_send_lock_pressure_and_pong_wait() -> None:
+    class _BlockingWebSocket:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.messages: list[dict] = []
+
+        async def send_json(self, msg: dict) -> None:
+            self.messages.append(msg)
+            if len(self.messages) == 1:
+                self.started.set()
+                await self.release.wait()
+
+    async def _run() -> tuple[dict, dict]:
+        ws = _BlockingWebSocket()
+        link = mod.HubMemberLink(node_id="member-1", websocket=ws)
+        event_task = asyncio.create_task(
+            link.send_json(
+                {
+                    "t": "hub.event",
+                    "event": {
+                        "type": "io.out.large_file.progress",
+                        "source": "skill:large_file",
+                        "payload": {"bytes": 1024},
+                    },
+                }
+            )
+        )
+        await ws.started.wait()
+        pong_task = asyncio.create_task(link.send_json({"t": "pong", "ts": 1.0}))
+        await asyncio.sleep(0)
+        pressured = link.outbound_snapshot()
+        ws.release.set()
+        await asyncio.gather(event_task, pong_task)
+        return pressured, link.outbound_snapshot()
+
+    pressured, completed = asyncio.run(_run())
+
+    assert pressured["pending"] == 2
+    assert pressured["pending_high_watermark"] == 2
+    assert {item["state"] for item in pressured["active_sends"]} == {"sending", "waiting_lock"}
+    event = next(item for item in pressured["active_sends"] if item["message_type"].startswith("hub.event:"))
+    assert event["source"] == "skill:large_file"
+    assert completed["pending"] == 0
+    assert completed["send_total"] == 2
+    assert completed["pong"]["send_total"] == 1
+    assert completed["pong"]["last_send"]["lock_wait_s"] >= 0.0
+
+
+def test_hub_member_link_rejects_oversized_skill_event_with_attribution(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SUBNET_HUB_EVENT_MAX_BYTES", "1024")
+    link = mod.HubMemberLink(node_id="member-1", websocket=_FakeWebSocket())
+    pressure: list[dict] = []
+    monkeypatch.setattr(link, "_record_send_pressure", lambda **kwargs: pressure.append(dict(kwargs)))
+
+    async def _run() -> None:
+        await link.send_json(
+            {
+                "t": "hub.event",
+                "event": {
+                    "type": "skill.large_payload",
+                    "source": "skill:noisy",
+                    "payload": {"blob": "x" * 2048},
+                },
+            }
+        )
+
+    try:
+        asyncio.run(_run())
+    except RuntimeError as exc:
+        assert "event_payload_too_large" in str(exc)
+    else:
+        raise AssertionError("oversized hub event must be rejected")
+
+    snapshot = link.outbound_snapshot()
+    assert snapshot["send_rejected_total"] == 1
+    assert snapshot["send_total"] == 0
+    assert pressure[0]["signal"] == "event_payload_too_large"
+    assert pressure[0]["message_type"] == "hub.event:skill.large_payload"
+    assert pressure[0]["source"] == "skill:noisy"
+
+
 def test_unregister_does_not_remove_replacement_link(monkeypatch) -> None:
     fake_bus = _FakeBus()
     monkeypatch.setattr(mod, "get_ctx", lambda: _FakeCtx(fake_bus))

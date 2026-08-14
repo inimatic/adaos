@@ -40,6 +40,46 @@ def _env_int(name: str, default: int, *, minimum: int = 0, maximum: int | None =
     return value
 
 
+def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        value = float(str(os.getenv(name, str(default)) or str(default)).strip())
+    except Exception:
+        value = float(default)
+    return max(float(minimum), min(float(maximum), value))
+
+
+def _hub_member_send_timeout_s(message_type: str) -> float:
+    if str(message_type or "").strip() == "pong":
+        return _env_float("ADAOS_SUBNET_HUB_PONG_SEND_TIMEOUT_S", 3.0, minimum=0.25, maximum=30.0)
+    return _env_float("ADAOS_SUBNET_HUB_SEND_TIMEOUT_S", 10.0, minimum=0.5, maximum=120.0)
+
+
+def _hub_member_event_max_bytes() -> int:
+    return _env_int(
+        "ADAOS_SUBNET_HUB_EVENT_MAX_BYTES",
+        256 * 1024,
+        minimum=1024,
+        maximum=16 * 1024 * 1024,
+    )
+
+
+def _hub_member_frame_max_bytes() -> int:
+    return _env_int(
+        "ADAOS_SUBNET_HUB_FRAME_MAX_BYTES",
+        2 * 1024 * 1024,
+        minimum=16 * 1024,
+        maximum=64 * 1024 * 1024,
+    )
+
+
+def _hub_member_send_pending_limit() -> int:
+    return _env_int("ADAOS_SUBNET_HUB_SEND_PENDING_LIMIT", 128, minimum=8, maximum=4096)
+
+
+def _hub_member_send_pending_hard_limit() -> int:
+    return _env_int("ADAOS_SUBNET_HUB_SEND_PENDING_HARD_LIMIT", 512, minimum=16, maximum=8192)
+
+
 def _hub_yjs_broadcast_skip_source_prefixes() -> tuple[str, ...]:
     raw = str(
         os.getenv(
@@ -909,10 +949,218 @@ class HubMemberLink:
     node_snapshot: dict[str, Any] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     pending_rpc: Dict[str, asyncio.Future] = field(default_factory=dict)
+    send_seq: int = 0
+    send_pending: dict[int, dict[str, Any]] = field(default_factory=dict)
+    send_pending_high_watermark: int = 0
+    send_total: int = 0
+    send_failed_total: int = 0
+    send_timeout_total: int = 0
+    send_rejected_total: int = 0
+    sent_bytes: int = 0
+    last_send: dict[str, Any] = field(default_factory=dict)
+    max_total_send: dict[str, Any] = field(default_factory=dict)
+    max_lock_wait: dict[str, Any] = field(default_factory=dict)
+    max_socket_send: dict[str, Any] = field(default_factory=dict)
+    pong_send_total: int = 0
+    pong_send_timeout_total: int = 0
+    pong_last_send: dict[str, Any] = field(default_factory=dict)
+
+    @staticmethod
+    def _message_identity(msg: dict[str, Any]) -> tuple[str, str | None]:
+        message_type = str(msg.get("t") or "unknown").strip() or "unknown"
+        source: str | None = None
+        if message_type == "hub.event":
+            event = msg.get("event") if isinstance(msg.get("event"), dict) else {}
+            event_type = str(event.get("type") or "unknown").strip() or "unknown"
+            message_type = f"hub.event:{event_type}"
+            source = str(event.get("source") or "").strip() or None
+        return message_type[:192], source[:128] if source else None
+
+    def _record_send_pressure(
+        self,
+        *,
+        signal: str,
+        message_type: str,
+        source: str | None,
+        payload_bytes: int,
+        pending: int,
+        timeout_s: float | None = None,
+    ) -> None:
+        try:
+            from adaos.services.incident_registry import incident_domain_from_owner, record_incident
+
+            domain = incident_domain_from_owner(source, fallback="core.subnet")
+
+            record_incident(
+                incident_class="subnet_channel_pressure",
+                signal=signal,
+                severity="warning",
+                domain=domain,
+                component="hub_member_link",
+                source=source or "subnet.link_manager",
+                summary=f"hub-member outbound {signal}",
+                evidence={
+                    "node_id": self.node_id,
+                    "message_type": message_type,
+                    "source": source,
+                    "payload_bytes": int(payload_bytes),
+                    "pending": int(pending),
+                    "timeout_s": timeout_s,
+                },
+                fingerprint_parts=("subnet_channel_pressure", signal, domain, self.node_id, message_type),
+                tags=("subnet", "channel", "backpressure"),
+            )
+        except Exception:
+            _log.debug("failed to record hub-member send pressure", exc_info=True)
 
     async def send_json(self, msg: dict[str, Any]) -> None:
-        async with self.send_lock:
-            await self.websocket.send_json(msg)
+        message_type, source = self._message_identity(msg)
+        payload_bytes = len(json.dumps(msg, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        base_type = str(msg.get("t") or "unknown").strip() or "unknown"
+        pending = len(self.send_pending)
+        low_priority = base_type in {"hub.event", "yjs.update"}
+        rejected_signal: str | None = None
+        if base_type == "hub.event" and payload_bytes > _hub_member_event_max_bytes():
+            rejected_signal = "event_payload_too_large"
+        elif payload_bytes > _hub_member_frame_max_bytes():
+            rejected_signal = "frame_payload_too_large"
+        elif pending >= _hub_member_send_pending_hard_limit():
+            rejected_signal = "hard_pending_limit_exceeded"
+        elif low_priority and pending >= _hub_member_send_pending_limit():
+            rejected_signal = "low_priority_pending_limit_exceeded"
+        if rejected_signal is not None:
+            self.send_rejected_total += 1
+            self._record_send_pressure(
+                signal=rejected_signal,
+                message_type=message_type,
+                source=source,
+                payload_bytes=payload_bytes,
+                pending=pending,
+            )
+            raise RuntimeError(f"hub-member send rejected: {rejected_signal}")
+
+        self.send_seq += 1
+        token = int(self.send_seq)
+        started_at = time.time()
+        started_mono = time.monotonic()
+        timeout_s = _hub_member_send_timeout_s(base_type)
+        entry = {
+            "token": token,
+            "state": "waiting_lock",
+            "message_type": message_type,
+            "source": source,
+            "bytes": payload_bytes,
+            "started_at": started_at,
+        }
+        self.send_pending[token] = entry
+        self.send_pending_high_watermark = max(self.send_pending_high_watermark, len(self.send_pending))
+        lock_wait_s = 0.0
+        socket_send_s = 0.0
+        succeeded = False
+        error: str | None = None
+        timed_out = False
+
+        async def _send_locked() -> None:
+            nonlocal lock_wait_s, socket_send_s
+            async with self.send_lock:
+                lock_acquired_mono = time.monotonic()
+                lock_wait_s = max(0.0, lock_acquired_mono - started_mono)
+                entry["state"] = "sending"
+                entry["lock_wait_s"] = round(lock_wait_s, 6)
+                await self.websocket.send_json(msg)
+                socket_send_s = max(0.0, time.monotonic() - lock_acquired_mono)
+
+        try:
+            await asyncio.wait_for(_send_locked(), timeout=timeout_s)
+            succeeded = True
+            self.send_total += 1
+            self.sent_bytes += payload_bytes
+            if base_type == "pong":
+                self.pong_send_total += 1
+        except asyncio.TimeoutError:
+            timed_out = True
+            error = "TimeoutError"
+            self.send_failed_total += 1
+            self.send_timeout_total += 1
+            if base_type == "pong":
+                self.pong_send_timeout_total += 1
+            self._record_send_pressure(
+                signal="send_timeout",
+                message_type=message_type,
+                source=source,
+                payload_bytes=payload_bytes,
+                pending=len(self.send_pending),
+                timeout_s=timeout_s,
+            )
+            raise
+        except asyncio.CancelledError:
+            error = "CancelledError"
+            raise
+        except Exception as exc:
+            error = type(exc).__name__
+            self.send_failed_total += 1
+            raise
+        finally:
+            total_s = max(0.0, time.monotonic() - started_mono)
+            if error is not None and entry.get("state") == "waiting_lock":
+                lock_wait_s = max(lock_wait_s, total_s)
+            elif error is not None and entry.get("state") == "sending":
+                socket_send_s = max(socket_send_s, total_s - lock_wait_s)
+            completed = {
+                "message_type": message_type,
+                "source": source,
+                "bytes": payload_bytes,
+                "lock_wait_s": round(lock_wait_s, 6),
+                "socket_send_s": round(socket_send_s, 6),
+                "total_s": round(total_s, 6),
+                "timeout_s": timeout_s,
+                "started_at": started_at,
+                "finished_at": time.time(),
+                "succeeded": succeeded,
+                "timed_out": timed_out,
+                "error": error,
+            }
+            self.send_pending.pop(token, None)
+            self.last_send = completed
+            if total_s >= float(self.max_total_send.get("total_s") or 0.0):
+                self.max_total_send = dict(completed)
+            if lock_wait_s >= float(self.max_lock_wait.get("lock_wait_s") or 0.0):
+                self.max_lock_wait = dict(completed)
+            if socket_send_s >= float(self.max_socket_send.get("socket_send_s") or 0.0):
+                self.max_socket_send = dict(completed)
+            if base_type == "pong":
+                self.pong_last_send = dict(completed)
+
+    def outbound_snapshot(self, *, now: float | None = None) -> dict[str, Any]:
+        now_ts = time.time() if now is None else float(now)
+        pending: list[dict[str, Any]] = []
+        for item in list(self.send_pending.values()):
+            row = dict(item)
+            row.pop("token", None)
+            row["age_s"] = round(max(0.0, now_ts - float(row.get("started_at") or now_ts)), 6)
+            pending.append(row)
+        pending.sort(key=lambda item: -float(item.get("age_s") or 0.0))
+        return {
+            "pending": len(self.send_pending),
+            "pending_limit": _hub_member_send_pending_limit(),
+            "pending_hard_limit": _hub_member_send_pending_hard_limit(),
+            "pending_high_watermark": int(self.send_pending_high_watermark),
+            "active_sends": pending[:8],
+            "send_total": int(self.send_total),
+            "send_failed_total": int(self.send_failed_total),
+            "send_timeout_total": int(self.send_timeout_total),
+            "send_rejected_total": int(self.send_rejected_total),
+            "sent_bytes": int(self.sent_bytes),
+            "last_send": dict(self.last_send),
+            "max_total_send": dict(self.max_total_send),
+            "max_lock_wait": dict(self.max_lock_wait),
+            "max_socket_send": dict(self.max_socket_send),
+            "pong": {
+                "send_total": int(self.pong_send_total),
+                "send_timeout_total": int(self.pong_send_timeout_total),
+                "last_send": dict(self.pong_last_send),
+            },
+        }
 
 
 class HubLinkManager:
@@ -1587,6 +1835,7 @@ class HubLinkManager:
                     "last_control_result": dict(link.last_control_result) if isinstance(link.last_control_result, dict) else {},
                     "node_snapshot": dict(link.node_snapshot) if isinstance(link.node_snapshot, dict) else {},
                     "pending_rpc": len(link.pending_rpc),
+                    "outbound": link.outbound_snapshot(now=now),
                     "connected": True,
                 }
             )

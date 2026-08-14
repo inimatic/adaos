@@ -44,6 +44,62 @@ from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_w
 _log = logging.getLogger("adaos.subnet.client")
 
 
+def _bounded_json_size(value: Any, *, limit: int) -> tuple[int, bool]:
+    """Estimate encoded JSON bytes and stop before copying an oversized value."""
+
+    budget = max(1, int(limit))
+    total = 0
+    stack: list[tuple[str, Any]] = [("value", value)]
+    seen: set[int] = set()
+    visited = 0
+    while stack:
+        kind, item = stack.pop()
+        if kind == "exit":
+            seen.discard(int(item))
+            continue
+        visited += 1
+        if visited > 200_000:
+            return total, True
+        if item is None:
+            total += 4
+        elif isinstance(item, bool):
+            total += 4 if item else 5
+        elif isinstance(item, (int, float)):
+            total += len(str(item))
+        elif isinstance(item, str):
+            remaining = budget - total
+            if len(item) > remaining:
+                return total + len(item), True
+            total += len(json.dumps(item).encode("utf-8"))
+        elif isinstance(item, dict):
+            marker = id(item)
+            if marker in seen:
+                return total, True
+            seen.add(marker)
+            stack.append(("exit", marker))
+            total += 2 + (2 * len(item)) + (2 * max(0, len(item) - 1))
+            for key, child in item.items():
+                stack.append(("value", child))
+                stack.append(("value", str(key)))
+        elif isinstance(item, (list, tuple)):
+            marker = id(item)
+            if marker in seen:
+                return total, True
+            seen.add(marker)
+            stack.append(("exit", marker))
+            total += 2 + (2 * max(0, len(item) - 1))
+            stack.extend(("value", child) for child in item)
+        else:
+            text = str(item)
+            remaining = budget - total
+            if len(text) > remaining:
+                return total + len(text), True
+            total += len(json.dumps(text).encode("utf-8"))
+        if total > budget:
+            return total, True
+    return total, False
+
+
 def _resolve_member_hub_token(conf) -> str:
     token = load_member_hub_token()
     if token:
@@ -346,6 +402,26 @@ class MemberLinkClient:
         self._member_session_refresh_succeeded_at = 0.0
         self._member_session_refresh_error = ""
         self._member_session_expires_at = 0.0
+        self._outbound_queue_high_watermark = 0
+        self._outbound_enqueued_total = 0
+        self._outbound_drop_total = 0
+        self._outbound_drop_by_type: dict[str, int] = {}
+        self._outbound_rejected_total = 0
+        self._outbound_rejected_by_type: dict[str, int] = {}
+        self._outbound_last_rejected: dict[str, Any] = {}
+        self._outbound_send_seq = 0
+        self._outbound_send_active: dict[int, dict[str, Any]] = {}
+        self._outbound_send_total = 0
+        self._outbound_send_failed_total = 0
+        self._outbound_send_timeout_total = 0
+        self._outbound_sent_bytes = 0
+        self._outbound_last_send: dict[str, Any] = {}
+        self._outbound_max_send: dict[str, Any] = {}
+        self._semantic_ping_send_total = 0
+        self._semantic_ping_send_failed_total = 0
+        self._semantic_ping_send_timeout_total = 0
+        self._semantic_ping_last_send: dict[str, Any] = {}
+        self._semantic_ping_max_send: dict[str, Any] = {}
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -452,8 +528,198 @@ class MemberLinkClient:
         reason = str(getattr(exc, "reason", "") or fallback or type(exc).__name__).strip()
         return reason or type(exc).__name__
 
+    @staticmethod
+    def _outbound_message_identity(message: Any, *, fallback_type: str = "unknown") -> tuple[str, str | None]:
+        if not isinstance(message, dict):
+            return str(fallback_type or "unknown"), None
+        message_type = str(message.get("t") or fallback_type or "unknown").strip() or "unknown"
+        source: str | None = None
+        if message_type == "bus.emit":
+            event = message.get("event") if isinstance(message.get("event"), dict) else {}
+            event_type = str(event.get("type") or "unknown").strip() or "unknown"
+            message_type = f"bus.emit:{event_type}"
+            source = str(event.get("source") or "").strip() or None
+        return message_type[:192], source[:128] if source else None
+
+    @staticmethod
+    def _outbound_event_max_bytes() -> int:
+        try:
+            value = int(str(os.getenv("ADAOS_SUBNET_MEMBER_EVENT_MAX_BYTES", str(256 * 1024)) or "").strip())
+        except Exception:
+            value = 256 * 1024
+        return max(1024, min(value, 16 * 1024 * 1024))
+
+    @staticmethod
+    def _outbound_frame_max_bytes() -> int:
+        try:
+            value = int(str(os.getenv("ADAOS_SUBNET_MEMBER_FRAME_MAX_BYTES", str(2 * 1024 * 1024)) or "").strip())
+        except Exception:
+            value = 2 * 1024 * 1024
+        return max(16 * 1024, min(value, 64 * 1024 * 1024))
+
+    def _record_outbound_pressure(
+        self,
+        *,
+        signal: str,
+        message_type: str,
+        source: str | None,
+        payload_bytes: int,
+    ) -> None:
+        try:
+            from adaos.services.incident_registry import incident_domain_from_owner, record_incident
+
+            domain = incident_domain_from_owner(source, fallback="core.subnet")
+            record_incident(
+                incident_class="subnet_channel_pressure",
+                signal=signal,
+                severity="warning",
+                domain=domain,
+                component="member_link_client",
+                source=source or "subnet.link_client",
+                summary=f"member-hub outbound {signal}",
+                evidence={
+                    "message_type": message_type,
+                    "source": source,
+                    "payload_bytes": int(payload_bytes),
+                    "queue_size": int(self._out_q.qsize()),
+                },
+                fingerprint_parts=("subnet_channel_pressure", signal, domain, message_type),
+                tags=("subnet", "channel", "backpressure"),
+            )
+        except Exception:
+            _log.debug("failed to record member-hub outbound pressure", exc_info=True)
+
+    def _validate_outbound_size(self, message: dict[str, Any]) -> tuple[str, str | None, int]:
+        message_type, source = self._outbound_message_identity(message)
+        base_type = str(message.get("t") or "unknown").strip() or "unknown"
+        limit = self._outbound_event_max_bytes() if base_type == "bus.emit" else self._outbound_frame_max_bytes()
+        estimated_bytes, exceeded = _bounded_json_size(message, limit=limit)
+        if exceeded:
+            signal = "event_payload_too_large" if base_type == "bus.emit" else "frame_payload_too_large"
+            self._outbound_rejected_total += 1
+            self._outbound_rejected_by_type[message_type] = (
+                int(self._outbound_rejected_by_type.get(message_type) or 0) + 1
+            )
+            self._outbound_last_rejected = {
+                "message_type": message_type,
+                "source": source,
+                "estimated_bytes": int(estimated_bytes),
+                "limit_bytes": int(limit),
+                "signal": signal,
+                "rejected_at": time.time(),
+            }
+            self._record_outbound_pressure(
+                signal=signal,
+                message_type=message_type,
+                source=source,
+                payload_bytes=estimated_bytes,
+            )
+            raise RuntimeError(f"member-hub outbound rejected: {signal}")
+        return message_type, source, estimated_bytes
+
+    def _queue_outbound(self, message: dict[str, Any]) -> None:
+        message_type, _source, _estimated_bytes = self._validate_outbound_size(message)
+        try:
+            self._out_q.put_nowait(message)
+        except asyncio.QueueFull:
+            self._outbound_drop_total += 1
+            self._outbound_drop_by_type[message_type] = int(self._outbound_drop_by_type.get(message_type) or 0) + 1
+            raise
+        self._outbound_enqueued_total += 1
+        self._outbound_queue_high_watermark = max(
+            int(self._outbound_queue_high_watermark),
+            int(self._out_q.qsize()),
+        )
+
+    async def _send_ws_message(
+        self,
+        ws: Any,
+        message: dict[str, Any],
+        *,
+        lane: str,
+        timeout_s: float | None = None,
+    ) -> None:
+        self._validate_outbound_size(message)
+        encoded = json.dumps(message)
+        encoded_bytes = len(encoded.encode("utf-8"))
+        message_type, source = self._outbound_message_identity(message)
+        self._outbound_send_seq += 1
+        token = int(self._outbound_send_seq)
+        started_at = time.time()
+        started_mono = time.monotonic()
+        active = {
+            "token": token,
+            "lane": str(lane or "unknown"),
+            "message_type": message_type,
+            "source": source,
+            "bytes": encoded_bytes,
+            "started_at": started_at,
+        }
+        self._outbound_send_active[token] = active
+        if lane == "semantic_ping":
+            self._semantic_ping_send_total += 1
+        error: str | None = None
+        timed_out = False
+        succeeded = False
+        try:
+            send_result = ws.send(encoded)
+            if timeout_s is None:
+                await send_result
+            else:
+                await asyncio.wait_for(send_result, timeout=timeout_s)
+            succeeded = True
+            self._outbound_send_total += 1
+            self._outbound_sent_bytes += encoded_bytes
+        except asyncio.TimeoutError:
+            timed_out = True
+            error = "TimeoutError"
+            self._outbound_send_timeout_total += 1
+            self._outbound_send_failed_total += 1
+            if lane == "semantic_ping":
+                self._semantic_ping_send_timeout_total += 1
+                self._semantic_ping_send_failed_total += 1
+            raise
+        except asyncio.CancelledError:
+            error = "CancelledError"
+            raise
+        except Exception as exc:
+            error = type(exc).__name__
+            self._outbound_send_failed_total += 1
+            if lane == "semantic_ping":
+                self._semantic_ping_send_failed_total += 1
+            raise
+        finally:
+            duration_s = max(0.0, time.monotonic() - started_mono)
+            completed = {
+                "lane": str(lane or "unknown"),
+                "message_type": message_type,
+                "source": source,
+                "bytes": encoded_bytes,
+                "duration_s": round(duration_s, 6),
+                "started_at": started_at,
+                "finished_at": time.time(),
+                "succeeded": succeeded,
+                "timed_out": timed_out,
+                "error": error,
+            }
+            self._outbound_send_active.pop(token, None)
+            self._outbound_last_send = completed
+            if duration_s >= float(self._outbound_max_send.get("duration_s") or 0.0):
+                self._outbound_max_send = dict(completed)
+            if lane == "semantic_ping":
+                self._semantic_ping_last_send = dict(completed)
+                if duration_s >= float(self._semantic_ping_max_send.get("duration_s") or 0.0):
+                    self._semantic_ping_max_send = dict(completed)
+
     def snapshot(self) -> dict[str, Any]:
         now = time.time()
+        active_sends: list[dict[str, Any]] = []
+        for item in list(self._outbound_send_active.values()):
+            row = dict(item)
+            row.pop("token", None)
+            row["age_s"] = round(max(0.0, now - float(row.get("started_at") or now)), 6)
+            active_sends.append(row)
+        active_sends.sort(key=lambda item: -float(item.get("age_s") or 0.0))
         last_hub_core_update = (
             dict(self._last_hub_core_update)
             if isinstance(self._last_hub_core_update, dict)
@@ -479,6 +745,31 @@ class MemberLinkClient:
             "last_ws_close_code": self._last_ws_close_code,
             "last_ws_close_reason": self._last_ws_close_reason or None,
             "last_ws_close_error": self._last_ws_close_error or None,
+            "outbound": {
+                "queue_size": int(self._out_q.qsize()),
+                "queue_capacity": int(self._out_q.maxsize),
+                "queue_high_watermark": int(self._outbound_queue_high_watermark),
+                "enqueued_total": int(self._outbound_enqueued_total),
+                "drop_total": int(self._outbound_drop_total),
+                "drop_by_type": dict(self._outbound_drop_by_type),
+                "rejected_total": int(self._outbound_rejected_total),
+                "rejected_by_type": dict(self._outbound_rejected_by_type),
+                "last_rejected": dict(self._outbound_last_rejected),
+                "send_total": int(self._outbound_send_total),
+                "send_failed_total": int(self._outbound_send_failed_total),
+                "send_timeout_total": int(self._outbound_send_timeout_total),
+                "sent_bytes": int(self._outbound_sent_bytes),
+                "active_sends": active_sends[:8],
+                "last_send": dict(self._outbound_last_send),
+                "max_send": dict(self._outbound_max_send),
+                "semantic_ping": {
+                    "send_total": int(self._semantic_ping_send_total),
+                    "send_failed_total": int(self._semantic_ping_send_failed_total),
+                    "send_timeout_total": int(self._semantic_ping_send_timeout_total),
+                    "last_send": dict(self._semantic_ping_last_send),
+                    "max_send": dict(self._semantic_ping_max_send),
+                },
+            },
             "member_session": {
                 "expires_at": self._member_session_expires_at or None,
                 "refresh_attempt_ago_s": (
@@ -705,7 +996,7 @@ class MemberLinkClient:
 
     def _queue_node_status(self, *, include_capacity: bool = False) -> None:
         try:
-            self._out_q.put_nowait(
+            self._queue_outbound(
                 {
                     "t": "node.status",
                     "status": self._local_node_status(include_capacity=include_capacity),
@@ -732,7 +1023,7 @@ class MemberLinkClient:
             except Exception:
                 pass
         try:
-            self._out_q.put_nowait(
+            self._queue_outbound(
                 {
                     "t": "node.catalog",
                     "snapshot": self._local_node_snapshot(),
@@ -826,7 +1117,7 @@ class MemberLinkClient:
             except Exception:
                 return
         try:
-            self._out_q.put_nowait(
+            self._queue_outbound(
                 {
                     "t": "node.catalog",
                     "snapshot": snapshot,
@@ -1041,7 +1332,7 @@ class MemberLinkClient:
                 "reason": str(reason or "member_link_snapshot"),
                 "ts": time.time(),
             }
-            self._out_q.put_nowait(msg)
+            self._queue_outbound(msg)
             self._yjs_snapshot_queued_total += 1
             self._yjs_write_queued_total += 1
             self._yjs_snapshot_bytes += len(json.dumps(node_state, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
@@ -1148,7 +1439,7 @@ class MemberLinkClient:
                         "ts": float(ts or time.time()),
                     },
                 }
-                self._out_q.put_nowait(msg)
+                self._queue_outbound(msg)
             except Exception:
                 return
 
@@ -1293,7 +1584,7 @@ class MemberLinkClient:
                         "base_url": None,
                         "capacity": get_local_capacity(),
                     }
-                    await ws.send(json.dumps(hello))
+                    await self._send_ws_message(ws, hello, lane="handshake")
                     try:
                         raw_ack = await asyncio.wait_for(ws.recv(), timeout=5.0)
                         try:
@@ -1334,14 +1625,14 @@ class MemberLinkClient:
                     backoff = 1.0
                     try:
                         now = time.time()
-                        await ws.send(
-                            json.dumps(
-                                {
-                                    "t": "node.status",
-                                    "status": self._local_node_status(include_capacity=True),
-                                    "ts": now,
-                                }
-                            )
+                        await self._send_ws_message(
+                            ws,
+                            {
+                                "t": "node.status",
+                                "status": self._local_node_status(include_capacity=True),
+                                "ts": now,
+                            },
+                            lane="session_bootstrap",
                         )
                     except Exception:
                         pass
@@ -1355,14 +1646,14 @@ class MemberLinkClient:
                         if send_catalog:
                             self._last_connect_full_snapshot_at = now
                             catalog_snapshot = await self._local_node_snapshot_async()
-                            await ws.send(
-                                json.dumps(
-                                    {
-                                        "t": "node.catalog",
-                                        "snapshot": catalog_snapshot,
-                                        "ts": now,
-                                    }
-                                )
+                            await self._send_ws_message(
+                                ws,
+                                {
+                                    "t": "node.catalog",
+                                    "snapshot": catalog_snapshot,
+                                    "ts": now,
+                                },
+                                lane="session_bootstrap",
                             )
                     except Exception:
                         _log.debug("failed to send member desktop catalog on connect", exc_info=True)
@@ -1383,7 +1674,7 @@ class MemberLinkClient:
                         while True:
                             msg = await self._out_q.get()
                             try:
-                                await ws.send(json.dumps(msg))
+                                await self._send_ws_message(ws, msg, lane="queue")
                                 if isinstance(msg, dict) and msg.get("t") in {"yjs.update", "yjs.node_state"}:
                                     self._yjs_sent_total += 1
                                     self._last_yjs_sent_at = time.time()
@@ -1578,12 +1869,14 @@ class MemberLinkClient:
                 )
                 return
             try:
-                ping_payload = json.dumps({"t": "ping", "ts": time.time()})
+                ping_payload = {"t": "ping", "ts": time.time()}
                 send_timeout_s = self._ws_semantic_ping_send_timeout_s()
-                if send_timeout_s is None:
-                    await ws.send(ping_payload)
-                else:
-                    await asyncio.wait_for(ws.send(ping_payload), timeout=send_timeout_s)
+                await self._send_ws_message(
+                    ws,
+                    ping_payload,
+                    lane="semantic_ping",
+                    timeout_s=send_timeout_s,
+                )
             except asyncio.TimeoutError:
                 _log.warning(
                     "subnet link semantic ping send timed out ws=%s timeout_s=%.3f",
@@ -1625,7 +1918,11 @@ class MemberLinkClient:
         if not isinstance(rid, str) or not rid:
             return
         if method != "tools.call":
-            await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": False, "error": "unknown_method"}))
+            await self._send_ws_message(
+                ws,
+                {"t": "rpc.res", "id": rid, "ok": False, "error": "unknown_method"},
+                lane="rpc_response",
+            )
             return
 
         tool = (params or {}).get("tool")
@@ -1634,14 +1931,26 @@ class MemberLinkClient:
         dev = bool((params or {}).get("dev", False))
         intent = str((params or {}).get("intent") or "").strip().lower()
         if not isinstance(tool, str) or ":" not in tool:
-            await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": False, "error": "invalid_tool"}))
+            await self._send_ws_message(
+                ws,
+                {"t": "rpc.res", "id": rid, "ok": False, "error": "invalid_tool"},
+                lane="rpc_response",
+            )
             return
 
         try:
             result = await asyncio.to_thread(self._run_tool, tool, arguments, timeout, dev, intent)
-            await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": True, "result": result}))
+            await self._send_ws_message(
+                ws,
+                {"t": "rpc.res", "id": rid, "ok": True, "result": result},
+                lane="rpc_response",
+            )
         except Exception as exc:
-            await ws.send(json.dumps({"t": "rpc.res", "id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}))
+            await self._send_ws_message(
+                ws,
+                {"t": "rpc.res", "id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                lane="rpc_response",
+            )
 
     @staticmethod
     def _run_tool(
@@ -2104,7 +2413,11 @@ class MemberLinkClient:
             self._last_control_request["error"] = str(result.get("error"))
         self._queue_node_snapshot()
         try:
-            await ws.send(json.dumps({"t": "core.update.result", "result": result}))
+            await self._send_ws_message(
+                ws,
+                {"t": "core.update.result", "result": result},
+                lane="control_response",
+            )
         except Exception:
             pass
 
@@ -2112,7 +2425,7 @@ class MemberLinkClient:
         node_names = normalize_node_names(msg.get("node_names"))
         conf = persist_node_names(node_names)
         try:
-            self._out_q.put_nowait(
+            self._queue_outbound(
                 {
                     "t": "node.meta",
                     "node_names": list(getattr(conf, "node_names", []) or []),
