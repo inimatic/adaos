@@ -1035,6 +1035,10 @@ Recommended demo data shape:
 - [x] `[must]` validate materialized `ui.application.interfaces` and
   `ui.application.modals` together so remote/member declarations cannot fail
   silently in the browser
+- [x] `[must]` tolerate rolling hub/member skill upgrades by merging missing
+  public `views` and `transitions` for the same skill interface. The first
+  local/scenario declaration remains authoritative for conflicts, while older
+  member-owned modals keep the addresses they still implement.
 - [x] `[must]` preserve validation evidence in `ui.application.diagnostics`
   and skill UI diagnostics logs
 - [x] `[must]` add Notebook as the reference contract test for addressed modal

@@ -13,6 +13,7 @@ class WebspaceResolutionOperations:
     build_materialization_snapshot: Any
     clone_json_like: Any
     clone_skill_ui_interface: Any
+    merge_skill_ui_interfaces: Any
     coerce_dict: Any
     coerce_live_branch_subset: Any
     decl_is_node_owned: Any
@@ -353,7 +354,11 @@ class WebspaceResolutionService:
             if raw_interface and skill_name:
                 interface_copy = operations.clone_skill_ui_interface(raw_interface, skill=str(skill_name), source=source)
                 if interface_copy:
-                    skill_interfaces.setdefault(str(skill_name), interface_copy)
+                    skill_key = str(skill_name)
+                    skill_interfaces[skill_key] = operations.merge_skill_ui_interfaces(
+                        skill_interfaces.get(skill_key),
+                        interface_copy,
+                    )
             raw_interfaces = decl.get("interfaces") if isinstance(decl.get("interfaces"), Mapping) else {}
             for interface_skill, raw_skill_interface in raw_interfaces.items():
                 interface_skill_name = str(interface_skill or "").strip()
@@ -365,7 +370,10 @@ class WebspaceResolutionService:
                     source=f"skill:{interface_skill_name}",
                 )
                 if interface_copy:
-                    skill_interfaces.setdefault(interface_skill_name, interface_copy)
+                    skill_interfaces[interface_skill_name] = operations.merge_skill_ui_interfaces(
+                        skill_interfaces.get(interface_skill_name),
+                        interface_copy,
+                    )
             mod_spec = reg.get("modals") or {}
             if isinstance(mod_spec, dict):
                 skill_registry_modals.append([modal_id_map.get(str(k), str(k)) for k in mod_spec.keys()])
@@ -625,7 +633,11 @@ class WebspaceResolutionService:
         if skill_interfaces:
             merged_interfaces = operations.coerce_dict(app_with_modals.get("interfaces") or {})
             for key, value in skill_interfaces.items():
-                merged_interfaces.setdefault(str(key), operations.clone_json_like(value))
+                interface_key = str(key)
+                merged_interfaces[interface_key] = operations.merge_skill_ui_interfaces(
+                    merged_interfaces.get(interface_key),
+                    value,
+                )
             app_with_modals["interfaces"] = merged_interfaces
         desktop_config = operations.coerce_dict(app_with_modals.get("desktop") or {})
         desktop_config["topbar"] = scenario_topbar

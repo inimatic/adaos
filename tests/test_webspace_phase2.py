@@ -5353,6 +5353,122 @@ def test_phase3_resolver_attaches_webui_contract_diagnostics(monkeypatch) -> Non
     }
 
 
+def test_phase3_resolver_merges_version_skewed_skill_interface_views(monkeypatch) -> None:
+    monkeypatch.setattr(webspace_runtime_module, "_local_node_id", lambda: "hub-node")
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "node_display_from_config",
+        lambda _conf: {
+            "node_label": "Hub",
+            "node_compact_label": "N0",
+            "node_index": 0,
+            "node_color": "",
+        },
+    )
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    resolved = runtime.resolve_webspace(
+        webspace_runtime_module.WebspaceResolverInputs(
+            webspace_id="phase3-version-skewed-interface",
+            scenario_id="web_desktop",
+            source_mode="workspace",
+            scenario_application={"desktop": {"pageSchema": {"id": "desktop-page"}}},
+            scenario_catalog={"apps": [], "widgets": []},
+            scenario_registry={"modals": [], "widgets": []},
+            overlay_snapshot={"installed": {"apps": [], "widgets": []}},
+            live_state={"desktop": {"installed": {}}, "routing": {}},
+            skill_decls=[
+                {
+                    "skill": "mediaserver",
+                    "space": "default",
+                    "interface": {
+                        "schema": "adaos.ui.skill_interface.v1",
+                        "defaultView": "mediaserver.diagnostics",
+                        "views": {
+                            "mediaserver.diagnostics": {"title": "Diagnostics", "surfaces": ["modal"]},
+                            "mediaserver.shared": {"title": "Local contract", "surfaces": ["modal"]},
+                        },
+                        "transitions": [
+                            {
+                                "from": "mediaserver.diagnostics",
+                                "on": "inspect",
+                                "to": "mediaserver.shared",
+                                "params": {"authority": "local"},
+                            }
+                        ],
+                    },
+                },
+                {
+                    "skill": "subnet.member.member-1",
+                    "space": "default",
+                    "node_id": "member-1",
+                    "interfaces": {
+                        "mediaserver": {
+                            "schema": "adaos.ui.skill_interface.v1",
+                            "defaultView": "mediaserver.mediaserver_modal",
+                            "views": {
+                                "mediaserver.mediaserver_modal": {"title": "Legacy player", "surfaces": ["modal"]},
+                                "mediaserver.shared": {"title": "Remote contract", "surfaces": ["modal"]},
+                            },
+                            "transitions": [
+                                {
+                                    "from": "mediaserver.diagnostics",
+                                    "on": "inspect",
+                                    "to": "mediaserver.shared",
+                                    "params": {"authority": "remote"},
+                                },
+                                {
+                                    "from": "mediaserver.shared",
+                                    "on": "play",
+                                    "to": "mediaserver.mediaserver_modal",
+                                },
+                            ],
+                        }
+                    },
+                    "registry": {
+                        "modals": {
+                            "mediaserver_modal": {
+                                "implements": ["mediaserver.mediaserver_modal"],
+                                "schema": {
+                                    "id": "mediaserver_modal",
+                                    "interface": {
+                                        "schema": "adaos.ui.modal.interface.v1",
+                                        "defaultRoute": "library",
+                                        "routes": {
+                                            "library": {
+                                                "view": "mediaserver.mediaserver_modal",
+                                                "params": {},
+                                            }
+                                        },
+                                    },
+                                    "widgets": [],
+                                },
+                            }
+                        },
+                        "widgets": {},
+                    },
+                },
+            ],
+            desktop_scenarios=[],
+        )
+    )
+
+    interface = resolved.application["interfaces"]["mediaserver"]
+    assert interface["defaultView"] == "mediaserver.diagnostics"
+    assert set(interface["views"]) == {
+        "mediaserver.diagnostics",
+        "mediaserver.mediaserver_modal",
+        "mediaserver.shared",
+    }
+    assert interface["views"]["mediaserver.shared"]["title"] == "Local contract"
+    assert len(interface["transitions"]) == 2
+    diagnostic_codes = {
+        item["code"]
+        for item in resolved.application.get("diagnostics", {}).get("webui_contract", {}).get("issues", [])
+    }
+    assert "webui.modal.implements_unknown_view" not in diagnostic_codes
+    assert "webui.modal.route_unknown_view" not in diagnostic_codes
+
+
 def test_phase5_resolver_cache_reuses_same_inputs_without_leaking_mutations() -> None:
     webspace_runtime_module._RUNTIME.cache.clear_resolved_webspaces()
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())

@@ -212,6 +212,7 @@ def _resolution_operations() -> WebspaceResolutionOperations:
         build_materialization_snapshot=_build_materialization_snapshot,
         clone_json_like=_clone_json_like,
         clone_skill_ui_interface=_clone_skill_ui_interface,
+        merge_skill_ui_interfaces=_merge_skill_ui_interfaces,
         coerce_dict=_coerce_dict,
         coerce_live_branch_subset=_coerce_live_branch_subset,
         decl_is_node_owned=_decl_is_node_owned,
@@ -1445,8 +1446,24 @@ def _local_catalog_decl_entries(decls: List[Dict[str, Any]]) -> dict[str, Any]:
                     skill_dir=skill_source_path,
                 )
         raw_interface = decl.get("interface") if isinstance(decl.get("interface"), Mapping) else {}
-        if raw_interface and skill_name and skill_name not in interfaces:
-            interfaces[skill_name] = _clone_skill_ui_interface(raw_interface, skill=skill_name, source=source)
+        if raw_interface and skill_name:
+            interfaces[skill_name] = _merge_skill_ui_interfaces(
+                interfaces.get(skill_name),
+                _clone_skill_ui_interface(raw_interface, skill=skill_name, source=source),
+            )
+        raw_interfaces = decl.get("interfaces") if isinstance(decl.get("interfaces"), Mapping) else {}
+        for interface_skill, raw_skill_interface in raw_interfaces.items():
+            interface_skill_name = str(interface_skill or "").strip()
+            if not interface_skill_name or not isinstance(raw_skill_interface, Mapping):
+                continue
+            interfaces[interface_skill_name] = _merge_skill_ui_interfaces(
+                interfaces.get(interface_skill_name),
+                _clone_skill_ui_interface(
+                    raw_skill_interface,
+                    skill=interface_skill_name,
+                    source=f"skill:{interface_skill_name}",
+                ),
+            )
         webio = decl.get("webio") if isinstance(decl.get("webio"), Mapping) else {}
         receivers = webio.get("receivers") if isinstance(webio.get("receivers"), Mapping) else {}
         for key, value in receivers.items():
@@ -1952,6 +1969,57 @@ def _clone_skill_ui_interface(raw: Any, *, skill: str, source: str) -> Dict[str,
         meta.setdefault("origin", source)
     interface_copy["_adaos"] = meta
     return interface_copy
+
+
+def _merge_skill_ui_interfaces(primary: Any, supplemental: Any) -> Dict[str, Any]:
+    """Merge version-skewed declarations while preserving primary authority."""
+    primary_copy = _clone_json_like(primary) if isinstance(primary, Mapping) else {}
+    supplemental_copy = _clone_json_like(supplemental) if isinstance(supplemental, Mapping) else {}
+    if not isinstance(primary_copy, dict) or not primary_copy:
+        return supplemental_copy if isinstance(supplemental_copy, dict) else {}
+    if not isinstance(supplemental_copy, dict) or not supplemental_copy:
+        return primary_copy
+
+    merged = dict(primary_copy)
+    for key, value in supplemental_copy.items():
+        if key not in {"views", "transitions"}:
+            merged.setdefault(str(key), _clone_json_like(value))
+
+    primary_views = primary_copy.get("views") if isinstance(primary_copy.get("views"), Mapping) else {}
+    supplemental_views = (
+        supplemental_copy.get("views") if isinstance(supplemental_copy.get("views"), Mapping) else {}
+    )
+    if primary_views or supplemental_views:
+        merged_views = {str(key): _clone_json_like(value) for key, value in primary_views.items()}
+        for key, value in supplemental_views.items():
+            merged_views.setdefault(str(key), _clone_json_like(value))
+        merged["views"] = merged_views
+
+    primary_transitions = primary_copy.get("transitions") if isinstance(primary_copy.get("transitions"), list) else []
+    supplemental_transitions = (
+        supplemental_copy.get("transitions") if isinstance(supplemental_copy.get("transitions"), list) else []
+    )
+    if primary_transitions or supplemental_transitions:
+        def _transition_identity(item: Any) -> str:
+            if isinstance(item, Mapping):
+                route = tuple(str(item.get(key) or "").strip() for key in ("from", "on", "to", "surface"))
+                if any(route):
+                    return "route:" + "\0".join(route)
+            try:
+                return json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+            except Exception:
+                return repr(item)
+
+        merged_transitions = [_clone_json_like(item) for item in primary_transitions]
+        seen = {_transition_identity(item) for item in merged_transitions}
+        for item in supplemental_transitions:
+            item_copy = _clone_json_like(item)
+            identity = _transition_identity(item_copy)
+            if identity not in seen:
+                seen.add(identity)
+                merged_transitions.append(item_copy)
+        merged["transitions"] = merged_transitions
+    return merged
 
 
 def _mapping_get(value: Any, key: str, default: Any = None) -> Any:
