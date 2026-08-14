@@ -200,6 +200,25 @@ def test_skill_migrate_schedules_remote_background_migration(monkeypatch) -> Non
     assert "skill runtime migration scheduled operation=op-1" in result.output
 
 
+def test_skill_migrate_remote_dry_run_fails_before_mutation(monkeypatch) -> None:
+    runner = CliRunner()
+    calls: list[tuple[str, dict | None, float]] = []
+
+    monkeypatch.setattr(skill_cmd, "_hub_api_ready", lambda timeout_s=3.0: True)
+
+    def _fake_hub_post(path: str, *, body: dict | None = None, timeout_s: float = 30) -> dict:
+        calls.append((path, body, timeout_s))
+        return {"accepted": True}
+
+    monkeypatch.setattr(skill_cmd, "_hub_post", _fake_hub_post)
+
+    result = runner.invoke(skill_cmd.app, ["migrate", "weather_skill", "--dry-run"])
+
+    assert result.exit_code == 2, result.output
+    assert calls == []
+    assert "use --local --dry-run" in result.output
+
+
 def test_skill_migrate_passes_force_flag_when_requested(monkeypatch) -> None:
     runner = CliRunner()
     calls: list[tuple[str, dict | None, float]] = []

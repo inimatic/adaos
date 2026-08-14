@@ -2221,7 +2221,12 @@ def migrate(
 ):
     if not local and _hub_api_ready(timeout_s=3.0):
         if dry_run:
-            typer.secho("dry-run is not supported in hub api mode; ignoring", fg=typer.colors.YELLOW)
+            typer.secho(
+                "dry-run is not supported in hub api mode; use --local --dry-run",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(2)
         result = _hub_post(
             "/api/skills/runtime/migration/start",
             body={
