@@ -3988,11 +3988,11 @@ class SupervisorManager:
                 session.close()
 
     def _runtime_reliability_payload(self, *, timeout: float = 2.0) -> dict[str, Any]:
-        path = "/api/node/reliability"
+        path = "/api/node/reliability/supervisor-channel"
         try:
             payload = self._runtime_request_json(path=path, timeout=timeout)
         except Exception as exc:
-            _LOG.debug("supervisor reliability preflight unavailable: %s: %s", type(exc).__name__, exc)
+            _LOG.debug("supervisor channel preflight unavailable: %s: %s", type(exc).__name__, exc)
             try:
                 from adaos.services.incident_registry import record_runtime_api_timeout
 
@@ -4009,18 +4009,15 @@ class SupervisorManager:
                 )
             except Exception:
                 pass
-            return {}
+            try:
+                payload = self._runtime_request_json(path="/api/node/reliability", timeout=timeout)
+            except Exception:
+                return {}
         runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
         return dict(runtime) if isinstance(runtime, dict) else {}
 
     async def _runtime_reliability_payload_async(self, *, timeout: float | None = None) -> dict[str, Any]:
-        """Read advisory reliability data without blocking the supervisor loop.
-
-        Runtime reliability is intentionally richer than the cheap listener
-        health probe.  Event-loop pressure in the managed runtime may delay
-        this response, but it must not freeze update/restart coordination in
-        the supervisor itself.
-        """
+        """Read the bounded channel watchdog contract off the supervisor loop."""
 
         resolved_timeout = (
             _runtime_reliability_probe_timeout_sec()

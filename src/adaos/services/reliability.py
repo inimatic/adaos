@@ -6871,6 +6871,101 @@ def skill_runtime_migration_update_gate_snapshot() -> dict[str, Any]:
     }
 
 
+def supervisor_channel_runtime_snapshot(
+    *,
+    node_id: str,
+    role: str,
+    local_ready: bool,
+    node_state: str,
+    draining: bool,
+    route_mode: str | None,
+    connected_to_hub: bool | None,
+    node_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build the bounded channel contract consumed by the supervisor watchdog."""
+
+    channel_diagnostics = channel_diagnostics_snapshot()
+    transport_strategy = hub_root_transport_strategy_snapshot()
+    hub_root_protocol = hub_root_protocol_snapshot()
+    hub_member_channels = hub_member_semantic_channels_snapshot(
+        role=role,
+        route_mode=route_mode,
+        connected_to_hub=connected_to_hub,
+        hub_root_protocol=hub_root_protocol,
+    )
+    member_state = hub_member_connection_state_snapshot(
+        role=role,
+        route_mode=route_mode,
+        connected_to_hub=connected_to_hub,
+        node_id=node_id,
+        node_names=node_names,
+    )
+    readiness_tree = build_readiness_tree(
+        role=role,
+        local_ready=local_ready,
+        node_state=node_state,
+        draining=draining,
+        connected_to_hub=connected_to_hub,
+        channel_diagnostics=channel_diagnostics,
+        hub_member_channels=hub_member_channels,
+        hub_member_connection_state=member_state,
+    )
+    channel_overview = channel_overview_snapshot(
+        readiness_tree=readiness_tree,
+        channel_diagnostics=channel_diagnostics,
+        transport_strategy=transport_strategy,
+    )
+    section_timeout = _runtime_snapshot_timeout_sec()
+    media_runtime = _run_bounded_runtime_section(
+        section="media",
+        timeout_sec=section_timeout,
+        fn=lambda: media_plane_runtime_snapshot(
+            role=role,
+            route_mode=route_mode,
+            connected_to_hub=connected_to_hub,
+        ),
+        fallback={"available": False, "update_guard": {}},
+    )
+    sidecar_runtime = sidecar_runtime_snapshot(
+        role=role,
+        readiness_tree=readiness_tree,
+        hub_root_protocol=hub_root_protocol,
+        transport_strategy=transport_strategy,
+        media_runtime=media_runtime,
+    )
+    return {
+        "node": {
+            "role": role,
+            "ready": bool(local_ready and not draining),
+            "node_state": node_state,
+            "draining": bool(draining),
+            "connected_to_subnet": _connected_to_subnet_alias(connected_to_hub),
+            "connected_to_hub": connected_to_hub,
+        },
+        "readiness_tree": {
+            key: dict(readiness_tree.get(key) or {})
+            for key in ("root_control", "route", "hub_member")
+            if isinstance(readiness_tree.get(key), dict)
+        },
+        "channel_overview": {
+            key: dict(channel_overview.get(key) or {})
+            for key in ("hub_root", "hub_root_browser")
+            if isinstance(channel_overview.get(key), dict)
+        },
+        "hub_root_transport_strategy": {
+            key: transport_strategy.get(key)
+            for key in ("last_event", "last_summary", "selected_server", "effective_transport")
+        },
+        "hub_member_connection_state": member_state,
+        "sidecar_runtime": {
+            "continuity_contract": dict(sidecar_runtime.get("continuity_contract") or {}),
+        },
+        "media_runtime": {
+            "update_guard": dict(media_runtime.get("update_guard") or {}),
+        },
+    }
+
+
 def _skill_subscription_execution_runtime_snapshot() -> dict[str, Any]:
     try:
         from adaos.services.skill.subscription_execution import subscription_execution_snapshot

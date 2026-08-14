@@ -70,6 +70,7 @@ from adaos.services.reliability import (
     sidecar_runtime_snapshot,
     skill_runtime_migration_update_gate_snapshot,
     skill_runtime_migration_runtime_snapshot,
+    supervisor_channel_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.operations import submit_install_operation
@@ -4220,6 +4221,30 @@ async def node_reliability_update_gate() -> dict[str, Any]:
         "runtime": {
             "skill_runtime_migration": migration,
         },
+    }
+
+
+@router.get("/reliability/supervisor-channel", dependencies=[Depends(require_token)])
+async def node_reliability_supervisor_channel() -> dict[str, Any]:
+    conf = load_config()
+    route_mode, connected = route_info(conf.role)
+    lifecycle = runtime_lifecycle_snapshot()
+    runtime = await asyncio.to_thread(
+        supervisor_channel_runtime_snapshot,
+        node_id=conf.node_id,
+        role=conf.role,
+        local_ready=is_ready(),
+        node_state=str(lifecycle.get("node_state") or "ready"),
+        draining=bool(lifecycle.get("draining")),
+        route_mode=route_mode,
+        connected_to_hub=connected,
+        node_names=list(getattr(conf, "node_names", []) or []),
+    )
+    return {
+        "ok": True,
+        "schema": "adaos.reliability_supervisor_channel.v1",
+        "captured_at": time.time(),
+        "runtime": runtime,
     }
 
 

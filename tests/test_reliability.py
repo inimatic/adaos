@@ -2898,6 +2898,38 @@ def test_node_reliability_update_gate_is_compact(monkeypatch) -> None:
     assert len(response.content) < 1024
 
 
+def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.auth import require_token
+
+    monkeypatch.setattr(
+        node_api,
+        "supervisor_channel_runtime_snapshot",
+        lambda **kwargs: {
+            "node": {"role": kwargs["role"]},
+            "readiness_tree": {"root_control": {"status": "ready"}},
+        },
+    )
+    monkeypatch.setattr(
+        node_api,
+        "load_config",
+        lambda: SimpleNamespace(role="hub", node_id="node-1", node_names=[]),
+    )
+    monkeypatch.setattr(node_api, "route_info", lambda role: (role, True))
+    monkeypatch.setattr(node_api, "runtime_lifecycle_snapshot", lambda: {"node_state": "ready"})
+    monkeypatch.setattr(node_api, "is_ready", lambda: True)
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(node_api.router, prefix="/api/node")
+
+    response = TestClient(app).get("/api/node/reliability/supervisor-channel")
+
+    assert response.status_code == 200
+    assert response.json()["schema"] == "adaos.reliability_supervisor_channel.v1"
+    assert response.json()["runtime"]["node"]["role"] == "hub"
+    assert len(response.content) < 1024
+
+
 def test_skill_runtime_migration_update_gate_snapshot_omits_failure_details(monkeypatch) -> None:
     from adaos.services import reliability
 

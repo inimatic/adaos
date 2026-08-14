@@ -1292,6 +1292,28 @@ def test_supervisor_reliability_probe_uses_nonblocking_configured_deadline(monke
     assert seen == [4.5]
 
 
+def test_supervisor_reliability_probe_uses_compact_channel_endpoint(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    calls: list[dict[str, object]] = []
+
+    def _request(**kwargs):  # noqa: ANN003
+        calls.append(dict(kwargs))
+        return {"runtime": {"node": {"role": "hub"}}}
+
+    monkeypatch.setattr(manager, "_runtime_request_json", _request)
+
+    payload = manager._runtime_reliability_payload(timeout=3.0)
+
+    assert payload == {"node": {"role": "hub"}}
+    assert calls == [
+        {"path": "/api/node/reliability/supervisor-channel", "timeout": 3.0},
+    ]
+
+
 def test_supervisor_update_gate_uses_compact_runtime_endpoint(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(
         runtime_host="127.0.0.1",
