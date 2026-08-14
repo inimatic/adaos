@@ -377,6 +377,36 @@ def test_skill_activate_without_name_activates_runtime_behind_skills(tmp_base_di
     assert "activated 1 runtime-behind skill(s)" in result.stdout
 
 
+def test_runtime_side_effects_use_single_authoritative_rebuild(monkeypatch) -> None:
+    rebuilds: list[str] = []
+    monkeypatch.setattr(skill_cmd, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(skill_cmd, "_notify_hub_skill_activated", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        skill_cmd,
+        "_rebuild_local_webspace",
+        lambda **kwargs: rebuilds.append(str(kwargs.get("webspace_id"))),
+    )
+
+    skill_cmd._refresh_runtime_side_effects("mediaserver", notify_activation=True)
+
+    assert rebuilds == []
+
+
+def test_runtime_side_effects_fall_back_to_local_rebuild(monkeypatch) -> None:
+    rebuilds: list[str] = []
+    monkeypatch.setattr(skill_cmd, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(skill_cmd, "_notify_hub_skill_activated", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        skill_cmd,
+        "_rebuild_local_webspace",
+        lambda **kwargs: rebuilds.append(str(kwargs.get("webspace_id"))),
+    )
+
+    skill_cmd._refresh_runtime_side_effects("mediaserver", notify_activation=True)
+
+    assert rebuilds == ["desktop"]
+
+
 def test_skill_list_prefers_workspace_version_over_runtime_version(tmp_base_dir, monkeypatch):
     skill_root = tmp_base_dir / "workspace" / "skills" / "demo_skill"
     skill_root.mkdir(parents=True, exist_ok=True)

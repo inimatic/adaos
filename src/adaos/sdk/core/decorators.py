@@ -101,7 +101,7 @@ def _topic_matches_any(topic: str, patterns: str) -> bool:
 
 
 def _run_sync_subscription_in_thread(topic: str) -> bool:
-    """Keep known expensive synchronous skill handlers off the main event loop."""
+    """Keep synchronous skill handlers off the main event loop by default."""
 
     try:
         if str(os.getenv("ADAOS_SYNC_SUBSCRIPTION_TO_THREAD", "1") or "1").strip().lower() in {
@@ -111,9 +111,12 @@ def _run_sync_subscription_in_thread(topic: str) -> bool:
             "off",
         }:
             return False
+        loop_patterns = os.getenv("ADAOS_SYNC_SUBSCRIPTION_LOOP_TOPICS", "")
+        if loop_patterns and _topic_matches_any(topic, loop_patterns):
+            return False
         patterns = os.getenv(
             "ADAOS_SYNC_SUBSCRIPTION_THREAD_TOPICS",
-            "sys.ready,webio.stream.snapshot.requested,webio.yjs.snapshot.requested",
+            "*",
         )
         return _topic_matches_any(topic, patterns)
     except Exception:
@@ -748,7 +751,14 @@ async def register_subscriptions(
                                     return _fn(safe_evt)
                             return _fn(safe_evt)
 
-                        return await asyncio.to_thread(_call_thread_safe_sync_handler)
+                        from adaos.services.skill.subscription_execution import run_sync_subscription
+
+                        return await run_sync_subscription(
+                            _call_thread_safe_sync_handler,
+                            skill=_skill or "<unknown>",
+                            topic=_topic,
+                            handler=f"{_fn.__module__}.{_fn.__name__}",
+                        )
                     return _call_sync_handler()
                 finally:
                     if pushed:

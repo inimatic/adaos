@@ -41,10 +41,7 @@ from adaos.services.hub_root_outbox_store import (
     outbox_store_path,
     save_outbox_items,
 )
-from adaos.services.incident_registry import (
-    capture_process_activity_sample,
-    record_hub_root_transport_incident,
-)
+from adaos.services.incident_registry import record_hub_root_transport_incident
 from adaos.services.nats_config import (
     nats_url_uses_websocket,
     order_nats_ws_candidates,
@@ -2880,25 +2877,11 @@ async def _run_nats_root_transport(
                 # keep task alive
                 try:
                     last_watchdog_tick_at = time.monotonic()
-                    last_process_activity_sample_at = 0.0
                     while True:
                         await asyncio.sleep(1.0)
                         now = time.monotonic()
                         tick_gap = now - last_watchdog_tick_at
                         last_watchdog_tick_at = now
-                        try:
-                            process_sample_interval_s = max(
-                                5.0,
-                                float(os.getenv("HUB_NATS_PROCESS_SAMPLE_S", "15") or "15"),
-                            )
-                        except Exception:
-                            process_sample_interval_s = 15.0
-                        if (now - last_process_activity_sample_at) >= process_sample_interval_s:
-                            last_process_activity_sample_at = now
-                            try:
-                                await asyncio.to_thread(capture_process_activity_sample)
-                            except Exception:
-                                pass
                         try:
                             await asyncio.to_thread(
                                 _write_nats_ws_diag_file,

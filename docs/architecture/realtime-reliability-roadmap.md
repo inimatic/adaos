@@ -536,7 +536,8 @@ Make readiness and degradation visible before changing protocol ownership.
 - [ ] `[should]` Keep remote and direct hub diagnostics consistent when
   browser is connected to `:8777`.
 - [x] `[should]` Keep a bounded pre-incident process CPU/RSS/I/O and system
-  network/disk-I/O history, and persist it with hub-root transport failures.
+  network/disk-I/O history, and persist it with hub-root transport failures,
+  skill execution pressure, slow event handlers, and event-loop lag.
 - [ ] `[should]` Complete `RT-POST-INCIDENT-001`: repeat the correlated
   node/Root log analysis after deployment and explicitly assess skills,
   subprocesses, and large downloads in the pre-failure window.
@@ -684,9 +685,14 @@ failure serves an explicitly marked stale last-known-good projection for a
 bounded window instead of immediately turning a ready required upstream link
 into false `degraded`. `core.update.status` and `hub.core_update.status` are
 latest-state bounded eventbus topics with per-handler supersession, and
-obsolete queued revisions do not amplify subscriber work. Event-loop-affine
-skill handlers stay on their owner loop; their blocking sub-operations must be
-offloaded at the handler boundary instead of moving the whole handler.
+obsolete queued revisions do not amplify subscriber work. Synchronous skill
+subscriptions now execute in a dedicated bounded worker pool after their event
+payload is converted to a thread-safe plain value on the owner loop. Admission,
+active thread identity, duration, failure, overload, and pre-incident process
+activity remain visible in reliability and durable incidents. Async
+subscriptions remain cooperative event-loop code; strict skill validation
+rejects direct known blocking calls and slow-handler incidents preserve owner
+and process evidence.
 NLU Teacher persisted-state reads, merges, comparisons, and writes triggered by
 `sys.ready` also run in workers. Target-stand pressure evidence is still needed
 before closing the tracking items.
@@ -1216,6 +1222,8 @@ Make Yjs transport-independent without building a second distributed system arou
 - [x] `[must]` Client local persistence.
 - [x] `[must]` Awareness explicitly ephemeral.
 - [x] `[must]` Explicit resync path after route or transport churn.
+- [x] `[must]` Preserve upstream WebSocket close code/reason through the routed
+  NATS proxy and keep routed YWS recovery under one browser-side retry owner.
 - [x] `[must]` Preserve a standards-complete server-authoritative handshake:
   answer the read-only browser `SYNC_STEP1` and reject only the initial mutating
   client state/update frames.
@@ -1224,6 +1232,9 @@ Make Yjs transport-independent without building a second distributed system arou
   materialized, and both inventory streams returned complete lists.
 - [ ] `[should]` Validate SyncChannel recovery during A/B runtime switch with
   an already-open rooted browser `/yws` session.
+- [ ] `[should]` On `.30`, prove a rejected or interrupted routed `/yws`
+  handshake produces one bounded application recovery sequence, no autonomous
+  provider reconnect storm, and a successful first sync after route recovery.
 - [ ] `[deferred]` Move Yjs websocket termination and live room/session
   lifecycle into sidecar.
 

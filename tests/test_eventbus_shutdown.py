@@ -103,6 +103,7 @@ def test_browser_session_changed_is_bounded_by_default(monkeypatch):
 
     assert "browser.session.changed" in snapshot["bounded_topics"]
     assert "io.out.stream.publish" in snapshot["bounded_topics"]
+    assert "operations.*" in snapshot["bounded_topics"]
     assert "core.update.status" in snapshot["bounded_topics"]
     assert "hub.core_update.status" in snapshot["bounded_topics"]
 

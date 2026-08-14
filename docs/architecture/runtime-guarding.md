@@ -429,7 +429,14 @@ instead of embedded into Yjs.
 
 - [ ] Wrap public skill tool execution with owner, tool, wall-time, and outcome
   accounting.
-- [ ] Wrap skill subscription/event handlers with the same owner accounting.
+- [x] Run synchronous skill subscription handlers in a dedicated bounded
+  executor with owner/topic/handler admission, active-thread, wall-time,
+  outcome, overload, and blocking-watchdog accounting.
+- [x] Preserve slow async subscription owner and pre-incident process evidence,
+  and reject obvious synchronous blocking APIs in async subscriptions during
+  strict skill validation.
+- [ ] Add cooperative async subscription aggregate accounting and quarantine
+  without moving loop-affine SDK/Yjs state onto worker event loops.
 - [ ] Wrap projection and Yjs write boundaries with owner accounting.
 - [ ] Track aggregate windows for `1m`, `5m`, and `1h`.
 - [ ] Distinguish `single_call_overload` from `aggregate_window_overload`.

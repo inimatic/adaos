@@ -27,6 +27,27 @@ def test_slow_event_handler_incident_is_attributed_to_skill() -> None:
     assert item["active"] is True
 
 
+def test_event_loop_lag_incident_keeps_skill_and_process_evidence(monkeypatch) -> None:
+    monkeypatch.setattr(
+        incidents,
+        "process_activity_history_snapshot",
+        lambda limit=8: {"sample_total": 2, "samples": [{"top_activity": [{"pid": 42}]}]},
+    )
+
+    recorded = incidents.record_runtime_event_loop_lag(
+        lag_ms=41000.0,
+        threshold_ms=250.0,
+        interval_sec=1.0,
+    )
+
+    assert recorded["class"] == "runtime_event_loop_lag"
+    assert recorded["severity"] == "degraded"
+    evidence = recorded["latest_evidence"]
+    assert evidence["lag_ms"] == 41000.0
+    assert evidence["process_activity_history"]["sample_total"] == 2
+    assert evidence["skill_subscription_execution"]["schema"] == "adaos.skill_subscription_execution.v1"
+
+
 def test_runtime_timeout_records_redacted_blocking_evidence(monkeypatch) -> None:
     monkeypatch.setattr(
         incidents,

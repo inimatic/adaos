@@ -97,9 +97,12 @@ def _run_sync_handler_in_thread(topic: str) -> bool:
         raw = str(os.getenv("ADAOS_SYNC_SUBSCRIPTION_TO_THREAD", "1") or "1").strip().lower()
         if raw in {"0", "false", "no", "off"}:
             return False
+        loop_patterns = os.getenv("ADAOS_SYNC_SUBSCRIPTION_LOOP_TOPICS", "")
+        if loop_patterns and _topic_matches_any(topic, loop_patterns):
+            return False
         patterns = os.getenv(
             "ADAOS_SYNC_SUBSCRIPTION_THREAD_TOPICS",
-            "sys.ready,webio.stream.snapshot.requested,webio.yjs.snapshot.requested",
+            "*",
         )
         return _topic_matches_any(topic, patterns)
     except Exception:
@@ -128,7 +131,7 @@ def _thread_safe_plain(value: Any, *, _depth: int = 0) -> Any:
     """Return a plain payload copy that can be dropped on a worker thread.
 
     y_py values are thread-affine on Windows. A synchronous subscription handler
-    running via ``asyncio.to_thread`` must not receive live YMap/YArray objects,
+    running on the isolated skill executor must not receive live YMap/YArray objects,
     otherwise Python may drop the final reference on the worker thread.
     """
 
@@ -233,7 +236,21 @@ async def on(topic: str, handler: Callable[[dict], Awaitable[Any]]):
         if inspect.iscoroutinefunction(handler):
             return await handler(data)
         if _run_sync_handler_in_thread(topic):
-            return await asyncio.to_thread(handler, _thread_safe_plain(data))
+            from adaos.services.skill.subscription_execution import run_sync_subscription
+
+            safe_data = _thread_safe_plain(data)
+            return await run_sync_subscription(
+                lambda: handler(safe_data),
+                skill=str(getattr(handler, "_adaos_skill", None) or "<sdk>"),
+                topic=str(topic or "<unknown>"),
+                handler=str(
+                    getattr(
+                        handler,
+                        "_adaos_handler",
+                        f"{getattr(handler, '__module__', '<unknown>')}.{getattr(handler, '__name__', '<unknown>')}",
+                    )
+                ),
+            )
         return handler(data)
 
     try:

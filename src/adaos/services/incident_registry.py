@@ -626,9 +626,77 @@ def record_slow_event_handler(
             "event_type": event_type,
             "duration_s": round(float(duration_s), 6),
             "threshold_s": round(float(threshold_s), 6),
+            "process_activity_history": process_activity_history_snapshot(limit=8),
         },
         fingerprint_parts=("slow_event_handler", kind, event_type, handler_label),
         tags=("eventbus", "latency"),
+    )
+
+
+def record_runtime_event_loop_lag(
+    *,
+    lag_ms: float,
+    threshold_ms: float,
+    interval_sec: float,
+) -> dict[str, Any]:
+    try:
+        from adaos.services.skill.subscription_execution import subscription_execution_snapshot
+
+        skill_execution = subscription_execution_snapshot(limit=10)
+    except Exception as exc:
+        skill_execution = {"available": False, "error": type(exc).__name__}
+    return record_incident(
+        incident_class="runtime_event_loop_lag",
+        signal="event_loop_lag_threshold_exceeded",
+        severity="degraded",
+        domain="core.runtime",
+        component="runtime_event_loop",
+        source="runtime_event_loop_monitor",
+        summary=f"Runtime event loop lag reached {max(0.0, float(lag_ms)):.1f} ms",
+        evidence={
+            "lag_ms": round(max(0.0, float(lag_ms)), 3),
+            "threshold_ms": round(max(0.0, float(threshold_ms)), 3),
+            "interval_sec": round(max(0.0, float(interval_sec)), 3),
+            "skill_subscription_execution": skill_execution,
+            "process_activity_history": process_activity_history_snapshot(limit=8),
+        },
+        fingerprint_parts=("runtime_event_loop_lag",),
+        tags=("event-loop", "latency", "channel-protection", "blocking-evidence"),
+    )
+
+
+def record_skill_handler_pressure(
+    *,
+    skill: str,
+    topic: str,
+    handler: str,
+    signal: str,
+    duration_s: float | None = None,
+    pending: int | None = None,
+    threshold_s: float | None = None,
+) -> dict[str, Any]:
+    skill_token = _clean_token(skill, fallback="unknown")
+    signal_token = _clean_token(signal, fallback="execution_pressure")
+    evidence = {
+        "skill": skill_token,
+        "topic": _clean_token(topic),
+        "handler": _clean_token(handler),
+        "duration_s": round(max(0.0, float(duration_s)), 6) if duration_s is not None else None,
+        "threshold_s": round(max(0.0, float(threshold_s)), 6) if threshold_s is not None else None,
+        "pending": max(0, int(pending)) if pending is not None else None,
+        "process_activity_history": process_activity_history_snapshot(limit=8),
+    }
+    return record_incident(
+        incident_class="skill_handler_pressure",
+        signal=signal_token,
+        severity="degraded" if signal_token == "execution_budget_exceeded" else "warning",
+        domain=f"skill:{skill_token}",
+        component="skill_subscription_execution",
+        source="skill_subscription_execution",
+        summary=f"Skill subscription pressure for {skill_token} on {topic}",
+        evidence=evidence,
+        fingerprint_parts=("skill_handler_pressure", skill_token, topic, handler, signal_token),
+        tags=("skill", "eventbus", "latency", "channel-protection"),
     )
 
 
@@ -1088,7 +1156,9 @@ __all__ = [
     "record_hub_root_transport_incident",
     "record_member_link_stale",
     "record_runtime_api_timeout",
+    "record_runtime_event_loop_lag",
     "record_slow_event_handler",
+    "record_skill_handler_pressure",
     "record_yjs_thread_affinity_fault",
     "record_yjs_pressure_incident",
     "reset_incident_registry",

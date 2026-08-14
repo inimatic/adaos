@@ -125,6 +125,7 @@ def _bounded_event_topics() -> tuple[str, ...]:
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
             "io.out.stream.publish,"
             "subnet.member.snapshot.changed,browser.session.changed,"
+            "operations.*,"
             "core.update.status,hub.core_update.status,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
@@ -141,7 +142,7 @@ def _bounded_supersede_by_handler_topics() -> tuple[str, ...]:
             "webio.stream.snapshot.requested,webio.stream.subscription.changed,"
             "webio.yjs.snapshot.requested,webio.yjs.subscription.changed,"
             "io.out.stream.publish,"
-            "browser.session.changed,core.update.status,hub.core_update.status,"
+            "browser.session.changed,operations.*,core.update.status,hub.core_update.status,"
             "adaos.status.card.changed,adaos.projection.lifecycle.changed",
         )
         or ""

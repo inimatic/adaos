@@ -230,6 +230,67 @@ async def ping():
     assert not any(issue.code == "projection.direct_yjs_write" for issue in report.issues)
 
 
+def test_skill_validation_warns_on_blocking_call_in_async_subscription(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+import time as clock
+
+from adaos.sdk.core.decorators import subscribe, tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+
+@subscribe("demo.changed")
+async def on_demo_changed(evt):
+    clock.sleep(2)
+""",
+        manifest_extra=[
+            "events:",
+            "  subscribe: [demo.changed]",
+            "  publish: []",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+    issues = [issue for issue in report.issues if issue.code == "runtime.async_subscription_blocking_call"]
+
+    assert report.ok is True
+    assert len(issues) == 1
+    assert issues[0].level == "warning"
+    assert "time.sleep" in issues[0].message
+
+
+def test_strict_skill_validation_rejects_blocking_async_subscription(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from subprocess import run as run_process
+
+from adaos.sdk.core.decorators import subscribe, tool
+
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+
+@subscribe("demo.changed")
+async def on_demo_changed(evt):
+    run_process(["demo"])
+""",
+        manifest_extra=[
+            "events:",
+            "  subscribe: [demo.changed]",
+            "  publish: []",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert report.ok is False
+    assert "runtime.async_subscription_blocking_call" in {issue.code for issue in report.issues}
+
+
 def test_skill_validation_allows_declared_stream_receiver_and_bounded_state(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

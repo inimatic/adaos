@@ -35,6 +35,26 @@ _DIRECT_PROJECTION_WRITE_CALLS = {
     "adaos.services.yjs.gateway.mutate_live_room",
     "y_py.apply_update",
 }
+_ASYNC_SUBSCRIPTION_BLOCKING_CALLS = {
+    "os.system",
+    "requests.delete",
+    "requests.get",
+    "requests.head",
+    "requests.patch",
+    "requests.post",
+    "requests.put",
+    "shutil.copy",
+    "shutil.copy2",
+    "shutil.copyfile",
+    "shutil.copytree",
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "subprocess.run",
+    "time.sleep",
+    "urllib.request.urlopen",
+    "urllib.request.urlretrieve",
+}
 _TRANSCRIPT_FILE_RE = re.compile(r"(transcript|chat_history|conversation_history|voice_chat|dialog_history)", re.I)
 _UNBOUNDED_NAME_RE = re.compile(r"(cache|history|histories|events|logs|frames|sessions|state|buffer|queue|transcript)", re.I)
 _TRANSPORT_MEMORY_PATTERNS = (
@@ -232,6 +252,7 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
     issues.extend(validate_data_route_contract(data))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_direct_projection_write_issues(skill_dir))
+    issues.extend(_async_subscription_blocking_issues(skill_dir))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
     return issues
@@ -392,6 +413,81 @@ def _direct_projection_write_issues(skill_dir: Path) -> List[Issue]:
                 f"{rel}:{first_line}",
             )
         )
+    return issues
+
+
+def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
+    """Reject obvious synchronous I/O in async event handlers under strict validation."""
+
+    issues: List[Issue] = []
+    for path in sorted(skill_dir.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        rel = _relative_to(path, skill_dir)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+
+        symbol_aliases: dict[str, str] = {}
+        module_aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module_aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                for alias in node.names:
+                    symbol_aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            subscribed = any(
+                isinstance(decorator, ast.Call)
+                and _ast_dotted_name(decorator.func).split(".")[-1] == "subscribe"
+                for decorator in node.decorator_list
+            )
+            if not subscribed:
+                continue
+
+            violations: list[tuple[int, str]] = []
+
+            class _BlockingCallVisitor(ast.NodeVisitor):
+                def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
+                    return
+
+                def visit_AsyncFunctionDef(self, nested: ast.AsyncFunctionDef) -> None:
+                    return
+
+                def visit_Lambda(self, nested: ast.Lambda) -> None:
+                    return
+
+                def visit_Call(self, call: ast.Call) -> None:
+                    called = _ast_dotted_name(call.func)
+                    resolved = symbol_aliases.get(called, called)
+                    root, dot, suffix = resolved.partition(".")
+                    if dot and root in module_aliases:
+                        resolved = f"{module_aliases[root]}.{suffix}"
+                    if resolved in _ASYNC_SUBSCRIPTION_BLOCKING_CALLS or resolved.endswith(".result"):
+                        violations.append((int(getattr(call, "lineno", 0) or 0), resolved))
+                    self.generic_visit(call)
+
+            visitor = _BlockingCallVisitor()
+            for statement in node.body:
+                visitor.visit(statement)
+            if not violations:
+                continue
+            first_line = min(line for line, _call in violations if line > 0)
+            calls = ", ".join(sorted({call for _line, call in violations}))
+            issues.append(
+                Issue(
+                    "warning",
+                    "runtime.async_subscription_blocking_call",
+                    f"async @subscribe handler '{node.name}' calls synchronous blocking APIs ({calls}); "
+                    "move the operation behind await asyncio.to_thread(...) or a bounded SDK worker",
+                    f"{rel}:{first_line}",
+                )
+            )
     return issues
 
 

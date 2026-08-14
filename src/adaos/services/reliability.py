@@ -6743,6 +6743,19 @@ def _skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
     }
 
 
+def _skill_subscription_execution_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.services.skill.subscription_execution import subscription_execution_snapshot
+
+        return subscription_execution_snapshot(limit=25)
+    except Exception as exc:
+        return {
+            "schema": "adaos.skill_subscription_execution.v1",
+            "available": False,
+            "error": type(exc).__name__,
+        }
+
+
 def _probe_supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -7888,6 +7901,7 @@ def reliability_snapshot(
     yjs_projection_guard = _yjs_projection_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
     skill_runtime_migration = _skill_runtime_migration_runtime_snapshot()
+    skill_subscription_execution = _skill_subscription_execution_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
@@ -7935,6 +7949,7 @@ def reliability_snapshot(
             "yjs_projection_guard": yjs_projection_guard,
             "eventbus_backlog": eventbus_backlog,
             "skill_runtime_migration": skill_runtime_migration,
+            "skill_subscription_execution": skill_subscription_execution,
             "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,

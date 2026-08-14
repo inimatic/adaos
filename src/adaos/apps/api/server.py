@@ -295,10 +295,41 @@ async def _runtime_event_loop_lag_monitor() -> None:
                 threshold_ms,
                 interval_sec,
             )
+            try:
+                from adaos.services.incident_registry import record_runtime_event_loop_lag
+
+                await asyncio.to_thread(
+                    record_runtime_event_loop_lag,
+                    lag_ms=lag_ms,
+                    threshold_ms=threshold_ms,
+                    interval_sec=interval_sec,
+                )
+            except Exception:
+                _runtime_log.debug("runtime event loop lag incident recording failed", exc_info=True)
         if observed - next_tick > interval_sec:
             next_tick = observed + interval_sec
         else:
             next_tick += interval_sec
+
+
+async def _runtime_process_activity_monitor() -> None:
+    from adaos.services.incident_registry import capture_process_activity_sample
+
+    try:
+        interval_sec = min(
+            60.0,
+            max(1.0, float(str(os.getenv("ADAOS_INCIDENT_PROCESS_SAMPLE_INTERVAL_S") or "5").strip())),
+        )
+    except Exception:
+        interval_sec = 5.0
+    while True:
+        try:
+            await asyncio.to_thread(capture_process_activity_sample)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _runtime_log.debug("runtime process activity sample failed", exc_info=True)
+        await asyncio.sleep(interval_sec)
 
 
 async def _run_boot_sequence_logged(app: FastAPI) -> None:
@@ -828,6 +859,11 @@ async def _runtime_context(app: FastAPI):
             name="runtime-event-loop-lag-monitor",
         )
     app.state.runtime_event_loop_lag_task = event_loop_lag_task
+    process_activity_task = asyncio.create_task(
+        _runtime_process_activity_monitor(),
+        name="runtime-process-activity-monitor",
+    )
+    app.state.runtime_process_activity_task = process_activity_task
 
     # 4) поднимаем наблюдатель и выполняем boot-последовательность
     await start_observer()
@@ -1174,6 +1210,10 @@ async def _runtime_context(app: FastAPI):
             await _cancel_background_task(getattr(app.state, "runtime_event_loop_lag_task", None))
         finally:
             app.state.runtime_event_loop_lag_task = None
+        try:
+            await _cancel_background_task(getattr(app.state, "runtime_process_activity_task", None))
+        finally:
+            app.state.runtime_process_activity_task = None
         try:
             await _cancel_background_task(
                 getattr(app.state, "artifact_delayed_verification_task", None)

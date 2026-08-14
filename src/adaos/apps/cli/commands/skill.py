@@ -654,7 +654,7 @@ def _notify_hub_skill_activated(
     space: str = "default",
     webspace_id: str | None = None,
     defer_webspace_rebuild: bool = False,
-) -> None:
+) -> bool:
     try:
         _hub_post(
             "/api/skills/runtime/notify-activated",
@@ -665,8 +665,9 @@ def _notify_hub_skill_activated(
                 "defer_webspace_rebuild": bool(defer_webspace_rebuild),
             },
         )
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _emit_local_skill_updated(name: str, *, webspace_id: str | None = None) -> None:
@@ -719,13 +720,14 @@ def _refresh_runtime_side_effects(
     target_webspace = webspace_id or default_webspace_id()
     if emit_updated:
         _emit_local_skill_updated(name, webspace_id=target_webspace)
+    notified = False
     if notify_activation:
-        _notify_hub_skill_activated(
+        notified = bool(_notify_hub_skill_activated(
             name,
             webspace_id=target_webspace,
             defer_webspace_rebuild=defer_hub_rebuild,
-        )
-    if rebuild_local:
+        ))
+    if rebuild_local and (not notified or defer_hub_rebuild):
         _rebuild_local_webspace(webspace_id=target_webspace)
 
 
@@ -1758,27 +1760,6 @@ def activate(
     except Exception as exc:
         typer.secho(f"activate failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
-
-    # Best-effort: уведомить живой hub через HTTP API, чтобы
-    # skills.activated отработал в его процессе и web_desktop_skill
-    # сразу обновил каталог без перезапуска, не трогая ещё раз runtime.
-    try:
-        base = _hub_base_url().rstrip("/")
-        url = base + "/api/skills/runtime/notify-activated"
-        payload = {
-            "name": name,
-            "space": "default",
-            "webspace_id": default_webspace_id(),
-        }
-        headers = _hub_headers(base_url=base)
-        # Таймаут маленький и любые ошибки игнорируем, чтобы CLI
-        # оставался работоспособен, даже когда API ещё не поднят.
-        try:
-            requests.post(url, json=payload, headers=headers, timeout=2.0)
-        except Exception:
-            pass
-    except Exception:
-        pass
 
     _refresh_runtime_side_effects(
         name,
