@@ -4710,7 +4710,10 @@ class SupervisorManager:
         action = str(decision.get("action") or "runtime_reconnect")
         try:
             if action == "sidecar_restart":
-                result = await self.restart_sidecar(reconnect_hub_root=True)
+                result = await self.restart_sidecar(
+                    reconnect_hub_root=True,
+                    allow_active_channel_disruption=True,
+                )
             elif action == "runtime_route_reset":
                 result = await asyncio.to_thread(
                     self._runtime_request_json,
@@ -6290,7 +6293,52 @@ class SupervisorManager:
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
-    async def restart_sidecar(self, *, reconnect_hub_root: bool = True) -> dict[str, Any]:
+    def _active_sidecar_channel_evidence(self) -> dict[str, Any] | None:
+        if str(self._sidecar_role() or "").strip().lower() != "hub":
+            return None
+        try:
+            runtime = self._runtime_sidecar_runtime_payload()
+        except Exception:
+            runtime = {}
+        if not isinstance(runtime, dict):
+            runtime = {}
+        remote_state = str(runtime.get("remote_session_state") or "").strip().lower()
+        status = str(runtime.get("status") or "").strip().lower()
+        active = bool(
+            runtime.get("active_session")
+            or runtime.get("transport_ready")
+            or remote_state == "ready"
+            or status == "ready"
+        )
+        if not active:
+            return None
+        return {
+            "active_session": bool(runtime.get("active_session")),
+            "transport_ready": bool(runtime.get("transport_ready")),
+            "status": status or None,
+            "remote_session_state": remote_state or None,
+            "session_id": runtime.get("session_id"),
+            "remote_url": runtime.get("remote_url"),
+            "route_tunnel_contract": runtime.get("route_tunnel_contract"),
+        }
+
+    async def restart_sidecar(
+        self,
+        *,
+        reconnect_hub_root: bool = True,
+        allow_active_channel_disruption: bool = False,
+    ) -> dict[str, Any]:
+        active_channel = self._active_sidecar_channel_evidence()
+        if active_channel is not None and not allow_active_channel_disruption:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "active_sidecar_channel",
+                    "message": "sidecar restart would disrupt active NATS and browser proxy sessions",
+                    "required_override": "allow_active_channel_disruption=true",
+                    "channel": active_channel,
+                },
+            )
         async with self._lock:
             # A validated slot may contain newer sidecar-controlled files than
             # root. Sync before launch so one operator request produces one
@@ -6327,6 +6375,7 @@ class SupervisorManager:
             reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
         return {
             "ok": True,
+            "active_channel_disruption_allowed": bool(allow_active_channel_disruption),
             "restart": restart_result,
             "reconnect": reconnect_result,
             "runtime": self._runtime_sidecar_runtime_payload(),

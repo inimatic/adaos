@@ -160,7 +160,8 @@ class SupervisorApiAdapter:
 
     async def supervisor_sidecar_restart(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._manager().restart_sidecar(
-            reconnect_hub_root=bool(payload.get("reconnect_hub_root", True))
+            reconnect_hub_root=bool(payload.get("reconnect_hub_root", True)),
+            allow_active_channel_disruption=bool(payload.get("allow_active_channel_disruption", False)),
         )
 
     async def supervisor_update_status(self) -> dict[str, Any]:

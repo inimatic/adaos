@@ -3372,6 +3372,7 @@ class HubRootRouteResetRequest(BaseModel):
 
 class SidecarRestartRequest(BaseModel):
     reconnect_hub_root: bool = True
+    allow_active_channel_disruption: bool = False
 
 
 class NodeNamesUpdateRequest(BaseModel):
@@ -4409,10 +4410,41 @@ async def sidecar_restart(request: Request, payload: SidecarRestartRequest) -> d
         return await _proxy_supervisor_json(
             method="POST",
             path="/api/supervisor/sidecar/restart",
-            payload={"reconnect_hub_root": bool(payload.reconnect_hub_root)},
+            payload={
+                "reconnect_hub_root": bool(payload.reconnect_hub_root),
+                "allow_active_channel_disruption": bool(payload.allow_active_channel_disruption),
+            },
             timeout=10.0,
         )
     conf = await anyio.to_thread.run_sync(load_config)
+    if str(conf.role or "").strip().lower() == "hub" and not payload.allow_active_channel_disruption:
+        reliability_before = await _current_reliability_payload_async()
+        runtime_before = (
+            reliability_before.get("runtime")
+            if isinstance(reliability_before.get("runtime"), dict)
+            else {}
+        )
+        sidecar_before = (
+            runtime_before.get("sidecar_runtime")
+            if isinstance(runtime_before.get("sidecar_runtime"), dict)
+            else {}
+        )
+        remote_state = str(sidecar_before.get("remote_session_state") or "").strip().lower()
+        sidecar_status = str(sidecar_before.get("status") or "").strip().lower()
+        if bool(
+            sidecar_before.get("active_session")
+            or sidecar_before.get("transport_ready")
+            or remote_state == "ready"
+            or sidecar_status == "ready"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "active_sidecar_channel",
+                    "message": "sidecar restart would disrupt active NATS and browser proxy sessions",
+                    "required_override": "allow_active_channel_disruption=true",
+                },
+            )
     proc = getattr(request.app.state, "realtime_sidecar_proc", None)
     new_proc, restart_result = await restart_realtime_sidecar_subprocess(proc=proc, role=conf.role)
     request.app.state.realtime_sidecar_proc = new_proc

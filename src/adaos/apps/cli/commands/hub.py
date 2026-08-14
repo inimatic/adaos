@@ -1077,6 +1077,11 @@ def hub_root_sidecar_status(
 @sidecar_app.command("restart")
 def hub_root_sidecar_restart(
     reconnect_hub_root: bool = typer.Option(True, "--reconnect/--no-reconnect", help="Request hub-root reconnect after sidecar restart"),
+    allow_active_channel_disruption: bool = typer.Option(
+        False,
+        "--allow-active-channel-disruption",
+        help="Explicitly allow interruption of active NATS and browser proxy sessions",
+    ),
     json_output: bool = typer.Option(False, "--json", help="JSON output"),
 ) -> None:
     """
@@ -1088,7 +1093,10 @@ def hub_root_sidecar_restart(
     token = _local_control_token(base)
     url = base + "/api/node/sidecar/restart"
     headers = {"X-AdaOS-Token": token}
-    payload = {"reconnect_hub_root": bool(reconnect_hub_root)}
+    payload = {
+        "reconnect_hub_root": bool(reconnect_hub_root),
+        "allow_active_channel_disruption": bool(allow_active_channel_disruption),
+    }
     r = requests.post(url, headers=headers, json=payload, timeout=20.0)
     r.raise_for_status()
     data = r.json()

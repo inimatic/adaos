@@ -1451,6 +1451,7 @@ def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypa
 
     assert len(sidecar_calls) == 1
     assert sidecar_calls[0]["reconnect_hub_root"] is True
+    assert sidecar_calls[0]["allow_active_channel_disruption"] is True
     assert manager._hub_root_watchdog_last_result["action"] == "sidecar_restart"
     assert manager._hub_root_watchdog_last_result["verification"]["ok"] is True
     assert manager._hub_root_watchdog_last_state == "ready"
@@ -4536,6 +4537,37 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     assert payload["process"]["proc"] == "new-proc"
     assert sync_calls == [True]
     assert persisted
+
+
+def test_supervisor_restart_sidecar_refuses_to_disrupt_active_channel(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._sidecar_proc = "active-proc"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_sidecar_runtime_payload",
+        lambda: {
+            "status": "ready",
+            "active_session": True,
+            "transport_ready": True,
+            "remote_session_state": "ready",
+            "session_id": "rt-active",
+        },
+    )
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("active channel must require an explicit disruption override")
+
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
+
+    with pytest.raises(supervisor.HTTPException) as exc_info:
+        asyncio.run(manager.restart_sidecar())
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"] == "active_sidecar_channel"
+    assert exc_info.value.detail["channel"]["session_id"] == "rt-active"
 
 
 def test_supervisor_monitor_recovers_scheduler_after_iteration_failure(monkeypatch, tmp_path) -> None:

@@ -118,11 +118,23 @@ def test_hub_root_sidecar_restart_prints_route_tunnel_summary(monkeypatch) -> No
             payload["restart"] = {"accepted": True, "reason": "manual"}
             return payload
 
-    monkeypatch.setattr(requests, "post", lambda url, headers, json, timeout: _Response())
+    requested: list[dict] = []
+
+    def _post(url, headers, json, timeout):
+        requested.append(dict(json))
+        return _Response()
+
+    monkeypatch.setattr(requests, "post", _post)
 
     result = CliRunner().invoke(hub_cli.app, ["root", "sidecar", "restart"])
 
     assert result.exit_code == 0
+    assert requested == [
+        {
+            "reconnect_hub_root": True,
+            "allow_active_channel_disruption": False,
+        }
+    ]
     assert "accepted=True" in result.output
     assert "sidecar=ready/ready" in result.output
     assert "progress=2/4 target=first_browser_realtime_tunnel state=in_progress current=browser_events_ws_handoff" in result.output

@@ -269,7 +269,10 @@ def test_node_sidecar_restart_proxies_to_supervisor_when_enabled(monkeypatch) ->
         def request(self, method: str, url: str, headers=None, json=None, timeout=None):
             assert method == "POST"
             assert url == "http://127.0.0.1:8776/api/supervisor/sidecar/restart"
-            assert json == {"reconnect_hub_root": True}
+            assert json == {
+                "reconnect_hub_root": True,
+                "allow_active_channel_disruption": False,
+            }
             return _FakeResponse()
 
         def close(self):
