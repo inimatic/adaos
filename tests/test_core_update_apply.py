@@ -157,6 +157,30 @@ def test_repair_moved_venv_preserves_windows_crlf_in_pyvenv_cfg(tmp_path: Path) 
     assert raw.count(b"\r\n") == 3
 
 
+def test_repair_moved_venv_limits_site_package_reads_to_path_metadata(tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    original_venv = tmp_path / "tmp-build" / "B" / "venv"
+    final_venv = tmp_path / "slots" / "B" / "venv"
+    site_packages = final_venv / "lib" / "python3.11" / "site-packages"
+    package_source = site_packages / "large_dependency" / "module.py"
+    editable_finder = site_packages / "__editable___adaos_finder.py"
+    source_pointer = site_packages / "adaos.pth"
+    direct_url = site_packages / "adaos-0.1.dist-info" / "direct_url.json"
+    for path in (package_source, editable_finder, source_pointer, direct_url):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(original_venv), encoding="utf-8")
+
+    result = mod._repair_moved_venv(final_venv, original_venv_dir=original_venv)
+
+    repaired = set(result["repaired_files"])
+    assert str(editable_finder) in repaired
+    assert str(source_pointer) in repaired
+    assert str(direct_url) in repaired
+    assert str(package_source) not in repaired
+    assert package_source.read_text(encoding="utf-8") == str(original_venv)
+
+
 def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 

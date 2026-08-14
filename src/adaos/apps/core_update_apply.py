@@ -290,18 +290,19 @@ def _venv_text_repair_paths(venv_dir: Path) -> list[Path]:
     for site_packages in site_package_roots:
         if not site_packages.is_dir():
             continue
-        for child in site_packages.rglob("*"):
-            if not child.is_file():
-                continue
-            suffix = child.suffix.lower()
-            if suffix in {".pyc", ".pyo", ".so", ".pyd", ".dll", ".dylib", ".a", ".lib"}:
-                continue
-            try:
-                if child.stat().st_size > 2 * 1024 * 1024:
-                    continue
-            except Exception:
-                continue
-            paths.append(child)
+        # Absolute environment/source paths are generated only in launchers,
+        # environment metadata, editable-install finders, and direct-url
+        # metadata. Walking and reading every package source file made slot
+        # preparation saturate disks with large scientific environments.
+        patterns = (
+            "*.pth",
+            "*.egg-link",
+            "__editable__*.py",
+            "*.dist-info/direct_url.json",
+            "*.data/scripts/*",
+        )
+        for pattern in patterns:
+            paths.extend(child for child in site_packages.glob(pattern) if child.is_file())
     return list(dict.fromkeys(paths))
 
 
