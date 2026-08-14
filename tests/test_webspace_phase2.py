@@ -5612,6 +5612,77 @@ def test_phase5_apply_trusts_previous_materialized_fingerprint_without_live_bran
     assert summary["branch_timings_ms"]["data.webio"]["presence_check"] >= 0.0
 
 
+def test_scenario_switch_verifies_and_repairs_stale_branch_behind_matching_fingerprint(monkeypatch) -> None:
+    runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
+    monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "_trust_previous_materialized_branch_fingerprints_enabled",
+        lambda: True,
+    )
+
+    resolved = webspace_runtime_module.WebspaceResolverOutputs(
+        webspace_id="scenario-switch-verification",
+        scenario_id="web_desktop",
+        source_mode="workspace",
+        application={"desktop": {"pageSchema": {"id": "desktop", "title": "Desktop"}}},
+        catalog={"apps": [], "widgets": []},
+        registry={"modals": [], "widgets": []},
+        installed={"apps": [], "widgets": []},
+        desktop={"installed": {"apps": [], "widgets": []}},
+        webio={"receivers": {}},
+        routing={"routes": {}},
+        skill_decls=[],
+    )
+    fingerprints = webspace_runtime_module._resolved_output_branch_fingerprints(resolved)
+    fake_state = {
+        "ui": _CountingMap(
+            {
+                "current_scenario": "web_desktop",
+                # Reproduces the observed split state: the selector and stored
+                # fingerprint already name home, while the effective UI branch
+                # still contains the previous scenario.
+                "application": {"desktop": {"pageSchema": {"id": "research", "title": "Research Workbench"}}},
+            }
+        ),
+        "registry": _CountingMap(
+            {
+                "merged": resolved.registry,
+                "runtime_meta": {
+                    webspace_runtime_module._RUNTIME_META_EFFECTIVE_BRANCH_FINGERPRINTS_KEY: dict(fingerprints),
+                },
+            }
+        ),
+        "data": _CountingMap(
+            {
+                "catalog": resolved.catalog,
+                "installed": resolved.installed,
+                "desktop": resolved.desktop,
+                "webio": resolved.webio,
+                "routing": resolved.routing,
+            }
+        ),
+        "runtime": _CountingMap({"environment": webspace_runtime_module.runtime_environment_payload()}),
+    }
+
+    runtime._apply_resolved_state_in_doc(
+        _FakeDoc(fake_state),
+        resolved.webspace_id,
+        resolved,
+        previous_resolved=resolved,
+        resolved_branch_fingerprints_override=fingerprints,
+        previous_branch_fingerprints_override=fingerprints,
+        force_selector_write=True,
+        verify_branch_fingerprints=True,
+    )
+
+    assert fake_state["ui"].get("application")["desktop"]["pageSchema"]["id"] == "desktop"
+    summary = runtime._last_apply_summary or {}
+    assert summary["verified_branch_fingerprints"] is True
+    assert "ui.application" in summary["stale_fingerprint_paths"]
+    assert summary["branch_apply_modes"]["ui.application"] == "changed:replace"
+
+
 def test_phase5_apply_trusts_previous_materialized_fingerprint_for_patch_base(monkeypatch) -> None:
     runtime = webspace_runtime_module.WebspaceScenarioRuntime(get_ctx())
     monkeypatch.setattr(runtime, "_apply_ydoc_defaults_in_txn", lambda ydoc, txn, skill_decls: None)

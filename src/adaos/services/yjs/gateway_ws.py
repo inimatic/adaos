@@ -7209,6 +7209,12 @@ async def _apply_room_materialized_payload(
                         payload,
                         materialization_identity=materialization_identity,
                         previous_payload=previous_payload,
+                        # Scenario navigation is an explicit projection
+                        # boundary.  Do not let a stale persisted fingerprint
+                        # turn mere branch presence into proof that the live
+                        # room contains the requested scenario.  Other rebuilds
+                        # retain the bounded fingerprint fast path.
+                        verify_branch_fingerprints="scenario_switch" in str(reason or "").lower(),
                     )
             finally:
                 phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)

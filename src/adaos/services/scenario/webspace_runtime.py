@@ -5171,6 +5171,7 @@ class WebspaceScenarioRuntime:
         single_transaction: bool = False,
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
+        verify_branch_fingerprints: bool = False,
     ) -> None:
         _RUNTIME.resolution.apply(
             self,
@@ -5186,6 +5187,7 @@ class WebspaceScenarioRuntime:
             single_transaction=single_transaction,
             materialization_status_per_phase=materialization_status_per_phase,
             force_selector_write=force_selector_write,
+            verify_branch_fingerprints=verify_branch_fingerprints,
         )
 
     def apply_materialized_payload_to_doc(
@@ -5197,6 +5199,7 @@ class WebspaceScenarioRuntime:
         expected_request_id: str | None = None,
         materialization_identity: Mapping[str, Any] | None = None,
         previous_payload: Mapping[str, Any] | None = None,
+        verify_branch_fingerprints: bool = False,
     ) -> WebUIRegistryEntry:
         apply_started = time.perf_counter()
         timings: Dict[str, float] = {}
@@ -5239,6 +5242,7 @@ class WebspaceScenarioRuntime:
             single_transaction=True,
             materialization_status_per_phase=False,
             force_selector_write=True,
+            verify_branch_fingerprints=verify_branch_fingerprints,
         )
         _record_timing(timings, "apply", stage_started)
         apply_phase_timings = _copy_timing_map(self._last_apply_phase_timings_ms) or {}

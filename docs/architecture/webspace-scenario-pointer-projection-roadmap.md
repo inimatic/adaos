@@ -147,6 +147,16 @@ evidence explicitly reopens that contract.
   backup, a delayed backup is scheduled instead of waiting for another write.
   This prevents cold `scenario_projection_sync` from paying a multi-second
   replay cost on the next room open.
+- Projection-integrity checkpoint as of 2026-08-14:
+  runtime-owned fingerprints remain a performance hint for non-navigation
+  rebuilds, but they are not accepted as integrity proof at a scenario-switch
+  boundary. A reconnect/replay gap can preserve the target fingerprint while
+  the effective branch still contains an older scenario. Scenario-switch
+  live-room apply therefore hashes the actual effective branches, replaces a
+  mismatching branch, and reports `verified_branch_fingerprints=true`. During
+  the bounded selector/projection transition, the client keeps both chrome and
+  page rendering on the last complete projection instead of combining the new
+  selector with the previous page.
 - Cold-switch ownership checkpoint as of 2026-07-23:
   payload-only scenario switching no longer starts a one-shot AdaOS runtime.
   Skill declaration discovery is process-owned and startup-prewarmed, resolver
@@ -619,6 +629,14 @@ valid because effective branches are runtime-owned materialization output, not
 browser-owned collaborative data. Diagnostics surface
 `trusted_previous_fingerprint_patch_branches` when this path is used.
 
+That trust is intentionally disabled for explicit scenario navigation. A
+stored fingerprint proves what the runtime last intended to write; it does not
+prove that a reconnecting room or client received and retained the complete
+branch update. Scenario-switch apply verifies the live branch against the
+target fingerprint before declaring it unchanged. This bounded extra hashing
+is paid only on the navigation boundary and makes repeat go-home requests
+self-healing after a split selector/projection state.
+
 Bootstrap compatibility fallback now also stays on the incremental YStore path
 when possible: if the default webspace has to seed legacy compatibility caches,
 bootstrap writes a diff update over the already-open document and only falls
@@ -652,6 +670,15 @@ when the room already contains the target value, so the final update remains
 an explicit selector/projection commit. The response exposes
 `selector_commit_mode=materialization_transaction`; legacy paths report
 `eager_pointer`.
+
+Atomic server mutation alone does not imply atomic observation across a
+temporarily disconnected transport: a client can receive the persisted
+selector before it receives the replacement branch. Render selection therefore
+uses projection identity as a barrier too. While
+`current_scenario != runtime.environment.materialization.scenario_id`, a ready
+last-good snapshot matching the projection id supplies all render paths,
+including the application badge. The client switches chrome and page together
+only after a coherent target projection is available.
 
 The remaining `materialize_and_copy` path has now been removed entirely.
 Scenario switch no longer loads `scenario.json` or writes

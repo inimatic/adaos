@@ -2686,6 +2686,7 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
     ydoc = y_py.YDoc()
     room = SimpleNamespace(ydoc=ydoc, clients=[])
     observed_authority: list[str | None] = []
+    observed_verification: list[bool] = []
 
     def _fake_apply(
         self,
@@ -2695,6 +2696,7 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
         **_kwargs,
     ) -> None:
         observed_authority.append(gateway_module._authoritative_current_scenario(webspace_id))
+        observed_verification.append(bool(_kwargs.get("verify_branch_fingerprints")))
         with target_ydoc.begin_transaction() as txn:
             target_ydoc.get_map("ui").set(txn, "current_scenario", "test04_recipes")
         self._last_apply_summary = {"failed_branches": 0, "changed_branches": 0}
@@ -2719,12 +2721,13 @@ def test_materialized_payload_establishes_selector_authority_before_room_mutatio
                     },
                 },
             },
-            reason="unit",
+            reason="semantic_rebuild:scenario_switch_rebuild",
         )
     )
 
     assert result["ready"] is True
     assert observed_authority == ["test04_recipes"]
+    assert observed_verification == [True]
     assert gateway_module._authoritative_current_scenario(key) == "test04_recipes"
     gateway_module._AUTHORITATIVE_SCENARIO_LEASES.clear()
 
@@ -2766,6 +2769,7 @@ def test_materialized_payload_force_full_state_replaces_ystore_snapshot(monkeypa
         *,
         materialization_identity=None,  # noqa: ARG001
         previous_payload=None,  # noqa: ARG001
+        verify_branch_fingerprints=False,  # noqa: ARG001
     ) -> None:
         with target_ydoc.begin_transaction() as txn:
             target_ydoc.get_map("ui").set(

@@ -528,6 +528,8 @@ Roadmap:
 - [x] Make `/api/node/yjs/webspaces/{id}/scenario` return a minimal ack by default.
 - [x] Commit scenario selector and effective branches atomically to the live room on the default switch path.
 - [x] Validate go-home/scenario hydration against the acknowledged scenario and bound HTTP render recovery by scenario plus TTL.
+- [x] Verify actual effective-branch fingerprints at scenario-switch commit; persisted fingerprint metadata is an optimization, not navigation integrity proof.
+- [x] Keep browser chrome and page on one coherent projection while selector delivery is ahead of effective branches.
 - [ ] Add an explicit small Yjs service/status node for browser-visible materialization health.
 - [ ] Move large materialization/runtime diagnostics behind a details/debug interaction in the UI.
 - [ ] Add regression coverage that scenario switching does not close `/yws/{webspace}`.

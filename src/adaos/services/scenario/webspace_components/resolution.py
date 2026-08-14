@@ -722,6 +722,7 @@ class WebspaceResolutionService:
         single_transaction: bool = False,
         materialization_status_per_phase: bool = True,
         force_selector_write: bool = False,
+        verify_branch_fingerprints: bool = False,
     ) -> None:
         operations.raise_if_rebuild_request_superseded(webspace_id, expected_request_id)
         effective_inputs = inputs or operations.resolver_inputs_type(
@@ -876,6 +877,7 @@ class WebspaceResolutionService:
                     trusted_previous_fingerprint = str(previous_branch_fingerprints.get(path) or "").strip()
                     if (
                         trusted_previous_fingerprint == fingerprint
+                        and not verify_branch_fingerprints
                         and operations.trust_previous_materialized_branch_fingerprints_enabled()
                     ):
                         has_value = operations.has_effective_branch_value(y_map, key)
@@ -912,7 +914,8 @@ class WebspaceResolutionService:
                 if previous_fingerprint and path in previous_branch_values and path not in operations.whole_branch_replace_paths:
                     verify_started = time.perf_counter()
                     trusted_previous_state = (
-                        operations.trust_previous_materialized_branch_fingerprints_enabled()
+                        not verify_branch_fingerprints
+                        and operations.trust_previous_materialized_branch_fingerprints_enabled()
                         and str(effective_branch_fingerprints.get(path) or "").strip() == previous_fingerprint
                     )
                     if trusted_previous_state:
@@ -1193,6 +1196,7 @@ class WebspaceResolutionService:
             "selector_changed": bool(selector_changed),
             "selector_reasserted": bool(selector_reasserted),
             "selector_apply_mode": selector_apply_mode,
+            "verified_branch_fingerprints": bool(verify_branch_fingerprints),
         }
         if diff_applied_paths:
             runtime._last_apply_summary["diff_applied_branches"] = len(diff_applied_paths)
