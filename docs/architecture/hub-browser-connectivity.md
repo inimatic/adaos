@@ -228,6 +228,11 @@ Required for a reliable hub-browser quality bar:
 - [x] Bind offers and ICE candidates to a peer generation, queue browser
       candidates until offer acknowledgement, and replace server peers on full
       recovery instead of reusing an old ICE transport.
+- [x] Keep transport sync and YDoc materialization as separate evidence. A
+      synced provider remains connected while an incomplete live document is
+      repaired by a bounded, coalesced server full-state broadcast; an HTTP
+      snapshot is render-only and a semantic gap never reloads the page or
+      replaces a healthy provider.
 - [ ] Separate logical `ready` from quality `ready` in diagnostics and UI.
 - [ ] Report Yjs first-sync latency and pressure as hub-browser quality gates.
 - [ ] Record browser route/WebRTC/YWS fallback windows in the incident registry.

@@ -3359,6 +3359,56 @@ class WebspaceYjsActionRequest(BaseModel):
     request_source: str | None = None
 
 
+class WebspaceMaterializationRepairRequest(BaseModel):
+    expected_scenario: str | None = Field(default=None, max_length=256)
+    missing_branches: list[str] = Field(default_factory=list, max_length=32)
+    request_id: str | None = Field(default=None, max_length=256)
+    request_source: str | None = Field(default=None, max_length=256)
+
+
+_YJS_MATERIALIZATION_REPAIR_LOCK = threading.RLock()
+_YJS_MATERIALIZATION_REPAIR_INFLIGHT: dict[
+    str,
+    tuple[asyncio.AbstractEventLoop, asyncio.Task[dict[str, Any]]],
+] = {}
+
+
+async def _coalesced_materialization_repair(
+    webspace_id: str,
+    materialized_payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    from adaos.services.yjs.gateway import apply_materialized_payload_to_live_room
+
+    key = str(webspace_id or "").strip() or "default"
+    loop = asyncio.get_running_loop()
+    created = False
+    with _YJS_MATERIALIZATION_REPAIR_LOCK:
+        current = _YJS_MATERIALIZATION_REPAIR_INFLIGHT.get(key)
+        if current is not None and current[0] is loop and not current[1].done():
+            task = current[1]
+        else:
+            task = loop.create_task(
+                apply_materialized_payload_to_live_room(
+                    key,
+                    materialized_payload=materialized_payload,
+                    reason="client_materialization_repair",
+                    persist_repair=False,
+                    force_full_state_update=True,
+                ),
+                name=f"yjs-materialization-repair:{key}",
+            )
+            _YJS_MATERIALIZATION_REPAIR_INFLIGHT[key] = (loop, task)
+            created = True
+    try:
+        return dict(await asyncio.shield(task)), not created
+    finally:
+        if task.done():
+            with _YJS_MATERIALIZATION_REPAIR_LOCK:
+                current = _YJS_MATERIALIZATION_REPAIR_INFLIGHT.get(key)
+                if current is not None and current[1] is task:
+                    _YJS_MATERIALIZATION_REPAIR_INFLIGHT.pop(key, None)
+
+
 class WebspaceCreateRequest(BaseModel):
     id: str | None = None
     title: str | None = None
@@ -5472,6 +5522,119 @@ async def node_yjs_webspace_materialization_snapshot(
             role=conf.role,
             webspace_id=target_webspace_id,
         )
+    return result
+
+
+@router.post("/yjs/webspaces/{webspace_id}/materialization/repair", dependencies=[Depends(require_token)])
+async def node_yjs_webspace_materialization_repair(
+    webspace_id: str,
+    payload: WebspaceMaterializationRepairRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Republish the authoritative live YDoc without replacing its room."""
+
+    started = time.perf_counter()
+    conf = load_config()
+    target_webspace_id = _coerce_node_webspace_id(webspace_id)
+    if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "hub_role_required",
+        }
+
+    materialized_payload = await asyncio.to_thread(
+        get_webspace_rebuild_materialized_payload,
+        target_webspace_id,
+    )
+    if not materialized_payload:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "authoritative_materialization_unavailable",
+            "rebuild": describe_webspace_rebuild_state(target_webspace_id),
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+
+    expected_scenario = str(payload.expected_scenario or "").strip()
+    authoritative_scenario = str(
+        materialized_payload.get("scenario_id")
+        or _coerce_dict(materialized_payload.get("ui")).get("current_scenario")
+        or ""
+    ).strip()
+    if expected_scenario and authoritative_scenario != expected_scenario:
+        return {
+            "ok": False,
+            "accepted": False,
+            "webspace_id": target_webspace_id,
+            "error": "authoritative_scenario_mismatch",
+            "expected_scenario": expected_scenario,
+            "authoritative_scenario": authoritative_scenario or None,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+
+    missing_branches = list(
+        dict.fromkeys(
+            token
+            for token in (
+                str(item or "").strip()[:256]
+                for item in payload.missing_branches[:32]
+            )
+            if token
+        )
+    )
+    event_payload = _trace_yjs_control_ingress(
+        request=request,
+        kind="desktop.webspace.materialization.repair",
+        webspace_id=target_webspace_id,
+        scenario_id=authoritative_scenario or None,
+    )
+    repair, coalesced = await _coalesced_materialization_repair(
+        target_webspace_id,
+        materialized_payload=materialized_payload,
+    )
+    applied = bool(repair.get("ok")) and bool(repair.get("materialized_payload_applied"))
+    materialized_apply = _coerce_dict(repair.get("materialized_payload"))
+    result = {
+        "ok": applied,
+        "accepted": True,
+        "webspace_id": target_webspace_id,
+        "scenario_id": authoritative_scenario or None,
+        "requested_missing_branches": missing_branches,
+        "request_id": str(payload.request_id or "").strip() or _coerce_dict(event_payload.get("_meta")).get("cmd_id"),
+        "request_source": str(payload.request_source or "").strip() or "browser_yjs_materialization_repair",
+        "room_preserved": not bool(repair.get("room_dropped")),
+        "transport_connections_closed": int(repair.get("closed_connections") or 0),
+        "full_state_update": bool(repair.get("force_full_state_update")),
+        "coalesced": bool(coalesced),
+        "full_state_update_bytes": int(materialized_apply.get("full_state_update_bytes") or 0),
+        "direct_client_broadcast_count": int(materialized_apply.get("direct_client_broadcast_count") or 0),
+        "direct_client_broadcast_failed": int(materialized_apply.get("direct_client_broadcast_failed") or 0),
+        "repair": repair,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }
+    if not applied:
+        result["error"] = str(materialized_apply.get("error") or repair.get("error") or "live_room_repair_failed")
+    _log.log(
+        logging.INFO if applied else logging.WARNING,
+        "Yjs materialization repair webspace=%s scenario=%s missing=%s applied=%s full_bytes=%s clients=%s failed=%s elapsed_ms=%s",
+        target_webspace_id,
+        authoritative_scenario or "-",
+        missing_branches,
+        applied,
+        result["full_state_update_bytes"],
+        result["direct_client_broadcast_count"],
+        result["direct_client_broadcast_failed"],
+        result["elapsed_ms"],
+    )
+    _publish_yjs_control_event(
+        action="materialization_repair",
+        webspace_id=target_webspace_id,
+        result=result,
+        scenario_id=authoritative_scenario or None,
+    )
     return result
 
 

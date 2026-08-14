@@ -101,6 +101,137 @@ def test_node_yjs_webspace_endpoint_coerces_legacy_default_to_desktop(monkeypatc
     assert result["runtime"]["webspace_id"] == "desktop"
 
 
+def test_node_yjs_materialization_repair_preserves_room_and_broadcasts_full_state(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    published: list[tuple[str, bool]] = []
+
+    async def _fake_apply(webspace_id: str, materialized_payload: dict, **kwargs) -> dict[str, object]:
+        calls.append({"webspace_id": webspace_id, "payload": materialized_payload, **kwargs})
+        return {
+            "ok": True,
+            "materialized_payload_applied": True,
+            "force_full_state_update": True,
+            "room_dropped": False,
+            "closed_connections": 0,
+            "materialized_payload": {
+                "full_state_update_bytes": 4096,
+                "direct_client_broadcast_count": 1,
+                "direct_client_broadcast_failed": 0,
+            },
+        }
+
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "get_webspace_rebuild_materialized_payload",
+        lambda webspace_id: {
+            "webspace_id": webspace_id,
+            "scenario_id": "media_center",
+            "ui": {"current_scenario": "media_center", "application": {}},
+        },
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_trace_yjs_control_ingress",
+        lambda **_kwargs: {"_meta": {"cmd_id": "repair-test"}},
+    )
+    monkeypatch.setattr(
+        node_api_module,
+        "_publish_yjs_control_event",
+        lambda action, webspace_id, result, scenario_id=None: published.append((action, bool(result.get("ok")))),
+    )
+    async def _fake_coalesced(webspace_id: str, materialized_payload: dict):
+        return await _fake_apply(
+            webspace_id,
+            materialized_payload,
+            persist_repair=False,
+            force_full_state_update=True,
+        ), False
+
+    monkeypatch.setattr(node_api_module, "_coalesced_materialization_repair", _fake_coalesced)
+
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_materialization_repair(
+            "default",
+            node_api_module.WebspaceMaterializationRepairRequest(
+                expected_scenario="media_center",
+                missing_branches=["ui.application", "data.catalog.widgets", "ui.application"],
+            ),
+            _fake_request(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["room_preserved"] is True
+    assert result["transport_connections_closed"] == 0
+    assert result["requested_missing_branches"] == ["ui.application", "data.catalog.widgets"]
+    assert result["full_state_update_bytes"] == 4096
+    assert result["direct_client_broadcast_count"] == 1
+    assert result["coalesced"] is False
+    assert calls[0]["persist_repair"] is False
+    assert calls[0]["force_full_state_update"] is True
+    assert published == [("materialization_repair", True)]
+
+
+def test_node_yjs_materialization_repair_rejects_stale_scenario(monkeypatch) -> None:
+    monkeypatch.setattr(node_api_module, "load_config", lambda: SimpleNamespace(role="hub"))
+    monkeypatch.setattr(
+        node_api_module,
+        "get_webspace_rebuild_materialized_payload",
+        lambda _webspace_id: {"scenario_id": "media_center", "ui": {"current_scenario": "media_center"}},
+    )
+
+    result = asyncio.run(
+        node_api_module.node_yjs_webspace_materialization_repair(
+            "desktop",
+            node_api_module.WebspaceMaterializationRepairRequest(expected_scenario="web_desktop"),
+            _fake_request(),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert result["error"] == "authoritative_scenario_mismatch"
+    assert result["authoritative_scenario"] == "media_center"
+
+
+def test_materialization_repair_coalesces_concurrent_room_broadcasts(monkeypatch) -> None:
+    node_api_module._YJS_MATERIALIZATION_REPAIR_INFLIGHT.clear()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def _fake_apply(webspace_id: str, **_kwargs) -> dict[str, object]:
+        calls.append(webspace_id)
+        started.set()
+        await release.wait()
+        return {"ok": True, "materialized_payload_applied": True}
+
+    monkeypatch.setattr(
+        "adaos.services.yjs.gateway.apply_materialized_payload_to_live_room",
+        _fake_apply,
+    )
+
+    async def _run() -> tuple[tuple[dict[str, object], bool], tuple[dict[str, object], bool]]:
+        first = asyncio.create_task(
+            node_api_module._coalesced_materialization_repair("desktop", {"scenario_id": "media_center"})
+        )
+        await started.wait()
+        second = asyncio.create_task(
+            node_api_module._coalesced_materialization_repair("desktop", {"scenario_id": "media_center"})
+        )
+        await asyncio.sleep(0)
+        release.set()
+        return await first, await second
+
+    first, second = asyncio.run(_run())
+
+    assert calls == ["desktop"]
+    assert first[1] is False
+    assert second[1] is True
+    assert node_api_module._YJS_MATERIALIZATION_REPAIR_INFLIGHT == {}
+
+
 def test_node_yjs_switch_scenario_endpoint_forwards_set_home(monkeypatch) -> None:
     captured: list[tuple[str, str, bool, bool, str | None, str | None, str | None]] = []
     published: list[tuple[str, str, str | None, bool, str | None]] = []
