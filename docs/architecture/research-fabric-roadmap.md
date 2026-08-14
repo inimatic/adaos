@@ -285,8 +285,10 @@ empty detail view. The shared Markdown renderer normalizes CRLF before legacy
 formula delimiter recognition and the exact imported TLP equation is covered
 by a KaTeX regression.
 
-The artifact SDK now parses notebook source cells before bounding, omits output
-payloads, emits stable fragment refs, and discloses coverage. ResearchPrototype
+The artifact SDK now parses notebook source cells before bounding, omits raw
+output payloads, emits stable fragment refs, and discloses coverage. The later
+semantic-preparation pass may retain bounded output summaries only as explicitly
+exploratory/untrusted context. ResearchPrototype
 1.1 records core-owned `context_coverage`, source-grounded claims, typed paired
 design/inference/requirement/check structures, and an unforgeable deterministic
 `admission_review`. Bounded LLM repair now receives semantic quality failures;
@@ -323,6 +325,44 @@ could not complete the final authenticated portfolio/back/reload receipt
 because it had no WebAuthn session and the pairing websocket returned 404.
 That remaining operator check is recorded explicitly below rather than being
 reported as a layout success.
+
+ARF7.1 source/inference hardening receipt (2026-08-14) treats formulation as an
+evaluated pipeline rather than one schema-shaped answer. The generic artifact
+SDK now turns notebook Markdown/code, imports, definitions, literal config,
+near-duplicate revisions, relevant code windows, and bounded historical-output
+summaries into query-selected provenance units before applying the context
+budget. Historical summaries remain exploratory/untrusted. Plain text uses the
+same selection/coverage envelope; PDF page/section/OCR extraction is the next
+adapter on that boundary, not a separate prompt path.
+
+The published orchestrator decomposes formulation into typed `problem_frame`,
+`protocol_design`, and `implementation_contract` artifacts. Every stage keeps
+input/output/schema digests, exact payload, all Root job attempts, resolved
+provider/model, aggregate usage, and bounded stage-local repair. A portable
+provider schema is projected from the richer local contract. Protocol decisions
+explicitly resolve early questions as source-derived, policy-default, proposed,
+or unresolved; only unresolved decisions block automation. AdaOS compiles refs,
+ids, readiness, user-facing lifecycle text, checkpoint selection, and interval
+decision logic from typed semantics.
+
+The controlled TLP acceptance direction `tlp_formulation_eval_01` used the same
+original 3.44 MB notebook and review across iterations. The globally routed
+`gpt-4o-mini` path either timed out/fell back or produced an unsafe protocol
+(one confirmatory seed, outcome-dependent stopping, invalid pairing), showing
+that schema-shaped output was not an adequate model-selection criterion. The
+Root `development` profile resolved to `gpt-5`. Successive real outputs exposed
+and drove fixes for stale question propagation, contradictory two-sided
+decision prose, and per-epoch final-test leakage. Final run
+`formulation-tlp_formulation_eval_01-7-97644b6085` completed all three native
+Structured Output stages with zero repairs, 37,503 aggregate tokens, no provider
+fallback, and produced admitted ResearchPrototype revision 5
+`sha256:55cf7344346e2ac68132a30ffbb5e5038b3452a95814b0a2108471de63619960`.
+All 24 deterministic checks pass. The plan has no blocking questions, compiles
+a coherent two-sided practical-equivalence decision at 0.5 percentage point,
+uses 10 paired confirmatory seeds, separates validation selection from sealed
+one-shot test access, and contains no per-epoch final-test obligation. It is
+ready for human acceptance and bounded Codex implementation, not accepted by
+the model and not evidence that TLP works.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -1083,7 +1123,7 @@ not substitute for this operator path.
 - [x] `[must]` `ARF7.1-20g` Make Markdown math parsing line-ending neutral and
   cover the exact CRLF legacy equation block imported by the TLP review.
 - [x] `[must]` `ARF7.1-20h` Extract notebook source cells before bounding,
-  omit outputs, expose fragment provenance and coverage, and prevent generated
+  omit raw outputs, expose fragment provenance and coverage, and prevent generated
   source claims from citing context that the formulation model did not receive.
 - [x] `[must]` `ARF7.1-20i` Strengthen ResearchPrototype with typed comparator,
   pairing, RNG, data-seal, estimand, uncertainty, stopping, multiplicity,
@@ -1113,6 +1153,21 @@ not substitute for this operator path.
   runtime-data failures in the shared widget host; and keep the experiment
   control-plane snapshot available when runner/tracker health dependencies
   degrade.
+- [x] `[must]` `ARF7.1-20p` Replace raw notebook-prefix context with semantic,
+  query-aware prepared-source units, near-duplicate compaction, bounded
+  explicitly untrusted output summaries, stable provenance, and disclosed
+  selected/omitted coverage. Keep plain text on the same ABI and reserve PDF as
+  an adapter with page/OCR evidence.
+- [x] `[must]` `ARF7.1-20q` Split rich formulation into durable typed
+  problem/protocol/implementation stages; keep the authoritative local schema
+  distinct from the provider subset; repair only one failed stage; expose full
+  stage artifacts, job attempts, resolved model, aggregate usage, and digests
+  through the skill API.
+- [x] `[must]` `ARF7.1-20r` Resolve early uncertainty through a typed decision
+  ledger, compile effect/threshold decision logic and checkpoint selection in
+  AdaOS, seal final-test access, reject per-epoch test observation, and prove
+  the path with a fresh zero-repair TLP Root-LLM run. Model output remains
+  subject to human acceptance.
 - [ ] `[must]` `ARF7.1-20l` In an authenticated operator browser, record the
   published portfolio -> direction -> back -> reload fallback and the exact
   CRLF Markdown/KaTeX preview. Automated layout/math regressions, production
@@ -1198,7 +1253,10 @@ not substitute for this operator path.
 - [ ] `[should]` `ARF7-17` Measure source-to-prototype target coverage,
   clarification/correction rate, unsupported assumptions, context sufficiency,
   direct-Markdown baseline quality, Codex handoff fidelity, Trial failures,
-  elapsed time, model usage, and human interventions.
+  elapsed time, model usage, and human interventions. The first controlled TLP
+  receipt now records source coverage, model/profile, stage repairs, latency and
+  aggregate usage, and identifies concrete semantic corrections; direct-
+  Markdown baseline, Codex fidelity, and a multi-task evaluation set remain.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 

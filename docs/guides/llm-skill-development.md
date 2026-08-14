@@ -382,6 +382,24 @@ coverage and fragment refs to the user; bind generated claims only to supplied
 refs. Do not let a model-provided `ready` flag substitute for a deterministic
 admission review.
 
+For notebooks, preprocessing is semantic rather than byte-prefix truncation:
+
+- parse code and Markdown cells before applying a character budget;
+- inventory imports, function/class definitions, literal configuration,
+  execution metadata, and historical outputs separately;
+- collapse near-duplicate cell revisions while retaining exact differences;
+- select query-relevant units and then render them back in source order;
+- include only bounded output summaries and label them
+  `exploratory/untrusted/not confirmatory`;
+- expose selected and omitted unit ids, source/selected character counts,
+  query digest, and exact cell/line provenance.
+
+Plain text uses the same unit-selection envelope. PDF support should plug into
+this `PreparedSource` boundary by producing page/section units with extraction
+quality, OCR status, and exact page refs; it must not introduce a second prompt
+or provenance path. Retrieval is an information-selection mechanism, not an
+authority mechanism: a relevant notebook output remains exploratory.
+
 ### Structured LLM candidate boundary
 
 When a skill asks an LLM to produce a contract candidate rather than ordinary
@@ -403,6 +421,48 @@ prose, treat structure, semantics, and admission as three separate gates:
 5. Retain rejected candidates with bounded failure reasons. A bounded repair
    may create another revision; exhaustion must remain a visible draft rather
    than silently falling back to plausible prose.
+
+Do not ask one model response to discover the scientific question, design the
+protocol, and produce the implementation contract when the aggregate schema is
+large. Prefer short typed stages whose outputs become the next stage's bounded
+input. A useful generic decomposition is:
+
+1. `problem_frame`: one question/hypothesis, epistemic stance, source
+   sufficiency, and candidate uncertainties;
+2. `protocol_design`: comparators, data access, budgets, pairing, outcomes,
+   uncertainty, stopping, multiplicity, practical threshold, and one decision
+   record per required area;
+3. `implementation_contract`: independently testable requirements and
+   acceptance evidence without changing the scientific protocol.
+
+Persist each stage's input/output/schema digests, resolved provider/model,
+native-structured-output flag, every job attempt, aggregate usage, and repair
+count. Repair only the rejected stage. Provider Structured Outputs improve
+shape adherence but support only a JSON Schema subset and do not guarantee
+semantic correctness; maintain a richer local schema plus deterministic
+semantic gates.
+
+Make decision resolution explicit. Early discovery questions are not
+necessarily automation blockers. A later decision must classify a choice as
+source-derived, policy-default, proposed, or unresolved; only `unresolved` may
+carry a blocking question. Conversely, a concrete bounded proposal must not
+retain the old question as a blocker. Compile repeated or logically fragile
+fields in code where possible: ids, exact provenance refs, readiness,
+checkpoint-selection rules, and interval decision inequalities should not be
+independently regenerated as prose by several stages.
+
+For experimental work, type final-evaluation access. At minimum record the
+development split, model/checkpoint selection source, one-shot final-test
+policy, and a test-feedback prohibition. Reject implementation contracts that
+observe final-test metrics per epoch or use them for checkpoint, variant,
+hyperparameter, or stopping decisions.
+
+Model choice remains a managed Root policy. Evaluate the actual task rather
+than assuming that schema conformance implies adequate reasoning. Compare at
+least: stage success, semantic-gate failures, repair rate, unresolved-decision
+quality, source-grounding precision, total usage/latency, and expert review of
+the final contract. A weaker model that repeatedly produces scientifically
+unsafe but schema-shaped plans is not an acceptable default for that workload.
 
 For research-like contracts, semantic checks should cover source provenance,
 hypothesis-versus-observation stance, predeclared allocation, disjoint varied

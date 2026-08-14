@@ -641,10 +641,18 @@ The first user-facing implementation is local-first. Source payloads are
 ordinary files under the owned direction skill's `artifacts/partN` groups, and
 each group has a deterministic manifest. The Skill SDK lists, validates,
 resolves, and extracts bounded text from those files. Notebook JSON is parsed
-before bounding; source cells receive stable `#cell=N` refs and output payloads
-are omitted. Text fragments receive stable line refs. Every extraction returns
+before bounding into semantic units: Markdown, imports, definitions, literal
+configuration, query-relevant code windows, near-duplicate revisions, and
+bounded historical-output summaries. Raw output payloads are not forwarded;
+summaries are explicitly exploratory/untrusted and cannot become confirmatory
+evidence. Selected units are rendered back in notebook order. Source cells
+receive stable `#cell=N` refs and text fragments receive stable line refs.
+Every extraction returns
 a coverage envelope with represented/truncated/unreadable sources and selected
-character/unit counts. Codex receives native
+and omitted unit ids, character/unit counts, query digest, and notebook
+inventory. PDF extraction will implement the same prepared-source/provenance
+contract with page/section and OCR-quality metadata rather than a PDF-specific
+LLM path. Codex receives native
 read-only paths; the conversational LLM receives bounded extraction through
 the orchestrator. Logical `ArtifactRef` addressing is provider-neutral so an
 external store or MCP adapter can be added later without being an admission
@@ -657,7 +665,8 @@ policy, and sensitivity editing remain later intake gates and must not be
 implied by the first slice. Publication policy decides whether each source
 payload is included, excluded, or represented only by its manifest/reference.
 
-The source assessment may inventory notebook cells, imports, outputs,
+The source assessment may inventory notebook cells, imports, bounded output
+summaries,
 environment hints, duplicate implementations, likely data leakage, and code
 that could be extracted. It may not decide that an exploratory output is true
 or silently define the research direction. The formulation LLM and human
@@ -666,16 +675,36 @@ classes, analysis rules, budgets, stops, implementation requirements, and
 acceptance checks. LLM `ready_for_automation` is a proposal only: schema and
 semantic admission are repeated at acceptance.
 
+Formulation is staged because the complete ResearchPrototype is too rich for a
+single reliable inference. `problem_frame` extracts one falsifiable scientific
+question and separates observations, interpretations, hypotheses, and gaps.
+`protocol_design` resolves nine required decision areas and specifies data,
+pairing, budgets, estimation, and inference. `implementation_contract`
+translates the accepted semantics into independently observable obligations.
+Each stage has its own strict schema, local semantic gate, durable payload and
+telemetry, and one bounded stage-local repair. Provider schemas are a projected
+portable subset; the complete local JSON Schema remains authoritative.
+
+Problem-stage questions are discovery records, not automatically blockers. A
+protocol decision is explicitly `source_derived`, `policy_default`, `proposed`,
+or `unresolved`; only the last may carry a blocking question. This prevents a
+later concrete proposal from coexisting with a stale question that incorrectly
+blocks Codex. AdaOS, not the model, compiles exact refs and ids, readiness,
+human-facing lifecycle text, the checkpoint-selection rule, and interval
+decision inequalities from typed effect direction and practical threshold.
+
 `context_coverage` and `admission_review` are orchestrator-managed
 ResearchPrototype fields. The LLM cannot emit or override them. Source-grounded
 claims may cite only fragment refs present in the disclosed extraction
 allowlist. The deterministic review separately records quality gates and the
 final admission gates. It requires source coverage and grounding, smoke versus
 confirmatory separation, comparator isolation, named RNG streams, paired
-invariants/varied fields, data sealing/leakage controls, one operationalized
+invariants/varied fields, data sealing/leakage controls, explicit development
+selection versus one-shot sealed final-test access, one operationalized
 primary estimand/outcome, uncertainty, multiplicity, practical significance,
 predeclared stopping, negative-result retention, and independently verifiable
-implementation/acceptance records. A schema-valid candidate may still be a
+implementation/acceptance records. Per-epoch final-test observation is a hard
+semantic failure. A schema-valid candidate may still be a
 draft. Bounded repair receives the exact gate findings; exhausted repair stores
 the draft with blockers instead of either discarding useful work or pretending
 it is ready.
@@ -732,6 +761,8 @@ multiple agents, implementation iterations, executions, reviews, or restarts:
 | --- | --- | --- |
 | Input identity | The visible file may change; attachment selection can be implicit | Exact SourceBundle and every source payload are fixed by digest |
 | Scientific meaning | Question, hypothesis, smoke test, confirmation, and claims are prose conventions | Falsification, evidence class, inference permission, estimands, stops, and negative-result policy are typed fields |
+| Decision coherence | Direction, threshold, and interval interpretation can contradict each other across paragraphs | Effect direction and threshold are typed; AdaOS compiles mutually exclusive supported/contradicted/inconclusive regions |
+| Leakage control | “Untouched test” is an instruction Codex may accidentally violate | Development selection and final-test access are typed; per-epoch test observation fails admission |
 | Implementation scope | Codex infers missing requirements and may optimize for the apparent desired result | Required modules, provider boundaries, forbidden actions, and executable acceptance checks are explicit |
 | Consent | “Looks good” is conversational context | A human accepts one exact revision and observed generation |
 | Stale-input safety | A later attachment/edit may be overlooked | Acceptance fails if either the source bundle or prototype changed |
