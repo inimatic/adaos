@@ -7,7 +7,7 @@ from pathlib import Path
 import queue
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 from datetime import datetime, timezone
 
 from adaos.domain import Event
@@ -111,6 +111,29 @@ class SkillContextCaptureFilter(logging.Filter):
         return True
 
 
+class ResilientQueueListener(QueueListener):
+    """Keep draining when an individual output handler fails."""
+
+    def __init__(
+        self,
+        log_queue: queue.Queue[logging.LogRecord],
+        *handlers: logging.Handler,
+        respect_handler_level: bool,
+        on_error: Callable[[logging.Handler, Exception], None],
+    ) -> None:
+        super().__init__(log_queue, *handlers, respect_handler_level=respect_handler_level)
+        self._on_error = on_error
+
+    def handle(self, record: logging.LogRecord) -> None:
+        for handler in self.handlers:
+            if self.respect_handler_level and record.levelno < handler.level:
+                continue
+            try:
+                handler.handle(record)
+            except Exception as exc:
+                self._on_error(handler, exc)
+
+
 class NonBlockingQueueHandler(QueueHandler):
     """Bounded, observable logging handoff that never performs output I/O."""
 
@@ -125,12 +148,49 @@ class NonBlockingQueueHandler(QueueHandler):
         self._high_watermark = 0
         self._last_drop_at: float | None = None
         self._listener: QueueListener | None = None
+        self._listener_lock = threading.Lock()
+        self._listener_restart_total = 0
+        self._listener_failure_total = 0
+        self._last_listener_failure: dict[str, object] | None = None
         self._output_handlers: tuple[logging.Handler, ...] = ()
         self._pipeline_closed = False
 
     def bind_listener(self, listener: QueueListener, handlers: list[logging.Handler]) -> None:
         self._listener = listener
         self._output_handlers = tuple(handlers)
+
+    def record_listener_failure(self, handler: logging.Handler, exc: Exception) -> None:
+        with self._metrics_lock:
+            self._listener_failure_total += 1
+            self._last_listener_failure = {
+                "at": time.time(),
+                "handler": type(handler).__name__,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:1000],
+            }
+
+    def _ensure_listener(self) -> None:
+        if self._pipeline_closed:
+            return
+        listener = self._listener
+        if listener is None:
+            return
+        thread = getattr(listener, "_thread", None)
+        if thread is not None and thread.is_alive():
+            return
+        with self._listener_lock:
+            if self._pipeline_closed:
+                return
+            thread = getattr(listener, "_thread", None)
+            if thread is not None and thread.is_alive():
+                return
+            try:
+                listener.start()
+            except Exception as exc:
+                self.record_listener_failure(self, exc)
+                return
+            with self._metrics_lock:
+                self._listener_restart_total += 1
 
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         # Never transfer traceback frames, args, or arbitrary custom objects
@@ -166,6 +226,7 @@ class NonBlockingQueueHandler(QueueHandler):
         return prepared
 
     def enqueue(self, record: logging.LogRecord) -> None:
+        self._ensure_listener()
         try:
             self.queue.put_nowait(record)
         except queue.Full:
@@ -194,6 +255,9 @@ class NonBlockingQueueHandler(QueueHandler):
             dropped_by_level = dict(self._dropped_by_level)
             high_watermark = self._high_watermark
             last_drop_at = self._last_drop_at
+            listener_restart_total = self._listener_restart_total
+            listener_failure_total = self._listener_failure_total
+            last_listener_failure = dict(self._last_listener_failure or {}) or None
         thread = getattr(self._listener, "_thread", None)
         return {
             "schema": "adaos.logging.queue.v1",
@@ -206,6 +270,9 @@ class NonBlockingQueueHandler(QueueHandler):
             "dropped_by_level": dropped_by_level,
             "last_drop_at": last_drop_at,
             "listener_alive": bool(thread is not None and thread.is_alive()),
+            "listener_restart_total": listener_restart_total,
+            "listener_failure_total": listener_failure_total,
+            "last_listener_failure": last_listener_failure,
         }
 
     def close(self) -> None:
@@ -476,6 +543,9 @@ def logging_queue_snapshot() -> dict[str, object]:
                 "dropped_by_level": {},
                 "last_drop_at": None,
                 "listener_alive": False,
+                "listener_restart_total": 0,
+                "listener_failure_total": 0,
+                "last_listener_failure": None,
             }
         return handler.snapshot()
 
@@ -547,7 +617,12 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
 
     log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=_logging_queue_capacity())
     queue_handler = NonBlockingQueueHandler(log_queue, level=logger.level)
-    listener = QueueListener(log_queue, *output_handlers, respect_handler_level=True)
+    listener = ResilientQueueListener(
+        log_queue,
+        *output_handlers,
+        respect_handler_level=True,
+        on_error=queue_handler.record_listener_failure,
+    )
     queue_handler.bind_listener(listener, output_handlers)
     listener.start()
 

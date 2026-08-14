@@ -309,3 +309,54 @@ def test_skill_exception_capture_avoids_traceback_formatter_and_cross_thread_fra
             handler.flush()
         skill_ctx.clear()
         clear_ctx()
+
+
+def test_logging_queue_survives_output_handler_failure(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    logger = setup_logging(paths, level="DEBUG")
+    queue_handler = logger.handlers[0]
+    listener = queue_handler._listener
+    output_handler = listener.handlers[0]
+    original_handle = output_handler.handle
+    failed = False
+
+    def fail_once(record: logging.LogRecord) -> bool:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("synthetic log sink failure")
+        return original_handle(record)
+
+    output_handler.handle = fail_once
+    try:
+        logger.info("first record triggers sink failure")
+        logger.info("second record remains observable")
+        queue_handler.flush()
+
+        snapshot = logging_queue_snapshot()
+        assert snapshot["listener_alive"] is True
+        assert snapshot["listener_failure_total"] == 1
+        assert snapshot["last_listener_failure"]["error_type"] == "OSError"
+        assert "second record remains observable" in (paths.logs_dir() / "adaos.log").read_text(encoding="utf-8")
+    finally:
+        output_handler.handle = original_handle
+
+
+def test_logging_queue_restarts_unexpectedly_stopped_listener(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    logger = setup_logging(paths, level="DEBUG")
+    queue_handler = logger.handlers[0]
+    listener = queue_handler._listener
+    listener.enqueue_sentinel()
+    listener._thread.join(timeout=2.0)
+    assert listener._thread.is_alive() is False
+
+    logger.info("record after listener restart")
+    queue_handler.flush()
+
+    snapshot = logging_queue_snapshot()
+    assert snapshot["listener_alive"] is True
+    assert snapshot["listener_restart_total"] == 1
+    assert "record after listener restart" in (paths.logs_dir() / "adaos.log").read_text(encoding="utf-8")
