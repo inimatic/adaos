@@ -643,6 +643,30 @@ def test_realtime_sidecar_listener_snapshot_skips_pid_scan_when_y_py_loaded(
     assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
 
 
+def test_realtime_sidecar_listener_snapshot_handles_managed_process_when_pid_scan_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ManagedProcess:
+        pid = 321
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    monkeypatch.setattr(realtime_sidecar_mod, "_skip_realtime_listener_pid_scan", lambda: True)
+    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+
+    snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(_ManagedProcess(), role="hub")
+
+    assert snapshot["managed_pid"] == 321
+    assert snapshot["managed_alive"] is True
+    assert snapshot["listener_running"] is True
+    assert snapshot["listener_pid"] is None
+    assert snapshot["listener_matches_managed"] is False
+    assert snapshot["adopted_listener"] is True
+    assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
+
+
 def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

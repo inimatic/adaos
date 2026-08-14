@@ -1766,9 +1766,11 @@ def realtime_sidecar_listener_snapshot(
         listener_running = _cached_realtime_listener_port_open(host, port)
     listener_matches_managed = bool(
         listener_running
+        and isinstance(listener_pid, int)
+        and listener_pid > 0
         and isinstance(managed_pid, int)
         and managed_pid > 0
-        and int(listener_pid) == int(managed_pid)
+        and listener_pid == managed_pid
     )
     adopted_listener = bool(listener_running and not listener_matches_managed)
     payload = {
