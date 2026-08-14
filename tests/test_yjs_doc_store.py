@@ -579,6 +579,96 @@ async def test_ystore_backup_to_disk_records_encode_panic_without_compacting(mon
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_auto_backup_failure_enters_backoff_without_retry_loop(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_MAX_UPDATES", "128")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "1")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_ENTRIES", "2")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_BYTES", "0")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_REPLAY_PRESSURE_DEBOUNCE_SEC", "0.01")
+    monkeypatch.setenv("ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_SEC", "60")
+    webspace_id = _webspace_id("auto-backup-failure-backoff")
+    store = get_ystore_for_webspace(webspace_id)
+    attempts = 0
+
+    class _YjsPanic(BaseException):
+        pass
+
+    def _fail_encode(_updates):
+        nonlocal attempts
+        attempts += 1
+        raise _YjsPanic("Couldn't get item's parent")
+
+    monkeypatch.setattr(ystore_module, "_encode_snapshot_artifacts", _fail_encode)
+    try:
+        for idx in range(2):
+            async with async_get_ydoc(webspace_id) as ydoc:
+                with ydoc.begin_transaction() as txn:
+                    ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+
+        for _ in range(20):
+            if int(store.runtime_snapshot().get("backup_failed_total") or 0) >= 1:
+                break
+            await asyncio.sleep(0.02)
+
+        failed = store.runtime_snapshot()
+        assert attempts == 1
+        assert failed["backup_failed_total"] == 1
+        assert failed["snapshot_compaction_failure_streak"] == 1
+        assert failed["snapshot_compaction_backoff_remaining_s"] > 0
+        assert failed["auto_backup_inflight"] is False
+
+        async with async_get_ydoc(webspace_id) as ydoc:
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, "after_failure", True)
+        await asyncio.sleep(0.05)
+
+        contained = store.runtime_snapshot()
+        assert attempts == 1
+        assert contained["backup_failed_total"] == 1
+        assert contained["update_log_entries"] == 3
+        assert contained["snapshot_compaction_backoff_remaining_s"] > 0
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_ystore_replay_compaction_panic_retains_update_and_enters_backoff(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_YSTORE_MAX_UPDATES", "8")
+    monkeypatch.setenv("ADAOS_YSTORE_REPLAY_WINDOW", "7")
+    monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
+    monkeypatch.setenv("ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_SEC", "60")
+    webspace_id = _webspace_id("replay-compaction-failure-backoff")
+    store = get_ystore_for_webspace(webspace_id)
+    attempts = 0
+
+    class _YjsPanic(BaseException):
+        pass
+
+    def _fail_compaction(**_kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise _YjsPanic("Couldn't get item's parent")
+
+    monkeypatch.setattr(store, "_compact_updates_locked", _fail_compaction)
+    ydoc = Y.YDoc()
+    try:
+        for idx in range(10):
+            with ydoc.begin_transaction() as txn:
+                ydoc.get_map("data").set(txn, f"item_{idx}", idx)
+            async with ystore_write_metadata(governed=True, source="test", owner="test"):
+                accepted = await store.write_update(Y.encode_state_as_update(ydoc), update_kind="diff")
+            assert accepted is True
+
+        snapshot = store.runtime_snapshot()
+        assert attempts == 1
+        assert snapshot["update_log_entries"] == 10
+        assert snapshot["snapshot_compaction_failure_streak"] == 1
+        assert snapshot["snapshot_compaction_backoff_remaining_s"] > 0
+        assert snapshot["snapshot_compaction_suppressed_total"] >= 1
+        assert "Couldn't get item's parent" in snapshot["last_snapshot_compaction_error"]
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_ystore_backup_to_disk_reuses_runtime_base_snapshot_without_reencode(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_YSTORE_AUTOBACKUP_AFTER_COMPACT", "0")
     webspace_id = _webspace_id("backup-fast-path")

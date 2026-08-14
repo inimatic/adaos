@@ -440,6 +440,16 @@ class AdaosMemoryYStore(BaseYStore):
             1.0,
             minimum=0.0,
         )
+        self.snapshot_compaction_failure_backoff_sec = _env_float(
+            "ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_SEC",
+            30.0,
+            minimum=0.0,
+        )
+        self.snapshot_compaction_failure_backoff_max_sec = _env_float(
+            "ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_MAX_SEC",
+            300.0,
+            minimum=0.0,
+        )
         self._lock = threading.RLock()
         self._updates: List[Tuple[bytes, bytes, float]] = []
         self._base_snapshot_present = False
@@ -489,6 +499,11 @@ class AdaosMemoryYStore(BaseYStore):
         self._last_apply_slow_update_ms = 0.0
         self._last_apply_slow_update_bytes = 0
         self._auto_backup_inflight = False
+        self._snapshot_compaction_failure_streak = 0
+        self._snapshot_compaction_retry_not_before = 0.0
+        self._snapshot_compaction_suppressed_total = 0
+        self._last_snapshot_compaction_error = ""
+        self._last_snapshot_compaction_failed_at = 0.0
         self._generation = 0
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
@@ -612,6 +627,8 @@ class AdaosMemoryYStore(BaseYStore):
         self._running = False
         self._auto_backup_inflight = False
         self._auto_backup_retry_reason = ""
+        self._snapshot_compaction_failure_streak = 0
+        self._snapshot_compaction_retry_not_before = 0.0
         self._generation = 0
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
@@ -791,30 +808,64 @@ class AdaosMemoryYStore(BaseYStore):
             self._last_update_bytes = len(payload)
             if update_kind != "snapshot" or not was_empty:
                 self._base_state_vector = None
+            compaction_failed = False
             if self.document_ttl is not None and self._updates:
                 last_ts = self._updates[-1][2]
                 if now - last_ts > self.document_ttl:
-                    # Squash stale history into a snapshot and continue with a
-                    # fresh append-only window.
-                    self._compact_updates_locked(now=now, keep_tail=0, reason="document_ttl")
+                    if self._snapshot_compaction_backoff_remaining_locked(now) > 0.0:
+                        self._snapshot_compaction_suppressed_total += 1
+                    else:
+                        try:
+                            self._compact_updates_locked(now=now, keep_tail=0, reason="document_ttl")
+                        except BaseException as exc:
+                            if _is_fatal_base_exception(exc):
+                                raise
+                            compaction_failed = True
+                            self._record_snapshot_compaction_failure_locked(exc, now=now)
+                            _log.warning(
+                                "YStore TTL compaction failed; retaining replay log webspace=%s error=%s",
+                                self.path,
+                                self._last_snapshot_compaction_error,
+                                exc_info=True,
+                            )
 
             self._updates.append((payload, metadata, now))
             compact_reason = self._replay_compaction_reason_locked()
             if compact_reason:
-                self._compact_updates_locked(now=now, keep_tail=self.replay_window, reason=compact_reason)
+                if compaction_failed or self._snapshot_compaction_backoff_remaining_locked(now) > 0.0:
+                    self._snapshot_compaction_suppressed_total += 1
+                else:
+                    try:
+                        self._compact_updates_locked(now=now, keep_tail=self.replay_window, reason=compact_reason)
+                    except BaseException as exc:
+                        if _is_fatal_base_exception(exc):
+                            raise
+                        compaction_failed = True
+                        self._record_snapshot_compaction_failure_locked(exc, now=now)
+                        _log.warning(
+                            "YStore replay compaction failed; retaining replay log webspace=%s reason=%s error=%s",
+                            self.path,
+                            compact_reason,
+                            self._last_snapshot_compaction_error,
+                            exc_info=True,
+                        )
                 if (
-                    self.auto_backup_after_compact
+                    not compaction_failed
+                    and self.auto_backup_after_compact
                     and not self._auto_backup_inflight
+                    and self._snapshot_compaction_backoff_remaining_locked(now) <= 0.0
                     and (self._last_auto_backup_at <= 0.0 or now - self._last_auto_backup_at >= self.auto_backup_cooldown_sec)
                 ):
                     self._auto_backup_inflight = True
                     auto_backup_reason = compact_reason
             if (
                 auto_backup_reason is None
+                and not compaction_failed
                 and self.auto_backup_after_compact
                 and self.auto_backup_large_update_bytes > 0
                 and len(payload) >= int(self.auto_backup_large_update_bytes)
                 and not self._auto_backup_inflight
+                and self._snapshot_compaction_backoff_remaining_locked(now) <= 0.0
             ):
                 cooldown_remaining = (
                     0.0
@@ -826,8 +877,10 @@ class AdaosMemoryYStore(BaseYStore):
                 auto_backup_debounce_override = float(self.auto_backup_large_update_debounce_sec) + cooldown_remaining
             if (
                 auto_backup_reason is None
+                and not compaction_failed
                 and self.auto_backup_after_compact
                 and not self._auto_backup_inflight
+                and self._snapshot_compaction_backoff_remaining_locked(now) <= 0.0
             ):
                 pressure_reason = self._replay_pressure_reason_locked()
                 if pressure_reason:
@@ -846,7 +899,9 @@ class AdaosMemoryYStore(BaseYStore):
             except Exception:
                 pass
         if auto_backup_reason:
-            self._schedule_auto_backup(reason=auto_backup_reason, debounce_sec=auto_backup_debounce_override)
+            if not self._schedule_auto_backup(reason=auto_backup_reason, debounce_sec=auto_backup_debounce_override):
+                with self._lock:
+                    self._auto_backup_inflight = False
         return True
 
     async def encode_state_as_update(self, ydoc: Y.YDoc) -> None:  # type: ignore[override]
@@ -959,6 +1014,26 @@ class AdaosMemoryYStore(BaseYStore):
             return 0
         start_idx = 1 if self._base_snapshot_present and len(snapshot) > 0 else 0
         return sum(len(update) for update, _meta, _ts in snapshot[start_idx:])
+
+    def _snapshot_compaction_backoff_remaining_locked(self, now: float) -> float:
+        return max(0.0, float(self._snapshot_compaction_retry_not_before) - float(now))
+
+    def _record_snapshot_compaction_failure_locked(self, exc: BaseException, *, now: float) -> None:
+        self._snapshot_compaction_failure_streak += 1
+        base_delay = float(self.snapshot_compaction_failure_backoff_sec)
+        max_delay = max(base_delay, float(self.snapshot_compaction_failure_backoff_max_sec))
+        delay = min(max_delay, base_delay * (2 ** min(8, self._snapshot_compaction_failure_streak - 1)))
+        self._snapshot_compaction_retry_not_before = max(
+            float(self._snapshot_compaction_retry_not_before),
+            float(now) + delay,
+        )
+        self._last_snapshot_compaction_error = f"{type(exc).__name__}: {exc}"[:1000]
+        self._last_snapshot_compaction_failed_at = float(now)
+        self._auto_backup_retry_reason = ""
+
+    def _record_snapshot_compaction_success_locked(self) -> None:
+        self._snapshot_compaction_failure_streak = 0
+        self._snapshot_compaction_retry_not_before = 0.0
 
     def _replay_pressure_reason_locked(self) -> str | None:
         replay_entries = max(
@@ -1138,12 +1213,14 @@ class AdaosMemoryYStore(BaseYStore):
 
     def _schedule_auto_backup(self, *, reason: str, debounce_sec: float | None = None) -> bool:
         async def _runner() -> None:
+            failed = False
             try:
                 delay = self.auto_backup_debounce_sec if debounce_sec is None else max(0.0, float(debounce_sec))
                 if delay > 0:
                     await asyncio.sleep(delay)
                 await self.backup_to_disk(compact_runtime=True, backup_kind=f"auto_after_compact:{reason}")
             except Exception as exc:
+                failed = True
                 _log.warning(
                     "auto YStore backup failed for webspace=%s reason=%s: %s",
                     self.path,
@@ -1155,7 +1232,7 @@ class AdaosMemoryYStore(BaseYStore):
                 retry_reason = ""
                 with self._lock:
                     self._auto_backup_inflight = False
-                    retry_reason = self._auto_backup_retry_reason
+                    retry_reason = "" if failed else self._auto_backup_retry_reason
                     self._auto_backup_retry_reason = ""
                     if retry_reason:
                         self._auto_backup_inflight = True
@@ -1277,6 +1354,7 @@ class AdaosMemoryYStore(BaseYStore):
                 self._last_backup_error = error[:1000]
                 self._last_backup_failed_at = now
                 self._last_backup_at = now
+                self._record_snapshot_compaction_failure_locked(exc, now=now)
                 if backup_kind_token.startswith("auto_after_compact:"):
                     self._last_auto_backup_reason = str(backup_kind_token.partition(":")[2] or "").strip()
             _log.warning(
@@ -1292,6 +1370,7 @@ class AdaosMemoryYStore(BaseYStore):
             raise RuntimeError(f"yjs_backup_failed:{backup_kind_token}:{error}") from None
         now = time.time()
         with self._lock:
+            self._record_snapshot_compaction_success_locked()
             self._backup_total += 1
             self._backup_by_kind[backup_kind_token] = int(self._backup_by_kind.get(backup_kind_token) or 0) + 1
             if used_fast_path:
@@ -1458,6 +1537,15 @@ class AdaosMemoryYStore(BaseYStore):
             "auto_backup_inflight": bool(self._auto_backup_inflight),
             "auto_backup_retry_pending": bool(self._auto_backup_retry_reason),
             "auto_backup_retry_reason": self._auto_backup_retry_reason or None,
+            "snapshot_compaction_failure_backoff_sec": float(self.snapshot_compaction_failure_backoff_sec),
+            "snapshot_compaction_failure_backoff_max_sec": float(self.snapshot_compaction_failure_backoff_max_sec),
+            "snapshot_compaction_failure_streak": int(self._snapshot_compaction_failure_streak),
+            "snapshot_compaction_retry_not_before": self._snapshot_compaction_retry_not_before or None,
+            "snapshot_compaction_backoff_remaining_s": round(
+                self._snapshot_compaction_backoff_remaining_locked(now),
+                3,
+            ),
+            "snapshot_compaction_suppressed_total": int(self._snapshot_compaction_suppressed_total),
             "snapshot_file_exists": bool(snapshot_exists),
             "snapshot_file_size": int(snapshot_size),
             "persisted_generation": int(self._persisted_generation) if self._persisted_generation >= 0 else None,
@@ -1481,6 +1569,14 @@ class AdaosMemoryYStore(BaseYStore):
             "last_backup_failed_at": self._last_backup_failed_at or None,
             "last_backup_failed_ago_s": round(max(0.0, now - self._last_backup_failed_at), 3)
             if self._last_backup_failed_at
+            else None,
+            "last_snapshot_compaction_error": self._last_snapshot_compaction_error or None,
+            "last_snapshot_compaction_failed_at": self._last_snapshot_compaction_failed_at or None,
+            "last_snapshot_compaction_failed_ago_s": round(
+                max(0.0, now - self._last_snapshot_compaction_failed_at),
+                3,
+            )
+            if self._last_snapshot_compaction_failed_at
             else None,
             "last_apply_update_total": int(self._last_apply_update_total),
             "last_apply_bytes": int(self._last_apply_bytes),

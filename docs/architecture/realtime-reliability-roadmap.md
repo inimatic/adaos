@@ -1245,6 +1245,12 @@ Make Yjs transport-independent without building a second distributed system arou
 ### Completed for current scope
 
 - hub-side YStore runtime now exposes bounded log and snapshot+diff state for operator diagnostics
+- failed native snapshot encoding or replay compaction now opens an observable
+  per-webspace circuit breaker. Accepted updates remain in the replay log,
+  repeated maintenance attempts use exponential backoff, and a successful
+  snapshot backup closes the breaker. Operators can tune the initial and
+  maximum delays with `ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_SEC`
+  and `ADAOS_YSTORE_SNAPSHOT_COMPACTION_FAILURE_BACKOFF_MAX_SEC`.
 - browser sync now has an explicit resync path and runtime snapshot instead of scattered provider recreation logic
 - node reliability / hub-root status surface Yjs sync runtime alongside transport and protocol state
 - browser header now exposes a manual Yjs resync action, separate from scenario reseed/reload
