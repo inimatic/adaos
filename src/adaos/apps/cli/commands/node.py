@@ -498,6 +498,7 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
             f"dropped={logging_queue.get('dropped_total') or 0} "
             f"listener_restarts={logging_queue.get('listener_restart_total') or 0} "
             f"sink_failures={logging_queue.get('listener_failure_total') or 0} "
+            f"pipeline_closed={bool(logging_queue.get('pipeline_closed'))} "
             f"last_drop_at={logging_queue.get('last_drop_at') or '-'}"
         )
     hub_root_zone = runtime.get("hub_root_zone") if isinstance(runtime.get("hub_root_zone"), dict) else {}

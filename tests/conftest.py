@@ -286,6 +286,9 @@ def _autocontext(tmp_path, monkeypatch):
     try:
         yield ctx
     finally:
+        for handler in list(logger.handlers):
+            handler.close()
+        logger.handlers.clear()
         clear_ctx()
 
 

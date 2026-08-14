@@ -154,6 +154,7 @@ class NonBlockingQueueHandler(QueueHandler):
         self._last_listener_failure: dict[str, object] | None = None
         self._output_handlers: tuple[logging.Handler, ...] = ()
         self._pipeline_closed = False
+        self._pipeline_closed_at: float | None = None
 
     def bind_listener(self, listener: QueueListener, handlers: list[logging.Handler]) -> None:
         self._listener = listener
@@ -258,6 +259,7 @@ class NonBlockingQueueHandler(QueueHandler):
             listener_restart_total = self._listener_restart_total
             listener_failure_total = self._listener_failure_total
             last_listener_failure = dict(self._last_listener_failure or {}) or None
+            pipeline_closed_at = self._pipeline_closed_at
         thread = getattr(self._listener, "_thread", None)
         return {
             "schema": "adaos.logging.queue.v1",
@@ -273,12 +275,16 @@ class NonBlockingQueueHandler(QueueHandler):
             "listener_restart_total": listener_restart_total,
             "listener_failure_total": listener_failure_total,
             "last_listener_failure": last_listener_failure,
+            "pipeline_closed": self._pipeline_closed,
+            "pipeline_closed_at": pipeline_closed_at,
         }
 
     def close(self) -> None:
         if self._pipeline_closed:
             return
         self._pipeline_closed = True
+        with self._metrics_lock:
+            self._pipeline_closed_at = datetime.now(tz=timezone.utc).timestamp()
         self.flush()
         listener = self._listener
         if listener is not None:
@@ -546,6 +552,8 @@ def logging_queue_snapshot() -> dict[str, object]:
                 "listener_restart_total": 0,
                 "listener_failure_total": 0,
                 "last_listener_failure": None,
+                "pipeline_closed": False,
+                "pipeline_closed_at": None,
             }
         return handler.snapshot()
 

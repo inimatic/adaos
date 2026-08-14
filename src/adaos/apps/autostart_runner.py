@@ -1332,6 +1332,7 @@ def main() -> None:
                 reload=False,
                 workers=1,
                 access_log=False,
+                log_config=None,
             )
         finally:
             restore_profile_signal_handlers()
