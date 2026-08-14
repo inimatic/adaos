@@ -6251,15 +6251,6 @@ class WorkspaceWebsocketServer(WebsocketServer):
 
         _cancel_idle_room_reset(webspace_id)
 
-        def _space_mode(ws_id: str) -> str:
-            try:
-                row = get_workspace(ws_id)
-                if not row:
-                    return "workspace"
-                return row.effective_source_mode
-            except Exception:
-                return "workspace"
-
         # Double-checked locking to prevent concurrent room creation.
         # Without this, multiple concurrent get_room() calls can both pass
         # the `if name not in self.rooms` check and create duplicate rooms,
@@ -6324,23 +6315,15 @@ class WorkspaceWebsocketServer(WebsocketServer):
                     room: DiagnosticYRoom | None = None
                     ystore = None
                     try:
-                        ensure_workspace(webspace_id)
+                        workspace = await _workspace_bootstrap_snapshot(webspace_id)
                         ystore = get_ystore_for_webspace(webspace_id)
-                        row = get_workspace(webspace_id)
-                        space = _space_mode(webspace_id)
-                        row_current_scenario = (
-                            str(getattr(row, "current_scenario_overlay", "") or "").strip()
-                            if row and getattr(row, "has_current_scenario_overlay", False)
-                            else ""
-                        )
+                        space = str(workspace.get("effective_source_mode") or "workspace")
+                        row_current_scenario = str(workspace.get("current_scenario_overlay") or "")
                         target_scenario_id = (
                             row_current_scenario
-                            or (row.effective_home_scenario if row and row.home_scenario else "web_desktop")
+                            or str(workspace.get("effective_home_scenario") or "web_desktop")
                         )
-                        prefer_manifest_home = bool(
-                            row
-                            and (row_current_scenario or row.home_scenario)
-                        )
+                        prefer_manifest_home = bool(row_current_scenario or workspace.get("home_scenario"))
                         room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
                         room._webspace_id = webspace_id
                         room._thread_id = threading.get_ident()
@@ -8125,26 +8108,50 @@ async def stop_y_server() -> None:
         pass
 
 
+def _workspace_bootstrap_snapshot_sync(webspace_id: str) -> dict[str, Any]:
+    ensure_workspace(webspace_id)
+    row = get_workspace(webspace_id)
+    if row is None:
+        return {
+            "effective_source_mode": "workspace",
+            "current_scenario_overlay": "",
+            "home_scenario": "",
+            "effective_home_scenario": "web_desktop",
+            "is_dev": False,
+        }
+    current_scenario_overlay = (
+        str(getattr(row, "current_scenario_overlay", "") or "").strip()
+        if bool(getattr(row, "has_current_scenario_overlay", False))
+        else ""
+    )
+    return {
+        "effective_source_mode": str(getattr(row, "effective_source_mode", "") or "workspace"),
+        "current_scenario_overlay": current_scenario_overlay,
+        "home_scenario": str(getattr(row, "home_scenario", "") or ""),
+        "effective_home_scenario": str(getattr(row, "effective_home_scenario", "") or "web_desktop"),
+        "is_dev": bool(getattr(row, "is_dev", False)),
+    }
+
+
+async def _workspace_bootstrap_snapshot(webspace_id: str) -> dict[str, Any]:
+    return await asyncio.to_thread(_workspace_bootstrap_snapshot_sync, webspace_id)
+
+
 async def ensure_webspace_ready(webspace_id: str, scenario_id: str | None = None) -> None:
     webspace_id = _coerce_gateway_webspace_id(webspace_id)
-    ensure_workspace(webspace_id)
+    workspace = await _workspace_bootstrap_snapshot(webspace_id)
     ystore = get_ystore_for_webspace(webspace_id)
-    row = get_workspace(webspace_id)
-    space = row.effective_source_mode if row else "workspace"
+    space = str(workspace.get("effective_source_mode") or "workspace")
     base_scenario = str(scenario_id or "").strip()
-    if not base_scenario and row and row.home_scenario:
-        base_scenario = row.effective_home_scenario
+    if not base_scenario and workspace.get("home_scenario"):
+        base_scenario = str(workspace.get("effective_home_scenario") or "")
     if not base_scenario:
         base_scenario = "web_desktop"
     prefer_default_scenario = bool(
         scenario_id
         or (
-            row
-            and row.home_scenario
-            and (
-                row.is_dev
-                or row.effective_source_mode == "dev"
-            )
+            workspace.get("home_scenario")
+            and (workspace.get("is_dev") or workspace.get("effective_source_mode") == "dev")
         )
     )
 

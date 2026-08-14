@@ -5704,6 +5704,47 @@ def test_ws_event_send_queue_coalesces_hot_events(monkeypatch) -> None:
     gateway_module._WS_EVENT_SEND_STATES.clear()
 
 
+def test_workspace_bootstrap_snapshot_keeps_sqlite_work_off_event_loop(monkeypatch) -> None:
+    from adaos.services.yjs import gateway_ws as gateway_module
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_ensure(_webspace_id: str) -> None:
+        started.set()
+        assert release.wait(timeout=2.0)
+
+    row = SimpleNamespace(
+        effective_source_mode="workspace",
+        current_scenario_overlay="web_desktop",
+        has_current_scenario_overlay=True,
+        home_scenario="web_desktop",
+        effective_home_scenario="web_desktop",
+        is_dev=False,
+    )
+    monkeypatch.setattr(gateway_module, "ensure_workspace", _slow_ensure)
+    monkeypatch.setattr(gateway_module, "get_workspace", lambda _webspace_id: row)
+
+    async def _run() -> None:
+        task = asyncio.create_task(gateway_module._workspace_bootstrap_snapshot("desktop"))
+        assert await asyncio.to_thread(started.wait, 1.0)
+        loop_advanced = False
+
+        async def _tick() -> None:
+            nonlocal loop_advanced
+            await asyncio.sleep(0)
+            loop_advanced = True
+
+        await _tick()
+        assert loop_advanced is True
+        assert task.done() is False
+        release.set()
+        snapshot = await task
+        assert snapshot["current_scenario_overlay"] == "web_desktop"
+
+    asyncio.run(_run())
+
+
 def test_yws_guard_attempts_allow_single_client_reconnect_recovery(monkeypatch) -> None:
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_CLIENT_OPEN_15S", 3)
     monkeypatch.setattr(gateway_module, "_YWS_GUARD_WEBSPACE_MIN_CLIENTS_10S", 2)
