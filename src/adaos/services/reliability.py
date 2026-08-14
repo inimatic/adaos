@@ -6816,7 +6816,7 @@ def _eventbus_backlog_runtime_snapshot() -> dict[str, Any]:
     }
 
 
-def _skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
+def skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
     try:
         from adaos.services.skill.runtime_migration_worker import read_status
 
@@ -8000,7 +8000,7 @@ def reliability_snapshot(
     webio_stream_guard = _webio_stream_guard_runtime_snapshot(sync_runtime)
     yjs_projection_guard = _yjs_projection_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
-    skill_runtime_migration = _skill_runtime_migration_runtime_snapshot()
+    skill_runtime_migration = skill_runtime_migration_runtime_snapshot()
     skill_subscription_execution = _skill_subscription_execution_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(

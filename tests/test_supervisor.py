@@ -1292,6 +1292,26 @@ def test_supervisor_reliability_probe_uses_nonblocking_configured_deadline(monke
     assert seen == [4.5]
 
 
+def test_supervisor_update_gate_uses_compact_runtime_endpoint(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    calls: list[dict[str, object]] = []
+
+    def _request(**kwargs):  # noqa: ANN003
+        calls.append(dict(kwargs))
+        return {"runtime": {"skill_runtime_migration": {"pending": False}}}
+
+    monkeypatch.setattr(manager, "_runtime_request_json", _request)
+
+    payload = manager._runtime_update_gate_payload(timeout=3.0)
+
+    assert payload == {"skill_runtime_migration": {"pending": False}}
+    assert calls == [{"path": "/api/node/reliability/update-gate", "timeout": 3.0}]
+
+
 def test_hub_root_watchdog_resets_browser_route_when_root_control_is_ready(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_ROUTE_DEGRADED_RESET", "1")
@@ -5963,7 +5983,7 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
             }
         }
 
-    monkeypatch.setattr(manager, "_runtime_reliability_payload_async", _terminal_migration)
+    monkeypatch.setattr(manager, "_runtime_update_gate_payload_async", _terminal_migration)
 
     restart_reasons: list[str] = []
 
@@ -6029,7 +6049,7 @@ def test_supervisor_complete_update_defers_root_promotion_during_skill_migration
     async def _unexpected_promote_root(*, reason):  # noqa: ANN001, ARG001
         raise AssertionError("root promotion must wait for skill migration")
 
-    monkeypatch.setattr(manager, "_runtime_reliability_payload_async", _pending_migration)
+    monkeypatch.setattr(manager, "_runtime_update_gate_payload_async", _pending_migration)
     monkeypatch.setattr(manager, "promote_root", _unexpected_promote_root)
     supervisor._write_update_attempt({"state": "active", "action": "update", "updated_at": 1.0})
     write_status({"state": "validated", "phase": "root_promotion_pending", "action": "update"})

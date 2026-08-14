@@ -2871,6 +2871,33 @@ def test_node_reliability_endpoint_exposes_model_and_runtime_state(monkeypatch) 
     assert "top_webio_stream_controls" in payload["runtime"]["eventbus_backlog"]
 
 
+def test_node_reliability_update_gate_is_compact(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+    from adaos.apps.api.auth import require_token
+
+    monkeypatch.setattr(
+        node_api,
+        "skill_runtime_migration_runtime_snapshot",
+        lambda: {
+            "operation_id": "migration-1",
+            "state": "running",
+            "phase": "tests",
+            "pending": True,
+        },
+    )
+    app = FastAPI()
+    app.dependency_overrides[require_token] = lambda: True
+    app.include_router(node_api.router, prefix="/api/node")
+
+    response = TestClient(app).get("/api/node/reliability/update-gate")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema"] == "adaos.reliability_update_gate.v1"
+    assert payload["runtime"]["skill_runtime_migration"]["operation_id"] == "migration-1"
+    assert len(response.content) < 1024
+
+
 def test_yjs_projection_guard_runtime_snapshot_links_recovery_to_ystore(monkeypatch) -> None:
     def _guard_snapshot(**kwargs):
         assert kwargs["webspace_id"] == "desktop"

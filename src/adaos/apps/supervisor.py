@@ -3499,7 +3499,7 @@ class SupervisorManager:
         promotion: dict[str, Any] | None = None
         promotion_gate: dict[str, Any] | None = None
         if _is_root_promotion_pending_status(status) or bool(runtime.get("root_promotion_required")):
-            reliability = await self._runtime_reliability_payload_async()
+            reliability = await self._runtime_update_gate_payload_async()
             migration = (
                 reliability.get("skill_runtime_migration")
                 if isinstance(reliability.get("skill_runtime_migration"), dict)
@@ -4029,6 +4029,31 @@ class SupervisorManager:
         )
         return await asyncio.to_thread(
             self._runtime_reliability_payload,
+            timeout=resolved_timeout,
+        )
+
+    def _runtime_update_gate_payload(self, *, timeout: float = 2.0) -> dict[str, Any]:
+        path = "/api/node/reliability/update-gate"
+        try:
+            payload = self._runtime_request_json(path=path, timeout=timeout)
+            runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+            return dict(runtime)
+        except Exception as exc:
+            _LOG.debug(
+                "compact runtime update gate unavailable; falling back to full reliability: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return self._runtime_reliability_payload(timeout=timeout)
+
+    async def _runtime_update_gate_payload_async(self, *, timeout: float | None = None) -> dict[str, Any]:
+        resolved_timeout = (
+            _runtime_reliability_probe_timeout_sec()
+            if timeout is None
+            else max(0.1, float(timeout))
+        )
+        return await asyncio.to_thread(
+            self._runtime_update_gate_payload,
             timeout=resolved_timeout,
         )
 

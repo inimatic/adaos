@@ -68,6 +68,7 @@ from adaos.services.reliability import (
     media_plane_runtime_snapshot,
     reliability_snapshot,
     sidecar_runtime_snapshot,
+    skill_runtime_migration_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.operations import submit_install_operation
@@ -4206,6 +4207,19 @@ async def node_reliability() -> Response:
             error=f"{type(exc).__name__}: {exc}",
         )
         raise
+
+
+@router.get("/reliability/update-gate", dependencies=[Depends(require_token)])
+async def node_reliability_update_gate() -> dict[str, Any]:
+    migration = await asyncio.to_thread(skill_runtime_migration_runtime_snapshot)
+    return {
+        "ok": True,
+        "schema": "adaos.reliability_update_gate.v1",
+        "captured_at": time.time(),
+        "runtime": {
+            "skill_runtime_migration": migration,
+        },
+    }
 
 
 @router.get("/reliability/runtime", dependencies=[Depends(require_token)])
