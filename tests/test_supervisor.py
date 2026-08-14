@@ -4659,7 +4659,67 @@ def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tm
     assert reconnect_calls == []
 
 
-def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatch, tmp_path) -> None:
+def test_supervisor_monitor_defers_healthy_sidecar_code_upgrade_for_continuity(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def poll(self):
+            return None
+
+    old_proc = _RunningProc("old")
+    manager._sidecar_proc = old_proc
+    manager._sidecar_code_fingerprint = "old-fingerprint"
+    manager._sidecar_code_change_pending_fingerprint = "new-fingerprint"
+    manager._sidecar_code_change_pending_since = 1.0
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("healthy channel owner must not restart solely to apply code")
+
+    async def _unexpected_reconnect():
+        raise AssertionError("deferred code upgrade must not reconnect the active channel")
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _unexpected_reconnect)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager._monitor_iteration_loop())
+
+    assert manager._sidecar_proc is old_proc
+    assert manager._sidecar_code_fingerprint == "old-fingerprint"
+    assert manager._sidecar_last_restart_reason == "supervisor.sidecar.code_upgrade_deferred_for_continuity"
+    assert manager._sidecar_restart_policy_state()["code_upgrade_state"] == "deferred_for_continuity"
+
+
+def test_supervisor_monitor_restarts_confirmed_unhealthy_sidecar(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -4674,13 +4734,14 @@ def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatc
     old_proc = _RunningProc("old")
     new_proc = _RunningProc("new")
     manager._sidecar_proc = old_proc
-    manager._sidecar_code_fingerprint = "old-fingerprint"
+    manager._sidecar_code_fingerprint = "current-fingerprint"
 
     async def _no_sleep(_delay):
         return None
 
-    async def _healthy(*_args, **_kwargs):
-        return True
+    async def _unhealthy(*_args, **_kwargs):
+        manager._sidecar_consecutive_probe_failures = 2
+        return False
 
     class _StopMonitor(Exception):
         pass
@@ -4702,9 +4763,9 @@ def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatc
 
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
-    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
-    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
-    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": False})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "current-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _unhealthy)
     monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
     monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _reconnect)
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
@@ -4723,7 +4784,67 @@ def test_supervisor_monitor_reconnects_hub_after_sidecar_sync_restart(monkeypatc
     assert restart_calls[0][2]
     assert reconnect_calls == [True]
     assert manager._sidecar_proc is new_proc
-    assert manager._sidecar_code_fingerprint == "new-fingerprint"
+    assert manager._sidecar_code_fingerprint == "current-fingerprint"
+
+
+def test_supervisor_monitor_honors_sidecar_restart_circuit_breaker(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    manager._sidecar_proc = _RunningProc()
+    manager._proc = _RunningProc()
+    manager._sidecar_code_fingerprint = "current-fingerprint"
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _unhealthy(*_args, **_kwargs):
+        manager._sidecar_consecutive_probe_failures = 2
+        return False
+
+    class _StopMonitor(Exception):
+        pass
+
+    continue_calls = 0
+
+    async def _continue_transition():
+        nonlocal continue_calls
+        continue_calls += 1
+        if continue_calls >= 2:
+            raise _StopMonitor
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("circuit breaker must suppress the sidecar restart")
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": False})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "current-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _unhealthy)
+    monkeypatch.setattr(
+        manager,
+        "_sidecar_restart_allowed",
+        lambda: (False, "supervisor.sidecar.circuit_open"),
+    )
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _continue_transition)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager._monitor_iteration_loop())
+
+    assert continue_calls == 2
+    assert manager._sidecar_last_restart_reason == "supervisor.sidecar.circuit_open"
 
 
 def test_supervisor_adopted_sidecar_keeps_persisted_code_generation(monkeypatch, tmp_path) -> None:

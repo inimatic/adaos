@@ -2379,8 +2379,22 @@ class SupervisorManager:
 
     def _sidecar_restart_policy_state(self) -> dict[str, Any]:
         now = time.time()
+        pending_code = bool(self._sidecar_code_change_pending_fingerprint)
+        deferred_for_continuity = bool(
+            pending_code
+            and self._sidecar_last_restart_reason
+            == "supervisor.sidecar.code_upgrade_deferred_for_continuity"
+        )
         return {
             "code_change_debounce_sec": _sidecar_code_change_debounce_sec(),
+            "automatic_code_restart": False,
+            "code_upgrade_policy": "preserve_healthy_channel_owner",
+            "code_upgrade_state": (
+                "deferred_for_continuity"
+                if deferred_for_continuity
+                else ("pending_debounce" if pending_code else "current")
+            ),
+            "deferred_for_continuity": deferred_for_continuity,
             "restart_window_sec": _sidecar_restart_window_sec(),
             "restart_limit": _sidecar_restart_limit(),
             "base_backoff_sec": _sidecar_restart_base_backoff_sec(),

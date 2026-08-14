@@ -60,23 +60,28 @@ class SupervisorMonitoringService:
                 sidecar_ready = await manager._probe_sidecar_health()
                 should_restart_sidecar = False
                 restart_reason = None
-                if bool(sync_result.get("changed")):
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.validated_slot_sync"
-                elif manager._sidecar_proc is None and not bool(sidecar_snapshot.get("listener_running")):
+                if manager._sidecar_proc is None and not bool(sidecar_snapshot.get("listener_running")):
                     should_restart_sidecar = True
                     restart_reason = "supervisor.sidecar.missing"
-                elif code_changed and code_change_ready:
-                    should_restart_sidecar = True
-                    restart_reason = "supervisor.sidecar.code_changed"
                 elif sidecar_ready is False and manager._sidecar_consecutive_probe_failures >= 2:
                     should_restart_sidecar = True
                     restart_reason = "supervisor.sidecar.unhealthy"
+                elif code_changed and code_change_ready:
+                    # A healthy sidecar owns the local NATS listener and the
+                    # browser WS/YWS proxy listeners. Replacing it solely to
+                    # apply code would tear down an otherwise healthy channel.
+                    # Keep the generation mismatch explicit and let a missing
+                    # or unhealthy process self-heal onto the current code.
+                    deferred_reason = "supervisor.sidecar.code_upgrade_deferred_for_continuity"
+                    if manager._sidecar_last_restart_reason != deferred_reason:
+                        manager._sidecar_last_restart_reason = deferred_reason
+                        manager._persist_runtime_state()
                 if should_restart_sidecar:
                     allowed, blocked_reason = manager._sidecar_restart_allowed()
                     if not allowed:
                         manager._sidecar_last_restart_reason = blocked_reason
                         manager._persist_runtime_state()
+                        should_restart_sidecar = False
                         await manager._maybe_resume_or_continue_transition()
                         candidate_proc = manager._candidate_proc
                         if candidate_proc is not None:
@@ -101,52 +106,39 @@ class SupervisorMonitoringService:
                                             adopt_existing=True,
                                         )
                             continue
-                    try:
-                        async with manager._lock:
-                            stale_code_restart = False
-                            if restart_reason in {
-                                "supervisor.sidecar.validated_slot_sync",
-                                "supervisor.sidecar.code_changed",
-                            }:
-                                refreshed_code_state = manager._sidecar_code_state()
-                                refreshed_fingerprint = (
-                                    str(refreshed_code_state.get("fingerprint") or "").strip() or None
-                                )
-                                stale_code_restart = bool(
-                                    refreshed_fingerprint
-                                    and refreshed_fingerprint == manager._sidecar_code_fingerprint
-                                )
-                                if stale_code_restart:
+                    if should_restart_sidecar:
+                        try:
+                            async with manager._lock:
+                                if manager._stopping:
+                                    pass
+                                elif manager._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
+                                    manager._sidecar_last_restart_reason = restart_reason
+                                    await manager._spawn_sidecar_locked(reason=restart_reason)
+                                    reconnect_hub_root_after_sidecar_restart = True
+                                else:
+                                    manager._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
+                                    new_proc, restart_result = await operations.restart_realtime_sidecar_subprocess(
+                                        proc=manager._sidecar_proc,
+                                        role=manager._sidecar_role(),
+                                        repo_root=str(manager._sidecar_repo_root() or "").strip() or None,
+                                    )
+                                    manager._process_supervisor.track_sidecar(new_proc)
+                                    manager._sidecar_launch_cwd = str(code_state.get("repo_root") or manager._sidecar_launch_cwd or "") or None
+                                    manager._sidecar_code_fingerprint = current_fingerprint
+                                    manager._sidecar_code_fingerprint_updated_at = time.time() if current_fingerprint else None
                                     manager._sidecar_code_change_pending_fingerprint = None
                                     manager._sidecar_code_change_pending_since = None
-                            if manager._stopping or stale_code_restart:
-                                pass
-                            elif manager._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
-                                manager._sidecar_last_restart_reason = restart_reason
-                                await manager._spawn_sidecar_locked(reason=restart_reason)
-                                reconnect_hub_root_after_sidecar_restart = True
-                            else:
-                                manager._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                new_proc, restart_result = await operations.restart_realtime_sidecar_subprocess(
-                                    proc=manager._sidecar_proc,
-                                    role=manager._sidecar_role(),
-                                    repo_root=str(manager._sidecar_repo_root() or "").strip() or None,
-                                )
-                                manager._process_supervisor.track_sidecar(new_proc)
-                                manager._sidecar_launch_cwd = str(code_state.get("repo_root") or manager._sidecar_launch_cwd or "") or None
-                                manager._sidecar_code_fingerprint = current_fingerprint
-                                manager._sidecar_code_fingerprint_updated_at = time.time() if current_fingerprint else None
-                                manager._sidecar_last_start_reason = str(restart_reason or "supervisor.sidecar.restart")
-                                manager._sidecar_last_restart_reason = str(restart_reason or restart_result.get("reason") or "restarted")
-                                manager._sidecar_last_probe_at = None
-                                manager._sidecar_last_probe_ok = None
-                                manager._sidecar_last_probe_error = None
-                                manager._sidecar_consecutive_probe_failures = 0
-                                manager._record_sidecar_restart_attempt(reason=manager._sidecar_last_restart_reason)
-                                manager._persist_runtime_state()
-                                reconnect_hub_root_after_sidecar_restart = True
-                    except Exception:
-                        operations.logger.warning("failed to restart adaos-realtime sidecar", exc_info=True)
+                                    manager._sidecar_last_start_reason = str(restart_reason or "supervisor.sidecar.restart")
+                                    manager._sidecar_last_restart_reason = str(restart_reason or restart_result.get("reason") or "restarted")
+                                    manager._sidecar_last_probe_at = None
+                                    manager._sidecar_last_probe_ok = None
+                                    manager._sidecar_last_probe_error = None
+                                    manager._sidecar_consecutive_probe_failures = 0
+                                    manager._record_sidecar_restart_attempt(reason=manager._sidecar_last_restart_reason)
+                                    manager._persist_runtime_state()
+                                    reconnect_hub_root_after_sidecar_restart = True
+                        except Exception:
+                            operations.logger.warning("failed to restart adaos-realtime sidecar", exc_info=True)
                 if reconnect_hub_root_after_sidecar_restart:
                     reconnect_result = await manager._reconnect_hub_root_after_sidecar_restart()
                     if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
