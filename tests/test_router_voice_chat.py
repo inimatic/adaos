@@ -60,6 +60,30 @@ async def _drain_voice_chat_persist(router: RouterService) -> None:
             return
 
 
+async def test_candidate_router_defers_shared_database_bootstrap_until_promotion(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(router_service_module, "runtime_transition_role", lambda: "candidate")
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "ensure_schema",
+        lambda: calls.append("schema") or True,
+    )
+    monkeypatch.setattr(router_service_module, "_seed_conversation_registry", lambda: calls.append("seed"))
+    monkeypatch.setattr(RouterService, "_start_rules_watch", lambda _self: None)
+    router = RouterService(eventbus=LocalEventBus(), base_dir=Path("."))
+
+    await router.start()
+    assert calls == []
+    assert router._conversation_store_active is False
+
+    await router.activate_after_promotion()
+    assert calls == ["schema", "seed"]
+    assert router._conversation_store_active is True
+
+    await router.activate_after_promotion()
+    assert calls == ["schema", "seed"]
+
+
 class _Txn:
     def __enter__(self):
         return self

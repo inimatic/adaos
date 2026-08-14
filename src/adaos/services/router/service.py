@@ -18,6 +18,7 @@ import logging
 from adaos.domain import Event
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
+from adaos.services.runtime_identity import runtime_transition_role
 from .rules_loader import load_rules, watch_rules
 from .media_routes import build_media_route_refresh_payload, resolve_media_route_state
 from adaos.services.registry.subnet_directory import get_directory
@@ -462,6 +463,7 @@ class RouterService:
         self.bus = eventbus
         self.base_dir = base_dir
         self._started = False
+        self._conversation_store_active = False
         self._stop_watch: Callable[[], None] | None = None
         self._rules: list[dict[str, Any]] = []
         self._subscribed = False
@@ -6336,16 +6338,32 @@ class RouterService:
         if self._started:
             return
         self._started = True
-        try:
-            conversation_store.ensure_schema()
-            _seed_conversation_registry()
-        except Exception:
-            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
+        if runtime_transition_role() == "candidate":
+            logging.getLogger("adaos.router.dialog").info(
+                "deferring conversation store bootstrap until candidate promotion"
+            )
+        else:
+            await self.activate_after_promotion()
         if not self._subscribed:
             for event_type, handler in self._compose_handlers():
                 self.bus.subscribe(event_type, handler)
             self._subscribed = True
         self._start_rules_watch()
+
+    async def activate_after_promotion(self) -> None:
+        if self._conversation_store_active:
+            return
+
+        def _bootstrap() -> None:
+            conversation_store.ensure_schema()
+            _seed_conversation_registry()
+
+        try:
+            await asyncio.to_thread(_bootstrap)
+        except Exception:
+            logging.getLogger("adaos.router.dialog").debug("conversation store bootstrap failed", exc_info=True)
+            return
+        self._conversation_store_active = True
 
     async def stop(self) -> None:
         if self._stop_watch:

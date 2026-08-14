@@ -1573,6 +1573,17 @@ class RuntimePromoteActiveRequest(BaseModel):
 
 
 async def _start_service_skills_after_promotion(reason: str) -> None:
+    router_service = getattr(app.state, "router_service", None)
+    activate_router = getattr(router_service, "activate_after_promotion", None)
+    if callable(activate_router):
+        try:
+            await activate_router()
+        except Exception:
+            logging.getLogger("adaos.runtime").warning(
+                "failed to activate router persistence after candidate promotion reason=%s",
+                reason,
+                exc_info=True,
+            )
     try:
         await get_service_supervisor().start_all()
     except Exception:
