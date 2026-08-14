@@ -136,7 +136,7 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
         artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
 
 
-def test_artifact_context_extracts_notebook_sources_before_bounding_and_omits_outputs(project_space, tmp_path: Path) -> None:
+def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted_outputs(project_space, tmp_path: Path) -> None:
     _skill(project_space["skills"], "tlp_direction")
     source = tmp_path / "experiment.ipynb"
     source.write_text(
@@ -168,21 +168,18 @@ def test_artifact_context_extracts_notebook_sources_before_bounding_and_omits_ou
     assert "TLP is unconfirmed" in extracted["content"]
     assert "def tropical_pool" in extracted["content"]
     assert "x" * 1_000 not in extracted["content"]
-    assert extracted["coverage"] == {
-        "strategy": "notebook_source_cells_without_outputs",
-        "raw_bytes": source.stat().st_size,
-        "source_characters": 91,
-        "selected_characters": 91,
-        "total_units": 2,
-        "selected_units": 2,
-        "omitted_units": 0,
-        "truncated": False,
-        "notebook_cells": 2,
-        "source_cells": 2,
-        "omitted_output_items": 1,
-        "outputs_included": False,
-    }
-    assert extracted["provenance"][1]["ref"].endswith("#cell=1")
+    coverage = extracted["coverage"]
+    assert coverage["strategy"] == "notebook_semantic_digest_v1"
+    assert coverage["raw_bytes"] == source.stat().st_size
+    assert coverage["source_characters"] == 91
+    assert coverage["total_units"] == 3  # generated inventory plus two source cells
+    assert coverage["selected_units"] == 3
+    assert coverage["truncated"] is False
+    assert coverage["output_items"] == 1
+    assert coverage["outputs_classification"] == "exploratory_untrusted_not_confirmatory"
+    assert coverage["selection_strategy"] == "source_order"
+    assert extracted["provenance"][0]["ref"].endswith("#inventory")
+    assert extracted["provenance"][2]["ref"].endswith("#cell=1")
 
 
 def test_artifact_context_reports_line_level_coverage_for_bounded_text(project_space, tmp_path: Path) -> None:

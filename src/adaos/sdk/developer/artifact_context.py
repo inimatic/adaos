@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator
 
 from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import projects
+from adaos.sdk.developer.source_preprocessing import prepare_notebook_units, query_digest, select_units
 from adaos.services.artifact_pipeline.storage import atomic_write_bytes, mutation_lock
 from adaos.services.builder.sources import _source_analysis
 
@@ -316,58 +317,21 @@ def _text_units(text: str, artifact_ref: str, *, chunk_characters: int = 4_000) 
     return units
 
 
-def _notebook_units(text: str, artifact_ref: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    try:
-        notebook = json.loads(text)
-    except ValueError as exc:
-        raise ArtifactContextError("notebook artifact is not valid JSON") from exc
-    if not isinstance(notebook, Mapping):
-        raise ArtifactContextError("notebook artifact must contain a JSON object")
-    cells = notebook.get("cells") or []
-    if not isinstance(cells, list):
-        raise ArtifactContextError("notebook cells must be an array")
-    units: list[dict[str, Any]] = []
-    output_count = 0
-    for index, cell in enumerate(cells):
-        if not isinstance(cell, Mapping):
-            continue
-        cell_type = str(cell.get("cell_type") or "unknown")
-        source = cell.get("source") or ""
-        body = "".join(str(item) for item in source) if isinstance(source, list) else str(source)
-        outputs = cell.get("outputs") or []
-        if isinstance(outputs, list):
-            output_count += len(outputs)
-        if not body.strip():
-            continue
-        units.append(
-            {
-                "id": f"cell-{index}",
-                "ref": f"{artifact_ref}#cell={index}",
-                "label": f"cell {index} ({cell_type})",
-                "content": body,
-            }
-        )
-    return units, {
-        "notebook_cells": len(cells),
-        "source_cells": len(units),
-        "omitted_output_items": output_count,
-        "outputs_included": False,
-    }
-
-
 def extract_text(
     skill_id: str,
     group_id: str,
     artifact_id: str,
     *,
     max_characters: int = 40_000,
+    query: str = "",
 ) -> dict[str, Any]:
     """Extract bounded, provenance-addressable LLM context from a text artifact.
 
-    Notebook structure is parsed before bounding and output payloads are
-    deliberately omitted. Plain text is chunked into stable line references.
-    The coverage envelope lets orchestrators disclose exactly what the model
-    did and did not receive.
+    Notebook structure is parsed and compacted before query-aware selection.
+    Bounded historical output summaries may be included, explicitly labelled
+    as exploratory and untrusted. Plain text uses the same relevance selector
+    over stable line chunks. The coverage envelope discloses exactly what the
+    model did and did not receive.
     """
 
     resolved = resolve(skill_id, group_id, artifact_id)
@@ -380,35 +344,27 @@ def extract_text(
     artifact_ref = str(resolved["ref"])
     notebook_meta: dict[str, Any] = {}
     if str(resolved.get("media_type") or "") == "application/x-ipynb+json" or str(resolved.get("path") or "").lower().endswith(".ipynb"):
-        units, notebook_meta = _notebook_units(text, artifact_ref)
-        strategy = "notebook_source_cells_without_outputs"
+        try:
+            units, notebook_meta = prepare_notebook_units(text, artifact_ref, query=query)
+        except ValueError as exc:
+            raise ArtifactContextError(str(exc)) from exc
+        strategy = "notebook_semantic_digest_v1"
     else:
         units = _text_units(text, artifact_ref)
+        query_tokens = {item.casefold() for item in re.findall(r"[^\W_]{2,}", str(query or ""), re.UNICODE)}
+        for index, unit in enumerate(units):
+            content_tokens = {item.casefold() for item in re.findall(r"[^\W_]{2,}", str(unit.get("content") or ""), re.UNICODE)}
+            unit["relevance"] = len(query_tokens & content_tokens) * 10 + (2 if index == 0 else 0)
+            unit["order"] = index
+            unit["kind"] = "text"
         strategy = "utf8_line_chunks"
 
-    selected: list[dict[str, Any]] = []
-    remaining = maximum
-    extracted_characters = 0
-    for unit in units:
-        if remaining <= 0:
-            break
-        content = str(unit.get("content") or "")
-        accepted = content[:remaining]
-        if not accepted:
-            continue
-        selected.append(
-            {
-                "id": unit["id"],
-                "ref": unit["ref"],
-                "label": unit.get("label") or unit["id"],
-                "content": accepted,
-                "selected_characters": len(accepted),
-                "source_characters": len(content),
-                "truncated": len(accepted) < len(content),
-            }
-        )
-        extracted_characters += len(accepted)
-        remaining -= len(accepted)
+    selected, selection_meta = select_units(
+        units,
+        max_characters=maximum,
+        relevance_first=bool(str(query or "").strip()),
+    )
+    extracted_characters = sum(int(item.get("selected_characters") or 0) for item in selected)
 
     content = "\n\n".join(
         f"--- {item['label']} [{item['ref']}] ---\n{item['content'].rstrip()}" for item in selected
@@ -437,6 +393,8 @@ def extract_text(
             "selected_units": selected_units,
             "omitted_units": max(0, total_units - selected_units),
             "truncated": selected_units < total_units or any(bool(item["truncated"]) for item in selected),
+            "query_digest": query_digest(query),
+            **selection_meta,
             **notebook_meta,
         },
     }
