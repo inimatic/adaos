@@ -667,6 +667,24 @@ def test_realtime_sidecar_listener_snapshot_handles_managed_process_when_pid_sca
     assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
 
 
+def test_realtime_sidecar_listener_snapshot_reports_internal_diagnostic_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_realtime_sidecar_listener_snapshot",
+        lambda _proc=None, **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot exploded")),
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+
+    snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(role="hub")
+
+    assert snapshot["listener_running"] is True
+    assert snapshot["snapshot_error"] is True
+    assert snapshot["snapshot_error_type"] == "RuntimeError"
+    assert snapshot["snapshot_error_message"] == "snapshot exploded"
+
+
 def test_realtime_sidecar_media_proxy_contract_reflects_explicit_listener(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

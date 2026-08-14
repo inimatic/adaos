@@ -1735,7 +1735,7 @@ async def stop_realtime_sidecar_subprocess(proc: subprocess.Popen[Any] | None) -
         proc.kill()
 
 
-def realtime_sidecar_listener_snapshot(
+def _realtime_sidecar_listener_snapshot(
     proc: subprocess.Popen[Any] | None = None,
     *,
     role: str | None = None,
@@ -1793,6 +1793,71 @@ def realtime_sidecar_listener_snapshot(
     if pid_scan_skipped:
         payload["listener_pid_unavailable_reason"] = "y_py_loaded"
     return payload
+
+
+def realtime_sidecar_listener_snapshot(
+    proc: subprocess.Popen[Any] | None = None,
+    *,
+    role: str | None = None,
+) -> dict[str, Any]:
+    """Return a best-effort snapshot without making diagnostics a control dependency."""
+
+    try:
+        return _realtime_sidecar_listener_snapshot(proc, role=role)
+    except Exception as exc:
+        try:
+            host = realtime_sidecar_host()
+        except Exception:
+            host = "127.0.0.1"
+        try:
+            port = int(realtime_sidecar_port())
+        except Exception:
+            port = 7422
+        managed_pid: int | None = None
+        managed_alive = False
+        managed_exit_code: int | None = None
+        try:
+            pid = int(getattr(proc, "pid", 0) or 0) if proc is not None else 0
+            managed_pid = pid or None
+            exit_code = proc.poll() if proc is not None else None
+            managed_alive = bool(proc is not None and exit_code is None)
+            managed_exit_code = exit_code if isinstance(exit_code, int) else None
+        except Exception:
+            pass
+        try:
+            listener_running = _cached_realtime_listener_port_open(host, port)
+        except Exception:
+            listener_running = False
+        try:
+            enablement_policy = realtime_sidecar_enablement_policy(role=role)
+        except Exception as policy_exc:
+            enablement_policy = {
+                "enabled": None,
+                "role": str(role or "").strip().lower() or None,
+                "source": "snapshot_error",
+                "error_type": type(policy_exc).__name__,
+                "error": str(policy_exc)[:500],
+            }
+        return {
+            "host": host,
+            "port": port,
+            "local_url": f"nats://{host}:{port}",
+            "log_path": None,
+            "diag_path": None,
+            "managed_pid": managed_pid,
+            "managed_alive": managed_alive,
+            "managed_exit_code": managed_exit_code,
+            "listener_pid": None,
+            "listener_running": bool(listener_running),
+            "listener_matches_managed": False,
+            "adopted_listener": bool(listener_running),
+            "enablement_policy": enablement_policy,
+            "route_tunnel_contract": {},
+            "media_proxy_contract": {},
+            "snapshot_error": True,
+            "snapshot_error_type": type(exc).__name__,
+            "snapshot_error_message": str(exc)[:1000],
+        }
 
 
 async def restart_realtime_sidecar_subprocess(
