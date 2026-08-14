@@ -37,6 +37,7 @@ DRIVE_PUBLIC_LINK_ROOT_PATH_PREFIX = "/v1/drive/public-links"
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,160}$")
 _DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 _MAX_TTL_SECONDS = 90 * 24 * 3600
+_PUBLIC_LABEL_MAX = 120
 
 
 class DrivePublicLinkError(RuntimeError):
@@ -256,10 +257,34 @@ def _record_resource_kind(record: Mapping[str, Any]) -> str:
     return "folder" if mime_type == "inode/directory" else "file"
 
 
+def _public_label(value: Any) -> str:
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or "")).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:_PUBLIC_LABEL_MAX]
+
+
+def _public_owner_name(record: Mapping[str, Any]) -> str:
+    metadata = record.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    for source in (record, metadata_map):
+        for key in (
+            "assistant_name",
+            "subnet_name",
+            "subnet_display_name",
+            "owner_name",
+            "display_name",
+        ):
+            label = _public_label(source.get(key))
+            if label:
+                return label
+    return ""
+
+
 def _public_record(record: Mapping[str, Any], *, include_public_token: bool = False, include_routing: bool = False) -> dict[str, Any]:
     resource_kind = _record_resource_kind(record)
     capabilities = _capabilities_for_kind(resource_kind, record.get("capabilities"))
     name = str(record.get("filename") or record.get("name") or "").strip()
+    owner_name = _public_owner_name(record)
     grant = public_grant_descriptor(
         grant_kind=str(record.get("grant_kind") or DRIVE_PUBLIC_GRANT_KIND),
         face_id=str(record.get("face_id") or DRIVE_PUBLIC_FACE_ID),
@@ -271,6 +296,8 @@ def _public_record(record: Mapping[str, Any], *, include_public_token: bool = Fa
         expires_at=record.get("expires_at"),
         metadata=record.get("grant_metadata") if isinstance(record.get("grant_metadata"), Mapping) else None,
     )
+    if owner_name:
+        grant["owner"] = {"name": owner_name}
     payload = {
         "schema": DRIVE_PUBLIC_LINK_SCHEMA,
         "grant_schema": PUBLIC_GRANT_SCHEMA,
@@ -302,6 +329,11 @@ def _public_record(record: Mapping[str, Any], *, include_public_token: bool = Fa
         "root_download_url": str(record.get("root_download_url") or ""),
         "list_url": str(record.get("list_url") or ""),
     }
+    if owner_name:
+        payload["assistant_name"] = owner_name
+        payload["subnet_name"] = owner_name
+        payload["owner_name"] = owner_name
+        payload["public_face"]["owner"] = {"name": owner_name}
     if include_public_token:
         payload["public_token"] = str(record.get("public_token") or "")
     if include_routing:
@@ -325,6 +357,8 @@ def register_hub_public_link(
     subnet_id: str = "",
     node_id: str = "",
     zone: str = "",
+    assistant_name: str = "",
+    subnet_name: str = "",
     ttl_seconds: Any = None,
     expires_at: Any = None,
     capabilities: Any = None,
@@ -378,6 +412,11 @@ def register_hub_public_link(
         "node_id": str(node_id or "").strip(),
         "zone": str(zone or "").strip().lower(),
     }
+    owner_name = _public_label(assistant_name) or _public_label(subnet_name)
+    if owner_name:
+        record["assistant_name"] = owner_name
+        record["subnet_name"] = owner_name
+        record["owner_name"] = owner_name
     data = _load_store("hub", ctx)
     links = data.get("links") if isinstance(data.get("links"), dict) else {}
     links[record["public_token_hash"]] = record
@@ -406,6 +445,7 @@ def register_root_public_link(payload: Mapping[str, Any], *, ctx: AgentContext |
     expires_epoch, expires_iso = _coerce_expires_at(ttl_seconds=payload.get("ttl_seconds"), expires_at=payload.get("expires_at"))
     now = _now()
     name = str(payload.get("filename") or payload.get("name") or "").strip()
+    owner_name = _public_owner_name(payload)
     record = {
         "schema": DRIVE_PUBLIC_LINK_SCHEMA,
         "grant_schema": PUBLIC_GRANT_SCHEMA,
@@ -444,6 +484,10 @@ def register_root_public_link(payload: Mapping[str, Any], *, ctx: AgentContext |
         "root_download_url": str(payload.get("root_download_url") or "").strip(),
         "list_url": str(payload.get("list_url") or "").strip(),
     }
+    if owner_name:
+        record["assistant_name"] = owner_name
+        record["subnet_name"] = owner_name
+        record["owner_name"] = owner_name
     metadata = payload.get("metadata")
     if isinstance(metadata, Mapping):
         record["metadata"] = dict(metadata)

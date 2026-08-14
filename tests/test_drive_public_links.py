@@ -51,6 +51,7 @@ def test_root_drive_public_link_registers_and_streams_without_auth(monkeypatch, 
         subnet_id="sn_test",
         node_id="node_test",
         zone="ru",
+        assistant_name="Homepoint",
         ctx=fake_ctx,
     )
     client = _client(monkeypatch, tmp_path / "runtime")
@@ -68,6 +69,7 @@ def test_root_drive_public_link_registers_and_streams_without_auth(monkeypatch, 
             "filename": "hello.txt",
             "size_bytes": target.stat().st_size,
             "mime_type": "text/plain",
+            "assistant_name": "Homepoint",
         },
     )
     assert registered.status_code == 200
@@ -79,6 +81,8 @@ def test_root_drive_public_link_registers_and_streams_without_auth(monkeypatch, 
     assert public_meta["filename"] == "hello.txt"
     assert public_meta["grant_schema"] == "adaos.public_grant.v1"
     assert public_meta["public_face"]["id"] == "adaos_drive.files.public"
+    assert public_meta["public_face"]["owner"]["name"] == "Homepoint"
+    assert public_meta["assistant_name"] == "Homepoint"
     assert public_meta["resource_kind"] == "file"
     assert public_meta["readonly"] is True
     assert "subnet_id" not in public_meta

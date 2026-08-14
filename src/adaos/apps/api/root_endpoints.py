@@ -1666,6 +1666,11 @@ class DrivePublicLinkRegisterRequest(BaseModel):
     download_url: str | None = None
     root_download_url: str | None = None
     list_url: str | None = None
+    assistant_name: str | None = None
+    subnet_name: str | None = None
+    subnet_display_name: str | None = None
+    owner_name: str | None = None
+    display_name: str | None = None
     metadata: dict[str, Any] | None = None
 
 
