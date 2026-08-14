@@ -291,7 +291,7 @@ def _resolve_list_skill_version(
 class InstallReq(BaseModel):
     name: str
     pin: Optional[str] = None
-    perform_validation: bool = False
+    perform_validation: bool = True
     strict: bool = True
     probe_tools: bool = False
     async_operation: bool = False
@@ -488,6 +488,9 @@ def _install_skill_sync(body: InstallReq, mgr: SkillManager, webspace_id: str) -
         meta, report = result
     else:
         meta, report = result, None
+    if body.strict and report is not None and hasattr(report, "ok") and not report.ok:
+        detail = report.to_dict() if hasattr(report, "to_dict") else repr(report)
+        raise HTTPException(status_code=409, detail={"error": "skill_validation_failed", "report": detail})
     payload: Dict[str, Any] = {
         "ok": True,
         "skill": {

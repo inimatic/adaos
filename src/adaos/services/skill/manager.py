@@ -624,8 +624,8 @@ class SkillManager:
             ensure_clean(self.ctx.git, str(root), ["skills"])
         # 4) mono-only установка через репозиторий (sparse-add + pull)
         meta = self.ctx.skills_repo.install(name, branch=None)
-        """ if not validate:
-            return meta, None """
+        if not validate:
+            return meta, None
         report = SkillValidationService(self.ctx).validate(meta.id.value, strict=strict, probe_tools=probe_tools)
         if strict and not report.ok:
             # опционально можно откатывать установку:

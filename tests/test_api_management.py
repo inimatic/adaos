@@ -245,6 +245,27 @@ def test_skill_api_install_reports_runtime_preparation_failure() -> None:
     assert "missing torch dependency" in resp.json()["detail"]
 
 
+def test_skill_api_install_rejects_strict_validation_before_runtime_prepare() -> None:
+    class _InvalidSkillManager(_FakeSkillManager):
+        def install(self, name: str, **kwargs: Any):
+            self.calls.append(f"install:{name}")
+            meta = _Meta(id=type("Id", (), {"value": name})(), name=name, version="1.0.0", path=f"/skills/{name}")
+            report = SimpleNamespace(ok=False, to_dict=lambda: {"ok": False, "issues": ["blocking async I/O"]})
+            return meta, report
+
+        def prepare_runtime(self, name: str, run_tests: bool = False):
+            raise AssertionError("invalid skill must not be prepared")
+
+    skill_mgr = _InvalidSkillManager()
+    client = _make_client(skill_mgr, _FakeScenarioManager())
+
+    response = client.post("/api/skills/install", json={"name": "demo"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error"] == "skill_validation_failed"
+    assert "prepare_runtime:demo" not in skill_mgr.calls
+
+
 def test_skill_api_list_prefers_workspace_version(monkeypatch) -> None:
     skill_mgr = _FakeSkillManager()
     scenario_mgr = _FakeScenarioManager()

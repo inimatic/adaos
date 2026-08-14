@@ -18,6 +18,7 @@ from adaos.domain.artifact_release import (
     canonical_payload_digest,
 )
 from adaos.services import workspace_registry as workspace_registry_module
+from adaos.services import workspace_sync as workspace_sync_module
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
     list_workspace_registry_entries,
@@ -851,3 +852,33 @@ def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):
     assert skill_rows["weather_skill"].active_version == "1.2.3"
     assert list(scenario_rows) == ["greet_on_boot"]
     assert scenario_rows["greet_on_boot"].active_version == "0.4.0"
+
+
+def test_reconcile_workspace_db_preserves_git_authoritative_catalog(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    skill_dir = workspace / "skills" / "weather_skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "skill.yaml").write_text("id: weather_skill\nversion: '1.2.3'\n", encoding="utf-8")
+    catalog = {
+        "version": 2,
+        "updated_at": "2026-08-14T00:00:00+00:00",
+        "skills": [
+            {"kind": "skill", "id": "weather_skill", "name": "weather_skill", "version": "1.2.3"},
+            {"kind": "skill", "id": "remote_only", "name": "remote_only", "version": "9.0.0"},
+        ],
+        "scenarios": [],
+    }
+    catalog_path = workspace_registry_path(workspace)
+    catalog_path.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+    original = catalog_path.read_bytes()
+
+    sql = _Sql(tmp_path / "adaos.db")
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
+    monkeypatch.setattr(workspace_sync_module, "workspace_registry_is_git_tracked", lambda _root: True)
+
+    result = reconcile_workspace_db_to_materialized(ctx)
+
+    assert result["registry_persisted"] is False
+    assert result["registry_authority"] == "git"
+    assert catalog_path.read_bytes() == original
+    assert [row.name for row in SqliteSkillRegistry(sql).list()] == ["weather_skill"]

@@ -6,7 +6,12 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.adapters.git.workspace import SparseWorkspace
 from adaos.services.git.workspace_guard import ensure_clean
-from adaos.services.workspace_registry import registry_pattern_set, rebuild_workspace_registry, write_workspace_registry
+from adaos.services.workspace_registry import (
+    rebuild_workspace_registry,
+    registry_pattern_set,
+    workspace_registry_is_git_tracked,
+    write_workspace_registry,
+)
 
 
 def installed_names(rows: list[object]) -> list[str]:
@@ -63,7 +68,9 @@ def effective_registry_names(ctx, registry_names: list[str], workspace_root: Pat
 def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
     workspace_root = Path(ctx.paths.workspace_dir())
     payload = rebuild_workspace_registry(workspace_root)
-    write_workspace_registry(workspace_root, payload)
+    registry_is_authoritative = workspace_registry_is_git_tracked(workspace_root)
+    if not registry_is_authoritative:
+        write_workspace_registry(workspace_root, payload)
 
     skill_entries = payload.get("skills") if isinstance(payload.get("skills"), list) else []
     scenario_entries = payload.get("scenarios") if isinstance(payload.get("scenarios"), list) else []
@@ -111,6 +118,8 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         "skills_removed": sorted(set(current_skills) - set(materialized_skills)),
         "scenarios_removed": sorted(set(current_scenarios) - set(materialized_scenarios)),
         "registry_updated_at": payload.get("updated_at"),
+        "registry_persisted": not registry_is_authoritative,
+        "registry_authority": "git" if registry_is_authoritative else "materialized_workspace",
     }
 
 

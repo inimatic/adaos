@@ -96,3 +96,29 @@ def test_skill_install_rejects_unknown_source_before_contacting_registry(monkeyp
 
     assert result.exit_code != 0
     assert "source must be 'registry' or 'workspace'" in result.output
+
+
+def test_registry_install_does_not_activate_failed_validation(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Manager:
+        def sync(self):
+            calls.append("sync")
+
+        def install(self, *_args, **_kwargs):
+            calls.append("install")
+            meta = SimpleNamespace(id=SimpleNamespace(value="demo_skill"))
+            return meta, SimpleNamespace(ok=False, issues=["blocking async I/O"])
+
+        def prepare_runtime(self, *_args, **_kwargs):
+            raise AssertionError("invalid skill must not be prepared")
+
+    monkeypatch.setattr(skill_cmd, "_mgr", lambda: _Manager())
+
+    result = CliRunner().invoke(
+        skill_cmd.app,
+        ["install", "demo_skill", "--source", "registry", "--local", "--silent"],
+    )
+
+    assert result.exit_code == 1
+    assert calls == ["sync", "install"]

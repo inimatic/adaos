@@ -679,7 +679,7 @@ class BootstrapBootCoordinator:
             from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized as _reconcile_workspace_db_to_materialized
 
             _reconcile_started = _startup_stage_mark("bootstrap_reconcile_workspace_registry")
-            _reconcile_workspace_db_to_materialized(_get_ctx())
+            await asyncio.to_thread(_reconcile_workspace_db_to_materialized, _get_ctx())
             _startup_stage_mark("bootstrap_reconcile_workspace_registry", started=_reconcile_started)
         except Exception:
             service._log.debug("failed to reconcile workspace sqlite registry on boot", exc_info=True)

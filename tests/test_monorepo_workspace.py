@@ -263,6 +263,20 @@ def test_install_missing_remote_path(monkeypatch, monorepo, paths):
     assert _git_status_clean(paths.workspace_dir())
 
 
+def test_skill_install_surfaces_pull_failure(monkeypatch, monorepo, paths):
+    monkeypatch.setenv("ADAOS_TESTING", "0")
+    repo = _make_skill_repo(paths, monorepo)
+    repo.install("weather_skill")
+
+    def _fail_pull(_root):
+        raise RuntimeError("registry pull failed")
+
+    monkeypatch.setattr(repo.git, "pull", _fail_pull)
+
+    with pytest.raises(RuntimeError, match="registry pull failed"):
+        repo.install("news_skill")
+
+
 def test_sparse_checkout_scope(monkeypatch, monorepo, paths):
     monkeypatch.setenv("ADAOS_TESTING", "0")
     skill_repo = _make_skill_repo(paths, monorepo)

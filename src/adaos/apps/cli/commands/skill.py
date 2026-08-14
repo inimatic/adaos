@@ -1372,8 +1372,8 @@ def cmd_install(
                 body={
                     "name": name,
                     "pin": None,
-                    "perform_validation": False,
-                    "strict": False if safe else True,
+                    "perform_validation": True,
+                    "strict": True,
                     "probe_tools": False,
                 },
             )
@@ -1446,7 +1446,8 @@ def cmd_install(
     runtime_source_path: Path | None = None
     if source_mode == "registry":
         try:
-            result = mgr.install(name, validate=False, safe=safe)
+            mgr.sync()
+            result = mgr.install(name, validate=True, strict=True, safe=safe)
         except Exception as exc:
             message = str(exc)
             typer.secho(f"install failed: {message}", fg=typer.colors.RED)
@@ -1496,7 +1497,8 @@ def cmd_install(
         skill_name = name
 
     if report is not None and hasattr(report, "ok") and not report.ok:
-        typer.secho(str(report), fg=typer.colors.YELLOW)
+        typer.secho(str(report), fg=typer.colors.RED)
+        raise typer.Exit(1)
 
     try:
         runtime = mgr.prepare_runtime(

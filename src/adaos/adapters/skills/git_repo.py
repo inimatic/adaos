@@ -245,10 +245,7 @@ class GitSkillRepository(SkillRepository):
         # не может выполниться из‑за локальных незакоммиченных изменений в workspace.
         # Если навык после этого не появится на диске, будет брошена FileNotFoundError ниже.
         if used_sparse:
-            try:
-                self.git.pull(str(workspace_root))
-            except Exception:
-                pass
+            self.git.pull(str(workspace_root))
 
         skill_dir: Path = self.paths.skills_dir() / name
         try:

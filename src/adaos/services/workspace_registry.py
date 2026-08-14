@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +63,24 @@ def registry_pattern_set(patterns: Iterable[str]) -> list[str]:
 
 def workspace_registry_path(workspace_root: Path) -> Path:
     return Path(workspace_root) / REGISTRY_FILE_NAME
+
+
+def workspace_registry_is_git_tracked(workspace_root: Path) -> bool:
+    root = Path(workspace_root)
+    if not (root / ".git").exists():
+        return False
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", REGISTRY_FILE_NAME],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if completed.returncode == 1:
+        return False
+    return True
 
 
 def load_workspace_registry(workspace_root: Path, *, fallback_to_scan: bool = True) -> dict[str, Any]:
@@ -825,6 +844,7 @@ __all__ = [
     "registry_pattern_set",
     "set_workspace_registry_channel",
     "upsert_workspace_registry_entry",
+    "workspace_registry_is_git_tracked",
     "workspace_registry_path",
     "write_workspace_registry",
 ]
