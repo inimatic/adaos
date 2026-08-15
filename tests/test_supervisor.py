@@ -4901,12 +4901,18 @@ def test_sidecar_restart_waits_for_actual_failback_from_direct_transport(monkeyp
         assert kwargs["path"] == "/api/node/reliability/supervisor-channel"
         probes += 1
         owner = "runtime" if probes == 1 else "sidecar"
+        selected_server = (
+            "wss://ru.api.inimatic.com/nats"
+            if owner == "runtime"
+            else "nats://127.0.0.1:7422"
+        )
         return {
             "ok": True,
             "runtime": {
                 "readiness_tree": {"root_control": {"status": "ready"}},
                 "channel_overview": {"hub_root": {"effective_status": "ready"}},
-                "sidecar_runtime": {"transport_owner": owner, "transport_ready": True},
+                "sidecar_runtime": {"transport_owner": owner, "transport_ready": False},
+                "hub_root_transport_strategy": {"selected_server": selected_server},
             },
         }
 
@@ -4940,6 +4946,9 @@ def test_sidecar_restart_forces_single_failback_when_direct_transport_persists(m
                 "readiness_tree": {"root_control": {"status": "ready"}},
                 "channel_overview": {"hub_root": {"effective_status": "ready"}},
                 "sidecar_runtime": {"transport_owner": "runtime", "transport_ready": True},
+                "hub_root_transport_strategy": {
+                    "selected_server": "wss://ru.api.inimatic.com/nats"
+                },
             },
         }
 

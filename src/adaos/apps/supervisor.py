@@ -6550,11 +6550,24 @@ class SupervisorManager:
             overview = runtime.get("channel_overview") if isinstance(runtime.get("channel_overview"), dict) else {}
             hub_root = overview.get("hub_root") if isinstance(overview.get("hub_root"), dict) else {}
             sidecar = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
+            strategy = (
+                runtime.get("hub_root_transport_strategy")
+                if isinstance(runtime.get("hub_root_transport_strategy"), dict)
+                else {}
+            )
+            selected_server = str(strategy.get("selected_server") or "").strip().rstrip("/")
+            local_sidecar_url = str(realtime_sidecar_local_url() or "").strip().rstrip("/")
+            sidecar_transport_confirmed = (
+                str(sidecar.get("transport_owner") or "").strip().lower() == "sidecar"
+                and (
+                    bool(sidecar.get("transport_ready"))
+                    or bool(selected_server and local_sidecar_url and selected_server == local_sidecar_url)
+                )
+            )
             channel_ready = (
                 str(root_control.get("status") or "").strip().lower() == "ready"
                 and str(hub_root.get("effective_status") or "").strip().lower() == "ready"
-                and str(sidecar.get("transport_owner") or "").strip().lower() == "sidecar"
-                and bool(sidecar.get("transport_ready"))
+                and sidecar_transport_confirmed
             )
             now = time.monotonic()
             if channel_ready:

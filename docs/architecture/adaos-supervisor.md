@@ -960,6 +960,9 @@ It samples the bounded supervisor-channel contract until `root_control` and
 `hub_root` remain ready through a transport-ready sidecar owner across
 consecutive observations. A ready direct fallback is not mistaken for completed
 failback; an explicit reconnect is issued when that recovery window expires.
+The sidecar path is confirmed either by current sidecar diagnostics or by a
+ready root-control session whose selected server is the exact local sidecar URL;
+the latter prevents diagnostic publication lag from causing a second reconnect.
 The monitor rechecks the code fingerprint while holding the lifecycle lock so a
 validated-slot sync detected before an operator restart cannot produce a second
 restart after that request completes.
