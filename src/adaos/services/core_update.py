@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -876,15 +877,7 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     return payload
 
 
-def write_status(payload: dict[str, Any]) -> dict[str, Any]:
-    merged = _hydrate_rollout_status_fields(payload)
-    manifest = merged.get("manifest") if isinstance(merged.get("manifest"), dict) else None
-    if manifest is not None:
-        _hydrate_install_status_fields_from_manifest(merged, manifest)
-    merged.setdefault("updated_at", time.time())
-    _write_json(status_path(), merged)
-    if _is_terminal_status(merged):
-        _write_json(last_result_path(), merged)
+def _publish_status_events(merged: dict[str, Any]) -> None:
     try:
         public_payload = build_public_update_status_payload(merged, served_by="runtime_fallback")
         get_ctx().bus.publish(
@@ -905,10 +898,27 @@ def write_status(payload: dict[str, Any]) -> dict[str, Any]:
         )
     except Exception:
         pass
+
+
+def write_status(payload: dict[str, Any], *, publish_events: bool = True) -> dict[str, Any]:
+    merged = _hydrate_rollout_status_fields(payload)
+    manifest = merged.get("manifest") if isinstance(merged.get("manifest"), dict) else None
+    if manifest is not None:
+        _hydrate_install_status_fields_from_manifest(merged, manifest)
+    merged.setdefault("updated_at", time.time())
+    _write_json(status_path(), merged)
+    if _is_terminal_status(merged):
+        _write_json(last_result_path(), merged)
+    if publish_events:
+        _publish_status_events(merged)
     return merged
 
 
-def finalize_runtime_boot_status(*, supervisor_authorized: bool = False) -> dict[str, Any] | None:
+def finalize_runtime_boot_status(
+    *,
+    supervisor_authorized: bool = False,
+    publish_events: bool = True,
+) -> dict[str, Any] | None:
     current = read_status()
     state = str(current.get("state") or "").strip().lower()
     phase = str(current.get("phase") or "").strip().lower()
@@ -986,8 +996,21 @@ def finalize_runtime_boot_status(*, supervisor_authorized: bool = False) -> dict
         payload["candidate_prewarm_state"] = None
         payload["candidate_prewarm_message"] = None
         payload["candidate_prewarm_ready_at"] = None
-    finalized = write_status(payload)
+    finalized = write_status(payload, publish_events=publish_events)
     clear_plan()
+    return finalized
+
+
+async def finalize_runtime_boot_status_async(
+    *, supervisor_authorized: bool = False
+) -> dict[str, Any] | None:
+    finalized = await asyncio.to_thread(
+        finalize_runtime_boot_status,
+        supervisor_authorized=supervisor_authorized,
+        publish_events=False,
+    )
+    if finalized is not None:
+        _publish_status_events(finalized)
     return finalized
 
 

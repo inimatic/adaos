@@ -141,6 +141,7 @@ async def test_boot_coordinator_uses_agent_context_bus() -> None:
         _lifecycle=SimpleNamespace(bind_app=lambda app: None),
         _log=SimpleNamespace(debug=lambda *args, **kwargs: None),
         _prepare_environment=lambda: None,
+        _nats_policy=SimpleNamespace(runtime_candidate_mode=lambda: False),
         ctx=SimpleNamespace(bus=context_bus, config=config),
     )
     operations = SimpleNamespace(

@@ -1,6 +1,7 @@
 import asyncio
+import threading
 
-from adaos.services.bootstrap import (
+from adaos.services.bootstrap_runtime.core_update_convergence import (
     _core_update_waits_for_supervisor_convergence,
     _watch_supervisor_core_update_convergence,
 )
@@ -58,6 +59,31 @@ def test_supervisor_convergence_watch_emits_final_status_once() -> None:
     assert bus.events == [
         ("core.update.status", final, "supervisor.convergence", "system"),
     ]
+
+
+def test_supervisor_convergence_reads_status_off_owner_loop() -> None:
+    initial = {"state": "countdown", "phase": "countdown", "updated_at": 1.0}
+    final = {"state": "succeeded", "phase": "validate", "updated_at": 2.0}
+    owner_thread = threading.get_ident()
+    read_threads: list[int] = []
+    bus = _RecordingBus()
+
+    def _read_status() -> dict:
+        read_threads.append(threading.get_ident())
+        return dict(final)
+
+    result = asyncio.run(
+        _watch_supervisor_core_update_convergence(
+            bus,
+            read_status=_read_status,
+            initial_status=initial,
+            poll_interval_s=0.05,
+            timeout_s=1.0,
+        )
+    )
+
+    assert result["ok"] is True
+    assert read_threads and read_threads[0] != owner_thread
 
 
 def test_warm_candidate_convergence_watch_survives_countdown_and_promotion() -> None:

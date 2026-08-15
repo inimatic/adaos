@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
 
+from adaos.services import core_update as core_update_service
 from adaos.services.core_update import (
     clear_plan,
     execute_pending_update,
@@ -113,6 +116,30 @@ def test_core_update_status_roundtrip(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_status({"state": "countdown", "message": "scheduled"})
     assert read_status()["state"] == "countdown"
+
+
+def test_async_runtime_boot_finalization_keeps_io_off_owner_loop(monkeypatch) -> None:
+    owner_thread = threading.get_ident()
+    worker_threads: list[int] = []
+    publisher_threads: list[int] = []
+    finalized = {"state": "validated", "phase": "root_promotion_pending"}
+
+    def _finalize(**_kwargs):
+        worker_threads.append(threading.get_ident())
+        return finalized
+
+    monkeypatch.setattr(core_update_service, "finalize_runtime_boot_status", _finalize)
+    monkeypatch.setattr(
+        core_update_service,
+        "_publish_status_events",
+        lambda payload: publisher_threads.append(threading.get_ident()),
+    )
+
+    result = asyncio.run(core_update_service.finalize_runtime_boot_status_async())
+
+    assert result == finalized
+    assert worker_threads and worker_threads[0] != owner_thread
+    assert publisher_threads == [owner_thread]
 
 
 def test_core_update_status_keeps_rollout_metadata_across_validate(monkeypatch, tmp_path) -> None:

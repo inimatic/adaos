@@ -60,7 +60,7 @@ async def _watch_supervisor_core_update_convergence(
     while _core_update_waits_for_supervisor_convergence(last_status) and time.monotonic() < deadline:
         await asyncio.sleep(max(0.05, float(poll_interval_s)))
         try:
-            current = read_status()
+            current = await asyncio.to_thread(read_status)
         except Exception:
             continue
         current = dict(current) if isinstance(current, dict) else {}

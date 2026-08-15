@@ -321,12 +321,15 @@ class BootstrapBootCoordinator:
                 )
         try:
             from adaos.services.core_update import (
-                finalize_runtime_boot_status as _finalize_runtime_boot_status,
+                finalize_runtime_boot_status_async as _finalize_runtime_boot_status,
                 read_public_update_status as _read_public_update_status,
                 read_status as _read_core_update_status,
             )
 
-            initial_core_update_status = _read_core_update_status()
+            initial_core_update_status, initial_public_update_status = await asyncio.gather(
+                asyncio.to_thread(_read_core_update_status),
+                asyncio.to_thread(_read_public_update_status),
+            )
             await operations.bus.emit(
                 "core.update.status",
                 initial_core_update_status,
@@ -335,7 +338,7 @@ class BootstrapBootCoordinator:
             )
             await operations.bus.emit(
                 "supervisor.update.status.raw",
-                _read_public_update_status(),
+                initial_public_update_status,
                 source="lifecycle",
                 actor="system",
             )
@@ -709,7 +712,7 @@ class BootstrapBootCoordinator:
             _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
             try:
                 if callable(_finalize_runtime_boot_status):
-                    _finalize_runtime_boot_status()
+                    await _finalize_runtime_boot_status()
             except Exception:
                 service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
             if not candidate_runtime_mode:
@@ -752,7 +755,7 @@ class BootstrapBootCoordinator:
                 _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
                 try:
                     if callable(_finalize_runtime_boot_status):
-                        _finalize_runtime_boot_status()
+                        await _finalize_runtime_boot_status()
                 except Exception:
                     service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
                 if not candidate_runtime_mode:
