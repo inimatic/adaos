@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
 import time
@@ -222,6 +223,60 @@ def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     assert payload["environment"]["envType"] == "dev"
     assert payload["environment"]["debug"] is True
     assert payload["runtime"]["environment"]["envType"] == "dev"
+
+
+def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
+    full_payload = {
+        "node_id": "hub-1",
+        "subnet_id": "sn-1",
+        "role": "hub",
+        "ready": True,
+        "environment": {"envType": "dev"},
+        "runtime": {
+            "environment": {"envType": "dev"},
+            "supervisor_available": True,
+            "supervisor_runtime": {
+                "available": True,
+                "attempt": {
+                    "state": "recovering",
+                    "target_version": "0.1.817",
+                    "last_status": {"incident_history": "x" * (300 * 1024)},
+                },
+                "runtime": {
+                    "runtime_state": "ready",
+                    "managed_alive": True,
+                    "monitor": {"history": "x" * (300 * 1024)},
+                },
+            },
+            "sidecar_runtime": {
+                "status": "ready",
+                "session_state": "remote_active",
+                "last_diag": {"history": "x" * (300 * 1024)},
+            },
+            "core_update_status": {"state": "idle"},
+        },
+    }
+    monkeypatch.setattr(system_model_service, "current_node_status_payload", lambda: full_payload)
+
+    payload = system_model_service.current_node_status_push_payload(updated_at=1.0)
+
+    assert payload["runtime"]["supervisor_runtime"]["attempt"] == {
+        "state": "recovering",
+        "target_version": "0.1.817",
+    }
+    assert payload["runtime"]["supervisor_runtime"]["runtime"] == {
+        "managed_alive": True,
+        "runtime_state": "ready",
+    }
+    assert payload["runtime"]["sidecar_runtime"] == {
+        "status": "ready",
+        "session_state": "remote_active",
+    }
+    assert payload["_meta"] == {
+        "projection": "adaos.node_status.transport.v1",
+        "diagnostics_truncated": True,
+    }
+    assert len(json.dumps(payload).encode("utf-8")) < 32 * 1024
 
 
 def test_node_status_overlays_fresh_sidecar_runtime(monkeypatch) -> None:

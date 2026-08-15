@@ -43,6 +43,22 @@ def test_path_provider_workspace_layout(tmp_path):
     assert provider.scenarios_dir() == provider.scenarios_workspace_dir()
 
 
+def test_path_provider_resolves_base_only_once(tmp_path, monkeypatch):
+    settings = Settings.from_sources().with_overrides(base_dir=tmp_path / "adaos-test", profile="test")
+    provider = PathProvider(settings)
+
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("child path must remain lexical")),
+    )
+
+    assert provider.workspace_dir() == provider.base / "workspace"
+    assert provider.skills_workspace_dir() == provider.base / "workspace" / "skills"
+    assert provider.repo_root() == provider.package_dir.parents[1]
+    assert provider.skill_runtime_log_path("demo") == provider.base / "logs" / "service.demo.runtime.log"
+
+
 def test_path_provider_dev_dir_uses_attached_config_subnet_when_settings_is_empty(tmp_path):
     settings = Settings.from_sources().with_overrides(base_dir=tmp_path / "adaos-test", profile="test")
     settings = replace(settings, subnet_id=None)

@@ -349,6 +349,30 @@ async def test_ystore_backup_to_disk_compacts_runtime_log(monkeypatch) -> None:
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_snapshot_preflight_runs_outside_event_loop(monkeypatch, tmp_path) -> None:
+    webspace_id = _webspace_id("preflight-thread")
+    path = tmp_path / f"{webspace_id}.ysnap"
+    path.write_bytes(b"snapshot")
+    owner_thread_id = threading.get_ident()
+    preflight_thread_ids: list[int] = []
+
+    def _preflight(_path):
+        preflight_thread_ids.append(threading.get_ident())
+        return False, "test_corrupt"
+
+    monkeypatch.setattr(ystore_module, "ystore_path_for_webspace", lambda _webspace_id: path)
+    monkeypatch.setattr(ystore_module, "_preflight_snapshot_file", _preflight)
+    store = get_ystore_for_webspace(webspace_id)
+    try:
+        await store._load_from_disk_if_needed()
+
+        assert preflight_thread_ids
+        assert preflight_thread_ids[0] != owner_thread_id
+        assert store.runtime_snapshot()["last_disk_load_mode"] == "corrupt_snapshot_quarantined"
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
 async def test_async_get_ydoc_replaces_partial_doc_and_preserves_good_base(monkeypatch) -> None:
     webspace_id = _webspace_id("corrupt-tail")
     store = get_ystore_for_webspace(webspace_id)

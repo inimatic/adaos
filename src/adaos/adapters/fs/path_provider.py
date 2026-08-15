@@ -47,20 +47,20 @@ class PathProvider:
     # --- базовые каталоги ---
     def package_path(self) -> Path:
         """Package-level locales shipped with AdaOS (see ``get_ctx().paths``)."""
-        return (self.package_dir).resolve()
+        return self.package_dir
 
     def repo_root(self) -> Path:
-        return self.package_path().parents[1].resolve()
+        return self.package_dir.parents[1]
 
     def locales_dir(self) -> Path:
         """Package-level locales shipped with AdaOS (see ``get_ctx().paths``)."""
-        return (self.package_dir / "locales").resolve()
+        return self.package_dir / "locales"
 
     def skill_templates_dir(self) -> Path:
-        return (self.package_dir / "skills_templates").resolve()
+        return self.package_dir / "skills_templates"
 
     def scenario_templates_dir(self) -> Path:
-        return (self.package_dir / "scenario_templates").resolve()
+        return self.package_dir / "scenario_templates"
 
     def base_dir(self) -> Path:
         return self.base
@@ -68,21 +68,21 @@ class PathProvider:
     # --- workspace helpers ---
 
     def workspace_dir(self) -> Path:
-        return (self.base / "workspace").resolve()
+        return self.base / "workspace"
 
     def skills_workspace_dir(self) -> Path:
-        return (self.workspace_dir() / "skills").resolve()
+        return self.workspace_dir() / "skills"
 
     def scenarios_workspace_dir(self) -> Path:
-        return (self.workspace_dir() / "scenarios").resolve()
+        return self.workspace_dir() / "scenarios"
 
     # --- registry caches ---
 
     def skills_cache_dir(self) -> Path:
-        return (self.base / "skills").resolve()
+        return self.base / "skills"
 
     def scenarios_cache_dir(self) -> Path:
-        return (self.base / "scenarios").resolve()
+        return self.base / "scenarios"
 
     def skills_dir(self) -> Path:
         return self.skills_workspace_dir()
@@ -91,36 +91,36 @@ class PathProvider:
         return self.scenarios_workspace_dir()
 
     def models_dir(self) -> Path:
-        return (self.base / "models").resolve()
+        return self.base / "models"
 
     def mcp_dir(self) -> Path:
-        return (self.base / "mcp").resolve()
+        return self.base / "mcp"
 
     def logs_dir(self) -> Path:
-        return (self.base / "logs").resolve()
+        return self.base / "logs"
 
     def skill_service_log_path(self, skill_name: str) -> Path:
-        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.log").resolve()
+        return self.logs_dir() / f"service.{_safe_log_token(skill_name)}.log"
 
     def skill_runtime_log_path(self, skill_name: str) -> Path:
-        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.runtime.log").resolve()
+        return self.logs_dir() / f"service.{_safe_log_token(skill_name)}.runtime.log"
 
     def skill_ui_diagnostics_log_path(self, skill_name: str) -> Path:
-        return (self.logs_dir() / f"service.{_safe_log_token(skill_name)}.ui_runtime.log").resolve()
+        return self.logs_dir() / f"service.{_safe_log_token(skill_name)}.ui_runtime.log"
 
     def cache_dir(self) -> Path:
-        return (self.base / "cache").resolve()
+        return self.base / "cache"
 
     def state_dir(self) -> Path:
-        return (self.base / "state").resolve()
+        return self.base / "state"
 
     def root_mcp_state_dir(self) -> Path:
-        return (self.state_dir() / "root_mcp").resolve()
+        return self.state_dir() / "root_mcp"
 
     def locales_base_dir(self) -> Path:
         """Base directory for runtime locales exposed via ``get_ctx().paths``."""
 
-        return (self.base / "i18n").resolve()
+        return self.base / "i18n"
 
     def skills_locales_dir(self) -> Path:
         """Skill locales managed through the global context."""
@@ -142,21 +142,21 @@ class PathProvider:
                 subnet_id = str(getattr(config, "subnet_id", "") or "").strip()
             except Exception:
                 subnet_id = ""
-        return (self.base / "dev" / subnet_id).resolve()
+        return self.base / "dev" / subnet_id
 
     def dev_skills_dir(self) -> Path:
-        return (self.dev_dir() / "skills").resolve()
+        return self.dev_dir() / "skills"
 
     def dev_scenarios_dir(self) -> Path:
-        return (self.dev_dir() / "scenarios").resolve()
+        return self.dev_dir() / "scenarios"
 
     def dev_projects_dir(self) -> Path:
         """Declarative multi-component projects in the active DEV snapshot."""
 
-        return (self.dev_dir() / "projects").resolve()
+        return self.dev_dir() / "projects"
 
     def tmp_dir(self) -> Path:
-        return (self.base / "tmp").resolve()
+        return self.base / "tmp"
 
     def ensure_tree(self) -> None:
         for p in (

@@ -57,6 +57,9 @@ _YSTORE_APPLY_YIELD_MS = _env_float("ADAOS_YSTORE_APPLY_YIELD_MS", 25.0, minimum
 _YSTORE_APPLY_SLOW_UPDATE_MS = _env_float("ADAOS_YSTORE_APPLY_SLOW_UPDATE_MS", 250.0, minimum=0.0)
 _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
+_YSTORE_SNAPSHOT_PREFLIGHT_LIMITER = anyio.CapacityLimiter(
+    _env_int("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_WORKERS", 2, minimum=1)
+)
 _YSTORE_SNAPSHOT_SUFFIX = ".ysnap"
 
 
@@ -1128,13 +1131,17 @@ class AdaosMemoryYStore(BaseYStore):
         if self._loaded_from_disk:
             return
         path = ystore_path_for_webspace(self.path)
-        if not path.exists():
+        if not await anyio.to_thread.run_sync(path.exists):
             self._loaded_from_disk = True
             return
 
-        preflight_ok, preflight_reason = _preflight_snapshot_file(path)
+        preflight_ok, preflight_reason = await anyio.to_thread.run_sync(
+            _preflight_snapshot_file,
+            path,
+            limiter=_YSTORE_SNAPSHOT_PREFLIGHT_LIMITER,
+        )
         if not preflight_ok:
-            quarantined = _quarantine_corrupt_snapshot(path, preflight_reason)
+            quarantined = await anyio.to_thread.run_sync(_quarantine_corrupt_snapshot, path, preflight_reason)
             with self._lock:
                 self._loaded_from_disk = True
                 self._last_disk_load_mode = "corrupt_snapshot_quarantined"
@@ -1151,7 +1158,7 @@ class AdaosMemoryYStore(BaseYStore):
             return
 
         try:
-            data = path.read_bytes()
+            data = await anyio.to_thread.run_sync(path.read_bytes)
         except Exception as exc:  # pragma: no cover - IO errors are logged only
             _log.warning("failed to read YStore snapshot %s: %s", path, exc, exc_info=True)
             self._loaded_from_disk = True

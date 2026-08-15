@@ -176,11 +176,153 @@ def node_status_push_heartbeat_s() -> float:
     return _bounded_interval_seconds(raw, default=5.0, minimum=2.0)
 
 
+def _select_mapping_fields(value: object, fields: tuple[str, ...]) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {field: source[field] for field in fields if field in source}
+
+
+def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep node-status fanout bounded while retaining control-plane state."""
+
+    top_level_fields = (
+        "node_id",
+        "subnet_id",
+        "role",
+        "node_names",
+        "primary_node_name",
+        "ready",
+        "node_state",
+        "draining",
+        "route_mode",
+        "connected_to_subnet",
+        "connected_to_hub",
+        "updated_at",
+        "heartbeat_interval_s",
+        "trigger",
+    )
+    compact = _select_mapping_fields(payload, top_level_fields)
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    supervisor = runtime.get("supervisor_runtime") if isinstance(runtime.get("supervisor_runtime"), dict) else {}
+    compact_supervisor = _select_mapping_fields(
+        supervisor,
+        ("available", "enabled", "status", "runtime_url", "supervisor_url", "_served_by"),
+    )
+    compact_supervisor["attempt"] = _select_mapping_fields(
+        supervisor.get("attempt"),
+        (
+            "contract_version",
+            "authority",
+            "state",
+            "action",
+            "requested_at",
+            "transitioned_at",
+            "scheduled_for",
+            "updated_at",
+            "completed_at",
+            "countdown_sec",
+            "target_rev",
+            "target_version",
+            "reason",
+            "completion_reason",
+            "accepted",
+            "awaiting_restart",
+            "restart_required",
+            "restart_mode",
+            "candidate_prewarm_state",
+            "candidate_prewarm_message",
+        ),
+    )
+    compact_supervisor["runtime"] = _select_mapping_fields(
+        supervisor.get("runtime"),
+        (
+            "ok",
+            "runtime_url",
+            "runtime_instance_id",
+            "transition_role",
+            "active_slot",
+            "previous_slot",
+            "managed_pid",
+            "managed_alive",
+            "listener_running",
+            "runtime_api_ready",
+            "runtime_state",
+            "candidate_slot",
+            "candidate_runtime_url",
+            "candidate_runtime_instance_id",
+            "candidate_managed_pid",
+            "candidate_managed_alive",
+            "candidate_runtime_api_ready",
+            "candidate_runtime_state",
+            "transition_mode",
+            "warm_switch_enabled",
+            "warm_switch_supported",
+            "warm_switch_allowed",
+            "warm_switch_reason",
+            "root_promotion_required",
+            "restart_count",
+            "last_start_at",
+            "last_stop_reason",
+            "last_exit_at",
+            "last_exit_code",
+            "last_error",
+            "updated_at",
+        ),
+    )
+    compact_sidecar = _select_mapping_fields(
+        runtime.get("sidecar_runtime"),
+        (
+            "enabled",
+            "enablement",
+            "phase",
+            "transport_owner",
+            "lifecycle_manager",
+            "continuity_contract",
+            "progress",
+            "route_tunnel_contract",
+            "status",
+            "summary",
+            "session_state",
+            "status_reason",
+            "local_url",
+            "diag_age_s",
+            "diag_fresh",
+            "local_listener_state",
+            "remote_session_state",
+            "transport_ready",
+            "control_ready",
+            "route_ready",
+            "sync_ready",
+            "media_ready",
+            "transport_provenance",
+        ),
+    )
+    environment = payload.get("environment") if isinstance(payload.get("environment"), dict) else {}
+    compact["runtime"] = {
+        "environment": runtime.get("environment") if isinstance(runtime.get("environment"), dict) else environment,
+        "supervisor_available": bool(runtime.get("supervisor_available")),
+        "supervisor_runtime": compact_supervisor,
+        "sidecar_runtime": compact_sidecar,
+        "core_update_status": (
+            runtime.get("core_update_status") if isinstance(runtime.get("core_update_status"), dict) else {}
+        ),
+    }
+    compact["environment"] = environment
+    meta = dict(payload.get("_meta") or {}) if isinstance(payload.get("_meta"), dict) else {}
+    meta.update(
+        {
+            "projection": "adaos.node_status.transport.v1",
+            "diagnostics_truncated": True,
+        }
+    )
+    compact["_meta"] = meta
+    return compact
+
+
 def current_node_status_push_payload(*, updated_at: float | None = None) -> dict[str, Any]:
     payload = current_node_status_payload()
     payload["updated_at"] = float(updated_at or time.time())
     payload["heartbeat_interval_s"] = float(node_status_push_heartbeat_s())
-    return payload
+    return compact_node_status_transport_payload(payload)
 
 
 def _control_plane_scope_refs() -> tuple[str | None, str | None]:
@@ -580,6 +722,7 @@ __all__ = [
     "current_neighborhood_projection",
     "current_node_object",
     "current_node_status_push_payload",
+    "compact_node_status_transport_payload",
     "current_node_status_payload",
     "current_object_inspector",
     "current_object_model",
