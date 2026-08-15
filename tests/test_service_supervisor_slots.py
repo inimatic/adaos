@@ -244,6 +244,47 @@ def test_service_supervisor_shutdown_prevents_late_service_restart():
     assert supervisor._health_task is None
 
 
+def test_service_supervisor_start_all_attributes_each_service_result(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    supervisor = mod.ServiceSkillSupervisor()
+    calls: list[str] = []
+    recorded: list[str] = []
+    logged: list[str] = []
+
+    def _capture(message, *args, **_kwargs) -> None:  # noqa: ANN001
+        logged.append(message % args if args else str(message))
+
+    monkeypatch.setattr(mod._log, "info", _capture)
+    monkeypatch.setattr(mod._log, "warning", _capture)
+    monkeypatch.setattr(mod._log, "log", lambda _level, message, *args, **kwargs: _capture(message, *args, **kwargs))
+
+    async def _refresh_discovered(*, force: bool = False) -> None:  # noqa: ARG001
+        return None
+
+    async def _ensure_started(name, spec, *, force: bool) -> None:  # noqa: ANN001, ARG001
+        calls.append(name)
+        if name == "broken_service":
+            raise RuntimeError("health timeout")
+
+    async def _record_failure(name, spec, exc) -> None:  # noqa: ANN001, ARG001
+        recorded.append(name)
+
+    supervisor._specs = {"broken_service": object(), "ready_service": object()}  # type: ignore[assignment]
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.ensure_started = _ensure_started  # type: ignore[method-assign]
+    supervisor._record_ensure_failure = _record_failure  # type: ignore[method-assign]
+    supervisor._ensure_background_tasks = lambda: None  # type: ignore[method-assign]
+
+    asyncio.run(supervisor.start_all())
+
+    assert calls == ["broken_service", "ready_service"]
+    assert recorded == ["broken_service"]
+    assert any("service skill startup result skill=broken_service status=failed" in line for line in logged)
+    assert any("service skill startup result skill=ready_service status=ready" in line for line in logged)
+    assert any("service skill startup summary attempted=2 failed=1" in line for line in logged)
+
+
 def test_get_service_supervisor_replaces_shutdown_singleton(monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

@@ -10,6 +10,15 @@ from typing import Any
 from adaos.domain.node_identity import node_identities_match
 
 
+def _service_skills_block_boot() -> bool:
+    return str(os.getenv("ADAOS_SERVICE_SKILLS_BLOCK_BOOT") or "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class BootstrapBootOperations:
     bus: Any
@@ -118,6 +127,23 @@ class BootstrapBootCoordinator:
             elif startup_stage_logs_enabled:
                 startup_log.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
             return now
+
+        async def _start_service_skills(stage: str) -> None:
+            started = _startup_stage_mark(stage)
+            try:
+                await operations.get_service_supervisor().start_all()
+                _startup_stage_mark(stage, started=started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _startup_stage_mark(stage, started=started, failed=exc)
+                service._log.warning("failed to start service skills", exc_info=True)
+
+        async def _start_deferred_service_skills() -> None:
+            # Let the ASGI lifespan return and bind the listener before any
+            # external process discovery competes for CPU or disk.
+            await asyncio.sleep(0.5)
+            await _start_service_skills("post_ready_start_service_skills")
 
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
@@ -231,17 +257,17 @@ class BootstrapBootCoordinator:
         _handler_import_started = _startup_stage_mark("bootstrap_import_skill_handlers")
         await service.skills_loader.import_all_handlers(service.ctx.paths.skills_dir())
         _startup_stage_mark("bootstrap_import_skill_handlers", started=_handler_import_started)
-        # Start service-type skills (external processes).
+        # External service skills must not hold the API listener closed. Their
+        # health and recovery are supervised independently after core channel
+        # setup, unless an installation explicitly opts into legacy blocking.
+        defer_service_skill_startup = False
         if candidate_runtime_mode:
             service._log.info("skipping service skill startup for candidate runtime prewarm")
+        elif _service_skills_block_boot():
+            await _start_service_skills("bootstrap_start_service_skills")
         else:
-            _service_skills_started = _startup_stage_mark("bootstrap_start_service_skills")
-            try:
-                await operations.get_service_supervisor().start_all()
-                _startup_stage_mark("bootstrap_start_service_skills", started=_service_skills_started)
-            except Exception as exc:
-                _startup_stage_mark("bootstrap_start_service_skills", started=_service_skills_started, failed=exc)
-                service._log.warning("failed to start service skills", exc_info=True)
+            defer_service_skill_startup = True
+            service._log.info("deferring service skill startup until core channel setup completes")
         _subscriptions_started = _startup_stage_mark("bootstrap_register_subscriptions")
         await operations.register_subscriptions()
         _startup_stage_mark("bootstrap_register_subscriptions", started=_subscriptions_started)
@@ -850,4 +876,9 @@ class BootstrapBootCoordinator:
             startup_stage_mark=_startup_stage_mark,
             report_control_lifecycle=_report_control_lifecycle,
         )
+        if defer_service_skill_startup:
+            service._start_boot_task_once(
+                "adaos-service-skills-startup",
+                _start_deferred_service_skills,
+            )
 

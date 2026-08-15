@@ -943,17 +943,43 @@ class ServiceSkillSupervisor:
     async def start_all(self) -> None:
         if self._shutdown_requested:
             return
+        started_at = time.perf_counter()
         await self.refresh_discovered(force=True)
+        attempted = 0
+        failed: list[str] = []
         for name, spec in list(self._specs.items()):
             if self._shutdown_requested:
                 return
+            attempted += 1
+            service_started_at = time.perf_counter()
+            service_status = "ready"
             try:
                 await self.ensure_started(name, spec, force=False)
+            except asyncio.CancelledError:
+                service_status = "cancelled"
+                raise
             except Exception as exc:
+                service_status = "failed"
+                failed.append(name)
                 await self._record_ensure_failure(name, spec, exc)
                 _log.warning("failed to start service skill=%s", name, exc_info=True)
+            finally:
+                _log.info(
+                    "service skill startup result skill=%s status=%s duration_s=%.3f",
+                    name,
+                    service_status,
+                    time.perf_counter() - service_started_at,
+                )
 
         self._ensure_background_tasks()
+        _log.log(
+            logging.WARNING if failed else logging.INFO,
+            "service skill startup summary attempted=%s failed=%s duration_s=%.3f failed_skills=%s",
+            attempted,
+            len(failed),
+            time.perf_counter() - started_at,
+            failed,
+        )
 
     def issues(self, name: str) -> list[dict[str, Any]]:
         self.ensure_discovered()
