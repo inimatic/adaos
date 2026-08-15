@@ -3997,9 +3997,10 @@ def test_process_events_command_publishes_device_registered(monkeypatch) -> None
     async def _fake_start_y_server() -> None:
         return None
 
-    async def _fake_update_device_presence(webspace_id: str, device_id: str) -> None:
+    async def _fake_update_device_presence(webspace_id: str, device_id: str) -> bool:
         assert webspace_id == "ops"
         assert device_id == "dev-2"
+        return True
 
     async def _send_response(msg: dict[str, object]) -> None:
         responses.append(msg)
@@ -4193,7 +4194,21 @@ def test_update_device_presence_skips_room_when_direct_yws_disabled(monkeypatch)
 
     monkeypatch.setattr(gateway_module.y_server, "get_room", _room_must_not_start)
 
-    asyncio.run(gateway_module._update_device_presence("desktop", "dev-disabled"))
+    assert asyncio.run(gateway_module._update_device_presence("desktop", "dev-disabled")) is False
+
+
+def test_update_device_presence_defers_until_transport_owns_existing_room(monkeypatch) -> None:
+    key = "desktop-presence-deferred"
+    gateway_module.y_server.rooms.pop(key, None)
+    monkeypatch.setattr(gateway_module, "_yws_direct_transport_enabled", lambda: True)
+
+    async def _room_must_not_start(*args, **kwargs):
+        raise AssertionError("device presence must not create a YRoom before YWS admission")
+
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _room_must_not_start)
+
+    assert asyncio.run(gateway_module._update_device_presence(key, "dev-deferred")) is False
+    assert key not in gateway_module.y_server.rooms
 
 
 def test_accept_websocket_returns_false_when_handshake_already_closed() -> None:

@@ -8478,9 +8478,14 @@ class FastAPIWebsocketAdapter:
             raise RuntimeError(f"unexpected websocket event: {msg_type}")
 
 
-async def _update_device_presence(webspace_id: str, device_id: str) -> None:
+async def _update_device_presence(webspace_id: str, device_id: str) -> bool:
     """
-    Project basic device presence into the Yjs doc under devices/<device_id>.
+    Project basic device presence into an existing transport-owned Yjs room.
+
+    Events/control registration normally precedes the YWS connection. It must
+    not create a room and replay the durable store on the API owner loop merely
+    to publish ephemeral presence; the admitted YWS path retries this update
+    after it has acquired and registered its room.
     """
     if not _yws_direct_transport_enabled():
         _log.warning(
@@ -8488,8 +8493,17 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
             webspace_id,
             device_id,
         )
-        return
-    room = await y_server.get_room(webspace_id)
+        return False
+    key = _coerce_gateway_webspace_id(webspace_id)
+    room = y_server.rooms.get(key)
+    if room is None or not _webspace_has_live_transports(key):
+        _log.debug(
+            "deferred device presence until Yjs transport owns room webspace=%s device=%s room_present=%s",
+            key,
+            device_id,
+            room is not None,
+        )
+        return False
     ydoc = room.ydoc
     now_ms = int(time.time() * 1000)
 
@@ -8518,6 +8532,7 @@ async def _update_device_presence(webspace_id: str, device_id: str) -> None:
             node["presence"] = presence
 
             devices.set(txn, device_id, node)
+    return True
 
 
 async def _recover_stale_yws_room_bootstrap(webspace: str, dev_id: str, *, waited_s: float, reason: str) -> None:
@@ -8942,6 +8957,16 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     _remember_yws_attempt(attempt_id, "open")
     yws_opened_at = time.time()
     try:
+        await _update_device_presence(webspace_id, dev_id)
+    except Exception:
+        _ylog.debug(
+            "failed to project device presence after yws room admission webspace=%s dev=%s attempt=%s",
+            webspace_id,
+            dev_id,
+            attempt_id,
+            exc_info=True,
+        )
+    try:
         from adaos.services.access_links import touch_browser_session
 
         await asyncio.to_thread(
@@ -9324,7 +9349,7 @@ async def process_events_command(
                         "yjs_post_skipped": True,
                         "yjs_guard_reason": guard_reason,
                     }
-                await _update_device_presence(captured_ws, captured_device)
+                presence_updated = await _update_device_presence(captured_ws, captured_device)
                 # Sync webspace listing directly to the live room's YDoc.
                 # This ensures the frontend sees data.webspaces immediately.
                 try:
@@ -9354,15 +9379,18 @@ async def process_events_command(
                 except Exception:
                     _log.debug("webspace listing sync failed", exc_info=True)
                 _log.debug("device.register post steps ok webspace=%s device=%s", captured_ws, captured_device)
-                return {"yjs_post_skipped": False}
+                return {
+                    "yjs_post_skipped": False,
+                    "yjs_presence_deferred": not bool(presence_updated),
+                    "yjs_presence_reason": "awaiting_yws_transport" if not presence_updated else None,
+                }
             except Exception:
                 _log.warning("device.register post steps failed webspace=%s device=%s", captured_ws, captured_device, exc_info=True)
                 return {"yjs_post_failed": True}
 
         try:
-            # Ensure room is created and seeded BEFORE sending ack.
-            # This prevents race condition where frontend connects Yjs provider
-            # before room is ready, causing empty webspaces on first connection.
+            # Ack control registration without opening a YRoom. The browser can
+            # now establish YWS, whose admitted room bootstrap is authoritative.
             post_result = await _post_register()
             event_payload = {
                 "device_id": captured_device,
@@ -9372,6 +9400,9 @@ async def process_events_command(
             if post_result.get("yjs_post_skipped"):
                 event_payload["yjs_post_skipped"] = True
                 event_payload["yjs_guard_reason"] = str(post_result.get("yjs_guard_reason") or "")
+            if post_result.get("yjs_presence_deferred"):
+                event_payload["yjs_presence_deferred"] = True
+                event_payload["yjs_presence_reason"] = str(post_result.get("yjs_presence_reason") or "")
             _publish_bus(
                 "device.registered",
                 event_payload,
@@ -9380,6 +9411,9 @@ async def process_events_command(
             if post_result.get("yjs_post_skipped"):
                 ack_data["yjs_post_skipped"] = True
                 ack_data["yjs_guard_reason"] = str(post_result.get("yjs_guard_reason") or "")
+            if post_result.get("yjs_presence_deferred"):
+                ack_data["yjs_presence_deferred"] = True
+                ack_data["yjs_presence_reason"] = str(post_result.get("yjs_presence_reason") or "")
             await _ack(data=ack_data)
         except Exception:
             # Best-effort: still send ack even if post-register fails
