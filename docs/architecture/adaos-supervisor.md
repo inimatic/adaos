@@ -963,6 +963,9 @@ failback; an explicit reconnect is issued when that recovery window expires.
 The sidecar path is confirmed either by current sidecar diagnostics or by a
 ready root-control session whose selected server is the exact local sidecar URL;
 the latter prevents diagnostic publication lag from causing a second reconnect.
+The settle decision reads current `channel_diagnostics`, not the high-level
+readiness quality projection: recent expected disruption may remain visible as
+`flapping` without being mistaken for a currently broken transport.
 The monitor rechecks the code fingerprint while holding the lifecycle lock so a
 validated-slot sync detected before an operator restart cannot produce a second
 restart after that request completes.

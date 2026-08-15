@@ -6549,6 +6549,16 @@ class SupervisorManager:
             root_control = readiness.get("root_control") if isinstance(readiness.get("root_control"), dict) else {}
             overview = runtime.get("channel_overview") if isinstance(runtime.get("channel_overview"), dict) else {}
             hub_root = overview.get("hub_root") if isinstance(overview.get("hub_root"), dict) else {}
+            diagnostics = (
+                runtime.get("channel_diagnostics")
+                if isinstance(runtime.get("channel_diagnostics"), dict)
+                else {}
+            )
+            root_diagnostics = (
+                diagnostics.get("root_control")
+                if isinstance(diagnostics.get("root_control"), dict)
+                else {}
+            )
             sidecar = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
             strategy = (
                 runtime.get("hub_root_transport_strategy")
@@ -6564,10 +6574,16 @@ class SupervisorManager:
                     or bool(selected_server and local_sidecar_url and selected_server == local_sidecar_url)
                 )
             )
+            current_root_status = str(root_diagnostics.get("status") or "").strip().lower()
+            if current_root_status:
+                root_currently_ready = current_root_status == "ready"
+            else:
+                root_currently_ready = (
+                    str(root_control.get("status") or "").strip().lower() == "ready"
+                    and str(hub_root.get("effective_status") or "").strip().lower() == "ready"
+                )
             channel_ready = (
-                str(root_control.get("status") or "").strip().lower() == "ready"
-                and str(hub_root.get("effective_status") or "").strip().lower() == "ready"
-                and sidecar_transport_confirmed
+                root_currently_ready and sidecar_transport_confirmed
             )
             now = time.monotonic()
             if channel_ready:

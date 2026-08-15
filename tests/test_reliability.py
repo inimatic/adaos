@@ -2933,7 +2933,17 @@ def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
 def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monkeypatch) -> None:
     from adaos.services import reliability
 
-    monkeypatch.setattr(reliability, "channel_diagnostics_snapshot", lambda: {})
+    monkeypatch.setattr(
+        reliability,
+        "channel_diagnostics_snapshot",
+        lambda: {
+            "root_control": {
+                "status": "ready",
+                "updated_at": 123.0,
+                "recent_history": ["x" * 4096] * 100,
+            }
+        },
+    )
     monkeypatch.setattr(reliability, "hub_root_transport_strategy_snapshot", lambda: {})
     monkeypatch.setattr(reliability, "hub_root_protocol_snapshot", lambda: {})
     monkeypatch.setattr(reliability, "hub_member_semantic_channels_snapshot", lambda **_kwargs: {})
@@ -2995,6 +3005,10 @@ def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monk
     assert snapshot["hub_member_connection_state"]["connected_total"] == 1
     assert "members" not in snapshot["hub_member_connection_state"]
     assert "history" not in snapshot["readiness_tree"]["root_control"]
+    assert snapshot["channel_diagnostics"]["root_control"] == {
+        "status": "ready",
+        "updated_at": 123.0,
+    }
 
 
 def test_skill_runtime_migration_update_gate_snapshot_omits_failure_details(monkeypatch) -> None:

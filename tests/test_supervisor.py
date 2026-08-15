@@ -4909,8 +4909,11 @@ def test_sidecar_restart_waits_for_actual_failback_from_direct_transport(monkeyp
         return {
             "ok": True,
             "runtime": {
-                "readiness_tree": {"root_control": {"status": "ready"}},
-                "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                "readiness_tree": {"root_control": {"status": "degraded"}},
+                "channel_overview": {"hub_root": {"effective_status": "degraded"}},
+                "channel_diagnostics": {
+                    "root_control": {"status": "down" if owner == "runtime" else "ready"}
+                },
                 "sidecar_runtime": {"transport_owner": owner, "transport_ready": False},
                 "hub_root_transport_strategy": {"selected_server": selected_server},
             },

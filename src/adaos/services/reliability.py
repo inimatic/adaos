@@ -7064,6 +7064,14 @@ def supervisor_channel_runtime_snapshot(
             for key in ("root_control", "route", "hub_member")
             if isinstance(readiness_tree.get(key), dict)
         },
+        "channel_diagnostics": {
+            key: {
+                "status": (channel_diagnostics.get(key) or {}).get("status"),
+                "updated_at": (channel_diagnostics.get(key) or {}).get("updated_at"),
+            }
+            for key in ("root_control", "route")
+            if isinstance(channel_diagnostics.get(key), dict)
+        },
         "channel_overview": {
             key: {
                 "effective_status": (channel_overview.get(key) or {}).get("effective_status"),
