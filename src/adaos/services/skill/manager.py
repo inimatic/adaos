@@ -67,6 +67,33 @@ _log = logging.getLogger("adaos.skill.manager")
 _SKILL_MANIFEST_NAMES = ("skill.yaml",)
 
 
+def _archive_failed_candidate_test_log(
+    *,
+    env: SkillRuntimeEnvironment,
+    version: str,
+    slot: str,
+    log_path: Path,
+) -> Path | None:
+    if not log_path.is_file():
+        return None
+    archive_dir = env.runtime_root / "diagnostics" / "candidate-tests"
+    safe_version = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(version or "unknown"))
+    destination = archive_dir / f"{safe_version}.{slot}.{time.time_ns()}.log"
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(log_path, destination)
+    except OSError as exc:
+        _log.warning(
+            "failed to preserve candidate test log skill=%s version=%s slot=%s error=%s",
+            env.skill_name,
+            version,
+            slot,
+            exc,
+        )
+        return None
+    return destination
+
+
 def _resolve_sync_tool_result(result: Any) -> Any:
     if not isawaitable(result):
         return result
@@ -2087,6 +2114,15 @@ class SkillManager:
                 if result.status != "passed"
             }
             if failed_tests:
+                archived_log = _archive_failed_candidate_test_log(
+                    env=env,
+                    version=version,
+                    slot=slot_name,
+                    log_path=log_file,
+                )
+                if archived_log is not None:
+                    for failure in failed_tests.values():
+                        failure["log"] = str(archived_log)
                 env.cleanup_slot(version, slot_name)
                 raise RuntimeError(f"skill tests failed: {failed_tests}")
         lifecycle["healthcheck"] = {
@@ -4940,9 +4976,26 @@ class SkillManager:
                 skill_version=version,
                 slot_current_dir=slot.root,
             )
-            if any(result.status != "passed" for result in tests.values()):
+            failed_tests = {
+                test_name: {
+                    "status": str(result.status or ""),
+                    "detail": str(result.detail or ""),
+                }
+                for test_name, result in tests.items()
+                if result.status != "passed"
+            }
+            if failed_tests:
+                archived_log = _archive_failed_candidate_test_log(
+                    env=env,
+                    version=version,
+                    slot=slot_name,
+                    log_path=log_file,
+                )
+                if archived_log is not None:
+                    for failure in failed_tests.values():
+                        failure["log"] = str(archived_log)
                 env.cleanup_slot(version, slot_name)
-                raise RuntimeError("skill tests failed")
+                raise RuntimeError(f"skill tests failed: {failed_tests}")
         lifecycle["healthcheck"] = {
             "ok": True,
             "stage": "prepare",

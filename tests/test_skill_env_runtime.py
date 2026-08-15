@@ -32,6 +32,24 @@ class _Caps:
         return None
 
 
+def test_failed_candidate_test_log_survives_slot_cleanup(tmp_path: Path) -> None:
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="demo_skill")
+    env.prepare_version("1.2.3")
+    log_path = env.build_slot_paths("1.2.3", "B").logs_dir / "tests.log"
+    log_path.write_text("collection failed\n", encoding="utf-8")
+
+    archived = skill_manager_module._archive_failed_candidate_test_log(
+        env=env,
+        version="1.2.3",
+        slot="B",
+        log_path=log_path,
+    )
+    env.cleanup_slot("1.2.3", "B")
+
+    assert archived is not None
+    assert archived.read_text(encoding="utf-8") == "collection failed\n"
+
+
 def test_tool_timeout_parser_accepts_timeout_seconds_and_legacy_timeout() -> None:
     assert SkillManager._tool_timeout_seconds({"timeout_seconds": 120}, 30.0) == 120.0
     assert SkillManager._tool_timeout_seconds({"timeout": 90}, 30.0) == 90.0
