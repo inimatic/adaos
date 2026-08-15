@@ -162,6 +162,23 @@ def _parse_draft_commit_metadata(message: str | None) -> dict[str, Any]:
     return _normalize_draft_metadata(result)
 
 
+def _definitive_remote_rejection_status(intent: Mapping[str, Any]) -> int | None:
+    """Recover known 4xx rejections, including journals written by older cores."""
+
+    raw_status = intent.get("remote_status")
+    status = raw_status if isinstance(raw_status, int) else None
+    if status is None:
+        error = str(intent.get("error") or "")
+        if error.startswith("RootHttpError:"):
+            status = next(
+                (code for code in range(400, 500) if f"{code} " in error),
+                None,
+            )
+    if status is None or status == 408:
+        return None
+    return status
+
+
 def _parse_timestamp(value: str | None) -> datetime:
     if not value:
         return _EPOCH
@@ -609,6 +626,10 @@ class ArtifactPublishResult:
 
 _SKIP_DIRS = {
     ".git",
+    # Project-owned source artifacts are immutable Builder/LLM inputs, not
+    # component source. They are bound separately by artifact-group digest
+    # and may be private or non-redistributable.
+    "artifacts",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -3226,6 +3247,15 @@ class RootDeveloperService:
             }
             atomic_write_json(intent_path, intent)
 
+        # Older cores classified every exception after dispatch as an unknown
+        # outcome. A concrete non-timeout 4xx response proves that Forge
+        # rejected the request, so retry may safely rebuild the archive under
+        # the current packaging policy without risking a duplicate commit.
+        if intent.get("status") == "uncertain":
+            rejected_status = _definitive_remote_rejection_status(intent)
+            if rejected_status is not None:
+                write_intent("rejected", remote_status=rejected_status)
+
         def result_from_checkpoint(
             *,
             source_ref: ArtifactSourceRef,
@@ -3623,13 +3653,20 @@ class RootDeveloperService:
             )
         except Exception as exc:
             if dispatch_started and not remote_committed:
+                status_code = getattr(exc, "status_code", None)
+                definitive_rejection = (
+                    isinstance(status_code, int)
+                    and 400 <= status_code < 500
+                    and status_code != 408
+                )
                 write_intent(
-                    "uncertain",
+                    "rejected" if definitive_rejection else "uncertain",
                     archive_sha256=(
                         hashlib.sha256(archive_bytes).hexdigest()
                         if "archive_bytes" in locals()
                         else None
                     ),
+                    remote_status=status_code,
                     error=f"{type(exc).__name__}: {exc}",
                 )
             if not remote_committed:

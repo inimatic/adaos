@@ -5,6 +5,9 @@ import copy
 import hashlib
 import json
 import logging
+import os
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -650,6 +653,53 @@ class BuilderAutomationService:
                     "session": session,
                     "automation": self.project_session(session),
                 }
+            transition_token = str(workflow_transition or "").strip() or None
+            if transition_token != "return_to_prototype":
+                workflow_before = self._workflow().describe(
+                    str(session.get("object_type") or ""),
+                    str(session.get("object_id") or ""),
+                )
+                governed = (
+                    workflow_before.get("governed")
+                    if isinstance(workflow_before.get("governed"), Mapping)
+                    else {}
+                )
+                governed_state = str(governed.get("state") or "").strip()
+                if governed_state in {"trial_ready", "trial_review", "publication_ready"}:
+                    delivery = (
+                        workflow_before.get("delivery")
+                        if isinstance(workflow_before.get("delivery"), Mapping)
+                        else {}
+                    )
+                    workflow_before = self._workflow().transition(
+                        str(session.get("object_type") or ""),
+                        str(session.get("object_id") or ""),
+                        "candidate_stale",
+                        actor="builder.automation",
+                        reason="a reviewed Automation correction supersedes the current checkpoint or trial",
+                        metadata={
+                            "confirmed": True,
+                            "candidate_id": str(delivery.get("candidate_id") or ""),
+                            "rebase_plan": {
+                                "stale_reason": "automation_iteration_requested",
+                                "source_change_id": session.get("change_id"),
+                            },
+                        },
+                    )["workflow"]
+                    governed = (
+                        workflow_before.get("governed")
+                        if isinstance(workflow_before.get("governed"), Mapping)
+                        else {}
+                    )
+                    governed_state = str(governed.get("state") or "").strip()
+                if governed_state and governed_state not in {
+                    "automation_ready",
+                    "automation_waiting",
+                    "verification",
+                }:
+                    raise ValueError(
+                        f"Automation iteration is unavailable from governed state {governed_state}"
+                    )
             session["iteration"] = int(session.get("iteration") or 0) + 1
             changed_at = _now_iso()
             previous_change_id = str(session.get("change_id") or "").strip()
@@ -663,7 +713,6 @@ class BuilderAutomationService:
             session.setdefault("turns", []).append(
                 {"iteration": session["iteration"], "text": instruction, "created_at": changed_at}
             )
-            transition_token = str(workflow_transition or "").strip() or None
             if transition_token == "return_to_prototype":
                 workflow_before = self._workflow().describe(
                     str(session.get("object_type") or ""),
@@ -1555,15 +1604,77 @@ class BuilderAutomationService:
 
     def _launch_worker(self, session_id: str) -> None:
         if self.background:
-            thread = threading.Thread(
-                target=self._run_worker,
-                args=(session_id,),
-                name=f"adaos-codex-{_safe_token(session_id)}",
-                daemon=True,
-            )
-            thread.start()
+            self._launch_worker_process(session_id)
         else:
             self._run_worker(session_id)
+
+    def _launch_worker_process(self, session_id: str) -> dict[str, Any]:
+        """Launch a durable worker outside the potentially ephemeral skill call.
+
+        Skill tools are process-isolated and may return before a daemon thread
+        has claimed its task.  A detached local worker keeps the existing
+        persisted task/session identities and reports progress through the
+        normal Skill Factory state watched by :meth:`refresh_session`.
+        """
+
+        token = _safe_token(session_id, fallback="automation")
+        worker_root = self.state_dir / "builder" / "automation_workers" / token
+        worker_root.mkdir(parents=True, exist_ok=True)
+        stdout_path = worker_root / "stdout.log"
+        stderr_path = worker_root / "stderr.log"
+        launch_path = worker_root / "launch.json"
+        repo_python = self.repo_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        executable = repo_python if repo_python.is_file() else Path(sys.executable)
+        command = [
+            str(executable),
+            "-m",
+            "adaos.services.builder.automation_worker",
+            "--session-id",
+            str(session_id),
+        ]
+        env = os.environ.copy()
+        env["ADAOS_BASE_DIR"] = str(self.state_dir.parent.resolve())
+        env["ADAOS_DISABLE_ACTIVE_SLOT_PYTHON_REEXEC"] = "1"
+        env["ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC"] = "1"
+        source_root = str((self.repo_root / "src").resolve())
+        inherited_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = (
+            source_root + os.pathsep + inherited_pythonpath
+            if inherited_pythonpath
+            else source_root
+        )
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(self.repo_root),
+            "env": env,
+            "stdin": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = (
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+        else:
+            popen_kwargs["start_new_session"] = True
+        with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+            process = subprocess.Popen(
+                command,
+                stdout=stdout,
+                stderr=stderr,
+                **popen_kwargs,
+            )
+        launched = {
+            "schema": "adaos.builder.automation_worker_launch.v1",
+            "session_id": str(session_id),
+            "pid": int(process.pid),
+            "status": "launched",
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "launched_at": _now_iso(),
+        }
+        _write_json(launch_path, launched)
+        return launched
 
     def _run_worker(self, session_id: str) -> None:
         with _WORKER_LOCK:
@@ -1795,6 +1906,28 @@ class BuilderAutomationService:
                             "source_prototype_revision": current.get("source_prototype_version"),
                             "task_id": current.get("current_task_id"),
                             "change_id": current.get("change_id"),
+                        },
+                    )
+                    workflow_projection = self._workflow().describe(object_type, object_id)
+                workflow_automation = (
+                    workflow_projection.get("automation")
+                    if isinstance(workflow_projection.get("automation"), Mapping)
+                    else {}
+                )
+                if str(workflow_automation.get("status") or "") == "failed":
+                    self._workflow().transition(
+                        object_type,
+                        object_id,
+                        "automation_iteration_started",
+                        actor="builder.automation.recovery",
+                        reason="re-enter Automation after a validated checkpoint reconciliation",
+                        metadata={
+                            "confirmed": True,
+                            "reconciliation": True,
+                            "task_id": current.get("current_task_id"),
+                            "change_id": current.get("change_id"),
+                            "run_id": current.get("change_id"),
+                            "context_packet_digest": current.get("context_packet_digest"),
                         },
                     )
                 self._workflow().transition(

@@ -1645,6 +1645,35 @@ def test_failed_prototype_adaptation_restores_completed_automation(
     assert recovered["capabilities"]["can_return_to_prototype"] is True
 
 
+def test_checkpoint_reconciliation_reenters_failed_automation_without_new_iteration(
+    workflow_project: tuple[BuilderWorkflowService, Path],
+) -> None:
+    service, _root = workflow_project
+    started = service.transition(
+        "scenario", "recipes", "automation_started", metadata=_confirmed({"task_id": "task.1"})
+    )["workflow"]
+    service.transition(
+        "scenario",
+        "recipes",
+        "automation_failed",
+        metadata={"task_id": "task.1", "error": "Forge checkpoint rejected"},
+    )
+
+    recovered = service.transition(
+        "scenario",
+        "recipes",
+        "automation_iteration_started",
+        metadata={"task_id": "task.1", "reconciliation": True},
+    )["workflow"]
+    completed = service.transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"}
+    )["workflow"]
+
+    assert recovered["automation"]["iteration"] == started["automation"]["iteration"]
+    assert recovered["automation"]["status"] == "working"
+    assert completed["automation"]["status"] == "completed"
+
+
 def test_new_automation_work_invalidates_an_unpublished_candidate(
     workflow_project: tuple[BuilderWorkflowService, Path],
 ) -> None:

@@ -4706,6 +4706,7 @@ class BuilderWorkflowService:
         if action == "automation_iteration_started":
             self._require_active(workflow, "automation", action)
             status = str(automation.get("status") or "")
+            reconciliation = bool(metadata.get("reconciliation"))
             next_task_id = str(metadata.get("task_id") or "").strip()
             previous_task_id = str(automation.get("head_task_id") or "").strip()
             reconciles_stale_working_state = bool(
@@ -4715,7 +4716,8 @@ class BuilderWorkflowService:
                 raise BuilderWorkflowError(
                     "a new Automation iteration requires a completed or failed Automation result"
                 )
-            automation["iteration"] = int(automation.get("iteration") or 0) + 1
+            if not reconciliation:
+                automation["iteration"] = int(automation.get("iteration") or 0) + 1
             automation.update(
                 {
                     "status": "working",

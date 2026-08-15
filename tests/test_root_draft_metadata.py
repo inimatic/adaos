@@ -22,6 +22,7 @@ from adaos.services.root.service import (
     _parse_draft_commit_metadata,
 )
 from adaos.services.root import service as root_service_module
+from adaos.services.root.client import RootHttpError
 
 
 def test_draft_metadata_is_allowlisted_and_round_trips_from_git_trailers() -> None:
@@ -50,6 +51,23 @@ def test_draft_metadata_is_allowlisted_and_round_trips_from_git_trailers() -> No
     )
 
     assert parsed == normalized
+
+
+def test_forge_source_archive_excludes_project_owned_artifact_inputs(tmp_path: Path) -> None:
+    skill = tmp_path / "direction_skill"
+    (skill / "artifacts" / "part0").mkdir(parents=True)
+    (skill / "skill.yaml").write_text(
+        "name: direction_skill\nversion: 0.1.0\n", encoding="utf-8"
+    )
+    (skill / "artifacts" / "part0" / "private-notebook.ipynb").write_bytes(
+        b"private source"
+    )
+
+    with zipfile.ZipFile(io.BytesIO(create_zip_bytes(skill))) as archive:
+        names = archive.namelist()
+
+    assert "skill.yaml" in names
+    assert not any(name.startswith("artifacts/") for name in names)
 
 
 def test_forge_reconciliation_recovers_builder_chat_only_once(tmp_path) -> None:
@@ -658,6 +676,60 @@ def test_checkpoint_rolls_back_local_manifest_and_registry_when_remote_write_fai
 
     assert calls["push"] == 1
     assert (skill / "skill.yaml").read_bytes() == original_manifest
+
+
+def test_checkpoint_can_retry_after_definitive_http_rejection(tmp_path) -> None:
+    service, _publication, skill, _workspace = _checkpoint_service(tmp_path)
+    change_id = "builder-checkpoint-too-large"
+    state = {"pushes": 0}
+
+    class _RejectThenAcceptClient:
+        def get_draft_info(self, **_kwargs):
+            raise FileNotFoundError("no previous checkpoint")
+
+        def push_skill_draft(self, **kwargs):
+            state["pushes"] += 1
+            if state["pushes"] == 1:
+                raise RootHttpError("too large", status_code=413)
+            return {
+                "stored_path": "subnets/dev/nodes/node/skills/recipe_skill",
+                "commit": "6" * 40,
+                "tree_sha": "7" * 40,
+                "sha256": kwargs["sha256"],
+                "metadata": {"change_id": change_id},
+            }
+
+        def get_draft_source_tree(self, **_kwargs):
+            return {"tree_sha": "7" * 40}
+
+    service._client = lambda _cfg: _RejectThenAcceptClient()
+
+    with pytest.raises(RootHttpError, match="too large"):
+        service._push_artifact(
+            "skills",
+            "recipe_skill",
+            message="checkpoint",
+            metadata={"change_id": change_id},
+        )
+
+    intent = next((tmp_path / "state" / "checkpoint-intents").rglob("*.json"))
+    journal = json.loads(intent.read_text(encoding="utf-8"))
+    assert journal["status"] == "rejected"
+    # Simulate a journal written by the old core, which knew the HTTP response
+    # but labelled every post-dispatch exception as an uncertain outcome.
+    journal["status"] = "uncertain"
+    journal.pop("remote_status", None)
+    journal["error"] = "RootHttpError: 413 Request Entity Too Large"
+    intent.write_text(json.dumps(journal), encoding="utf-8")
+    result = service._push_artifact(
+        "skills",
+        "recipe_skill",
+        message="checkpoint",
+        metadata={"change_id": change_id},
+    )
+
+    assert state["pushes"] == 2
+    assert result.commit == "6" * 40
 
 
 def test_checkpoint_recovers_remote_commit_after_local_recording_interruption(tmp_path) -> None:

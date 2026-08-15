@@ -56,6 +56,9 @@ _EXCLUDED_DIRS = {
     ".tox",
     ".venv",
     "__pycache__",
+    # Model-facing Project intake has its own ArtifactRef lifecycle and may
+    # carry private notebooks or papers. It is not runtime component code.
+    "artifacts",
     "build",
     "dist",
     "llm_jobs",

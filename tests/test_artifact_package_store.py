@@ -39,6 +39,7 @@ def _source() -> ArtifactSourceRef:
 def _scenario(root: Path) -> Path:
     scenario = root / "recipes"
     (scenario / "assets").mkdir(parents=True)
+    (scenario / "artifacts" / "part0").mkdir(parents=True)
     (scenario / "__pycache__").mkdir()
     (scenario / "scenario.yaml").write_text(
         "id: recipes\nversion: 1.2.3\ntitle: Recipes\n",
@@ -46,6 +47,9 @@ def _scenario(root: Path) -> Path:
     )
     (scenario / "webui.json").write_text('{"ui": {}}\n', encoding="utf-8")
     (scenario / "assets" / "icon.svg").write_text("<svg/>\n", encoding="utf-8")
+    (scenario / "artifacts" / "part0" / "private-source.md").write_text(
+        "private research intake\n", encoding="utf-8"
+    )
     (scenario / "builder.draft.json").write_text('{"private": true}\n', encoding="utf-8")
     (scenario / "prompt_state.json").write_text('{"workflow": "prototype"}\n', encoding="utf-8")
     (scenario / "builder_memory.md").write_text("private notes\n", encoding="utf-8")
@@ -157,6 +161,7 @@ def test_package_build_is_deterministic_and_excludes_dev_state(tmp_path: Path) -
     assert "builder.draft.json" not in verified.file_names
     assert "prompt_state.json" not in verified.file_names
     assert "builder_memory.md" not in verified.file_names
+    assert not any(item.startswith("artifacts/") for item in verified.file_names)
     assert not any(item.startswith("tests/") for item in verified.file_names)
     assert not any(item.startswith("ui_revisions/") for item in verified.file_names)
     assert not any("__pycache__" in item for item in verified.file_names)

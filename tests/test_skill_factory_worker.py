@@ -936,6 +936,9 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "change.demo" in prompt
     assert "workflow.json validates" in prompt
     assert "complete TransitionDescriptor contract" in prompt
+    assert "fabricated metrics" in prompt
+    assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
+    assert "does not permit omitting the executable scientific path" in prompt
     assert packet["context_packet_digest"] == "sha256:" + "a" * 64
     assert packet["context_packet"]["change"]["change_id"] == "change.demo"
 

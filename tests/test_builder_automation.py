@@ -9,6 +9,7 @@ from jsonschema import Draft202012Validator
 import pytest
 import yaml
 
+from adaos.services.builder import automation as automation_module
 from adaos.services.builder.automation import BuilderAutomationService
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.root.service import _rewrite_skill_template_identity
@@ -112,6 +113,35 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
         encoding="utf-8"
     )
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
+
+
+def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    service.background = True
+    launched: list[tuple[list[str], dict]] = []
+
+    def _popen(command, **kwargs):
+        launched.append((list(command), dict(kwargs)))
+        return SimpleNamespace(pid=4242)
+
+    monkeypatch.setattr(automation_module.subprocess, "Popen", _popen)
+
+    result = service._launch_worker_process("automation.scenario.recipes")
+
+    assert result["pid"] == 4242
+    assert result["status"] == "launched"
+    assert launched[0][0][-2:] == ["--session-id", "automation.scenario.recipes"]
+    assert launched[0][1]["env"]["ADAOS_BASE_DIR"] == str(service.state_dir.parent.resolve())
+    launch = json.loads(
+        (
+            service.state_dir
+            / "builder"
+            / "automation_workers"
+            / "automation.scenario.recipes"
+            / "launch.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert launch["session_id"] == "automation.scenario.recipes"
 
 
 def test_automation_rejects_unvalidated_prototype_handoff_before_mutation(tmp_path: Path) -> None:
@@ -532,6 +562,45 @@ def test_completed_automation_routes_chat_to_next_codex_iteration(tmp_path: Path
     assert workflow["automation"]["iteration"] == 2
     assert workflow["automation"]["status"] == "working"
     assert workflow["history"][-1]["action"] == "automation_iteration_started"
+
+
+def test_followup_invalidates_checkpoint_before_queueing_next_iteration(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement recipe search.",
+        webspace_id="prompt-dev",
+    )
+    service._workflow().transition(
+        "scenario", "recipes", "automation_completed", metadata={"task_id": "task.1"}
+    )
+    service._workflow().transition(
+        "scenario",
+        "recipes",
+        "checkpoint_recorded",
+        metadata={
+            "confirmed": True,
+            "change_id": "checkpoint-1",
+            "package_digest": "sha256:" + "1" * 64,
+            "source_revision": "a" * 40,
+        },
+    )
+
+    turn = service.submit_turn(
+        text="Repair the reviewed acceptance failure.",
+        object_type="scenario",
+        object_id="recipes",
+        webspace_id="prompt-dev",
+    )
+
+    workflow = service._workflow().describe("scenario", "recipes")
+    assert turn["status"] == "automation_queued"
+    assert [item["action"] for item in workflow["history"][-2:]] == [
+        "candidate_stale",
+        "automation_iteration_started",
+    ]
+    assert workflow["delivery"]["stale_reason"] == "automation_iteration_requested"
 
 
 def test_duplicate_queued_start_relaunches_orphaned_worker(tmp_path: Path, monkeypatch) -> None:
@@ -1090,6 +1159,70 @@ def test_finalize_prepares_materialized_runtime_then_notifies(tmp_path: Path, mo
     assert saved[-1]["status"] == "completed"
     assert saved[-1]["progress"]["status"] == "completed"
     assert saved[-1]["progress"]["task_id"] == "task.1"
+
+
+def test_finalize_reenters_failed_workflow_for_checkpoint_reconciliation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = _service(tmp_path)
+    saved: list[dict] = []
+    transitions: list[tuple[str, dict]] = []
+
+    class FakeWorkflow:
+        def snapshot_current_automation(self, *args, **kwargs):  # noqa: ARG002
+            return {"path": "automation/task.1"}
+
+        def describe(self, *args, **kwargs):  # noqa: ARG002
+            return {"active_phase": "automation", "automation": {"status": "failed"}}
+
+        def transition(self, object_type, object_id, event, **kwargs):  # noqa: ARG002
+            transitions.append((event, dict(kwargs.get("metadata") or {})))
+            return {"workflow": {"delivery": {"status": "checkpoint"}}}
+
+    monkeypatch.setattr(BuilderAutomationService, "_workflow", lambda self: FakeWorkflow())
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_checkpoint_completed_artifacts",
+        lambda self, session: [
+            {
+                "ok": True,
+                "kind": "skill",
+                "name": "research_skill",
+                "commit": "forge-1",
+                "package_digest": "sha256:" + "1" * 64,
+                "source_revision": "forge-1",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        BuilderAutomationService,
+        "_prepare_and_activate_dev_skill",
+        lambda self, skill_id, **kwargs: {"ok": True, "id": skill_id},
+    )
+    monkeypatch.setattr(BuilderAutomationService, "_project_version", lambda *args: "0.1.1")
+    monkeypatch.setattr(BuilderAutomationService, "_save_session", lambda self, value: saved.append(dict(value)))
+    monkeypatch.setattr(BuilderAutomationService, "_notify_completed_session", lambda self, value: dict(value))
+
+    service._finalize_completed_session(
+        {
+            "session_id": "automation.skill.research_skill",
+            "object_type": "skill",
+            "object_id": "research_skill",
+            "companion_skill_id": "research_skill",
+            "webspace_id": "desktop-dev",
+            "current_task_id": "task.1",
+            "change_id": "change-reconciled",
+            "status": "commit_ready",
+        }
+    )
+
+    assert [event for event, _metadata in transitions] == [
+        "automation_iteration_started",
+        "automation_completed",
+        "checkpoint_recorded",
+    ]
+    assert transitions[0][1]["reconciliation"] is True
+    assert saved[-1]["status"] == "completed"
 
 
 @pytest.mark.parametrize(
