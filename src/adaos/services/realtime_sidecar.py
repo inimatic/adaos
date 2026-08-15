@@ -58,6 +58,7 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "accepted_total": 0,
         "upstream_connect_total": 0,
         "upstream_disconnect_total": 0,
+        "upstream_terminal_close_total": 0,
         "session_resume_total": 0,
         "handshake_failure_total": 0,
         "downstream_protocol_failure_total": 0,
@@ -65,6 +66,10 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "uncertain_send_total": 0,
         "pending_total": 0,
         "max_pending_total": 0,
+        "last_upstream_close_code": None,
+        "last_upstream_close_reason": None,
+        "last_upstream_close_terminal": None,
+        "last_upstream_close_at": None,
     },
     "yws": {
         "listener_ready": False,
@@ -78,6 +83,7 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "accepted_total": 0,
         "upstream_connect_total": 0,
         "upstream_disconnect_total": 0,
+        "upstream_terminal_close_total": 0,
         "session_resume_total": 0,
         "handshake_failure_total": 0,
         "downstream_protocol_failure_total": 0,
@@ -85,6 +91,10 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "uncertain_send_total": 0,
         "pending_total": 0,
         "max_pending_total": 0,
+        "last_upstream_close_code": None,
+        "last_upstream_close_reason": None,
+        "last_upstream_close_terminal": None,
+        "last_upstream_close_at": None,
     },
 }
 _ROUTE_TUNNEL_DIAG_CACHE: dict[str, Any] = {
@@ -658,6 +668,7 @@ def _reset_route_tunnel_runtime_state() -> None:
                 "accepted_total": 0,
                 "upstream_connect_total": 0,
                 "upstream_disconnect_total": 0,
+                "upstream_terminal_close_total": 0,
                 "session_resume_total": 0,
                 "handshake_failure_total": 0,
                 "downstream_protocol_failure_total": 0,
@@ -665,6 +676,10 @@ def _reset_route_tunnel_runtime_state() -> None:
                 "uncertain_send_total": 0,
                 "pending_total": 0,
                 "max_pending_total": 0,
+                "last_upstream_close_code": None,
+                "last_upstream_close_reason": None,
+                "last_upstream_close_terminal": None,
+                "last_upstream_close_at": None,
             }
         )
 
@@ -755,6 +770,9 @@ def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[
                 "accepted_total": int(runtime_state.get("accepted_total") or 0),
                 "upstream_connect_total": int(runtime_state.get("upstream_connect_total") or 0),
                 "upstream_disconnect_total": int(runtime_state.get("upstream_disconnect_total") or 0),
+                "upstream_terminal_close_total": int(
+                    runtime_state.get("upstream_terminal_close_total") or 0
+                ),
                 "session_resume_total": int(runtime_state.get("session_resume_total") or 0),
                 "handshake_failure_total": int(runtime_state.get("handshake_failure_total") or 0),
                 "downstream_protocol_failure_total": int(
@@ -766,6 +784,10 @@ def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[
                 "uncertain_send_total": int(runtime_state.get("uncertain_send_total") or 0),
                 "pending_total": int(runtime_state.get("pending_total") or 0),
                 "max_pending_total": int(runtime_state.get("max_pending_total") or 0),
+                "last_upstream_close_code": runtime_state.get("last_upstream_close_code"),
+                "last_upstream_close_reason": runtime_state.get("last_upstream_close_reason"),
+                "last_upstream_close_terminal": runtime_state.get("last_upstream_close_terminal"),
+                "last_upstream_close_at": runtime_state.get("last_upstream_close_at"),
             },
         }
     return listeners
@@ -3319,6 +3341,54 @@ class RealtimeSidecarServer:
             return False, str(payload.get("error") or "hello_rejected")
         return True, "ready"
 
+    @staticmethod
+    def _route_tunnel_upstream_close_details(
+        upstream_ws: Any,
+        errors: list[Exception],
+    ) -> tuple[int | None, str]:
+        code: int | None = None
+        reason = ""
+        candidates: list[Any] = [upstream_ws, *errors]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            frames = [getattr(candidate, "rcvd", None), getattr(candidate, "sent", None)]
+            for source in [candidate, *frames]:
+                if source is None:
+                    continue
+                if code is None:
+                    raw_code = getattr(source, "close_code", None)
+                    if raw_code is None:
+                        raw_code = getattr(source, "code", None)
+                    try:
+                        parsed_code = int(raw_code)
+                    except (TypeError, ValueError):
+                        parsed_code = 0
+                    if 1000 <= parsed_code <= 4999:
+                        code = parsed_code
+                if not reason:
+                    reason = str(
+                        getattr(source, "close_reason", None)
+                        or getattr(source, "reason", None)
+                        or ""
+                    ).strip()
+            if code is not None and reason:
+                break
+        return code, reason[:256]
+
+    @staticmethod
+    def _route_tunnel_upstream_close_is_terminal(code: int | None) -> bool:
+        if code is None:
+            return False
+        if code == 1000 or 4000 <= code <= 4999:
+            return True
+        return code in {1002, 1003, 1007, 1008, 1009, 1010}
+
+    @staticmethod
+    def _route_tunnel_downstream_close_reason(reason: str, *, fallback: str) -> str:
+        value = str(reason or fallback or "upstream_closed").strip() or "upstream_closed"
+        return value.encode("utf-8")[:120].decode("utf-8", errors="ignore") or "upstream_closed"
+
     async def _handle_route_tunnel_websocket(
         self,
         *,
@@ -3504,18 +3574,30 @@ class RealtimeSidecarServer:
                 for task in pending:
                     with contextlib.suppress(BaseException):
                         await task
-                with contextlib.suppress(Exception):
-                    await upstream_ws.close()
-                active_upstream = None
-                if client_done.is_set():
-                    break
-                _increment_route_tunnel_runtime_counter(kind, "upstream_disconnect_total")
                 errors: list[Exception] = []
                 for task in done:
                     try:
                         await task
                     except Exception as exc:
                         errors.append(exc)
+                close_code, close_reason = self._route_tunnel_upstream_close_details(
+                    upstream_ws,
+                    errors,
+                )
+                terminal_close = self._route_tunnel_upstream_close_is_terminal(close_code)
+                _set_route_tunnel_runtime_state(
+                    kind,
+                    last_upstream_close_code=close_code,
+                    last_upstream_close_reason=close_reason or None,
+                    last_upstream_close_terminal=terminal_close,
+                    last_upstream_close_at=time.time(),
+                )
+                with contextlib.suppress(Exception):
+                    await upstream_ws.close()
+                active_upstream = None
+                if client_done.is_set():
+                    break
+                _increment_route_tunnel_runtime_counter(kind, "upstream_disconnect_total")
                 relay_tasks.difference_update((send_task, recv_task))
                 if errors:
                     exc = errors[0]
@@ -3525,6 +3607,22 @@ class RealtimeSidecarServer:
                     )
                 else:
                     self._log(f"{kind} proxy upstream disconnected target={target}")
+                if session_aware_reconnect and terminal_close:
+                    _increment_route_tunnel_runtime_counter(kind, "upstream_terminal_close_total")
+                    self._log(
+                        f"{kind} proxy upstream terminal close target={target} "
+                        f"code={close_code} reason={close_reason or '<none>'}"
+                    )
+                    client_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await websocket.close(
+                            code=int(close_code or 1000),
+                            reason=self._route_tunnel_downstream_close_reason(
+                                close_reason,
+                                fallback="upstream_terminal_close",
+                            ),
+                        )
+                    break
                 if not session_aware_reconnect:
                     _increment_route_tunnel_runtime_counter(kind, "downstream_reconnect_required_total")
                     client_task.cancel()

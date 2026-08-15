@@ -4248,11 +4248,14 @@ async def node_reliability_update_gate() -> dict[str, Any]:
 
 @router.get("/reliability/supervisor-channel", dependencies=[Depends(require_token)])
 async def node_reliability_supervisor_channel() -> dict[str, Any]:
+    return await asyncio.to_thread(_node_reliability_supervisor_channel_payload)
+
+
+def _node_reliability_supervisor_channel_payload() -> dict[str, Any]:
     conf = load_config()
     route_mode, connected = route_info(conf.role)
     lifecycle = runtime_lifecycle_snapshot()
-    runtime = await asyncio.to_thread(
-        supervisor_channel_runtime_snapshot,
+    runtime = supervisor_channel_runtime_snapshot(
         node_id=conf.node_id,
         role=conf.role,
         local_ready=is_ready(),

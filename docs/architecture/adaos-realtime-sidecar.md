@@ -307,13 +307,19 @@ open.
 - [ ] `[must]` Prove the same already-open `/ws` and `/yws` survival through a
   full A/B slot promotion with real root-routed browser ingress, not only a
   local sidecar-listener restart test.
-- [x] `[must]` Keep the sidecar browser-facing websocket open while the runtime
-  upstream reconnects, replaying bounded browser-to-runtime setup messages
-  after reconnect.
+- [x] `[must]` Keep only the session-aware `/ws/subnet` downstream open across
+  transient runtime loss. Resume it by repeating the stored `hello` handshake,
+  never by replaying already-sent application frames. Treat normal completion,
+  protocol/policy/auth failures, and private `4xxx` closes such as
+  `4001 link_replaced` as terminal: propagate the close downstream and do not
+  resurrect the displaced identity. Preserve the last upstream close
+  code/reason/classification and a terminal-close counter in diagnostics.
 - [x] `[must]` Re-discover the active supervisor runtime URL on route-proxy
   reconnect so A/B slot ports do not pin sidecar to the old runtime.
-- [x] `[must]` Cover both `/ws` and `/yws/{room}` route-proxy continuity in
-  tests when the runtime upstream disappears or moves to another slot port.
+- [x] `[must]` Treat protocol-opaque `/ws` and `/yws/{room}` upstream loss as a
+  downstream `1012` reconnect requirement. Their owning clients perform normal
+  protocol bootstrap against the newly discovered runtime; sidecar does not
+  replay opaque frames.
 - [x] `[must]` Preserve browser-compatible `/yws/{room}` path routing through
   the sidecar proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control APIs responsive during runtime

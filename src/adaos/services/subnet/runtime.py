@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from adaos.services.agent_context import get_ctx
+from adaos.services.runtime_identity import runtime_transition_role
 from adaos.services.subnet.link_client import get_member_link_client
 from adaos.services.subnet.link_manager import get_hub_link_manager
 from adaos.services.yjs.store import add_ystore_write_listener
@@ -20,7 +21,10 @@ async def start_subnet_p2p(app: Any) -> None:
     conf = get_ctx().config
     yjs_enabled = os.getenv("ADAOS_SUBNET_YJS_REPLICATION", "1").strip().lower() not in ("0", "false", "no")
 
-    state: dict[str, Any] = {"remove_ystore_listener": None}
+    state: dict[str, Any] = {
+        "remove_ystore_listener": None,
+        "member_link_start": "not_applicable",
+    }
 
     if conf.role == "hub" and yjs_enabled:
         mgr = get_hub_link_manager()
@@ -43,10 +47,16 @@ async def start_subnet_p2p(app: Any) -> None:
         state["remove_ystore_listener"] = add_ystore_write_listener(_on_write)
 
     if conf.role == "member":
-        try:
-            await get_member_link_client().start()
-        except Exception:
-            _log.debug("failed to start member P2P client", exc_info=True)
+        if runtime_transition_role() == "candidate":
+            state["member_link_start"] = "deferred_candidate"
+            _log.info("candidate member runtime keeps subnet upstream passive until promotion")
+        else:
+            try:
+                await get_member_link_client().start()
+                state["member_link_start"] = "started"
+            except Exception:
+                state["member_link_start"] = "failed"
+                _log.debug("failed to start member P2P client", exc_info=True)
 
     app.state.subnet_p2p = state
 

@@ -1193,7 +1193,7 @@ def test_realtime_sidecar_subnet_proxy_resumes_with_handshake_without_frame_repl
                 received.append((connection_id, message))
                 await websocket.send(f"{connection_id}:{message}")
                 if connection_id == 1:
-                    await websocket.close()
+                    await websocket.close(code=1012, reason="runtime_restart")
                     return
 
         upstream = await websockets.serve(
@@ -1222,6 +1222,70 @@ def test_realtime_sidecar_subnet_proxy_resumes_with_handshake_without_frame_repl
             assert sessions["session_resume_total"] == 1
             assert sessions["handshake_failure_total"] == 0
             assert sessions["uncertain_send_total"] == 0
+            assert sessions["upstream_terminal_close_total"] == 0
+            assert sessions["last_upstream_close_code"] == 1012
+            assert sessions["last_upstream_close_terminal"] is False
+        finally:
+            await server.close()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_realtime_sidecar_subnet_proxy_propagates_terminal_upstream_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_port = _free_port()
+    ws_proxy_port = _free_port()
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_RUNTIME_PORT", str(runtime_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_WS_PORT", str(ws_proxy_port))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_YWS_PORT", str(_free_port()))
+    monkeypatch.setenv("ADAOS_REALTIME_ROUTE_RECONNECT_DELAY_S", "0.05")
+
+    async def _run() -> None:
+        websockets = pytest.importorskip("websockets")
+        connection_total = 0
+
+        async def _replaced_session(websocket, _path=None):
+            nonlocal connection_total
+            connection_total += 1
+            hello = json.loads(await websocket.recv())
+            assert hello["t"] == "hello"
+            await websocket.send(json.dumps({"t": "hello.ack", "ok": True}))
+            await websocket.close(code=4001, reason="link_replaced")
+
+        upstream = await websockets.serve(
+            _replaced_session,
+            "127.0.0.1",
+            runtime_port,
+            max_size=None,
+            compression=None,
+        )
+        server = RealtimeSidecarServer(host="127.0.0.1", port=0)
+        await server.start()
+        try:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{ws_proxy_port}/ws/subnet?token=dev",
+                max_size=None,
+            ) as client:
+                await client.send(json.dumps({"t": "hello", "node_id": "member-1"}))
+                assert json.loads(await asyncio.wait_for(client.recv(), timeout=1.0))["ok"] is True
+                with pytest.raises(websockets.exceptions.ConnectionClosed) as closed:
+                    await asyncio.wait_for(client.recv(), timeout=1.0)
+                assert closed.value.rcvd is not None
+                assert closed.value.rcvd.code == 4001
+                assert closed.value.rcvd.reason == "link_replaced"
+            await asyncio.sleep(0.15)
+            assert connection_total == 1
+            sessions = realtime_sidecar_mod.realtime_sidecar_route_tunnel_listeners()["ws"]["sessions"]
+            assert sessions["upstream_disconnect_total"] == 1
+            assert sessions["upstream_terminal_close_total"] == 1
+            assert sessions["session_resume_total"] == 0
+            assert sessions["last_upstream_close_code"] == 4001
+            assert sessions["last_upstream_close_reason"] == "link_replaced"
+            assert sessions["last_upstream_close_terminal"] is True
         finally:
             await server.close()
             upstream.close()

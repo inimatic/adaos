@@ -2930,6 +2930,47 @@ def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
     assert len(response.content) < 1024
 
 
+def test_node_reliability_supervisor_channel_collects_off_event_loop(monkeypatch) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from adaos.apps.api import node_api
+
+    collector_threads: list[int] = []
+
+    def _record(value):
+        collector_threads.append(threading.get_ident())
+        return value
+
+    monkeypatch.setattr(
+        node_api,
+        "load_config",
+        lambda: _record(SimpleNamespace(node_id="node-1", role="hub", node_names=[])),
+    )
+    monkeypatch.setattr(node_api, "route_info", lambda _role: _record(("online", True)))
+    monkeypatch.setattr(
+        node_api,
+        "runtime_lifecycle_snapshot",
+        lambda: _record({"node_state": "ready", "draining": False}),
+    )
+    monkeypatch.setattr(node_api, "is_ready", lambda: _record(True))
+    monkeypatch.setattr(
+        node_api,
+        "supervisor_channel_runtime_snapshot",
+        lambda **_kwargs: _record({"node": {"role": "hub"}}),
+    )
+
+    async def _call() -> tuple[int, dict]:
+        loop_thread = threading.get_ident()
+        return loop_thread, await node_api.node_reliability_supervisor_channel()
+
+    loop_thread, payload = asyncio.run(_call())
+
+    assert payload["runtime"]["node"]["role"] == "hub"
+    assert collector_threads
+    assert set(collector_threads).isdisjoint({loop_thread})
+
+
 def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monkeypatch) -> None:
     from adaos.services import reliability
 
