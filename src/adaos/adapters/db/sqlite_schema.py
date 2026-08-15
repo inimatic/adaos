@@ -1,6 +1,15 @@
 # src/adaos/adapters/db/sqlite_schema.py
 from __future__ import annotations
 
+import hashlib
+import logging
+import os
+from pathlib import Path
+import threading
+import time
+
+_log = logging.getLogger("adaos.sqlite.schema")
+
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS skills (
@@ -127,14 +136,56 @@ _SCHEMA = (
     """,
 )
 
+_SCHEMA_REVISION = hashlib.sha256("\n".join(_SCHEMA).encode("utf-8")).hexdigest()[:16]
+_SCHEMA_LOCK = threading.RLock()
+_ENSURED_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
+
+
+def _schema_identity(sql) -> str:
+    raw_path = getattr(sql, "_db_path", None)
+    if raw_path is not None:
+        try:
+            return str(Path(raw_path).resolve())
+        except Exception:
+            return str(raw_path)
+    return f"{type(sql).__module__}.{type(sql).__qualname__}:{id(sql)}"
+
+
+def _schema_warn_ms() -> float:
+    try:
+        return max(0.0, float(os.getenv("ADAOS_SQLITE_SCHEMA_WARN_MS", "250") or "250"))
+    except (TypeError, ValueError):
+        return 250.0
+
 
 def ensure_schema(sql) -> None:
-    with sql.connect() as con:
-        cur = con.cursor()
-        for stmt in _SCHEMA:
-            cur.execute(stmt)
-        for table in ("pair_codes", "chat_bindings"):
-            columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})").fetchall()}
-            if "webspace_id" not in columns:
-                cur.execute(f"ALTER TABLE {table} ADD COLUMN webspace_id TEXT")
-        con.commit()
+    identity = _schema_identity(sql)
+    cache_key = (identity, _SCHEMA_REVISION)
+    wait_started = time.perf_counter()
+    with _SCHEMA_LOCK:
+        wait_ms = (time.perf_counter() - wait_started) * 1000.0
+        if cache_key in _ENSURED_SCHEMA_REVISIONS:
+            return
+        apply_started = time.perf_counter()
+        with sql.connect() as con:
+            cur = con.cursor()
+            for stmt in _SCHEMA:
+                cur.execute(stmt)
+            for table in ("pair_codes", "chat_bindings"):
+                columns = {str(row[1]) for row in cur.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "webspace_id" not in columns:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN webspace_id TEXT")
+            con.commit()
+        apply_ms = (time.perf_counter() - apply_started) * 1000.0
+        _ENSURED_SCHEMA_REVISIONS.add(cache_key)
+
+    total_ms = wait_ms + apply_ms
+    if total_ms >= _schema_warn_ms():
+        _log.warning(
+            "SQLite core schema ensure slow identity=%s revision=%s wait_ms=%.3f apply_ms=%.3f total_ms=%.3f",
+            identity,
+            _SCHEMA_REVISION,
+            wait_ms,
+            apply_ms,
+            total_ms,
+        )
