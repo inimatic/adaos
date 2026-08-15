@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
@@ -18,6 +20,7 @@ from adaos.services.logging import configure_skill_module_logging
 import yaml
 
 _LOG = logging.getLogger("adaos.services.skills_loader")
+_HANDLER_IMPORT_LOCK = threading.RLock()
 
 
 class ImportlibSkillsLoader(SkillsLoaderPort):
@@ -30,42 +33,58 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             await asyncio.to_thread(self._sync_runtime_from_workspace, root)
         loaded: set[str] = set()
         loaded_declaration_manifests: set[Path] = set()
-        for handler, skill_name in self._discover_runtime_handlers(root):
-            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
-            if self._try_load_handler(handler, skill_name=skill_name, source="runtime"):
-                if skill_name:
-                    loaded.add(skill_name)
-                    _LOG.info("imported skill handler skill=%s path=%s", skill_name, handler)
-                else:
-                    _LOG.info("imported skill handler path=%s", handler)
+        import_timings: list[dict[str, Any]] = []
+        discovery_timings: dict[str, float] = {}
+
+        discovery_started_at = time.perf_counter()
+        runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
+        discovery_timings["runtime"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
+        import_timings.extend(
+            await self._load_discovered_handlers(
+                runtime_handlers,
+                loaded=loaded,
+                loaded_declaration_manifests=loaded_declaration_manifests,
+                source="runtime",
+            )
+        )
 
         # Dev/fast-path: load handlers straight from the workspace tree when a
         # skill does not have an installed runtime bundle under .runtime.
-        for handler, skill_name in self._discover_workspace_handlers(root, loaded):
-            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
-            if self._try_load_handler(handler, skill_name=skill_name, source="workspace"):
-                if skill_name:
-                    loaded.add(skill_name)
-                    _LOG.info("imported workspace skill handler skill=%s path=%s", skill_name, handler)
-                else:
-                    _LOG.info("imported workspace skill handler path=%s", handler)
+        discovery_started_at = time.perf_counter()
+        workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, loaded)
+        discovery_timings["workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
+        import_timings.extend(
+            await self._load_discovered_handlers(
+                workspace_handlers,
+                loaded=loaded,
+                loaded_declaration_manifests=loaded_declaration_manifests,
+                source="workspace",
+            )
+        )
 
         # Repo-bundled workspace skills are a final fallback for builtin skills
         # when the node-local workspace tree does not contain the sources.
-        for handler, skill_name in self._discover_repo_workspace_handlers(root, loaded):
-            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=skill_name)
-            if self._try_load_handler(handler, skill_name=skill_name, source="repo_workspace"):
-                if skill_name:
-                    loaded.add(skill_name)
-                    _LOG.info("imported repo workspace skill handler skill=%s path=%s", skill_name, handler)
-                else:
-                    _LOG.info("imported repo workspace skill handler path=%s", handler)
+        discovery_started_at = time.perf_counter()
+        repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, loaded)
+        discovery_timings["repo_workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
+        import_timings.extend(
+            await self._load_discovered_handlers(
+                repo_handlers,
+                loaded=loaded,
+                loaded_declaration_manifests=loaded_declaration_manifests,
+                source="repo_workspace",
+            )
+        )
+        slowest_imports = sorted(import_timings, key=lambda item: float(item.get("elapsed_ms") or 0.0), reverse=True)[:5]
         _LOG.info(
-            "skill handler import completed elapsed_s=%.3f loaded_skills=%d source_sync=%s candidate=%s",
+            "skill handler import completed elapsed_s=%.3f loaded_skills=%d source_sync=%s candidate=%s "
+            "discovery_ms=%s slowest_imports=%s",
             time.perf_counter() - started_at,
             len(loaded),
             source_sync_enabled,
             self._runtime_candidate_mode(),
+            json.dumps(discovery_timings, sort_keys=True, separators=(",", ":")),
+            json.dumps(slowest_imports, sort_keys=True, separators=(",", ":")),
         )
 
     async def reload_skill_handlers(self, skills_root: Any, skill_name: str) -> dict[str, Any]:
@@ -73,17 +92,30 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         target = str(skill_name or "").strip()
         if not target:
             return {"ok": False, "reason": "skill_name_missing", "handlers": []}
-        handlers = [handler for handler, name in self._discover_runtime_handlers(root) if name == target]
+        runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
+        handlers = [handler for handler, name in runtime_handlers if name == target]
         if not handlers:
             loaded: set[str] = set()
-            handlers = [handler for handler, name in self._discover_workspace_handlers(root, loaded) if name == target]
+            workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, loaded)
+            handlers = [handler for handler, name in workspace_handlers if name == target]
         if not handlers:
-            handlers = [handler for handler, name in self._discover_repo_workspace_handlers(root, set()) if name == target]
+            repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, set())
+            handlers = [handler for handler, name in repo_handlers if name == target]
         loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         for handler in handlers:
             self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=target)
-            self._load_handler(handler, reload=True)
+            import_started_at = time.perf_counter()
+            await asyncio.to_thread(self._load_handler, handler, reload=True)
+            self._log_slow_handler_import(
+                self._handler_import_timing(
+                    handler=handler,
+                    skill_name=target,
+                    source="reload",
+                    elapsed_ms=(time.perf_counter() - import_started_at) * 1000.0,
+                    loaded=True,
+                )
+            )
             loaded_handlers.append(str(handler))
             _LOG.info("reloaded skill handler skill=%s path=%s", target, handler)
         if loaded_handlers:
@@ -93,24 +125,25 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         return {"ok": bool(loaded_handlers), "skill": target, "handlers": loaded_handlers}
 
     def _load_handler(self, handler: Path, *, reload: bool = False) -> None:
-        mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
-        existing = sys.modules.get(mod_name)
-        if existing is not None and not reload:
-            _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
-            return
-        if existing is not None and reload:
-            sys.modules.pop(mod_name, None)
-        spec = importlib.util.spec_from_file_location(mod_name, handler)
-        module = importlib.util.module_from_spec(spec)
-        assert spec and spec.loader
-        configure_skill_module_logging(mod_name)
-        sys.modules[mod_name] = module
-        try:
-            spec.loader.exec_module(module)  # type: ignore[attr-defined]
-        except Exception:
-            sys.modules.pop(mod_name, None)
-            raise
-        _LOG.info("imported skill handler module=%s path=%s", mod_name, handler)
+        with _HANDLER_IMPORT_LOCK:
+            mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+            existing = sys.modules.get(mod_name)
+            if existing is not None and not reload:
+                _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
+                return
+            if existing is not None and reload:
+                sys.modules.pop(mod_name, None)
+            spec = importlib.util.spec_from_file_location(mod_name, handler)
+            module = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            configure_skill_module_logging(mod_name)
+            sys.modules[mod_name] = module
+            try:
+                spec.loader.exec_module(module)  # type: ignore[attr-defined]
+            except Exception:
+                sys.modules.pop(mod_name, None)
+                raise
+            _LOG.info("imported skill handler module=%s path=%s", mod_name, handler)
 
     def _try_load_handler(self, handler: Path, *, skill_name: str | None, source: str) -> bool:
         try:
@@ -127,6 +160,104 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 exc_info=True,
             )
             return False
+
+    async def _try_load_handler_async(self, handler: Path, *, skill_name: str | None, source: str) -> bool:
+        timing_started_at = time.perf_counter()
+        loaded = await asyncio.to_thread(
+            self._try_load_handler,
+            handler,
+            skill_name=skill_name,
+            source=source,
+        )
+        timing = self._handler_import_timing(
+            handler=handler,
+            skill_name=skill_name,
+            source=source,
+            elapsed_ms=(time.perf_counter() - timing_started_at) * 1000.0,
+            loaded=loaded,
+        )
+        self._log_slow_handler_import(timing)
+        return loaded
+
+    async def _load_discovered_handlers(
+        self,
+        handlers: Iterable[Tuple[Path, Optional[str]]],
+        *,
+        loaded: set[str],
+        loaded_declaration_manifests: set[Path],
+        source: str,
+    ) -> list[dict[str, Any]]:
+        timings: list[dict[str, Any]] = []
+        source_label = {
+            "runtime": "skill handler",
+            "workspace": "workspace skill handler",
+            "repo_workspace": "repo workspace skill handler",
+        }.get(source, f"{source} skill handler")
+        for handler, skill_name in handlers:
+            self._load_skill_declarations(
+                handler,
+                loaded_declaration_manifests,
+                skill_name=skill_name,
+            )
+            import_started_at = time.perf_counter()
+            loaded_ok = await self._try_load_handler_async(
+                handler,
+                skill_name=skill_name,
+                source=source,
+            )
+            timings.append(
+                self._handler_import_timing(
+                    handler=handler,
+                    skill_name=skill_name,
+                    source=source,
+                    elapsed_ms=(time.perf_counter() - import_started_at) * 1000.0,
+                    loaded=loaded_ok,
+                )
+            )
+            if loaded_ok:
+                if skill_name:
+                    loaded.add(skill_name)
+                    _LOG.info("imported %s skill=%s path=%s", source_label, skill_name, handler)
+                else:
+                    _LOG.info("imported %s path=%s", source_label, handler)
+            await asyncio.sleep(0)
+        return timings
+
+    @staticmethod
+    def _handler_import_timing(
+        *,
+        handler: Path,
+        skill_name: str | None,
+        source: str,
+        elapsed_ms: float,
+        loaded: bool,
+    ) -> dict[str, Any]:
+        return {
+            "skill": str(skill_name or "<unknown>"),
+            "source": str(source or "unknown"),
+            "elapsed_ms": round(max(0.0, float(elapsed_ms)), 3),
+            "loaded": bool(loaded),
+            "path": str(handler),
+        }
+
+    @staticmethod
+    def _log_slow_handler_import(timing: dict[str, Any]) -> None:
+        try:
+            threshold_ms = max(10.0, float(os.getenv("ADAOS_SKILL_HANDLER_IMPORT_WARN_MS", "250") or 250.0))
+        except Exception:
+            threshold_ms = 250.0
+        elapsed_ms = float(timing.get("elapsed_ms") or 0.0)
+        if elapsed_ms < threshold_ms:
+            return
+        _LOG.warning(
+            "slow skill handler import skill=%s source=%s elapsed_ms=%.3f loaded=%s path=%s threshold_ms=%.1f",
+            timing.get("skill"),
+            timing.get("source"),
+            elapsed_ms,
+            timing.get("loaded"),
+            timing.get("path"),
+            threshold_ms,
+        )
 
     def _load_skill_declarations(
         self,
@@ -216,7 +347,16 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             manifest_path = slot_dir / "resolved.manifest.json"
             if self._is_service_manifest(manifest_path) and not self._service_allows_in_process_events(manifest_path):
                 continue
-            for handler in src_root.rglob("handlers/main.py"):
+            direct_handler = src_root / "skills" / skill_name / "handlers" / "main.py"
+            if direct_handler.exists():
+                handlers.append((direct_handler, skill_name))
+                continue
+            fallback_handlers = {
+                *src_root.glob("handlers/main.py"),
+                *src_root.glob("*/handlers/main.py"),
+                *src_root.glob("*/*/handlers/main.py"),
+            }
+            for handler in sorted(fallback_handlers):
                 handlers.append((handler, skill_name))
         return handlers
 

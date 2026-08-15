@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -26,6 +27,66 @@ if "ypy_websocket" not in sys.modules:
 from adaos.services import skills_loader_importlib as skills_loader_module
 from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
+
+
+def test_importlib_loader_keeps_event_loop_responsive_during_discovery_and_import(tmp_path, monkeypatch) -> None:
+    handler = tmp_path / "slow_skill" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+
+    def _slow_runtime_discovery(_root: Path):
+        time.sleep(0.08)
+        return [(handler, "slow_skill")]
+
+    def _slow_handler_import(_handler: Path, *, reload: bool = False) -> None:
+        assert reload is False
+        time.sleep(0.08)
+
+    monkeypatch.setattr(loader, "_discover_runtime_handlers", _slow_runtime_discovery)
+    monkeypatch.setattr(loader, "_discover_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(loader, "_discover_repo_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(loader, "_load_skill_declarations", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(loader, "_load_handler", _slow_handler_import)
+
+    async def _run() -> int:
+        ticks = 0
+        done = asyncio.Event()
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            while not done.is_set():
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        ticker = asyncio.create_task(_ticker())
+        try:
+            await loader.import_all_handlers(tmp_path)
+        finally:
+            done.set()
+            await ticker
+        return ticks
+
+    assert asyncio.run(_run()) >= 8
+
+
+def test_runtime_handler_discovery_uses_bounded_source_layout(tmp_path, monkeypatch) -> None:
+    runtime_skill = tmp_path / ".runtime" / "bounded_skill"
+    version_root = runtime_skill / "v1.0"
+    slot_root = version_root / "slots" / "A"
+    handler = slot_root / "src" / "skills" / "bounded_skill" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    (runtime_skill / "current_version").write_text("1.0.0\n", encoding="utf-8")
+    (version_root / "active").write_text("A\n", encoding="utf-8")
+    (slot_root / "resolved.manifest.json").write_text('{"name":"bounded_skill"}\n', encoding="utf-8")
+
+    def _reject_recursive_scan(*_args, **_kwargs):
+        raise AssertionError("runtime handler discovery must not recursively scan skill source trees")
+
+    monkeypatch.setattr(Path, "rglob", _reject_recursive_scan)
+
+    assert ImportlibSkillsLoader()._discover_runtime_handlers(tmp_path) == [(handler, "bounded_skill")]
 
 
 def test_importlib_loader_loads_skill_data_projections(tmp_path, monkeypatch) -> None:
