@@ -340,6 +340,10 @@ async def list_skills(
     mgr: SkillManager = Depends(_get_manager),
     ctx: AgentContext = Depends(get_ctx),
 ):
+    return await asyncio.to_thread(_list_skills_sync, fs=fs, mgr=mgr, ctx=ctx)
+
+
+def _list_skills_sync(*, fs: bool, mgr: SkillManager, ctx: AgentContext) -> Dict[str, Any]:
     rows = mgr.list_installed()
     workspace_registry_by_name: dict[str, dict[str, Any]] = {}
     try:
@@ -392,6 +396,10 @@ async def installed_status(mgr: SkillManager = Depends(_get_manager), ctx: Agent
     """
     Installed skills with runtime slot and update hint (remote version > local version).
     """
+    return await asyncio.to_thread(_installed_status_sync, mgr=mgr, ctx=ctx)
+
+
+def _installed_status_sync(*, mgr: SkillManager, ctx: AgentContext) -> dict[str, Any]:
     rows = mgr.list_installed()
     items: list[dict[str, Any]] = []
 
@@ -574,7 +582,8 @@ async def install(body: InstallReq, mgr: SkillManager = Depends(_get_manager), c
 @router.post("/uninstall")
 async def uninstall(body: UninstallReq, mgr: SkillManager = Depends(_get_manager)):
     webspace_id = body.webspace_id or default_webspace_id()
-    mgr.uninstall(
+    await asyncio.to_thread(
+        mgr.uninstall,
         body.name,
         force=bool(body.force),
     )
@@ -597,7 +606,7 @@ async def uninstall(body: UninstallReq, mgr: SkillManager = Depends(_get_manager
 
 @router.get("/{name}")
 async def get_skill(name: str, mgr: SkillManager = Depends(_get_manager)):
-    meta = mgr.get(name)
+    meta = await asyncio.to_thread(mgr.get, name)
     if not meta:
         return {"ok": False, "reason": "not-found"}
     return {"ok": True, "skill": _to_mapping(meta)}
@@ -605,7 +614,7 @@ async def get_skill(name: str, mgr: SkillManager = Depends(_get_manager)):
 
 @router.delete("/{name}")
 async def remove(name: str, mgr: SkillManager = Depends(_get_manager)):
-    mgr.uninstall(name)
+    await asyncio.to_thread(mgr.uninstall, name)
     invalidate_webspace_materialization_cache(
         default_webspace_id(),
         reason=f"skill_delete:{name}",
@@ -684,7 +693,7 @@ async def get_skill_file_content(
 
 @router.post("/push")
 async def push(body: PushReq, mgr: SkillManager = Depends(_get_manager)):
-    revision = mgr.push(body.name, body.message, signoff=body.signoff)
+    revision = await asyncio.to_thread(mgr.push, body.name, body.message, signoff=body.signoff)
     return {"ok": True, "revision": revision}
 
 
@@ -694,7 +703,12 @@ async def push(body: PushReq, mgr: SkillManager = Depends(_get_manager)):
 @router.post("/runtime/prepare")
 async def runtime_prepare(body: RuntimePrepareReq, mgr: SkillManager = Depends(_get_manager)):
     try:
-        result = mgr.prepare_runtime(body.name, run_tests=body.run_tests, preferred_slot=body.slot)
+        result = await asyncio.to_thread(
+            mgr.prepare_runtime,
+            body.name,
+            run_tests=body.run_tests,
+            preferred_slot=body.slot,
+        )
     except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     payload = {
@@ -717,7 +731,14 @@ async def runtime_activate(
     webspace_id = body.webspace_id or "default"
     invalidate_local_capacity_cache()
     try:
-        slot = mgr.activate_for_space(body.name, version=body.version, slot=body.slot, space="default", webspace_id=webspace_id)
+        slot = await asyncio.to_thread(
+            mgr.activate_for_space,
+            body.name,
+            version=body.version,
+            slot=body.slot,
+            space="default",
+            webspace_id=webspace_id,
+        )
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
         materialization_cache = invalidate_webspace_materialization_cache(
             webspace_id,
@@ -738,8 +759,20 @@ async def runtime_activate(
         # auto-prepare then retry
         pref_slot = body.slot
         try:
-            prep = mgr.prepare_runtime(body.name, run_tests=False, preferred_slot=pref_slot)
-            slot = mgr.activate_for_space(body.name, version=prep.version, slot=prep.slot, space="default", webspace_id=webspace_id)
+            prep = await asyncio.to_thread(
+                mgr.prepare_runtime,
+                body.name,
+                run_tests=False,
+                preferred_slot=pref_slot,
+            )
+            slot = await asyncio.to_thread(
+                mgr.activate_for_space,
+                body.name,
+                version=prep.version,
+                slot=prep.slot,
+                space="default",
+                webspace_id=webspace_id,
+            )
         except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
             raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
@@ -796,14 +829,14 @@ async def runtime_rebuild_webspace(body: RuntimeRebuildWebspaceReq):
 
 @router.get("/runtime/status/{name}")
 async def runtime_status(name: str, mgr: SkillManager = Depends(_get_manager)):
-    state = mgr.runtime_status(name)
+    state = await asyncio.to_thread(mgr.runtime_status, name)
     return {"ok": True, "state": state}
 
 
 @router.post("/runtime/setup")
 async def runtime_setup(body: RuntimeSetupReq, mgr: SkillManager = Depends(_get_manager)):
     try:
-        result = mgr.setup_skill(body.name)
+        result = await asyncio.to_thread(mgr.setup_skill, body.name)
         if isinstance(result, dict):
             return {"ok": bool(result.get("ok", True)), **result}
         return {"ok": True, "result": result}
@@ -957,4 +990,5 @@ async def runtime_migration_start(body: RuntimeMigrationStartReq, ctx: AgentCont
 
 @router.get("/runtime/migration/status")
 async def runtime_migration_status(ctx: AgentContext = Depends(get_ctx)):
-    return {"ok": True, "status": read_skill_runtime_migration_status(ctx)}
+    status = await asyncio.to_thread(read_skill_runtime_migration_status, ctx)
+    return {"ok": True, "status": status}

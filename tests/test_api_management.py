@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -558,6 +559,32 @@ def test_skill_installed_status_uses_registry_catalog_version(monkeypatch) -> No
     item = resp.json()["items"][0]
     assert item["remote_version"] == "2.0.0"
     assert item["update_available"] is True
+
+
+def test_skill_status_reads_run_off_event_loop(monkeypatch) -> None:
+    owner_thread = threading.get_ident()
+    call_threads: list[int] = []
+
+    class _ObservedSkillManager(_FakeSkillManager):
+        def list_installed(self) -> list[_Record]:
+            call_threads.append(threading.get_ident())
+            return super().list_installed()
+
+        def runtime_status(self, name: str):
+            call_threads.append(threading.get_ident())
+            return super().runtime_status(name)
+
+    skill_mgr = _ObservedSkillManager()
+    monkeypatch.setattr(skills, "_workspace_skill_manifest_exists", lambda *args, **kwargs: True)
+    monkeypatch.setattr(skills, "_read_registry_catalog_version", lambda *args, **kwargs: "2.0.0")
+
+    result = asyncio.run(skills.installed_status(mgr=skill_mgr, ctx=SimpleNamespace()))
+    runtime = asyncio.run(skills.runtime_status("demo", mgr=skill_mgr))
+
+    assert result["items"][0]["remote_version"] == "2.0.0"
+    assert runtime["state"]["version"] == "1.0.0"
+    assert call_threads
+    assert all(thread_id != owner_thread for thread_id in call_threads)
 
 
 def test_subscribed_skill_update_requires_reviewed_plan_and_records_runtime_health(monkeypatch) -> None:
