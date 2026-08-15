@@ -30,6 +30,8 @@ class _DummyDataChannel:
         return decorator
 
     def send(self, message: bytes) -> None:
+        if len(message) > 64 * 1024:
+            raise TypeError("Trying to send message larger than max-message-size")
         self.sent.append(bytes(message))
 
     def close(self) -> None:
@@ -182,6 +184,7 @@ def test_datachannel_yjs_adapter_chunks_large_outbound_messages(monkeypatch) -> 
 
     assert dc.close_called == 0
     assert len(dc.sent) > 1
+    assert max(map(len, dc.sent)) <= 64 * 1024
     assert _reassemble_chunk_frames(dc.sent) == payload
 
 

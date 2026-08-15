@@ -121,6 +121,70 @@ def test_member_rpc_rejects_untrusted_read_hint(monkeypatch) -> None:
     assert calls == []
 
 
+def test_member_rpc_failure_is_observable_without_argument_values(monkeypatch) -> None:
+    client = mod.MemberLinkClient()
+    responses: list[dict] = []
+    warnings: list[str] = []
+
+    def _fail(*_args, **_kwargs):
+        raise PermissionError("tool_intent_mismatch:slideshow_skill:get_status")
+
+    async def _send(_ws, message, **_kwargs):
+        responses.append(message)
+
+    monkeypatch.setattr(client, "_run_tool", _fail)
+    monkeypatch.setattr(client, "_send_ws_message", _send)
+    monkeypatch.setattr(
+        mod._log,
+        "warning",
+        lambda message, *args, **_kwargs: warnings.append(message % args if args else message),
+    )
+
+    asyncio.run(
+        client._on_rpc(
+            object(),
+            {
+                "id": "rpc-1",
+                "method": "tools.call",
+                "params": {
+                    "tool": "slideshow_skill:get_status",
+                    "arguments": {"source_dir": "secret-path", "webspace_id": "desktop"},
+                    "intent": "read",
+                },
+            },
+        )
+    )
+
+    assert responses[-1]["ok"] is False
+    assert client.snapshot()["rpc"]["failed_total"] == 1
+    assert client.snapshot()["rpc"]["last_result"]["error_code"] == "tool_intent_mismatch"
+    rendered = "\n".join(warnings)
+    assert "slideshow_skill:get_status" in rendered
+    assert "source_dir" in rendered
+    assert "secret-path" not in rendered
+
+
+def test_member_rpc_scheduler_does_not_block_receiver(monkeypatch) -> None:
+    async def _run() -> None:
+        client = mod.MemberLinkClient()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow_rpc(_ws, _msg):
+            entered.set()
+            await release.wait()
+
+        monkeypatch.setattr(client, "_on_rpc", _slow_rpc)
+        await client._schedule_rpc(object(), {"id": "rpc-1", "params": {"tool": "slow:tool"}})
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+        assert len(client._rpc_tasks) == 1
+        release.set()
+        await asyncio.gather(*client._rpc_tasks)
+
+    asyncio.run(_run())
+
+
 def test_member_link_requires_hello_ack_before_connected(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     client._connected.set()
@@ -165,12 +229,17 @@ def test_member_link_hello_ack_failure_preserves_relay_close_reason() -> None:
 def test_member_link_allocator_trim_is_rate_limited(monkeypatch) -> None:
     client = mod.MemberLinkClient()
     calls: list[int] = []
-    ticks = iter([100.0, 120.0, 161.0])
+    ticks = [100.0, 120.0, 161.0]
 
-    monkeypatch.setattr(mod.time, "time", lambda: next(ticks))
+    def _clock() -> float:
+        return ticks.pop(0) if len(ticks) > 1 else ticks[0]
+
+    # Patch the protected logger before replacing the process-wide time module;
+    # logger patch registration itself records a timestamp.
+    monkeypatch.setattr(mod._log, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mod.time, "time", _clock)
     monkeypatch.setattr(mod, "_subnet_link_malloc_trim_min_interval_s", lambda: 60.0)
     monkeypatch.setattr(mod, "_trim_allocator_after_member_link_cycle", lambda: calls.append(1) or True)
-    monkeypatch.setattr(mod._log, "info", lambda *_args, **_kwargs: None)
 
     assert client._maybe_trim_allocator_after_link_cycle(reason="first") is True
     assert client._maybe_trim_allocator_after_link_cycle(reason="second") is False

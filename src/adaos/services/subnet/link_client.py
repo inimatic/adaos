@@ -44,6 +44,13 @@ from adaos.services.yjs.store import add_ystore_write_listener, get_ystore_for_w
 _log = logging.getLogger("adaos.subnet.client")
 
 
+def _rpc_error_code(exc: BaseException) -> str:
+    token = str(exc).split(":", 1)[0].strip()
+    if token and len(token) <= 80 and all(char.isalnum() or char in "._-" for char in token):
+        return token
+    return type(exc).__name__
+
+
 def _bounded_json_size(value: Any, *, limit: int) -> tuple[int, bool]:
     """Estimate encoded JSON bytes and stop before copying an oversized value."""
 
@@ -422,6 +429,12 @@ class MemberLinkClient:
         self._semantic_ping_send_timeout_total = 0
         self._semantic_ping_last_send: dict[str, Any] = {}
         self._semantic_ping_max_send: dict[str, Any] = {}
+        self._rpc_tasks: set[asyncio.Task[Any]] = set()
+        self._rpc_started_total = 0
+        self._rpc_completed_total = 0
+        self._rpc_failed_total = 0
+        self._rpc_rejected_total = 0
+        self._rpc_last_result: dict[str, Any] = {}
 
     @staticmethod
     def _pong_stale_after_s() -> float:
@@ -769,6 +782,15 @@ class MemberLinkClient:
                     "last_send": dict(self._semantic_ping_last_send),
                     "max_send": dict(self._semantic_ping_max_send),
                 },
+            },
+            "rpc": {
+                "active": len(self._rpc_tasks),
+                "max_concurrency": self._rpc_max_concurrency(),
+                "started_total": int(self._rpc_started_total),
+                "completed_total": int(self._rpc_completed_total),
+                "failed_total": int(self._rpc_failed_total),
+                "rejected_total": int(self._rpc_rejected_total),
+                "last_result": dict(self._rpc_last_result),
             },
             "member_session": {
                 "expires_at": self._member_session_expires_at or None,
@@ -1205,6 +1227,15 @@ class MemberLinkClient:
             except BaseException:
                 pass
         self._snapshot_task = None
+        for task in list(self._rpc_tasks):
+            if not task.done():
+                task.cancel()
+        if self._rpc_tasks:
+            try:
+                await asyncio.gather(*self._rpc_tasks, return_exceptions=True)
+            except Exception:
+                pass
+        self._rpc_tasks.clear()
         for task in list(self._yjs_node_state_tasks.values()):
             if task and not task.done():
                 task.cancel()
@@ -1732,7 +1763,7 @@ class MemberLinkClient:
                                 await self._on_node_names_set(msg)
                                 continue
                             if t == "rpc.req":
-                                await self._on_rpc(ws, msg)
+                                await self._schedule_rpc(ws, msg)
                                 continue
 
                     async def _status_loop() -> None:
@@ -1809,6 +1840,15 @@ class MemberLinkClient:
                     )
                 except Exception:
                     pass
+                for task in list(self._rpc_tasks):
+                    if not task.done():
+                        task.cancel()
+                if self._rpc_tasks:
+                    try:
+                        await asyncio.gather(*self._rpc_tasks, return_exceptions=True)
+                    except Exception:
+                        pass
+                self._rpc_tasks.clear()
                 self._connected.clear()
                 self._connected_at = 0.0
                 self._hello_ack_ok = False
@@ -1938,19 +1978,86 @@ class MemberLinkClient:
             )
             return
 
+        started_at = time.time()
+        self._rpc_started_total += 1
         try:
             result = await asyncio.to_thread(self._run_tool, tool, arguments, timeout, dev, intent)
+            duration_s = max(0.0, time.time() - started_at)
+            self._rpc_completed_total += 1
+            self._rpc_last_result = {
+                "tool": tool,
+                "ok": True,
+                "duration_s": round(duration_s, 6),
+                "finished_at": time.time(),
+            }
+            if duration_s >= 1.0:
+                _log.warning(
+                    "member rpc tool slow tool=%s duration_s=%.3f argument_keys=%s",
+                    tool,
+                    duration_s,
+                    sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else [],
+                )
             await self._send_ws_message(
                 ws,
                 {"t": "rpc.res", "id": rid, "ok": True, "result": result},
                 lane="rpc_response",
             )
         except Exception as exc:
+            duration_s = max(0.0, time.time() - started_at)
+            error_code = _rpc_error_code(exc)
+            self._rpc_failed_total += 1
+            self._rpc_last_result = {
+                "tool": tool,
+                "ok": False,
+                "duration_s": round(duration_s, 6),
+                "error_type": type(exc).__name__,
+                "error_code": error_code,
+                "finished_at": time.time(),
+            }
+            _log.warning(
+                "member rpc tool failed tool=%s duration_s=%.3f error_type=%s error_code=%s argument_keys=%s",
+                tool,
+                duration_s,
+                type(exc).__name__,
+                error_code,
+                sorted(str(key) for key in arguments.keys()) if isinstance(arguments, dict) else [],
+            )
             await self._send_ws_message(
                 ws,
                 {"t": "rpc.res", "id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}"},
                 lane="rpc_response",
             )
+
+    @staticmethod
+    def _rpc_max_concurrency() -> int:
+        try:
+            value = int(str(os.getenv("ADAOS_SUBNET_RPC_MAX_CONCURRENCY", "4") or "").strip())
+        except Exception:
+            value = 4
+        return max(1, min(value, 32))
+
+    async def _schedule_rpc(self, ws: Any, msg: dict[str, Any]) -> None:
+        active = {task for task in self._rpc_tasks if not task.done()}
+        self._rpc_tasks = active
+        if len(active) >= self._rpc_max_concurrency():
+            self._rpc_rejected_total += 1
+            rid = msg.get("id")
+            if isinstance(rid, str) and rid:
+                await self._send_ws_message(
+                    ws,
+                    {"t": "rpc.res", "id": rid, "ok": False, "error": "member_rpc_busy"},
+                    lane="rpc_response",
+                )
+            _log.warning(
+                "member rpc rejected: concurrency limit active=%d limit=%d",
+                len(active),
+                self._rpc_max_concurrency(),
+            )
+            return
+        tool = str(((msg.get("params") or {}) if isinstance(msg.get("params"), dict) else {}).get("tool") or "unknown")
+        task = asyncio.create_task(self._on_rpc(ws, msg), name=f"subnet-rpc:{tool[:80]}")
+        self._rpc_tasks.add(task)
+        task.add_done_callback(self._rpc_tasks.discard)
 
     @staticmethod
     def _run_tool(
