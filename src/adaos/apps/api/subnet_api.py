@@ -12,6 +12,7 @@ from adaos.services.subnet_kv_file_http import get_subnet_kv
 from adaos.services.subnet_registry_mem import LEASE_SECONDS_DEFAULT, DOWN_GRACE_SECONDS
 from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.subnet_registry_mem import get_subnet_registry
+from adaos.services.subnet_heartbeat_runtime import get_heartbeat_persistence_runtime
 
 from adaos.sdk.data import bus
 
@@ -36,11 +37,12 @@ def _heartbeat_directory_node(
     base_url: str | None,
 ) -> bool:
     directory = get_directory()
-    if not directory.repo.get_node(node_id):
+    if not directory.accept_heartbeat(node_id):
         return False
-    directory.on_heartbeat(
-        node_id,
-        capacity,
+    get_heartbeat_persistence_runtime().submit(
+        directory,
+        node_id=node_id,
+        capacity=capacity,
         node_state=node_state,
         base_url=base_url,
     )
@@ -130,8 +132,7 @@ async def heartbeat(body: HeartbeatRequest):
     if conf.role != "hub":
         raise HTTPException(status_code=403, detail="only hub node accepts heartbeats")
 
-    known = await asyncio.to_thread(
-        _heartbeat_directory_node,
+    known = _heartbeat_directory_node(
         body.node_id,
         capacity=body.capacity or None,
         node_state=body.node_state,

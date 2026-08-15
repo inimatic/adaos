@@ -11,6 +11,7 @@ import time
 import traceback
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, List
 
@@ -90,6 +91,12 @@ from adaos.services.subnet_alias import save_subnet_alias
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL, zone_public_base_url
 
 
+def _route_http_lane_index(key: str, workers: int) -> int:
+    worker_total = max(1, int(workers or 1))
+    digest = hashlib.blake2s(str(key or "").encode("utf-8"), digest_size=2).digest()
+    return int.from_bytes(digest, "big") % worker_total
+
+
 class NatsRouteTunnelRuntime:
     """Own browser/root route tunnel state for one NATS connection."""
 
@@ -101,6 +108,7 @@ class NatsRouteTunnelRuntime:
         self.tunnels: dict[str, dict[str, Any]] = {}
         self.tunnel_tasks: dict[str, asyncio.Task] = {}
         self.reset_callback: Any = None
+        self._http_executor: ThreadPoolExecutor | None = None
 
     async def install(
         self,
@@ -143,6 +151,19 @@ class NatsRouteTunnelRuntime:
         try:
             if candidate_passive_mode:
                 raise RuntimeError("candidate runtime keeps root route relay passive until cutover")
+            try:
+                route_http_worker_count = int(os.getenv("HUB_ROUTE_HTTP_WORKERS", "4") or "4")
+            except Exception:
+                route_http_worker_count = 4
+            route_http_worker_count = max(1, min(route_http_worker_count, 16))
+            previous_http_executor = self._http_executor
+            if previous_http_executor is not None:
+                previous_http_executor.shutdown(wait=False, cancel_futures=True)
+            route_http_executor = ThreadPoolExecutor(
+                max_workers=route_http_worker_count,
+                thread_name_prefix="adaos-route-http",
+            )
+            self._http_executor = route_http_executor
             # Optional dependency: if `websockets` is missing, keep HTTP proxy working
             # and gracefully deny WS tunnel opens.
             websockets_mod = None
@@ -3830,7 +3851,10 @@ class NatsRouteTunnelRuntime:
                                         "err": str(e),
                                     }
 
-                            resp = await asyncio.to_thread(_do_streamed_http)
+                            resp = await asyncio.get_running_loop().run_in_executor(
+                                route_http_executor,
+                                _do_streamed_http,
+                            )
                             _cleanup_http_body_relay_session(key, remove_temp=True)
                             await _route_reply(
                                 key,
@@ -4054,7 +4078,10 @@ class NatsRouteTunnelRuntime:
                             except Exception as e:
                                 return {"t": "http_resp", "status": 502, "headers": {}, "body_b64": "", "err": str(e)}
 
-                        resp = await asyncio.to_thread(_do_http)
+                        resp = await asyncio.get_running_loop().run_in_executor(
+                            route_http_executor,
+                            _do_http,
+                        )
                         route_outcome = f"http_local_done:{resp.get('status')}"
                         if _route_http_trace:
                             try:
@@ -4209,8 +4236,26 @@ class NatsRouteTunnelRuntime:
                 route_handler_queue_max = 4096
             if route_handler_queue_max < 128:
                 route_handler_queue_max = 128
+            try:
+                route_http_lane_queue_max = int(
+                    os.getenv(
+                        "HUB_ROUTE_HTTP_LANE_QUEUE_MAX",
+                        str(max(32, route_handler_queue_max // route_http_worker_count)),
+                    )
+                    or str(max(32, route_handler_queue_max // route_http_worker_count))
+                )
+            except Exception:
+                route_http_lane_queue_max = max(32, route_handler_queue_max // route_http_worker_count)
+            route_http_lane_queue_max = max(32, route_http_lane_queue_max)
             route_handler_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=route_handler_queue_max)
+            route_http_queues = [
+                asyncio.Queue(maxsize=route_http_lane_queue_max)
+                for _index in range(route_http_worker_count)
+            ]
             route_diag_state["dispatch_queue_max"] = int(route_handler_queue_max)
+            route_diag_state["dispatch_control_queue_max"] = int(route_handler_queue_max)
+            route_diag_state["dispatch_http_worker_count"] = int(route_http_worker_count)
+            route_diag_state["dispatch_http_lane_queue_max"] = int(route_http_lane_queue_max)
 
             def _route_key_from_subject(subject: str) -> str:
                 try:
@@ -4223,16 +4268,34 @@ class NatsRouteTunnelRuntime:
                     pass
                 return ""
 
-            async def _route_handler_worker() -> None:
+            def _route_dispatch_queue_sizes() -> tuple[int, int, int]:
+                control_size = int(route_handler_queue.qsize())
+                http_size = sum(int(queue.qsize()) for queue in route_http_queues)
+                return control_size, http_size, control_size + http_size
+
+            def _observe_route_dispatch_queues() -> None:
+                control_size, http_size, total_size = _route_dispatch_queue_sizes()
+                route_diag_state["dispatch_control_queue_size"] = control_size
+                route_diag_state["dispatch_http_queue_size"] = http_size
+                route_diag_state["dispatch_queue_size"] = total_size
+
+            async def _route_handler_worker(
+                queue: asyncio.Queue[tuple[str, bytes]],
+                *,
+                lane: str,
+            ) -> None:
                 while True:
-                    subject, raw = await route_handler_queue.get()
+                    subject, raw = await queue.get()
                     started0 = time.monotonic()
                     key0 = _route_key_from_subject(subject)
                     try:
-                        route_diag_state["dispatch_queue_size"] = int(route_handler_queue.qsize())
+                        _observe_route_dispatch_queues()
+                        route_diag_state["last_dispatch_lane"] = lane
                         route_diag_state["last_dispatch_key_tag"] = _key_tag(key0) if key0 else ""
                         await _route_handle_msg(_QueuedRouteMsg(subject, raw))
                         route_diag_state["dispatch_handled_total"] = int(route_diag_state.get("dispatch_handled_total") or 0) + 1
+                        lane_counter = f"dispatch_{lane}_handled_total"
+                        route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
@@ -4255,11 +4318,11 @@ class NatsRouteTunnelRuntime:
                         except Exception:
                             pass
                         try:
-                            route_handler_queue.task_done()
+                            queue.task_done()
                         except Exception:
                             pass
                         try:
-                            route_diag_state["dispatch_queue_size"] = int(route_handler_queue.qsize())
+                            _observe_route_dispatch_queues()
                         except Exception:
                             pass
 
@@ -4272,21 +4335,35 @@ class NatsRouteTunnelRuntime:
                     raw = bytes(getattr(msg, "data", b"") or b"")
                 except Exception:
                     raw = b""
+                key0 = _route_key_from_subject(subject)
+                is_http = bool(key0 and "--http--" in key0)
+                if is_http:
+                    lane_index = _route_http_lane_index(key0, route_http_worker_count)
+                    target_queue = route_http_queues[lane_index]
+                    lane = f"http_{lane_index}"
+                else:
+                    target_queue = route_handler_queue
+                    lane = "control"
                 try:
-                    route_handler_queue.put_nowait((subject, raw))
+                    target_queue.put_nowait((subject, raw))
                     route_diag_state["dispatch_enqueued_total"] = int(route_diag_state.get("dispatch_enqueued_total") or 0) + 1
-                    route_diag_state["dispatch_queue_size"] = int(route_handler_queue.qsize())
+                    lane_counter = "dispatch_http_enqueued_total" if is_http else "dispatch_control_enqueued_total"
+                    route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1
+                    _observe_route_dispatch_queues()
                 except asyncio.QueueFull:
-                    key0 = _route_key_from_subject(subject)
                     route_diag_state["dispatch_drop_total"] = int(route_diag_state.get("dispatch_drop_total") or 0) + 1
-                    route_diag_state["dispatch_queue_size"] = int(route_handler_queue.qsize())
+                    lane_counter = "dispatch_http_drop_total" if is_http else "dispatch_control_drop_total"
+                    route_diag_state[lane_counter] = int(route_diag_state.get(lane_counter) or 0) + 1
+                    _observe_route_dispatch_queues()
+                    route_diag_state["last_dispatch_lane"] = lane
                     route_diag_state["last_dispatch_key_tag"] = _key_tag(key0) if key0 else ""
                     try:
                         _rl_log(
                             "hub-route.dispatch_queue_full",
                             (
                                 "[hub-route] dispatch queue full "
-                                f"qsize={route_handler_queue.qsize()} max={route_handler_queue_max} key={_key_tag(key0)}"
+                                f"lane={lane} qsize={target_queue.qsize()} max={target_queue.maxsize} "
+                                f"key={_key_tag(key0)}"
                             ),
                             every_s=1.0,
                         )
@@ -4298,19 +4375,41 @@ class NatsRouteTunnelRuntime:
                             summary="hub route handler queue is full; dropping inbound route frame",
                             details={
                                 "key_tag": _key_tag(key0),
-                                "queue_size": int(route_handler_queue.qsize()),
-                                "queue_max": int(route_handler_queue_max),
+                                "lane": lane,
+                                "queue_size": int(target_queue.qsize()),
+                                "queue_max": int(target_queue.maxsize),
                             },
                         )
                     except Exception:
                         pass
+                    if is_http and _hub_key_match(key0):
+                        try:
+                            await _route_reply(
+                                key0,
+                                {
+                                    "t": "http_resp",
+                                    "status": 503,
+                                    "headers": {"content-type": "application/json"},
+                                    "body_b64": "",
+                                    "truncated": False,
+                                    "err": "route_http_queue_full",
+                                },
+                            )
+                        except Exception:
+                            pass
 
             try:
                 route_handler_task = asyncio.create_task(
-                    _route_handler_worker(),
-                    name="adaos-hub-route-handler",
+                    _route_handler_worker(route_handler_queue, lane="control"),
+                    name="adaos-hub-route-control-handler",
                 )
                 sub_workers.append(route_handler_task)
+                for lane_index, queue in enumerate(route_http_queues):
+                    route_http_handler_task = asyncio.create_task(
+                        _route_handler_worker(queue, lane=f"http_{lane_index}"),
+                        name=f"adaos-hub-route-http-handler-{lane_index}",
+                    )
+                    sub_workers.append(route_http_handler_task)
             except Exception:
                 pass
 
@@ -4416,6 +4515,13 @@ class NatsRouteTunnelRuntime:
 
     async def close(self) -> None:
         service = self._service
+        route_http_executor = self._http_executor
+        self._http_executor = None
+        if route_http_executor is not None:
+            try:
+                route_http_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         try:
             current_route_reset = getattr(service, "_hub_root_route_reset", None)
             if current_route_reset is self.reset_callback:

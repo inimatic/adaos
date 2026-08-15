@@ -1722,6 +1722,7 @@ def set_integration_readiness(
 
 def runtime_signal_snapshot() -> dict[str, Any]:
     from adaos.services.logging import logging_queue_snapshot
+    from adaos.services.subnet_heartbeat_runtime import heartbeat_persistence_snapshot
 
     with _LOCK:
         return {
@@ -1731,6 +1732,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "event_loop": runtime_event_loop_lag_snapshot(),
             "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
             "logging_queue": logging_queue_snapshot(),
+            "subnet_heartbeat_persistence": heartbeat_persistence_snapshot(),
         }
 
 

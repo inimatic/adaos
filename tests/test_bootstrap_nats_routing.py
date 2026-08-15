@@ -12,6 +12,7 @@ from adaos.services import bootstrap as bootstrap_mod
 from adaos.services.bootstrap_runtime import HubRouteProxyPolicy, NatsBridgePolicy
 from adaos.services.bootstrap_runtime import hub_route_proxy as _hub_route_proxy
 from adaos.services.bootstrap_runtime import nats_bridge as _nats_bridge
+from adaos.services.bootstrap_runtime import route_tunnel_runtime as _route_tunnel_runtime
 from adaos.services.bootstrap_runtime import status_policy as _status_policy
 from adaos.services.bootstrap_runtime import transport_cleanup as _transport_cleanup
 from adaos.services.bootstrap_runtime.nats_transport_runtime import _sidecar_tail_summary
@@ -44,6 +45,19 @@ def test_hub_route_proxy_policy_owns_discovery_cache() -> None:
 
     assert first.discover_active_runtime_local_base() == "http://127.0.0.1:8778"
     assert second.discovery.snapshot()["cache"]["value"] is None
+
+
+def test_hub_route_http_lane_is_stable_per_key_and_distributes_requests() -> None:
+    key = "sn-test--http--request-a"
+    assert _route_tunnel_runtime._route_http_lane_index(key, 4) == _route_tunnel_runtime._route_http_lane_index(
+        key,
+        4,
+    )
+    lanes = {
+        _route_tunnel_runtime._route_http_lane_index(f"sn-test--http--request-{index}", 4)
+        for index in range(32)
+    }
+    assert lanes == {0, 1, 2, 3}
 
 
 def test_nats_url_does_not_need_public_ws_refresh_for_local_or_ws_url() -> None:

@@ -48,8 +48,34 @@ class SubnetDirectory:
         node_state: str | None = None,
         base_url: str | None = None,
     ) -> None:
+        self.persist_heartbeat(
+            node_id,
+            capacity,
+            node_state=node_state,
+            base_url=base_url,
+        )
+        self._mark_heartbeat_live(node_id)
+
+    def accept_heartbeat(self, node_id: str) -> bool:
+        """Accept liveness without putting durable storage on the route critical path."""
+        if node_id not in self.live:
+            return False
+        self._mark_heartbeat_live(node_id)
+        return True
+
+    def persist_heartbeat(
+        self,
+        node_id: str,
+        capacity: Optional[Dict[str, Any]],
+        *,
+        node_state: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         ts = time.time()
         self.repo.touch_heartbeat(node_id, ts, capacity, node_state=node_state, base_url=base_url)
+
+    def _mark_heartbeat_live(self, node_id: str) -> None:
+        ts = time.time()
         st = self.live.get(node_id) or {}
         st["online"] = True
         st["last_seen"] = ts
