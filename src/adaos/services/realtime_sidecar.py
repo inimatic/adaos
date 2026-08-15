@@ -1070,6 +1070,13 @@ def _rotate_realtime_sidecar_diag_if_needed(path: Path) -> bool:
     )
 
 
+def _append_realtime_sidecar_diag(path: Path, snapshot: dict[str, Any]) -> None:
+    _rotate_realtime_sidecar_diag_if_needed(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+
+
 def _host_matches_listener(host: str, other: str | None) -> bool:
     target = str(host or "").strip().lower()
     current = str(other or "").strip().lower()
@@ -2375,9 +2382,8 @@ class RealtimeSidecarServer:
         path = realtime_sidecar_diag_path()
         while not self._stopped.is_set():
             try:
-                _rotate_realtime_sidecar_diag_if_needed(path)
-                with path.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(self._diag_snapshot(), ensure_ascii=False) + "\n")
+                snapshot = self._diag_snapshot()
+                await asyncio.to_thread(_append_realtime_sidecar_diag, path, snapshot)
             except Exception:
                 pass
             try:
@@ -2446,7 +2452,7 @@ class RealtimeSidecarServer:
         while not self._stopped.is_set():
             now = time.time()
             supervisor_enabled = env_bool("ADAOS_SUPERVISOR_ENABLED")
-            runtime_state = _sidecar_runtime_lifecycle_state()
+            runtime_state = await asyncio.to_thread(_sidecar_runtime_lifecycle_state)
             runtime_listener_ready = await self._runtime_listener_ready_for_lifecycle(runtime_state)
             if runtime_listener_ready:
                 runtime_listener_missing_since = None

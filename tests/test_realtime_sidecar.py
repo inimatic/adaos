@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import json
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -259,6 +261,55 @@ def test_realtime_sidecar_rotates_diag_and_log_with_five_backups(
         assert path.with_name(f"{path.name}.1").read_text(encoding="utf-8") == "active-too-large"
         assert path.with_name(f"{path.name}.5").read_text(encoding="utf-8") == "backup-4"
         assert not path.with_name(f"{path.name}.6").exists()
+
+
+def test_realtime_sidecar_diag_io_cannot_block_transport_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    writer_threads: list[int] = []
+    owner_thread = threading.get_ident()
+
+    def _blocked_append(_path: Path, _snapshot: dict) -> None:
+        writer_threads.append(threading.get_ident())
+        started.set()
+        release.wait(timeout=2.0)
+
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_EVERY_S", "0.01")
+    monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_diag_path", lambda: tmp_path / "diag.jsonl")
+    monkeypatch.setattr(realtime_sidecar_mod, "_append_realtime_sidecar_diag", _blocked_append)
+    original_route_state = copy.deepcopy(realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE)
+    original_media_state = copy.deepcopy(realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE)
+    server = RealtimeSidecarServer(host="127.0.0.1", port=7422)
+
+    async def _exercise() -> float:
+        task = asyncio.create_task(server._diag_loop())
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not started.is_set() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.005)
+        assert started.is_set()
+        heartbeat = asyncio.Event()
+        before = asyncio.get_running_loop().time()
+        asyncio.get_running_loop().call_later(0.02, heartbeat.set)
+        await heartbeat.wait()
+        elapsed = asyncio.get_running_loop().time() - before
+        server._stopped.set()
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        return elapsed
+
+    try:
+        elapsed = asyncio.run(_exercise())
+    finally:
+        realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE.clear()
+        realtime_sidecar_mod._ROUTE_TUNNEL_RUNTIME_STATE.update(original_route_state)
+        realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE.clear()
+        realtime_sidecar_mod._MEDIA_PROXY_RUNTIME_STATE.update(original_media_state)
+
+    assert elapsed < 0.15
+    assert writer_threads and writer_threads[0] != owner_thread
 
 
 class _FakeRemoteWS:
