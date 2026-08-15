@@ -259,7 +259,7 @@ class WebspaceRebuildService:
                 stage_started = time.perf_counter()
                 try:
                     from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-                    from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
+                    from adaos.services.yjs.store import reset_ystore_for_webspace_async  # pylint: disable=import-outside-toplevel
 
                     try:
                         reset_room_result = await reset_live_webspace_room(
@@ -270,7 +270,7 @@ class WebspaceRebuildService:
                     except Exception:
                         pass
                     try:
-                        reset_ystore_for_webspace(webspace_id)
+                        await reset_ystore_for_webspace_async(webspace_id)
                         ystore_reset = True
                     except Exception:
                         pass

@@ -6668,14 +6668,14 @@ class WebspaceService:
             return False
         try:
             from adaos.services.yjs.gateway import reset_live_webspace_room  # pylint: disable=import-outside-toplevel
-            from adaos.services.yjs.store import reset_ystore_for_webspace  # pylint: disable=import-outside-toplevel
+            from adaos.services.yjs.store import reset_ystore_for_webspace_async  # pylint: disable=import-outside-toplevel
  
             try:
                 await reset_live_webspace_room(webspace_id, close_reason="webspace_delete")
             except Exception:
                 pass
             try:
-                reset_ystore_for_webspace(webspace_id)
+                await reset_ystore_for_webspace_async(webspace_id)
             except Exception:
                 pass
         except Exception:

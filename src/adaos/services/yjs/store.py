@@ -348,6 +348,24 @@ def _persist_snapshot(path: Path, snapshot: bytes) -> int:
         return 0
 
 
+def _snapshot_file_info(path: Path) -> tuple[bool, int]:
+    try:
+        stat = path.stat()
+        return True, int(stat.st_size)
+    except FileNotFoundError:
+        return False, 0
+    except Exception:
+        return False, 0
+
+
+def _remove_snapshot_file(path: Path) -> bool:
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def ystores_root() -> Path:
     """
     Root directory for Yjs store snapshots, ensuring it exists.
@@ -366,7 +384,8 @@ def ystore_path_for_webspace(webspace_id: str) -> Path:
     Map a webspace id to a filesystem path for its raw Yjs snapshot.
     """
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in webspace_id)
-    return ystores_root() / f"{safe}{_YSTORE_SNAPSHOT_SUFFIX}"
+    ctx = get_ctx()
+    return ctx.paths.state_dir() / "ystores" / f"{safe}{_YSTORE_SNAPSHOT_SUFFIX}"
 
 
 def ystore_snapshot_exists(webspace_id: str) -> bool:
@@ -510,6 +529,8 @@ class AdaosMemoryYStore(BaseYStore):
         self._generation = 0
         self._persisted_generation = -1
         self._persisted_snapshot_bytes = 0
+        self._snapshot_file_exists: bool | None = None
+        self._snapshot_file_size = 0
         self._base_state_vector: bytes | None = None
         self._state_vector_fast_path_total = 0
         self._state_vector_compute_total = 0
@@ -543,6 +564,10 @@ class AdaosMemoryYStore(BaseYStore):
         path = ystore_path_for_webspace(self.path)
         persist_started = time.perf_counter()
         written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, payload) if persist_snapshot else 0
+        if persist_snapshot:
+            snapshot_exists, snapshot_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
+            self._snapshot_file_exists = snapshot_exists
+            self._snapshot_file_size = snapshot_size
         persist_ms = round((time.perf_counter() - persist_started) * 1000.0, 3)
         metadata = await self.get_metadata()
         now = time.time()
@@ -722,9 +747,9 @@ class AdaosMemoryYStore(BaseYStore):
                     self._persisted_snapshot_bytes = int(persisted_base_bytes or len(base_snapshot))
         elif delete_snapshot:
             try:
-                if path.exists():
-                    path.unlink()
-                    removed_snapshot = True
+                removed_snapshot = await anyio.to_thread.run_sync(_remove_snapshot_file, path)
+                self._snapshot_file_exists = False
+                self._snapshot_file_size = 0
             except Exception:
                 _log.warning("failed to remove corrupt YStore snapshot for webspace=%s", self.path, exc_info=True)
         with self._lock:
@@ -1131,7 +1156,10 @@ class AdaosMemoryYStore(BaseYStore):
         if self._loaded_from_disk:
             return
         path = ystore_path_for_webspace(self.path)
-        if not await anyio.to_thread.run_sync(path.exists):
+        snapshot_exists, snapshot_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
+        self._snapshot_file_exists = snapshot_exists
+        self._snapshot_file_size = snapshot_size
+        if not snapshot_exists:
             self._loaded_from_disk = True
             return
 
@@ -1144,6 +1172,8 @@ class AdaosMemoryYStore(BaseYStore):
             quarantined = await anyio.to_thread.run_sync(_quarantine_corrupt_snapshot, path, preflight_reason)
             with self._lock:
                 self._loaded_from_disk = True
+                self._snapshot_file_exists = False
+                self._snapshot_file_size = 0
                 self._last_disk_load_mode = "corrupt_snapshot_quarantined"
                 self._last_disk_snapshot_bytes = 0
                 self._persisted_snapshot_bytes = 0
@@ -1163,6 +1193,8 @@ class AdaosMemoryYStore(BaseYStore):
             _log.warning("failed to read YStore snapshot %s: %s", path, exc, exc_info=True)
             self._loaded_from_disk = True
             return
+        self._snapshot_file_exists = True
+        self._snapshot_file_size = len(data)
 
         try:
             state_vector = await anyio.to_thread.run_sync(_decode_state_vector_from_snapshot, data)
@@ -1305,7 +1337,9 @@ class AdaosMemoryYStore(BaseYStore):
             metadata = updates[-1][1] if updates else b""
             cached_state_vector = bytes(self._base_state_vector or b"") or None
         path = ystore_path_for_webspace(self.path)
-        snapshot_exists = path.exists()
+        snapshot_exists, snapshot_file_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
+        self._snapshot_file_exists = snapshot_exists
+        self._snapshot_file_size = snapshot_file_size
         snapshot = b""
         snapshot_state_vector: bytes | None = None
         backup_mode = "empty"
@@ -1342,6 +1376,9 @@ class AdaosMemoryYStore(BaseYStore):
                     skip_reason = "persisted_generation_current"
                 else:
                     written_bytes = await anyio.to_thread.run_sync(_persist_snapshot, path, snapshot)
+                    snapshot_exists, snapshot_file_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
+                    self._snapshot_file_exists = snapshot_exists
+                    self._snapshot_file_size = snapshot_file_size
         except BaseException as exc:
             if _is_fatal_base_exception(exc):
                 raise
@@ -1466,12 +1503,9 @@ class AdaosMemoryYStore(BaseYStore):
 
     def runtime_snapshot(self, *, now_ts: float | None = None) -> dict[str, Any]:
         now = time.time() if now_ts is None else float(now_ts)
-        snapshot_path = ystore_path_for_webspace(self.path)
-        snapshot_exists = snapshot_path.exists()
-        try:
-            snapshot_size = snapshot_path.stat().st_size if snapshot_exists else 0
-        except Exception:
-            snapshot_size = 0
+        snapshot_observed = self._snapshot_file_exists is not None
+        snapshot_exists = bool(self._snapshot_file_exists)
+        snapshot_size = int(self._snapshot_file_size)
         updates = list(self._updates)
         update_log_entries = len(updates)
         update_log_bytes = sum(len(update) for update, _meta, _ts in updates)
@@ -1555,6 +1589,7 @@ class AdaosMemoryYStore(BaseYStore):
             "snapshot_compaction_suppressed_total": int(self._snapshot_compaction_suppressed_total),
             "snapshot_file_exists": bool(snapshot_exists),
             "snapshot_file_size": int(snapshot_size),
+            "snapshot_file_observed": bool(snapshot_observed),
             "persisted_generation": int(self._persisted_generation) if self._persisted_generation >= 0 else None,
             "persisted_snapshot_bytes": int(self._persisted_snapshot_bytes),
             "persisted_up_to_date": persisted_up_to_date,
@@ -1671,10 +1706,39 @@ def reset_ystore_for_webspace(webspace_id: str) -> None:
             store._clear_runtime_state_locked()  # type: ignore[attr-defined]
         except Exception:
             pass
+    path = ystore_path_for_webspace(webspace_id)
     try:
-        path = ystore_path_for_webspace(webspace_id)
-        if path.exists():
-            path.unlink()
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            _remove_snapshot_file(path)
+        except Exception:
+            _log.warning("failed to remove YStore snapshot for webspace=%s", webspace_id, exc_info=True)
+        return
+
+    async def _remove_snapshot() -> None:
+        try:
+            await anyio.to_thread.run_sync(_remove_snapshot_file, path)
+        except Exception:
+            _log.warning("failed to remove YStore snapshot for webspace=%s", webspace_id, exc_info=True)
+
+    loop.create_task(_remove_snapshot())
+
+
+async def reset_ystore_for_webspace_async(webspace_id: str) -> None:
+    store = _YSTORE_CACHE.pop(webspace_id, None)
+    if store is not None:
+        try:
+            store.stop()
+        except Exception:
+            pass
+        try:
+            store._clear_runtime_state_locked()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    path = ystore_path_for_webspace(webspace_id)
+    try:
+        await anyio.to_thread.run_sync(_remove_snapshot_file, path)
     except Exception:
         _log.warning("failed to remove YStore snapshot for webspace=%s", webspace_id, exc_info=True)
 
@@ -1686,7 +1750,7 @@ async def restore_ystore_for_webspace(webspace_id: str) -> dict[str, Any]:
     """
     key = str(webspace_id or "").strip() or "default"
     path = ystore_path_for_webspace(key)
-    snapshot_exists = path.exists()
+    snapshot_exists, _snapshot_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
     if not snapshot_exists:
         return {
             "ok": False,
@@ -1748,9 +1812,7 @@ async def evict_ystore_for_webspace(
         if delete_snapshot:
             try:
                 path = ystore_path_for_webspace(key)
-                if path.exists():
-                    path.unlink()
-                    removed_snapshot = True
+                removed_snapshot = await anyio.to_thread.run_sync(_remove_snapshot_file, path)
             except Exception:
                 _log.warning("failed to remove YStore snapshot for webspace=%s", key, exc_info=True)
         return {
@@ -1810,9 +1872,7 @@ async def evict_ystore_for_webspace(
     if delete_snapshot:
         try:
             path = ystore_path_for_webspace(key)
-            if path.exists():
-                path.unlink()
-                removed_snapshot = True
+            removed_snapshot = await anyio.to_thread.run_sync(_remove_snapshot_file, path)
         except Exception:
             _log.warning("failed to remove YStore snapshot for webspace=%s", key, exc_info=True)
 

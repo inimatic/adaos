@@ -373,6 +373,43 @@ async def test_ystore_snapshot_preflight_runs_outside_event_loop(monkeypatch, tm
         reset_ystore_for_webspace(webspace_id)
 
 
+async def test_ystore_backup_file_probe_runs_outside_event_loop(monkeypatch) -> None:
+    webspace_id = _webspace_id("backup-probe-thread")
+    store = get_ystore_for_webspace(webspace_id)
+    owner_thread_id = threading.get_ident()
+    probe_thread_ids: list[int] = []
+
+    def _file_info(_path):
+        probe_thread_ids.append(threading.get_ident())
+        return False, 0
+
+    monkeypatch.setattr(ystore_module, "_snapshot_file_info", _file_info)
+    try:
+        await store.backup_to_disk()
+
+        assert probe_thread_ids
+        assert probe_thread_ids[0] != owner_thread_id
+    finally:
+        reset_ystore_for_webspace(webspace_id)
+
+
+async def test_ystore_runtime_snapshot_has_no_filesystem_probe(monkeypatch) -> None:
+    webspace_id = _webspace_id("snapshot-no-io")
+    store = get_ystore_for_webspace(webspace_id)
+    monkeypatch.setattr(
+        ystore_module,
+        "ystore_path_for_webspace",
+        lambda _webspace_id: (_ for _ in ()).throw(AssertionError("runtime snapshot must use observed state")),
+    )
+    try:
+        snapshot = store.runtime_snapshot()
+
+        assert snapshot["snapshot_file_exists"] is False
+        assert snapshot["snapshot_file_observed"] is False
+    finally:
+        ystore_module._YSTORE_CACHE.pop(webspace_id, None)
+
+
 async def test_async_get_ydoc_replaces_partial_doc_and_preserves_good_base(monkeypatch) -> None:
     webspace_id = _webspace_id("corrupt-tail")
     store = get_ystore_for_webspace(webspace_id)

@@ -6426,7 +6426,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
         reset_calls.append(("room", close_reason, persist_ystore_snapshot))
         return {"accepted": True}
 
-    def _fake_reset_ystore(_webspace_id: str) -> None:
+    async def _fake_reset_ystore(_webspace_id: str) -> None:
         reset_calls.append(("ystore", "reset", None))
 
     monkeypatch.setattr(webspace_runtime_module, "async_get_ydoc", lambda _webspace_id: _FakeAsyncDoc(fake_state))
@@ -6449,7 +6449,7 @@ def test_phase3_reset_keeps_hard_runtime_reset(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
         "adaos.services.yjs.store",
-        types.SimpleNamespace(reset_ystore_for_webspace=_fake_reset_ystore),
+        types.SimpleNamespace(reset_ystore_for_webspace_async=_fake_reset_ystore),
     )
 
     result = asyncio.run(
