@@ -112,6 +112,7 @@ def refresh_skill_runtime(
     operation_id: str | None = None,
     retry_deactivated: bool = False,
     defer_webspace_rebuild: bool = False,
+    run_candidate_tests: bool = False,
 ) -> dict[str, Any]:
     target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
     expected_version = str(source_version or "").strip()
@@ -128,6 +129,8 @@ def refresh_skill_runtime(
         "activated_slot": "",
         "failed_stage": "",
         "failure_reason": "",
+        "candidate_tests_required": bool(run_candidate_tests),
+        "tests": {},
         "lifecycle_stages": [],
     }
     runtime_status_before: dict[str, Any] = {}
@@ -173,15 +176,24 @@ def refresh_skill_runtime(
         payload["deactivation"] = deactivation_before
     if retry_deactivated_prepare:
         payload["deactivation_retry"] = True
-    try:
-        runtime_result = mgr.runtime_update(skill_name, space="workspace")
-        payload["runtime_updated"] = True
-        payload["runtime_update_result"] = runtime_result
-        _record_stage(payload, "runtime_update", ok=True)
-    except Exception as exc:
-        payload["runtime_update_error"] = str(exc)
-        _record_stage(payload, "runtime_update", ok=False, error=str(exc), fatal=False)
-        runtime_result = {}
+    isolated_candidate = bool(migrate_runtime and expected_version and expected_version != runtime_version_before)
+    payload["isolated_candidate"] = isolated_candidate
+    if isolated_candidate:
+        # runtime_update copies Workspace sources into the active slot. A
+        # versioned A/B candidate must remain physically isolated until its
+        # prepare/tests/activation sequence completes.
+        runtime_result: dict[str, Any] = {}
+        _record_stage(payload, "runtime_update", ok=True, skipped=True, reason="versioned_candidate_isolated")
+    else:
+        try:
+            runtime_result = mgr.runtime_update(skill_name, space="workspace")
+            payload["runtime_updated"] = True
+            payload["runtime_update_result"] = runtime_result
+            _record_stage(payload, "runtime_update", ok=True)
+        except Exception as exc:
+            payload["runtime_update_error"] = str(exc)
+            _record_stage(payload, "runtime_update", ok=False, error=str(exc), fatal=False)
+            runtime_result = {}
     should_prepare = False
     if source_version is not None:
         should_prepare = bool(str(source_version or "").strip() and str(source_version or "").strip() != runtime_version_before)
@@ -213,16 +225,17 @@ def refresh_skill_runtime(
         if ensure_installed:
             mgr.install(skill_name, validate=False)
         try:
-            prepare_kwargs: dict[str, Any] = {"run_tests": False}
+            prepare_kwargs: dict[str, Any] = {"run_tests": bool(run_candidate_tests)}
             if allow_deactivated_prepare:
                 prepare_kwargs["allow_deactivated"] = True
             runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
         except Exception as exc:
             message = f"runtime prepare failed after skill update: {exc}"
-            payload["failed_stage"] = "prepare"
+            failed_stage = "tests" if str(exc).strip().lower().startswith("skill tests failed") else "prepare"
+            payload["failed_stage"] = failed_stage
             payload["failure_reason"] = str(exc)
             payload["error"] = message
-            _record_stage(payload, "prepare", ok=False, error=str(exc))
+            _record_stage(payload, failed_stage, ok=False, error=str(exc))
             try:
                 runtime_status_after = mgr.runtime_status(skill_name)
             except Exception:
@@ -235,6 +248,13 @@ def refresh_skill_runtime(
         payload["prepared_version"] = str(version or "").strip()
         payload["prepared_slot"] = str(slot or "").strip()
         payload["data_migration"] = dict(getattr(runtime, "data_migration", None) or {})
+        payload["tests"] = {
+            str(test_name): {
+                "status": str(getattr(result, "status", result) or ""),
+                "detail": str(getattr(result, "detail", "") or ""),
+            }
+            for test_name, result in dict(getattr(runtime, "tests", None) or {}).items()
+        }
         _record_stage(payload, "prepare", ok=True, version=version, slot=slot)
         try:
             activation_kwargs: dict[str, Any] = {

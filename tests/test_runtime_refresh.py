@@ -127,7 +127,7 @@ def test_refresh_skill_runtime_retries_deactivated_skill_when_requested() -> Non
 
         def runtime_update(self, name: str, space: str = "workspace") -> dict[str, Any]:
             calls.append(f"runtime_update:{name}:{space}")
-            return {"ok": True}
+            raise AssertionError("versioned candidate must not mutate the active runtime")
 
         def install(self, name: str, validate: bool = False) -> None:
             calls.append(f"install:{name}:{int(validate)}")
@@ -155,12 +155,13 @@ def test_refresh_skill_runtime_retries_deactivated_skill_when_requested() -> Non
     assert payload["ok"] is True
     assert payload["deactivation_retry"] is True
     assert payload["runtime_migrated"] is True
+    assert payload["isolated_candidate"] is True
+    assert payload["runtime_updated"] is False
     assert payload["active_converged"] is True
     assert payload["active_version_after"] == "0.2.1"
     assert payload["active_slot_after"] == "B"
     assert calls == [
         "runtime_status:weather_skill:1",
-        "runtime_update:weather_skill:workspace",
         "install:weather_skill:0",
         "prepare_runtime:weather_skill:0:1",
         "activate_for_space:weather_skill:0.2.1:B:default:desktop",
@@ -198,7 +199,7 @@ def test_refresh_skill_runtime_recovers_transient_migration_deactivation() -> No
 
         def runtime_update(self, name: str, space: str = "workspace") -> dict[str, Any]:
             calls.append(f"runtime_update:{name}:{space}")
-            return {"ok": True}
+            raise AssertionError("versioned candidate must not mutate the active runtime")
 
         def install(self, name: str, validate: bool = False) -> None:
             calls.append(f"install:{name}:{int(validate)}")
@@ -225,15 +226,50 @@ def test_refresh_skill_runtime_recovers_transient_migration_deactivation() -> No
     assert payload["ok"] is True
     assert payload["deactivation_recovery"] is True
     assert payload["runtime_migrated"] is True
+    assert payload["isolated_candidate"] is True
+    assert payload["runtime_updated"] is False
     assert payload["active_converged"] is True
     assert payload["active_version_after"] == "0.8.3"
     assert payload["active_slot_after"] == "B"
     assert payload.get("skipped") is not True
     assert calls == [
         "runtime_status:mediaserver:1",
-        "runtime_update:mediaserver:workspace",
         "install:mediaserver:0",
         "prepare_runtime:mediaserver:0:1",
         "activate_for_space:mediaserver:0.8.3:B:default:desktop",
         "runtime_status:mediaserver:2",
+    ]
+
+
+def test_refresh_skill_runtime_keeps_same_version_hot_refresh_behavior() -> None:
+    calls: list[str] = []
+
+    class _Manager:
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            calls.append(f"runtime_status:{name}")
+            return {"version": "1.0.0", "active_slot": "A", "deactivated": False}
+
+        def runtime_update(self, name: str, space: str = "workspace") -> dict[str, Any]:
+            calls.append(f"runtime_update:{name}:{space}")
+            return {"ok": True, "changed_files": ["handlers/main.py"]}
+
+        def prepare_runtime(self, *_args, **_kwargs):
+            raise AssertionError("same-version hot refresh must not prepare a new slot")
+
+    payload = refresh_skill_runtime(
+        _Manager(),
+        "demo_skill",
+        webspace_id="desktop",
+        source_version="1.0.0",
+        migrate_runtime=True,
+    )
+
+    assert payload["ok"] is True
+    assert payload["isolated_candidate"] is False
+    assert payload["runtime_updated"] is True
+    assert payload["runtime_migrated"] is False
+    assert calls == [
+        "runtime_status:demo_skill",
+        "runtime_update:demo_skill:workspace",
+        "runtime_status:demo_skill",
     ]

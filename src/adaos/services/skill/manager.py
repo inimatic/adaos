@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from importlib import metadata as importlib_metadata
 import asyncio
 from inspect import isawaitable
 import json
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 import yaml
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 from adaos.adapters.git.workspace import wait_for_materialized
 from adaos.build_info import BUILD_INFO
@@ -116,6 +119,78 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, (int, float)):
         return value != 0
     return str(value).strip().lower() in {"1", "true", "yes", "on", "write", "mutate"}
+
+
+def _vendor_satisfies_requirements(vendor_dir: Path, args: Iterable[str]) -> bool:
+    """Return true only when the requested dependency graph is present in the vendor."""
+
+    if not vendor_dir.is_dir():
+        return False
+    installed: dict[str, tuple[Version, importlib_metadata.Distribution]] = {}
+    try:
+        for distribution in importlib_metadata.distributions(path=[str(vendor_dir)]):
+            name = str(distribution.metadata.get("Name") or "").strip()
+            if not name:
+                continue
+            try:
+                installed[canonicalize_name(name)] = (Version(str(distribution.version or "0")), distribution)
+            except InvalidVersion:
+                return False
+    except Exception:
+        return False
+
+    verified: set[tuple[str, tuple[str, ...]]] = set()
+
+    def _marker_applies(requirement: Requirement, extras: set[str] | None = None) -> bool:
+        if requirement.marker is None:
+            return True
+        values = extras or {""}
+        try:
+            return any(requirement.marker.evaluate({"extra": extra}) for extra in values)
+        except Exception:
+            return False
+
+    def _satisfied(requirement: Requirement, *, parent_extras: set[str] | None = None) -> bool:
+        if not _marker_applies(requirement, parent_extras):
+            return True
+        if requirement.url:
+            return False
+        name = canonicalize_name(requirement.name)
+        installed_entry = installed.get(name)
+        if installed_entry is None:
+            return False
+        version, distribution = installed_entry
+        if requirement.specifier and version not in requirement.specifier:
+            return False
+        extras = {str(extra).strip() for extra in requirement.extras if str(extra).strip()}
+        key = (name, tuple(sorted(extras)))
+        if key in verified:
+            return True
+        verified.add(key)
+        for raw_dependency in distribution.requires or []:
+            try:
+                dependency = Requirement(raw_dependency)
+            except InvalidRequirement:
+                return False
+            if not _satisfied(dependency, parent_extras=extras):
+                return False
+        return True
+
+    checked = 0
+    for raw in args:
+        token = str(raw or "").strip()
+        if not token or token.startswith("-"):
+            return False
+        try:
+            requirement = Requirement(token)
+        except InvalidRequirement:
+            return False
+        if not _marker_applies(requirement):
+            continue
+        checked += 1
+        if not _satisfied(requirement):
+            return False
+    return checked > 0
 
 
 def _dev_tool_requires_caller_thread(tool_spec: Mapping[str, Any] | None) -> bool:
@@ -2003,9 +2078,17 @@ class SkillManager:
                 skill_version=version,
                 slot_current_dir=slot.root,
             )
-            if any(result.status != "passed" for result in tests.values()):
+            failed_tests = {
+                test_name: {
+                    "status": str(result.status or ""),
+                    "detail": str(result.detail or ""),
+                }
+                for test_name, result in tests.items()
+                if result.status != "passed"
+            }
+            if failed_tests:
                 env.cleanup_slot(version, slot_name)
-                raise RuntimeError("skill tests failed")
+                raise RuntimeError(f"skill tests failed: {failed_tests}")
         lifecycle["healthcheck"] = {
             "ok": True,
             "stage": "prepare",
@@ -2458,6 +2541,57 @@ class SkillManager:
             pass
         if self.bus:
             emit(self.bus, "skills.deactivated", dict(payload), "skill.mgr")
+        return payload
+
+    def record_runtime_migration_failure(
+        self,
+        name: str,
+        *,
+        attempted_version: str,
+        failed_stage: str,
+        comment: str,
+        operation_id: str = "",
+        active_version_before: str = "",
+        active_slot_before: str = "",
+        rollback_performed: bool = False,
+        source: str = "skill_runtime_migration_worker",
+    ) -> dict[str, Any]:
+        """Quarantine a candidate while keeping the selected runtime active."""
+
+        env = self._runtime_env(name)
+        version = env.resolve_active_version()
+        if not version:
+            raise RuntimeError("no active version")
+        slot = env.read_active_slot(version)
+        payload = {
+            "name": name,
+            "version": version,
+            "slot": slot,
+            "reason": "runtime_migration_failed",
+            "deactivated": False,
+            "status": "candidate_quarantined",
+            "comment": str(comment or "").strip(),
+            "operation_id": str(operation_id or "").strip(),
+            "transient": False,
+            "failure_kind": "migration",
+            "failed_stage": str(failed_stage or "unknown").strip() or "unknown",
+            "source": str(source or "skill_runtime_migration_worker").strip(),
+            "committed_core_switch": False,
+            "attempted_version": str(attempted_version or "").strip(),
+            "active_version_before": str(active_version_before or "").strip(),
+            "active_slot_before": str(active_slot_before or "").strip(),
+            "fallback_version": version,
+            "fallback_slot": slot,
+            "fallback_preserved": True,
+            "rollback_performed": bool(rollback_performed),
+        }
+        env.write_deactivation(payload)
+        try:
+            install_skill_in_capacity(name, version, active=True)
+        except Exception:
+            pass
+        if self.bus:
+            emit(self.bus, "skills.runtime_migration.failed", dict(payload), "skill.mgr")
         return payload
 
     def deactivate_for_space(
@@ -3457,6 +3591,13 @@ class SkillManager:
 
         # Default non-service dependencies are isolated from the active core
         # interpreter in the runtime bucket vendor overlay.
+        if not has_requirements_file and _vendor_satisfies_requirements(vendor_dir, python_args):
+            _log.info(
+                "reusing satisfied runtime vendor dependencies skill=%s vendor=%s",
+                slot.skill_name,
+                vendor_dir,
+            )
+            return [str(vendor_dir)]
         vendor_dir.mkdir(parents=True, exist_ok=True)
         ensure_dependency_disk_budget(
             vendor_dir,

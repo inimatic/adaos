@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypatch) -> None:
+def test_migrate_installed_skills_tests_candidate_before_activation_and_preserves_fallback(monkeypatch) -> None:
     import adaos.apps.skill_runtime_migrate as mod
 
     class _Row:
@@ -22,6 +22,9 @@ def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypat
         version = "1.2.3"
         slot = "B"
 
+        def __init__(self, tests=None) -> None:
+            self.tests = tests or {}
+
     class _TestResult:
         def __init__(self, status: str) -> None:
             self.status = status
@@ -33,23 +36,19 @@ def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypat
             return {"lifecycle": {"rehydrate": {"ok": True}}}
 
         def prepare_runtime(self, name: str, run_tests: bool = False):
-            assert run_tests is False
-            return _Runtime()
+            assert run_tests is True
+            if name == "service_skill":
+                raise RuntimeError("skill tests failed: suite=failed")
+            return _Runtime({"suite": _TestResult("passed")})
 
         def activate_runtime(self, name: str, version=None, slot=None):
             assert version == "1.2.3"
             assert slot == "B"
             return "B"
 
-        def run_skill_tests(self, name: str, source: str = "installed"):
-            assert source == "installed"
-            if name == "service_skill":
-                return {"suite": _TestResult("failed")}
-            return {"suite": _TestResult("passed")}
-
-        def rollback_runtime(self, name: str):
+        def record_runtime_migration_failure(self, name: str, **kwargs):
             assert name == "service_skill"
-            return "A"
+            return {"status": "candidate_quarantined", **kwargs}
 
     class _Ctx:
         sql = object()
@@ -76,7 +75,7 @@ def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypat
 
     assert payload["ok"] is False
     assert payload["failed_total"] == 1
-    assert payload["rollback_total"] == 1
+    assert payload["rollback_total"] == 0
     assert payload["tests_failed_total"] == 1
     assert payload["lifecycle_failed_total"] == 0
     assert payload["run_tests"] is True
@@ -87,9 +86,9 @@ def test_migrate_installed_skills_runs_tests_and_rolls_back_on_failure(monkeypat
     assert payload["skills"][1]["skill"] == "service_skill"
     assert payload["skills"][1]["ok"] is False
     assert payload["skills"][1]["failed_stage"] == "tests"
-    assert payload["skills"][1]["rollback_performed"] is True
-    assert payload["skills"][1]["rollback_slot"] == "A"
-    assert payload["skills"][1]["tests"] == {"suite": "failed"}
+    assert payload["skills"][1]["rollback_performed"] is False
+    assert payload["skills"][1]["fallback_preserved"] is True
+    assert payload["skills"][1]["candidate_quarantine"]["status"] == "candidate_quarantined"
 
 
 def test_main_json_redirects_noisy_migration_stdout(monkeypatch, capsys) -> None:
@@ -238,7 +237,7 @@ def test_migrate_installed_skills_skips_already_deactivated_skills(monkeypatch) 
     assert payload["skills"][0]["failure_kind"] == "prepare"
 
 
-def test_migrate_installed_skills_allows_prepare_after_transient_disable(monkeypatch) -> None:
+def test_migrate_installed_skills_keeps_fallback_live_while_preparing_candidate(monkeypatch) -> None:
     import adaos.apps.skill_runtime_migrate as mod
 
     calls: list[str] = []
@@ -246,40 +245,22 @@ def test_migrate_installed_skills_allows_prepare_after_transient_disable(monkeyp
     class _Runtime:
         version = "1.2.3"
         slot = "B"
+        tests = {}
 
     class _Manager:
         def runtime_status(self, name: str):
             calls.append(f"runtime_status:{name}")
             return {"version": "1.0.0", "active_slot": "A", "deactivated": False, "lifecycle": {}}
 
-        def deactivate_runtime(
-            self,
-            name: str,
-            reason: str = "",
-            failure_kind: str = "",
-            failed_stage: str = "",
-            source: str = "",
-            committed_core_switch=None,
-            status: str = "",
-            comment: str = "",
-            operation_id: str = "",
-            transient=None,
-        ):
-            calls.append(f"deactivate_runtime:{name}:{reason}:{int(bool(transient))}")
-            return {"name": name, "deactivated": True, "reason": reason, "transient": bool(transient)}
-
         def prepare_runtime(self, name: str, *, run_tests: bool = False, allow_deactivated: bool = False):
             calls.append(f"prepare_runtime:{name}:{int(run_tests)}:{int(allow_deactivated)}")
-            assert allow_deactivated is True
+            assert run_tests is True
+            assert allow_deactivated is False
             return _Runtime()
 
         def activate_runtime(self, name: str, version=None, slot=None):
             calls.append(f"activate_runtime:{name}:{version}:{slot}")
             return slot
-
-        def run_skill_tests(self, name: str, source: str = "installed"):
-            calls.append(f"run_skill_tests:{name}:{source}")
-            return {}
 
     class _Ctx:
         sql = object()
@@ -310,14 +291,12 @@ def test_migrate_installed_skills_allows_prepare_after_transient_disable(monkeyp
     assert payload["ok"] is True
     assert payload["failed_total"] == 0
     assert payload["skills"][0]["ok"] is True
-    assert payload["skills"][0]["disabled_for_migration"] is True
+    assert payload["skills"][0]["disabled_for_migration"] is False
     assert calls == [
         "runtime_status:mediaserver",
-        "deactivate_runtime:mediaserver:runtime_migration_in_progress:1",
-        "prepare_runtime:mediaserver:0:1",
+        "prepare_runtime:mediaserver:1:0",
         "activate_runtime:mediaserver:1.2.3:B",
         "runtime_status:mediaserver",
-        "run_skill_tests:mediaserver:installed",
     ]
 
 

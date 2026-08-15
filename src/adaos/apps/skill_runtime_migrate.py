@@ -73,7 +73,7 @@ def _safe_for_core_update(items: list[dict[str, Any]]) -> bool:
         return True
     for item in failures:
         stage = str(item.get("failed_stage") or item.get("stage") or "").strip().lower()
-        if bool(item.get("rollback_performed")) or bool(item.get("deactivated")):
+        if bool(item.get("rollback_performed")) or bool(item.get("fallback_preserved")) or bool(item.get("deactivated")):
             continue
         if stage in {"prepare", "activate"}:
             continue
@@ -132,32 +132,13 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
             continue
         activated = False
         try:
-            entry["stage"] = "disable"
-            try:
-                entry["deactivation"] = mgr.deactivate_runtime(
-                    skill_name,
-                    reason="runtime_migration_in_progress",
-                    failure_kind="migration",
-                    failed_stage="prepare",
-                    source="skill_runtime_migrate",
-                    committed_core_switch=False,
-                    status="disabled",
-                    comment="Skill runtime is disabled while AdaOS prepares and activates its updated runtime slot.",
-                    operation_id=operation_id,
-                    transient=True,
-                )
-                entry["disabled_for_migration"] = True
-                entry["transient_deactivation"] = entry["deactivation"]
-                entry["deactivated"] = False
-            except Exception as exc:
-                entry["disable_error"] = str(exc)
+            entry["disabled_for_migration"] = False
             entry["stage"] = "prepare"
-            prepare_kwargs: dict[str, Any] = {"run_tests": False}
-            if bool(entry.get("disabled_for_migration")):
-                prepare_kwargs["allow_deactivated"] = True
+            prepare_kwargs: dict[str, Any] = {"run_tests": bool(run_tests)}
             runtime = mgr.prepare_runtime(skill_name, **prepare_kwargs)
             entry["prepared_version"] = getattr(runtime, "version", None)
             entry["prepared_slot"] = getattr(runtime, "slot", None)
+            entry["tests"] = _tests_payload(dict(getattr(runtime, "tests", None) or {}))
 
             entry["stage"] = "activate"
             active_slot = mgr.activate_runtime(
@@ -174,21 +155,16 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
                 entry["stage"] = lifecycle_failed_stage
                 raise RuntimeError(f"lifecycle check failed at {lifecycle_failed_stage}")
 
-            if run_tests:
-                entry["stage"] = "tests"
-                tests = mgr.run_skill_tests(skill_name, source="installed")
-                entry["tests"] = _tests_payload(tests)
-                if not _tests_ok(tests):
-                    raise RuntimeError("skill tests failed")
-
             entry["stage"] = "completed"
         except Exception as exc:
             stage = str(entry.get("stage") or "prepare")
+            if stage == "prepare" and str(exc).strip().lower().startswith("skill tests failed"):
+                stage = "tests"
             entry["ok"] = False
             entry["failed_stage"] = stage
             entry["failure_kind"] = "lifecycle" if stage in {"persist", "rehydrate", "healthcheck", "drain", "dispose", "before_deactivate", "rollback"} else "tests" if stage == "tests" else "prepare"
             entry["error"] = str(exc)
-            if activated and stage in {"activate", "tests"}:
+            if activated:
                 try:
                     entry["stage"] = "rollback"
                     restored_slot = mgr.rollback_runtime(skill_name)
@@ -196,20 +172,38 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
                     entry["rollback_slot"] = str(restored_slot or "")
                 except Exception as rollback_exc:
                     entry["rollback_error"] = str(rollback_exc)
+            after = _runtime_status_safe(mgr, skill_name)
+            fallback_available = bool(after.get("version")) and not bool(entry.get("rollback_error"))
             try:
-                entry["deactivation"] = mgr.deactivate_runtime(
-                    skill_name,
-                    reason="runtime_migration_failed",
-                    failure_kind=str(entry["failure_kind"] or "migration"),
-                    failed_stage=str(entry["failed_stage"] or stage),
-                    source="skill_runtime_migrate",
-                    committed_core_switch=False,
-                    status="quarantined",
-                    comment=str(exc),
-                    operation_id=operation_id,
-                    transient=False,
-                )
-                entry["deactivated"] = True
+                if fallback_available:
+                    entry["candidate_quarantine"] = mgr.record_runtime_migration_failure(
+                        skill_name,
+                        attempted_version=str(candidate.get("workspace_version") or ""),
+                        failed_stage=str(entry["failed_stage"] or stage),
+                        comment=str(exc),
+                        operation_id=operation_id,
+                        active_version_before=str(before.get("version") or ""),
+                        active_slot_before=str(before.get("active_slot") or ""),
+                        rollback_performed=bool(entry.get("rollback_performed")),
+                        source="skill_runtime_migrate",
+                    )
+                    entry["deactivation"] = entry["candidate_quarantine"]
+                    entry["fallback_preserved"] = True
+                    entry["deactivated"] = False
+                else:
+                    entry["deactivation"] = mgr.deactivate_runtime(
+                        skill_name,
+                        reason="runtime_migration_failed",
+                        failure_kind=str(entry["failure_kind"] or "migration"),
+                        failed_stage=str(entry["failed_stage"] or stage),
+                        source="skill_runtime_migrate",
+                        committed_core_switch=False,
+                        status="quarantined",
+                        comment=str(exc),
+                        operation_id=operation_id,
+                        transient=False,
+                    )
+                    entry["deactivated"] = True
             except Exception as deactivate_exc:
                 entry["deactivate_error"] = str(deactivate_exc)
             entry["stage"] = "failed"

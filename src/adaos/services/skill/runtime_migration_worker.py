@@ -360,15 +360,26 @@ def migration_candidates(
             runtime_state = {}
         runtime_version = _clean_text(runtime_state.get("version") if isinstance(runtime_state, dict) else "")
         deactivation = runtime_state.get("deactivation") if isinstance(runtime_state, dict) and isinstance(runtime_state.get("deactivation"), dict) else {}
+        precommit_migration_failure = (
+            str(deactivation.get("reason") or "").strip() == "runtime_migration_failed"
+            and not bool(deactivation.get("committed_core_switch"))
+        )
+        attempted_version = _clean_text(deactivation.get("attempted_version"))
         reason = "force" if force else ""
         if not force:
             explicitly_recovering = bool(requested_name and runtime_state.get("deactivated"))
             if explicitly_recovering:
                 reason = "explicit_quarantine_recovery"
             elif bool(runtime_state.get("deactivated")):
-                # Quarantine is a durable fail-closed state. Background
-                # discovery reports it, but only an explicit named recovery
-                # may retry it, even when the Workspace source is newer.
+                if precommit_migration_failure and _runtime_is_behind(workspace_version, runtime_version):
+                    reason = "recover_precommit_migration_failure"
+                else:
+                    # Post-commit quarantine remains fail-closed. A pre-commit
+                    # failure is retried only when a newer candidate exists.
+                    continue
+            elif precommit_migration_failure and attempted_version == workspace_version:
+                # The active fallback remains live. Do not retry the same
+                # rejected candidate on every background discovery cycle.
                 continue
             elif not _runtime_is_behind(workspace_version, runtime_version):
                 continue
@@ -386,6 +397,35 @@ def migration_candidates(
             }
         )
     return candidates
+
+
+def failed_candidate_runtimes(ctx: AgentContext, mgr: SkillManager) -> list[dict[str, Any]]:
+    """Report rejected candidates that did not deactivate their fallback."""
+
+    names = set(_registered_skill_names(ctx)) | set(_registry_versions(ctx))
+    items: list[dict[str, Any]] = []
+    for skill_name in sorted(names):
+        try:
+            status = mgr.runtime_status(skill_name)
+        except Exception:
+            continue
+        marker = status.get("deactivation") if isinstance(status.get("deactivation"), dict) else {}
+        if bool(status.get("deactivated")) or str(marker.get("status") or "") != "candidate_quarantined":
+            continue
+        items.append(
+            {
+                "skill": skill_name,
+                "active_version": str(status.get("version") or ""),
+                "active_slot": str(status.get("active_slot") or ""),
+                "attempted_version": str(marker.get("attempted_version") or ""),
+                "failed_stage": str(marker.get("failed_stage") or ""),
+                "comment": str(marker.get("comment") or ""),
+                "operation_id": str(marker.get("operation_id") or ""),
+                "fallback_preserved": bool(marker.get("fallback_preserved")),
+                "rollback_performed": bool(marker.get("rollback_performed")),
+            }
+        )
+    return items
 
 
 def quarantined_runtimes(
@@ -440,6 +480,95 @@ def _reload_live_skill_handlers_sync(ctx: AgentContext, name: str) -> dict[str, 
         return {"ok": False, "reason": "reload_failed", "error": str(exc)}
 
 
+def _runtime_selection(status: dict[str, Any] | None) -> tuple[str, str]:
+    payload = status if isinstance(status, dict) else {}
+    return (
+        str(payload.get("version") or "").strip(),
+        str(payload.get("active_slot") or "").strip().upper(),
+    )
+
+
+def _preserve_runtime_after_candidate_failure(
+    ctx: AgentContext,
+    mgr: SkillManager,
+    *,
+    name: str,
+    candidate: dict[str, Any],
+    entry: dict[str, Any],
+    before: dict[str, Any],
+    operation_id: str,
+    error: BaseException,
+) -> dict[str, Any]:
+    before_version, before_slot = _runtime_selection(before)
+    try:
+        current = mgr.runtime_status(name)
+    except Exception:
+        current = {}
+    current_version, current_slot = _runtime_selection(current)
+    previous_marker = before.get("deactivation") if isinstance(before.get("deactivation"), dict) else {}
+    previous_failed_active = (
+        bool(before.get("deactivated"))
+        and not bool(previous_marker.get("committed_core_switch"))
+        and str(previous_marker.get("failed_stage") or "").strip().lower()
+        not in {"", "prepare", "runtime_update"}
+    )
+    selection_changed = bool(
+        before_version
+        and (current_version != before_version or current_slot != before_slot)
+    )
+    rollback_required = bool(selection_changed or previous_failed_active)
+    rollback_performed = False
+    rollback_error = ""
+    if rollback_required:
+        try:
+            mgr.rollback_runtime(name)
+            rollback_performed = True
+            current = mgr.runtime_status(name)
+            current_version, current_slot = _runtime_selection(current)
+        except Exception as rollback_exc:
+            rollback_error = f"{type(rollback_exc).__name__}: {rollback_exc}"
+
+    fallback_available = bool(current_version and current_slot and (not rollback_required or rollback_performed))
+    if fallback_available:
+        marker = mgr.record_runtime_migration_failure(
+            name,
+            attempted_version=str(candidate.get("workspace_version") or ""),
+            failed_stage=str(entry.get("stage") or "unknown"),
+            comment=str(error),
+            operation_id=operation_id,
+            active_version_before=before_version,
+            active_slot_before=before_slot,
+            rollback_performed=rollback_performed,
+            source="skill_runtime_migration_worker",
+        )
+        entry["candidate_quarantine"] = marker
+        entry["deactivation"] = marker
+        entry["fallback_preserved"] = True
+        entry["rollback_performed"] = rollback_performed
+        entry["fallback_version"] = str(marker.get("fallback_version") or current_version)
+        entry["fallback_slot"] = str(marker.get("fallback_slot") or current_slot)
+        entry["handler_reload"] = _reload_live_skill_handlers_sync(ctx, name)
+        return marker
+
+    if rollback_error:
+        entry["rollback_error"] = rollback_error
+    deactivation = mgr.deactivate_runtime(
+        name,
+        reason="runtime_migration_failed",
+        failure_kind="migration",
+        failed_stage=str(entry.get("stage") or "unknown"),
+        source="skill_runtime_migration_worker",
+        committed_core_switch=False,
+        status="quarantined",
+        comment=str(error),
+        operation_id=operation_id,
+        transient=False,
+    )
+    entry["deactivation"] = deactivation
+    entry["fallback_preserved"] = False
+    return deactivation
+
+
 def _run_migration_sync(
     ctx: AgentContext,
     *,
@@ -471,6 +600,7 @@ def _run_migration_sync(
         mgr.sync(force=True if force else None)
     candidates = migration_candidates(ctx, mgr, force=force, name=name)
     quarantine_before = quarantined_runtimes(ctx, mgr)
+    failed_candidates_before = failed_candidate_runtimes(ctx, mgr)
     payload: dict[str, Any] = {
         "ok": True,
         "state": "running",
@@ -490,6 +620,8 @@ def _run_migration_sync(
         "deactivated_total": 0,
         "quarantined_total": len(quarantine_before),
         "quarantined_skills": quarantine_before,
+        "failed_candidate_total": len(failed_candidates_before),
+        "failed_candidates": failed_candidates_before,
         "skills": candidates,
     }
     _write_status(ctx, payload)
@@ -501,6 +633,12 @@ def _run_migration_sync(
         entry = dict(candidate)
         entry["stage"] = "refresh_runtime"
         entry["ok"] = False
+        try:
+            before = mgr.runtime_status(name)
+        except Exception:
+            before = {}
+        entry["active_version_before"] = str(before.get("version") or "")
+        entry["active_slot_before"] = str(before.get("active_slot") or "")
         payload["current"] = {"skill": name, "index": index, "stage": "refresh_runtime"}
         _write_status(ctx, payload)
         try:
@@ -529,29 +667,12 @@ def _run_migration_sync(
                 # storm and races YStore compaction. The worker performs one
                 # authoritative rebuild after the complete batch below.
                 defer_webspace_rebuild=True,
+                run_candidate_tests=bool(run_tests),
             )
             entry["runtime_refresh"] = refresh
             if bool(refresh.get("skipped")) or bool(refresh.get("deactivated")):
                 raise RuntimeError("runtime refresh left the skill deactivated")
-            if run_tests:
-                entry["stage"] = "tests"
-                payload["current"] = {"skill": name, "index": index, "stage": "tests"}
-                _write_status(ctx, payload)
-                tests = mgr.run_skill_tests(name, source="installed")
-                entry["tests"] = {
-                    str(test): {
-                        "status": str(getattr(result, "status", result) or ""),
-                        "detail": str(getattr(result, "detail", "") or ""),
-                    }
-                    for test, result in tests.items()
-                }
-                failed_tests = {
-                    test: result
-                    for test, result in entry["tests"].items()
-                    if str(result.get("status") or "") != "passed"
-                }
-                if failed_tests:
-                    raise RuntimeError(f"skill tests failed: {failed_tests}")
+            entry["tests"] = dict(refresh.get("tests") or {})
             entry["stage"] = "completed"
             entry["ok"] = True
             entry["deactivation_cleared"] = True
@@ -561,37 +682,35 @@ def _run_migration_sync(
             entry["ok"] = False
             entry["error"] = str(exc)
             entry["runtime_refresh"] = exc.payload
-            with contextlib.suppress(Exception):
-                deactivation = mgr.deactivate_runtime(
-                    name,
-                    reason="runtime_migration_failed",
-                    failure_kind="migration",
-                    failed_stage=str(entry["stage"] or "refresh_runtime"),
-                    source="skill_runtime_migration_worker",
-                    committed_core_switch=False,
-                    status="quarantined",
-                    comment=str(exc),
+            try:
+                _preserve_runtime_after_candidate_failure(
+                    ctx,
+                    mgr,
+                    name=name,
+                    candidate=candidate,
+                    entry=entry,
+                    before=before,
                     operation_id=operation_id,
-                    transient=False,
+                    error=exc,
                 )
-                entry["deactivation"] = deactivation
+            except Exception as preserve_exc:
+                entry["preservation_error"] = f"{type(preserve_exc).__name__}: {preserve_exc}"
         except Exception as exc:
             entry["ok"] = False
             entry["error"] = str(exc)
-            with contextlib.suppress(Exception):
-                deactivation = mgr.deactivate_runtime(
-                    name,
-                    reason="runtime_migration_failed",
-                    failure_kind="migration",
-                    failed_stage=str(entry.get("stage") or "unknown"),
-                    source="skill_runtime_migration_worker",
-                    committed_core_switch=False,
-                    status="quarantined",
-                    comment=str(exc),
+            try:
+                _preserve_runtime_after_candidate_failure(
+                    ctx,
+                    mgr,
+                    name=name,
+                    candidate=candidate,
+                    entry=entry,
+                    before=before,
                     operation_id=operation_id,
-                    transient=False,
+                    error=exc,
                 )
-                entry["deactivation"] = deactivation
+            except Exception as preserve_exc:
+                entry["preservation_error"] = f"{type(preserve_exc).__name__}: {preserve_exc}"
         results.append(entry)
         payload["completed_total"] = len(results)
         payload["failed_total"] = sum(1 for item in results if not bool(item.get("ok")))
@@ -618,8 +737,11 @@ def _run_migration_sync(
     final["elapsed_s"] = round(final["finished_at"] - started_at, 3)
     final["skills"] = results
     quarantine_after = quarantined_runtimes(ctx, mgr)
+    failed_candidates_after = failed_candidate_runtimes(ctx, mgr)
     final["quarantined_total"] = len(quarantine_after)
     final["quarantined_skills"] = quarantine_after
+    final["failed_candidate_total"] = len(failed_candidates_after)
+    final["failed_candidates"] = failed_candidates_after
     if not failed and quarantine_after:
         final["message"] = (
             "skill runtime migration completed; "

@@ -127,6 +127,58 @@ def test_light_non_service_skill_dependencies_install_into_runtime_vendor(monkey
     assert commands[0][-1] == "requests==2.31.0"
 
 
+def test_satisfied_runtime_vendor_is_reused_without_disk_guard_or_install(monkeypatch, tmp_path: Path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=SimpleNamespace(require=lambda *_args, **_kwargs: None))
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="weather_skill")
+    env.prepare_version("2.6.18")
+    slot = env.build_slot_paths("2.6.18", "A")
+    skill_dir = tmp_path / "weather_skill"
+    skill_dir.mkdir()
+    dist_info = slot.vendor_dir / "requests-2.34.2.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: requests\nVersion: 2.34.2\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        skill_manager_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pip must not run")),
+    )
+    monkeypatch.setattr(
+        skill_manager_module,
+        "ensure_dependency_disk_budget",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("disk guard must not run")),
+    )
+    monkeypatch.setattr(mgr, "_constraints_file", lambda: None)
+    monkeypatch.setattr(mgr, "_repo_root_for_dependency_resolution", lambda: tmp_path)
+
+    paths = mgr._install_python_dependencies(
+        manifest={"dependencies": ["requests>=2.31"]},
+        slot=slot,
+        skill_dir=skill_dir,
+    )
+
+    assert paths == [str(slot.vendor_dir)]
+
+
+def test_runtime_vendor_reuse_rejects_missing_transitive_dependency(tmp_path: Path) -> None:
+    vendor_dir = tmp_path / "vendor"
+    dist_info = vendor_dir / "requests-2.34.2.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\n"
+        "Name: requests\n"
+        "Version: 2.34.2\n"
+        "Requires-Dist: urllib3>=2\n",
+        encoding="utf-8",
+    )
+
+    assert skill_manager_module._vendor_satisfies_requirements(vendor_dir, ["requests>=2.31"]) is False
+
+
 def test_light_service_skill_dependencies_install_into_runtime_vendor_for_inprocess_tools(
     monkeypatch,
     tmp_path: Path,
