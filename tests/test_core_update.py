@@ -877,6 +877,31 @@ def test_promote_root_from_slot_aborts_before_mutation_when_import_preflight_fai
     assert not list((tmp_path / "base" / "state" / "root_promotion").glob("*-b"))
 
 
+def test_write_status_retries_transient_windows_replace_denial(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    real_replace = core_update_service.os.replace
+    attempts: list[tuple[Path, Path]] = []
+    delays: list[float] = []
+
+    def _replace(source: Path, target: Path) -> None:
+        attempts.append((source, target))
+        if len(attempts) < 3:
+            error = PermissionError("target is temporarily observed")
+            error.winerror = 5
+            raise error
+        real_replace(source, target)
+
+    monkeypatch.setattr(core_update_service.os, "replace", _replace)
+    monkeypatch.setattr(core_update_service.time, "sleep", delays.append)
+
+    persisted = write_status({"state": "countdown", "message": "scheduled"})
+
+    assert persisted["state"] == "countdown"
+    assert read_status()["state"] == "countdown"
+    assert len(attempts) == 3
+    assert delays == [0.005, 0.01]
+
+
 def test_promote_root_from_slot_rolls_back_partial_apply(monkeypatch, tmp_path) -> None:
     import adaos.services.core_update as core_update
 

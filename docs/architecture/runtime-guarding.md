@@ -439,9 +439,18 @@ instead of embedded into Yjs.
   calls unless they cross `asyncio.to_thread(...)` or a bounded SDK worker.
 - [x] Provide async skill-env and skill-memory SDK operations that preserve the
   active skill context while moving persistent JSON I/O off the event loop.
+- [x] Reject synchronous skill-env path/read/write/replace operations at runtime
+  when invoked from an asyncio loop, and publish operation/skill rejection
+  counters in reliability diagnostics. Synchronous skill handlers remain valid
+  because they execute in the dedicated bounded worker pool.
 - [x] Probe the event loop from an independent daemon thread, capture the live
-  blocked stack and owner, then finalize the same incident with the full stall
-  duration after recovery without double-counting the occurrence.
+  blocked stack and owner, retain top-frame transitions during a multi-stage
+  stall, then finalize the same incident with the full duration after recovery
+  without double-counting the occurrence.
+- [x] Separate eventbus bounded-queue wait and async wall elapsed time from
+  watchdog-confirmed blocker attribution. A long cooperative `await` is
+  observable but does not by itself create a skill-pressure incident or open a
+  circuit.
 - [ ] Add cooperative async subscription aggregate accounting and quarantine
   without moving loop-affine SDK/Yjs state onto worker event loops.
 - [ ] Wrap projection and Yjs write boundaries with owner accounting.

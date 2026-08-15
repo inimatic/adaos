@@ -542,6 +542,11 @@ Make readiness and degradation visible before changing protocol ownership.
   a blocked loop cannot suppress its own evidence. Persist the live loop stack,
   attributed skill/core domain, active skill handlers, and process/I/O lookback;
   the watchdog is diagnostic only and must not restart or hide the offender.
+- [x] `[must]` Bound the browser runtime-beacon callback independently of
+  executor queue health. Coalesce equivalent builds, serve explicitly marked
+  stale state only within a finite window, return an explicit unavailable
+  response after that window, and prewarm the candidate beacon before A/B
+  promotion.
 - [ ] `[should]` Complete `RT-POST-INCIDENT-001`: repeat the correlated
   node/Root log analysis after deployment and explicitly assess skills,
   subprocesses, and large downloads in the pre-failure window.
@@ -845,6 +850,10 @@ Move transport ownership where it reduces blast radius, without moving protocol 
   route proxy, not only `/yws?ws=<room>`.
 - [x] `[must]` Keep sidecar status/control surfaces responsive while the main
   runtime event loop is stalled.
+- [x] `[must]` Apply a new sidecar generation automatically after the active
+  runtime transition is complete and stable; do not defer healthy-process code
+  upgrades forever. Allow built-in NATS recovery to settle and force reconnect
+  only when the supervisor-channel contract does not become stably ready.
 - [ ] `[must]` Expose server-side WebRTC/Yjs datachannel enablement in
   reliability and browser diagnostics. The `.30` auto-upgrade failure was
   caused by `ADAOS_WEBRTC_YJS_CHANNEL_ENABLED=0`, but the browser symptom was

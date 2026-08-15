@@ -1185,6 +1185,39 @@ def test_runtime_api_ready_honors_explicit_boot_readiness(monkeypatch, payload, 
     assert supervisor._runtime_api_ready("http://127.0.0.1:8777", token=None) is expected
 
 
+@pytest.mark.parametrize(
+    ("status_code", "payload", "stale", "expected"),
+    [
+        (200, {"ok": True}, "0", True),
+        (200, {"ok": True}, "1", True),
+        (200, {"ok": True}, "unavailable", False),
+        (503, {"ok": False}, "unavailable", False),
+    ],
+)
+def test_runtime_beacon_ready_requires_usable_bounded_response(
+    monkeypatch, status_code, payload, stale, expected
+) -> None:
+    class _Response:
+        headers = {"X-AdaOS-Runtime-Stale": stale}
+
+        def __init__(self):
+            self.status_code = status_code
+
+        @staticmethod
+        def json():
+            return payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(supervisor.requests, "get", lambda *_args, **_kwargs: _Response())
+
+    assert supervisor._runtime_beacon_ready("http://127.0.0.1:8778", token="token") is expected
+
+
 def test_hub_root_root_probe_accepts_root_items_payload(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 
@@ -2249,6 +2282,7 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
         },
     )
     monkeypatch.setattr(supervisor, "activate_slot", lambda slot: None)
+    monkeypatch.setattr(supervisor, "_runtime_beacon_ready", lambda *args, **kwargs: True)
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
 
     asyncio.run(
@@ -4815,7 +4849,23 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
         lambda: sync_calls.append(True) or {"changed": False},
     )
     monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart_sidecar)
-    monkeypatch.setattr(manager, "_runtime_request_json", lambda **kwargs: {"ok": True, "accepted": True})
+    runtime_requests: list[str] = []
+
+    def _runtime_request(**kwargs):
+        path = str(kwargs.get("path") or "")
+        runtime_requests.append(path)
+        if path == "/api/node/reliability/supervisor-channel":
+            return {
+                "ok": True,
+                "runtime": {
+                    "readiness_tree": {"root_control": {"status": "ready"}},
+                    "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                    "sidecar_runtime": {"transport_owner": "sidecar", "transport_ready": True},
+                },
+            }
+        raise AssertionError(f"unexpected forced reconnect: {path}")
+
+    monkeypatch.setattr(manager, "_runtime_request_json", _runtime_request)
     monkeypatch.setattr(manager, "_runtime_sidecar_runtime_payload", lambda: {"transport_owner": "sidecar"})
     monkeypatch.setattr(
         supervisor,
@@ -4830,10 +4880,84 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
     assert manager._sidecar_proc == "new-proc"
     assert payload["restart"]["accepted"] is True
     assert payload["reconnect"]["ok"] is True
+    assert payload["reconnect"]["skipped"] is True
+    assert "/api/node/hub-root/reconnect" not in runtime_requests
     assert payload["runtime"]["transport_owner"] == "sidecar"
     assert payload["process"]["proc"] == "new-proc"
     assert sync_calls == [True]
     assert persisted
+
+
+def test_sidecar_restart_waits_for_actual_failback_from_direct_transport(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    probes = 0
+
+    def _runtime_request(**kwargs):
+        nonlocal probes
+        assert kwargs["path"] == "/api/node/reliability/supervisor-channel"
+        probes += 1
+        owner = "runtime" if probes == 1 else "sidecar"
+        return {
+            "ok": True,
+            "runtime": {
+                "readiness_tree": {"root_control": {"status": "ready"}},
+                "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                "sidecar_runtime": {"transport_owner": owner, "transport_ready": True},
+            },
+        }
+
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_runtime_request_json", _runtime_request)
+
+    result = asyncio.run(manager._reconnect_hub_root_after_sidecar_restart())
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "hub_root_already_reconnected"
+    assert probes >= 3
+
+
+def test_sidecar_restart_forces_single_failback_when_direct_transport_persists(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    requests: list[str] = []
+
+    def _runtime_request(**kwargs):
+        path = str(kwargs.get("path") or "")
+        requests.append(path)
+        if path == "/api/node/hub-root/reconnect":
+            return {"ok": True, "accepted": True}
+        return {
+            "ok": True,
+            "runtime": {
+                "readiness_tree": {"root_control": {"status": "ready"}},
+                "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                "sidecar_runtime": {"transport_owner": "runtime", "transport_ready": True},
+            },
+        }
+
+    async def _no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_runtime_request_json", _runtime_request)
+    monkeypatch.setattr(supervisor, "_sidecar_recovery_settle_timeout_sec", lambda: 0.01)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    result = asyncio.run(manager._reconnect_hub_root_after_sidecar_restart())
+
+    assert result["ok"] is True
+    assert result["forced"] is True
+    assert result["reason"] == "hub_root_sidecar_failback_required"
+    assert requests.count("/api/node/hub-root/reconnect") == 1
+    assert requests.count("/api/node/reliability/supervisor-channel") >= 1
 
 
 def test_supervisor_restart_sidecar_refuses_to_disrupt_active_channel(monkeypatch, tmp_path) -> None:
@@ -4988,7 +5112,7 @@ def test_supervisor_monitor_coalesces_stale_sidecar_sync_restart(monkeypatch, tm
     assert reconnect_calls == []
 
 
-def test_supervisor_monitor_defers_healthy_sidecar_code_upgrade_for_continuity(monkeypatch, tmp_path) -> None:
+def test_supervisor_monitor_applies_sidecar_code_upgrade_after_runtime_is_stable(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -5001,6 +5125,7 @@ def test_supervisor_monitor_defers_healthy_sidecar_code_upgrade_for_continuity(m
             return None
 
     old_proc = _RunningProc("old")
+    new_proc = _RunningProc("new")
     manager._sidecar_proc = old_proc
     manager._sidecar_code_fingerprint = "old-fingerprint"
     manager._sidecar_code_change_pending_fingerprint = "new-fingerprint"
@@ -5018,19 +5143,87 @@ def test_supervisor_monitor_defers_healthy_sidecar_code_upgrade_for_continuity(m
     async def _stop_after_sidecar_reconcile():
         raise _StopMonitor
 
-    async def _unexpected_restart(**_kwargs):
-        raise AssertionError("healthy channel owner must not restart solely to apply code")
+    restart_calls: list[tuple[object, str | None, str | None]] = []
 
-    async def _unexpected_reconnect():
-        raise AssertionError("deferred code upgrade must not reconnect the active channel")
+    async def _restart(*, proc, role=None, repo_root=None):
+        restart_calls.append((proc, role, repo_root))
+        return new_proc, {"ok": True, "accepted": True, "reason": "restarted"}
+
+    reconnect_calls: list[bool] = []
+
+    async def _reconnect():
+        reconnect_calls.append(True)
+        return {"ok": True, "skipped": True, "reason": "hub_root_already_reconnected"}
+
+    async def _upgrade_allowed():
+        return True, None
 
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
     monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": True})
     monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
     monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_sidecar_code_upgrade_restart_allowed", _upgrade_allowed)
     monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
-    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _unexpected_reconnect)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _reconnect)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart)
+    monkeypatch.setattr(
+        supervisor,
+        "realtime_sidecar_listener_snapshot",
+        lambda *_args, **_kwargs: {"listener_running": True},
+    )
+
+    with pytest.raises(_StopMonitor):
+        asyncio.run(manager._monitor_iteration_loop())
+
+    assert restart_calls and restart_calls[0][0] is old_proc
+    assert reconnect_calls == [True]
+    assert manager._sidecar_proc is new_proc
+    assert manager._sidecar_code_fingerprint == "new-fingerprint"
+    assert manager._sidecar_last_restart_reason == "supervisor.sidecar.code_upgrade"
+    assert manager._sidecar_restart_policy_state()["code_upgrade_state"] == "current"
+
+
+def test_supervisor_monitor_waits_to_upgrade_sidecar_during_runtime_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _RunningProc:
+        def poll(self):
+            return None
+
+    manager._sidecar_proc = _RunningProc()
+    manager._sidecar_code_fingerprint = "old-fingerprint"
+    manager._sidecar_code_change_pending_fingerprint = "new-fingerprint"
+    manager._sidecar_code_change_pending_since = 1.0
+
+    async def _no_sleep(_delay):
+        return None
+
+    async def _healthy(*_args, **_kwargs):
+        return True
+
+    async def _upgrade_waiting():
+        return False, "supervisor.sidecar.code_upgrade_waiting_transition"
+
+    class _StopMonitor(Exception):
+        pass
+
+    async def _stop_after_sidecar_reconcile():
+        raise _StopMonitor
+
+    async def _unexpected_restart(**_kwargs):
+        raise AssertionError("sidecar code upgrade must wait for the active runtime transition")
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {"changed": False})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {"fingerprint": "new-fingerprint"})
+    monkeypatch.setattr(manager, "_probe_sidecar_health", _healthy)
+    monkeypatch.setattr(manager, "_sidecar_code_upgrade_restart_allowed", _upgrade_waiting)
+    monkeypatch.setattr(manager, "_maybe_resume_or_continue_transition", _stop_after_sidecar_reconcile)
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
     monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _unexpected_restart)
     monkeypatch.setattr(
@@ -5042,10 +5235,10 @@ def test_supervisor_monitor_defers_healthy_sidecar_code_upgrade_for_continuity(m
     with pytest.raises(_StopMonitor):
         asyncio.run(manager._monitor_iteration_loop())
 
-    assert manager._sidecar_proc is old_proc
-    assert manager._sidecar_code_fingerprint == "old-fingerprint"
-    assert manager._sidecar_last_restart_reason == "supervisor.sidecar.code_upgrade_deferred_for_continuity"
-    assert manager._sidecar_restart_policy_state()["code_upgrade_state"] == "deferred_for_continuity"
+    assert manager._sidecar_last_restart_reason == "supervisor.sidecar.code_upgrade_waiting_transition"
+    policy = manager._sidecar_restart_policy_state()
+    assert policy["automatic_code_restart"] is True
+    assert policy["code_upgrade_state"] == "waiting_for_runtime_stability"
 
 
 def test_supervisor_monitor_restarts_confirmed_unhealthy_sidecar(monkeypatch, tmp_path) -> None:

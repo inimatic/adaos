@@ -67,14 +67,12 @@ class SupervisorMonitoringService:
                     should_restart_sidecar = True
                     restart_reason = "supervisor.sidecar.unhealthy"
                 elif code_changed and code_change_ready:
-                    # A healthy sidecar owns the local NATS listener and the
-                    # browser WS/YWS proxy listeners. Replacing it solely to
-                    # apply code would tear down an otherwise healthy channel.
-                    # Keep the generation mismatch explicit and let a missing
-                    # or unhealthy process self-heal onto the current code.
-                    deferred_reason = "supervisor.sidecar.code_upgrade_deferred_for_continuity"
-                    if manager._sidecar_last_restart_reason != deferred_reason:
-                        manager._sidecar_last_restart_reason = deferred_reason
+                    upgrade_allowed, upgrade_blocked_reason = await manager._sidecar_code_upgrade_restart_allowed()
+                    if upgrade_allowed:
+                        should_restart_sidecar = True
+                        restart_reason = "supervisor.sidecar.code_upgrade"
+                    elif manager._sidecar_last_restart_reason != upgrade_blocked_reason:
+                        manager._sidecar_last_restart_reason = upgrade_blocked_reason
                         manager._persist_runtime_state()
                 if should_restart_sidecar:
                     allowed, blocked_reason = manager._sidecar_restart_allowed()

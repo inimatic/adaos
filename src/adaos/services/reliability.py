@@ -7096,6 +7096,10 @@ def supervisor_channel_runtime_snapshot(
             },
         },
         "sidecar_runtime": {
+            "transport_owner": sidecar_runtime.get("transport_owner"),
+            "transport_ready": bool(sidecar_runtime.get("transport_ready")),
+            "session_state": sidecar_runtime.get("session_state"),
+            "remote_session_state": sidecar_runtime.get("remote_session_state"),
             "continuity_contract": dict(sidecar_runtime.get("continuity_contract") or {}),
         },
         "media_runtime": {

@@ -955,11 +955,24 @@ The sidecar must not become the hidden owner of update status, rollback state, o
 A sidecar restart is a supervisor-owned transport transition, not only a
 process operation. The supervisor first synchronizes sidecar-controlled files
 from the validated active slot, starts exactly one new process generation, and
-then explicitly requests hub-root reconnect from the active runtime. The
-monitor rechecks the code fingerprint while holding the lifecycle lock so a
-validated-slot sync detected before an operator restart cannot produce a
-second restart after that request completes. Runtime watchdog reconnect remains
-a fallback, not the primary restart contract.
+then allows the active runtime's built-in NATS reconnect supervisor to recover.
+It samples the bounded supervisor-channel contract until `root_control` and
+`hub_root` remain ready through a transport-ready sidecar owner across
+consecutive observations. A ready direct fallback is not mistaken for completed
+failback; an explicit reconnect is issued when that recovery window expires.
+The monitor rechecks the code fingerprint while holding the lifecycle lock so a
+validated-slot sync detected before an operator restart cannot produce a second
+restart after that request completes.
+
+The settle window defaults to 3 seconds and is bounded by
+`ADAOS_SUPERVISOR_SIDECAR_RECOVERY_SETTLE_TIMEOUT_SEC`.
+
+A healthy sidecar with an old code fingerprint is not retained indefinitely.
+After debounce, the supervisor waits until no candidate/update transition is in
+progress, the active runtime has passed its startup stability window, and
+`/api/ping` is ready. It then applies one circuit-bounded sidecar restart using
+the same channel recovery contract. This keeps code activation observable while
+preventing a sidecar replacement during A/B preparation or cutover.
 
 ## Memory leak detection and profiling
 

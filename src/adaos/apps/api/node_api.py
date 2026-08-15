@@ -1324,6 +1324,27 @@ def _thin_runtime_reliability_response(
     )
 
 
+def _runtime_beacon_unavailable_response(*, reason: str, timeout_s: float) -> Response:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "ok": False,
+            "available": False,
+            "schema": "adaos.reliability_runtime_beacon.unavailable.v1",
+            "reason": str(reason or "unavailable"),
+            "retryable": True,
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "Retry-After": "1",
+            "X-AdaOS-Runtime-Executor": "dedicated",
+            "X-AdaOS-Runtime-Stale": "unavailable",
+            "X-AdaOS-Runtime-Fallback": str(reason or "unavailable"),
+            "X-AdaOS-Runtime-Timeout-Ms": str(round(max(0.0, float(timeout_s)) * 1000.0, 3)),
+        },
+    )
+
+
 def _compact_reliability_summary_payload(
     reliability: dict[str, Any],
     *,
@@ -4257,6 +4278,7 @@ async def node_reliability_runtime(
     started_at = time.time()
     return await run_reliability_runtime_beacon(
         _thin_runtime_reliability_response,
+        timeout_fallback=_runtime_beacon_unavailable_response,
         webspace_id=webspace_id,
         mode="runtime",
         if_none_match=if_none_match,
@@ -4294,6 +4316,7 @@ async def node_reliability_summary(
     if requested_mode in {"runtime", "beacon"}:
         return await run_reliability_runtime_beacon(
             _thin_runtime_reliability_response,
+            timeout_fallback=_runtime_beacon_unavailable_response,
             webspace_id=webspace_id,
             mode="runtime",
             if_none_match=if_none_match,

@@ -72,7 +72,19 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        for attempt in range(8):
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as exc:
+                transient = isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {
+                    5,
+                    32,
+                    33,
+                }
+                if not transient or attempt == 7:
+                    raise
+                time.sleep(min(0.005 * (2**attempt), 0.1))
     finally:
         temporary.unlink(missing_ok=True)
 

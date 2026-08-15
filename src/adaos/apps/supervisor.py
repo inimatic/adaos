@@ -565,6 +565,10 @@ def _sidecar_code_change_debounce_sec() -> float:
     return _RUNTIME_CONFIG.sidecar_code_change_debounce_sec()
 
 
+def _sidecar_recovery_settle_timeout_sec() -> float:
+    return _RUNTIME_CONFIG.sidecar_recovery_settle_timeout_sec()
+
+
 def _sidecar_restart_window_sec() -> float:
     return _RUNTIME_CONFIG.sidecar_restart_window_sec()
 
@@ -1563,6 +1567,25 @@ def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.7
     return True
 
 
+def _runtime_beacon_ready(base_url: str, *, token: str | None, timeout: float = 1.25) -> bool:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["X-AdaOS-Token"] = token
+    try:
+        with requests.get(
+            f"{base_url}/api/node/reliability/runtime?webspace_id=desktop",
+            headers=headers,
+            timeout=max(0.2, float(timeout)),
+        ) as response:
+            if int(response.status_code or 0) != 200:
+                return False
+            payload = response.json()
+            stale = str(response.headers.get("X-AdaOS-Runtime-Stale") or "0").strip().lower()
+    except Exception:
+        return False
+    return isinstance(payload, dict) and payload.get("ok") is True and stale in {"0", "1"}
+
+
 def _runtime_listener_restart_timeout_sec() -> float:
     return _RUNTIME_CONFIG.runtime_listener_restart_timeout_sec()
 
@@ -2391,21 +2414,22 @@ class SupervisorManager:
     def _sidecar_restart_policy_state(self) -> dict[str, Any]:
         now = time.time()
         pending_code = bool(self._sidecar_code_change_pending_fingerprint)
-        deferred_for_continuity = bool(
+        waiting_for_runtime = bool(
             pending_code
-            and self._sidecar_last_restart_reason
-            == "supervisor.sidecar.code_upgrade_deferred_for_continuity"
+            and str(self._sidecar_last_restart_reason or "").startswith(
+                "supervisor.sidecar.code_upgrade_waiting"
+            )
         )
         return {
             "code_change_debounce_sec": _sidecar_code_change_debounce_sec(),
-            "automatic_code_restart": False,
-            "code_upgrade_policy": "preserve_healthy_channel_owner",
+            "automatic_code_restart": True,
+            "code_upgrade_policy": "controlled_restart_after_runtime_stable",
             "code_upgrade_state": (
-                "deferred_for_continuity"
-                if deferred_for_continuity
+                "waiting_for_runtime_stability"
+                if waiting_for_runtime
                 else ("pending_debounce" if pending_code else "current")
             ),
-            "deferred_for_continuity": deferred_for_continuity,
+            "waiting_for_runtime_stability": waiting_for_runtime,
             "restart_window_sec": _sidecar_restart_window_sec(),
             "restart_limit": _sidecar_restart_limit(),
             "base_backoff_sec": _sidecar_restart_base_backoff_sec(),
@@ -2458,6 +2482,29 @@ class SupervisorManager:
             return False, "supervisor.sidecar.circuit_open"
         if self._sidecar_restart_backoff_until and self._sidecar_restart_backoff_until > now:
             return False, "supervisor.sidecar.backoff"
+        return True, None
+
+    async def _sidecar_code_upgrade_restart_allowed(self) -> tuple[bool, str | None]:
+        if self._stopping or not self._desired_running:
+            return False, "supervisor.sidecar.code_upgrade_waiting_runtime_stop"
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return False, "supervisor.sidecar.code_upgrade_waiting_runtime_process"
+        candidate = self._candidate_proc
+        if candidate is not None and candidate.poll() is None:
+            return False, "supervisor.sidecar.code_upgrade_waiting_candidate"
+        if _is_transition_in_progress(read_core_update_status(), _read_update_attempt()):
+            return False, "supervisor.sidecar.code_upgrade_waiting_transition"
+        if self._last_start_at is not None and time.time() - float(self._last_start_at) < 5.0:
+            return False, "supervisor.sidecar.code_upgrade_waiting_runtime_stability"
+        ready = await asyncio.to_thread(
+            _runtime_api_ready,
+            self.runtime_base_url,
+            token=self.token,
+            timeout=0.75,
+        )
+        if not ready:
+            return False, "supervisor.sidecar.code_upgrade_waiting_runtime_api"
         return True, None
 
     async def _probe_sidecar_health(self, *, force: bool = False) -> bool | None:
@@ -6483,14 +6530,59 @@ class SupervisorManager:
     async def _reconnect_hub_root_after_sidecar_restart(self) -> dict[str, Any] | None:
         if str(self._sidecar_role() or "").strip().lower() != "hub":
             return None
+        deadline = time.monotonic() + _sidecar_recovery_settle_timeout_sec()
+        ready_since: float | None = None
+        last_channel: dict[str, Any] = {}
+        await asyncio.sleep(0.25)
+        while time.monotonic() < deadline:
+            try:
+                channel = await asyncio.to_thread(
+                    self._runtime_request_json,
+                    path="/api/node/reliability/supervisor-channel",
+                    timeout=0.75,
+                )
+            except Exception:
+                channel = {}
+            last_channel = channel if isinstance(channel, dict) else {}
+            runtime = last_channel.get("runtime") if isinstance(last_channel.get("runtime"), dict) else {}
+            readiness = runtime.get("readiness_tree") if isinstance(runtime.get("readiness_tree"), dict) else {}
+            root_control = readiness.get("root_control") if isinstance(readiness.get("root_control"), dict) else {}
+            overview = runtime.get("channel_overview") if isinstance(runtime.get("channel_overview"), dict) else {}
+            hub_root = overview.get("hub_root") if isinstance(overview.get("hub_root"), dict) else {}
+            sidecar = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
+            channel_ready = (
+                str(root_control.get("status") or "").strip().lower() == "ready"
+                and str(hub_root.get("effective_status") or "").strip().lower() == "ready"
+                and str(sidecar.get("transport_owner") or "").strip().lower() == "sidecar"
+                and bool(sidecar.get("transport_ready"))
+            )
+            now = time.monotonic()
+            if channel_ready:
+                ready_since = ready_since or now
+                if now - ready_since >= 0.25:
+                    return {
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "hub_root_already_reconnected",
+                        "channel": last_channel,
+                    }
+            else:
+                ready_since = None
+            await asyncio.sleep(0.1)
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._runtime_request_json,
                 path="/api/node/hub-root/reconnect",
                 method="POST",
                 payload={},
                 timeout=5.0,
             )
+            return {
+                **(result if isinstance(result, dict) else {}),
+                "forced": True,
+                "reason": "hub_root_sidecar_failback_required",
+                "channel_before_force": last_channel,
+            }
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -6656,7 +6748,11 @@ class SupervisorManager:
                     "candidate_memory_guard": memory_guard,
                     "candidate_cleanup": cleanup,
                 }
-            if bool(snapshot.get("candidate_runtime_api_ready")):
+            if bool(snapshot.get("candidate_runtime_api_ready")) and await asyncio.to_thread(
+                _runtime_beacon_ready,
+                str(snapshot.get("candidate_runtime_url") or "").strip(),
+                token=self.token,
+            ):
                 return {
                     "attempted": True,
                     "state": "ready",
@@ -6687,7 +6783,12 @@ class SupervisorManager:
         candidate_alive = bool(snapshot.get("candidate_managed_alive"))
         candidate_ready = bool(snapshot.get("candidate_runtime_api_ready"))
         candidate_url = str(snapshot.get("candidate_runtime_url") or "").strip()
-        if candidate_ready:
+        beacon_ready = bool(candidate_ready and candidate_url) and await asyncio.to_thread(
+            _runtime_beacon_ready,
+            candidate_url,
+            token=self.token,
+        )
+        if candidate_ready and beacon_ready:
             return {
                 "attempted": True,
                 "state": "ready",
@@ -6700,7 +6801,9 @@ class SupervisorManager:
                 "attempted": True,
                 "state": "starting",
                 "message": (
-                    f"passive candidate runtime is still warming on {candidate_url or resolved_target}"
+                    f"passive candidate runtime beacon is still warming on {candidate_url or resolved_target}"
+                    if candidate_ready
+                    else f"passive candidate runtime is still warming on {candidate_url or resolved_target}"
                 ),
                 "runtime": snapshot,
             }
@@ -6748,7 +6851,12 @@ class SupervisorManager:
                     "candidate_memory_guard": memory_guard,
                     "candidate_cleanup": cleanup,
                 }
-            if candidate_ready:
+            beacon_ready = bool(candidate_ready and candidate_url) and await asyncio.to_thread(
+                _runtime_beacon_ready,
+                candidate_url,
+                token=self.token,
+            )
+            if candidate_ready and beacon_ready:
                 return {
                     "state": "ready",
                     "message": f"passive candidate runtime is ready on {candidate_url or resolved_target}",
@@ -6764,7 +6872,11 @@ class SupervisorManager:
             if timeout_sec <= 0.0 or time.time() >= deadline:
                 return {
                     "state": "starting",
-                    "message": f"passive candidate runtime is still warming on {candidate_url or resolved_target}",
+                    "message": (
+                        f"passive candidate runtime beacon is still warming on {candidate_url or resolved_target}"
+                        if candidate_ready
+                        else f"passive candidate runtime is still warming on {candidate_url or resolved_target}"
+                    ),
                     "runtime": snapshot,
                 }
             await asyncio.sleep(0.25)

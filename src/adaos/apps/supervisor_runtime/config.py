@@ -174,6 +174,13 @@ class SupervisorRuntimeConfig:
             "ADAOS_SUPERVISOR_SIDECAR_CODE_DEBOUNCE_SEC", 3.0, minimum=0.5
         )
 
+    def sidecar_recovery_settle_timeout_sec(self) -> float:
+        return self._float(
+            "ADAOS_SUPERVISOR_SIDECAR_RECOVERY_SETTLE_TIMEOUT_SEC",
+            3.0,
+            minimum=0.1,
+        )
+
     def sidecar_restart_window_sec(self) -> float:
         return self._float(
             "ADAOS_SUPERVISOR_SIDECAR_RESTART_WINDOW_SEC", 60.0, minimum=5.0
