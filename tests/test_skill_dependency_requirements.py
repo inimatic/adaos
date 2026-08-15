@@ -179,6 +179,32 @@ def test_runtime_vendor_reuse_rejects_missing_transitive_dependency(tmp_path: Pa
     assert skill_manager_module._vendor_satisfies_requirements(vendor_dir, ["requests>=2.31"]) is False
 
 
+def test_exact_runtime_restore_selects_requested_version_and_slot(monkeypatch, tmp_path: Path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=SimpleNamespace(require=lambda *_args, **_kwargs: None))
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="weather_skill")
+    env.prepare_version("2.6.18")
+    target = env.build_slot_paths("2.6.18", "B")
+    target.resolved_manifest.write_text("{}\n", encoding="utf-8")
+    env.prepare_version("2.6.19")
+    env.set_active_slot("2.6.19", "A")
+    env.active_version_marker().write_text("2.6.19", encoding="utf-8")
+
+    monkeypatch.setattr(mgr, "_runtime_env", lambda _name: env)
+    monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *_args, **_kwargs: None)
+
+    result = mgr.restore_runtime_selection_exact("weather_skill", version="2.6.18", slot="B")
+
+    assert result == {
+        "ok": True,
+        "restored_active_version": "2.6.18",
+        "restored_active_slot": "B",
+    }
+    assert env.resolve_active_version() == "2.6.18"
+    assert env.read_active_slot("2.6.18") == "B"
+    assert env.read_deactivation() == {}
+
+
 def test_light_service_skill_dependencies_install_into_runtime_vendor_for_inprocess_tools(
     monkeypatch,
     tmp_path: Path,

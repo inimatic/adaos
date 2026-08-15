@@ -338,6 +338,95 @@ def test_noop_migration_skips_webspace_rebuild(monkeypatch):
     assert rebuild_calls == []
 
 
+def test_candidate_failure_preserves_only_the_exact_pre_attempt_selection(monkeypatch):
+    state = {"version": "1.2.2", "active_slot": "B", "deactivated": True}
+    calls: list[str] = []
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict:
+            return dict(state)
+
+        def rollback_runtime(self, _name: str) -> str:
+            raise AssertionError("unchanged selection must not use history rollback")
+
+        def record_runtime_migration_failure(self, _name: str, **kwargs) -> dict:
+            calls.append("record")
+            return {
+                "status": "candidate_quarantined",
+                "fallback_version": state["version"],
+                "fallback_slot": state["active_slot"],
+                **kwargs,
+            }
+
+    monkeypatch.setattr(worker, "_reload_live_skill_handlers_sync", lambda *_args: {"ok": True})
+    entry = {"stage": "tests"}
+
+    marker = worker._preserve_runtime_after_candidate_failure(
+        SimpleNamespace(),
+        _Manager(),
+        name="weather_skill",
+        candidate={"workspace_version": "1.2.3"},
+        entry=entry,
+        before={"version": "1.2.2", "active_slot": "B", "deactivated": True},
+        operation_id="op-1",
+        error=RuntimeError("candidate tests failed"),
+    )
+
+    assert calls == ["record"]
+    assert marker["fallback_version"] == "1.2.2"
+    assert marker["fallback_slot"] == "B"
+    assert entry["rollback_performed"] is False
+    assert entry["fallback_preserved"] is True
+
+
+def test_candidate_failure_corrects_history_rollback_to_exact_fallback(monkeypatch):
+    state = {"version": "1.2.3", "active_slot": "A", "deactivated": False}
+    calls: list[str] = []
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict:
+            return dict(state)
+
+        def rollback_runtime(self, _name: str) -> str:
+            calls.append("history_rollback")
+            state.update(version="1.2.1", active_slot="A")
+            return "A"
+
+        def restore_runtime_selection_exact(self, _name: str, *, version: str, slot: str) -> dict:
+            calls.append(f"exact_restore:{version}/{slot}")
+            state.update(version=version, active_slot=slot)
+            return {"ok": True, "restored_active_version": version, "restored_active_slot": slot}
+
+        def record_runtime_migration_failure(self, _name: str, **kwargs) -> dict:
+            calls.append("record")
+            return {
+                "status": "candidate_quarantined",
+                "fallback_version": state["version"],
+                "fallback_slot": state["active_slot"],
+                **kwargs,
+            }
+
+    monkeypatch.setattr(worker, "_reload_live_skill_handlers_sync", lambda *_args: {"ok": True})
+    entry = {"stage": "activate"}
+
+    marker = worker._preserve_runtime_after_candidate_failure(
+        SimpleNamespace(),
+        _Manager(),
+        name="weather_skill",
+        candidate={"workspace_version": "1.2.3"},
+        entry=entry,
+        before={"version": "1.2.2", "active_slot": "B", "deactivated": False},
+        operation_id="op-2",
+        error=RuntimeError("candidate activation failed"),
+    )
+
+    assert calls == ["history_rollback", "exact_restore:1.2.2/B", "record"]
+    assert marker["fallback_version"] == "1.2.2"
+    assert marker["fallback_slot"] == "B"
+    assert entry["rollback_performed"] is True
+    assert entry["fallback_preserved"] is True
+
+
 def test_read_status_marks_stale_refresh_runtime_as_prepare_stall(monkeypatch, tmp_path):
     ctx = SimpleNamespace(
         paths=SimpleNamespace(

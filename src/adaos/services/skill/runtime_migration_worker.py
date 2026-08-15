@@ -505,30 +505,36 @@ def _preserve_runtime_after_candidate_failure(
     except Exception:
         current = {}
     current_version, current_slot = _runtime_selection(current)
-    previous_marker = before.get("deactivation") if isinstance(before.get("deactivation"), dict) else {}
-    previous_failed_active = (
-        bool(before.get("deactivated"))
-        and not bool(previous_marker.get("committed_core_switch"))
-        and str(previous_marker.get("failed_stage") or "").strip().lower()
-        not in {"", "prepare", "runtime_update"}
-    )
     selection_changed = bool(
         before_version
         and (current_version != before_version or current_slot != before_slot)
     )
-    rollback_required = bool(selection_changed or previous_failed_active)
     rollback_performed = False
     rollback_error = ""
-    if rollback_required:
+    if selection_changed:
         try:
             mgr.rollback_runtime(name)
-            rollback_performed = True
             current = mgr.runtime_status(name)
             current_version, current_slot = _runtime_selection(current)
+            if (current_version, current_slot) != (before_version, before_slot):
+                mgr.restore_runtime_selection_exact(name, version=before_version, slot=before_slot)
+                current = mgr.runtime_status(name)
+                current_version, current_slot = _runtime_selection(current)
+            rollback_performed = (current_version, current_slot) == (before_version, before_slot)
+            if not rollback_performed:
+                rollback_error = (
+                    "runtime rollback did not restore exact fallback: "
+                    f"expected={before_version}/{before_slot} actual={current_version or '-'}/{current_slot or '-'}"
+                )
         except Exception as rollback_exc:
             rollback_error = f"{type(rollback_exc).__name__}: {rollback_exc}"
 
-    fallback_available = bool(current_version and current_slot and (not rollback_required or rollback_performed))
+    fallback_available = bool(
+        before_version
+        and before_slot
+        and (current_version, current_slot) == (before_version, before_slot)
+        and (not selection_changed or rollback_performed)
+    )
     if fallback_available:
         marker = mgr.record_runtime_migration_failure(
             name,

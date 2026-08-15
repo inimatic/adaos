@@ -2388,6 +2388,45 @@ class SkillManager:
             pass
         return restored_slot
 
+    def restore_runtime_selection_exact(self, name: str, *, version: str, slot: str) -> dict[str, Any]:
+        """Restore one known-good runtime selection after a failed candidate switch."""
+
+        target_version = str(version or "").strip()
+        target_slot = str(slot or "").strip().upper()
+        if not target_version or target_slot not in {"A", "B"}:
+            raise ValueError("exact runtime restore requires version and slot")
+        env = self._runtime_env(name)
+        env.prepare_version(target_version)
+        target_paths = env.build_slot_paths(target_version, target_slot)
+        if not target_paths.resolved_manifest.exists():
+            raise RuntimeError(
+                f"cannot restore missing runtime selection skill={name} version={target_version} slot={target_slot}"
+            )
+        result = self._restore_runtime_selection(
+            env=env,
+            previous_active_version=target_version,
+            previous_active_slot=target_slot,
+            previous_deactivation=None,
+        )
+        if not bool(result.get("ok")):
+            raise RuntimeError(str(result.get("error") or "exact runtime restore failed"))
+        restored_version = str(env.resolve_active_version() or "").strip()
+        restored_slot = str(env.read_active_slot(restored_version) if restored_version else "").strip().upper()
+        if (restored_version, restored_slot) != (target_version, target_slot):
+            raise RuntimeError(
+                "exact runtime restore did not converge: "
+                f"expected={target_version}/{target_slot} actual={restored_version or '-'}/{restored_slot or '-'}"
+            )
+        try:
+            install_skill_in_capacity(name, target_version, active=True)
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "restored_active_version": restored_version,
+            "restored_active_slot": restored_slot,
+        }
+
     def dev_rollback_runtime(self, name: str) -> str:
         env = self._runtime_env_dev(name)
         version = env.resolve_active_version()

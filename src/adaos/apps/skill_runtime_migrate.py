@@ -168,12 +168,41 @@ def migrate_installed_skills(*, run_tests: bool = True) -> dict[str, Any]:
                 try:
                     entry["stage"] = "rollback"
                     restored_slot = mgr.rollback_runtime(skill_name)
-                    entry["rollback_performed"] = True
                     entry["rollback_slot"] = str(restored_slot or "")
+                    restored = _runtime_status_safe(mgr, skill_name)
+                    restored_version = str(restored.get("version") or "")
+                    restored_slot = str(restored.get("active_slot") or "").upper()
+                    expected_version = str(before.get("version") or "")
+                    expected_slot = str(before.get("active_slot") or "").upper()
+                    if (restored_version, restored_slot) != (expected_version, expected_slot):
+                        mgr.restore_runtime_selection_exact(
+                            skill_name,
+                            version=expected_version,
+                            slot=expected_slot,
+                        )
+                        restored = _runtime_status_safe(mgr, skill_name)
+                        restored_version = str(restored.get("version") or "")
+                        restored_slot = str(restored.get("active_slot") or "").upper()
+                    entry["rollback_performed"] = (restored_version, restored_slot) == (
+                        expected_version,
+                        expected_slot,
+                    )
+                    if not entry["rollback_performed"]:
+                        entry["rollback_error"] = (
+                            "runtime rollback did not restore exact fallback: "
+                            f"expected={expected_version}/{expected_slot} "
+                            f"actual={restored_version or '-'}/{restored_slot or '-'}"
+                        )
                 except Exception as rollback_exc:
                     entry["rollback_error"] = str(rollback_exc)
             after = _runtime_status_safe(mgr, skill_name)
-            fallback_available = bool(after.get("version")) and not bool(entry.get("rollback_error"))
+            fallback_available = bool(
+                before.get("version")
+                and before.get("active_slot")
+                and str(after.get("version") or "") == str(before.get("version") or "")
+                and str(after.get("active_slot") or "").upper() == str(before.get("active_slot") or "").upper()
+                and not bool(entry.get("rollback_error"))
+            )
             try:
                 if fallback_available:
                     entry["candidate_quarantine"] = mgr.record_runtime_migration_failure(
