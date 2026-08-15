@@ -62,6 +62,47 @@ def write_project_version(pyproject_path: Path, version: str) -> None:
     pyproject_path.write_text("".join(lines), encoding="utf-8")
 
 
+def write_uv_lock_project_version(uv_lock_path: Path, version: str, *, project_name: str = "adaos") -> bool:
+    if not uv_lock_path.exists():
+        return False
+    text = uv_lock_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    starts = [index for index, line in enumerate(lines) if line.strip() == "[[package]]"]
+    starts.append(len(lines))
+    matching_blocks: list[tuple[int, int]] = []
+    for block_index in range(len(starts) - 1):
+        start, end = starts[block_index], starts[block_index + 1]
+        try:
+            block = tomllib.loads("".join(lines[start:end]))
+        except Exception as exc:
+            raise RuntimeError(f"failed to parse package block in {uv_lock_path}: {exc}") from exc
+        packages = block.get("package") if isinstance(block, dict) else None
+        package = packages[0] if isinstance(packages, list) and packages else None
+        source = package.get("source") if isinstance(package, dict) else None
+        if (
+            isinstance(package, dict)
+            and str(package.get("name") or "").strip() == project_name
+            and isinstance(source, dict)
+            and str(source.get("editable") or "").strip() == "."
+        ):
+            matching_blocks.append((start, end))
+    if len(matching_blocks) != 1:
+        raise RuntimeError(
+            f"expected one editable {project_name!r} package in {uv_lock_path}, found {len(matching_blocks)}"
+        )
+    start, end = matching_blocks[0]
+    for index in range(start, end):
+        match = _VERSION_LINE_RE.match(lines[index].rstrip("\r\n"))
+        if match is None:
+            continue
+        newline = "\r\n" if lines[index].endswith("\r\n") else "\n" if lines[index].endswith("\n") else ""
+        prefix, quote, _old, _closing, suffix = match.groups()
+        lines[index] = f"{prefix}{quote}{version}{quote}{suffix}{newline}"
+        uv_lock_path.write_text("".join(lines), encoding="utf-8")
+        return True
+    raise RuntimeError(f"editable {project_name!r} package does not define a version in {uv_lock_path}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Increment AdaOS [project].version patch number.")
     parser.add_argument(
@@ -83,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         next_version = bump_patch(current)
         if not args.dry_run:
             write_project_version(pyproject_path, next_version)
+            write_uv_lock_project_version(pyproject_path.with_name("uv.lock"), next_version)
         print(next_version)
         return 0
     except Exception as exc:
