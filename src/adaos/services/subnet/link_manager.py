@@ -14,6 +14,7 @@ from fastapi import WebSocket
 from packaging.version import InvalidVersion, Version
 
 from adaos.domain import Event as DomainEvent
+from adaos.domain.node_identity import node_identities_match, node_identity_token
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_display import node_display_from_directory_node
 from adaos.services.yjs.doc import apply_update_to_live_room, async_get_ydoc, mutate_live_room
@@ -757,12 +758,12 @@ def _target_node_id_for_hub_event(event_type: str, payload: dict[str, Any]) -> s
         or ""
     ).strip()
     if target:
-        return target
+        return node_identity_token(target)
     if str(event_type or "").strip() in {
         "webio.stream.snapshot.requested",
         "webio.stream.subscription.changed",
     }:
-        return str(payload.get("node_id") or "").strip()
+        return node_identity_token(payload.get("node_id"))
     return ""
 
 
@@ -1410,11 +1411,19 @@ class HubLinkManager:
         _publish_link_event("subnet.member.lost", payload)
 
     def is_connected(self, node_id: str) -> bool:
-        return node_id in self._links
+        target = node_identity_token(node_id)
+        return any(node_identities_match(target, known_id) for known_id in self._links)
 
     async def _get_link(self, node_id: str) -> HubMemberLink | None:
         async with self._lock:
-            return self._links.get(node_id)
+            target = node_identity_token(node_id)
+            direct = self._links.get(target)
+            if direct is not None:
+                return direct
+            return next(
+                (link for known_id, link in self._links.items() if node_identities_match(target, known_id)),
+                None,
+            )
 
     async def note_member_activity(self, node_id: str, *, message_type: str | None = None) -> None:
         link = await self._get_link(node_id)
@@ -1774,7 +1783,7 @@ class HubLinkManager:
         sent = 0
         failed = 0
         for link in links:
-            if target_node_id and link.node_id != target_node_id:
+            if target_node_id and not node_identities_match(link.node_id, target_node_id):
                 continue
             try:
                 await link.send_json(msg)

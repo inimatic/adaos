@@ -68,6 +68,17 @@ def test_subscription_log_suffix_is_empty_for_unknown_skill() -> None:
     assert decorators._subscription_log_suffix("<unknown>") == ""
 
 
+def test_skill_event_target_accepts_canonical_local_node_identity(monkeypatch) -> None:
+    monkeypatch.setattr(decorators, "_local_node_id", lambda: "node-1")
+
+    for target in ("node-1", "hub:node-1", "member:node-1", "node:node-1", "redevice:node-1"):
+        assert decorators._skill_event_targets_this_node({"target_node_id": target})
+
+    assert decorators._skill_event_targets_this_node({})
+    assert not decorators._skill_event_targets_this_node({"target_node_id": "member:node-2"})
+    assert not decorators._skill_event_targets_this_node({"target_node_id": "root:node-1"})
+
+
 def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     calls: list[str] = []
 

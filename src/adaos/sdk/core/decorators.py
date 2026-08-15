@@ -12,6 +12,7 @@ from adaos.sdk.data.context import set_current_skill, clear_current_skill
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.sdk.io.context import io_meta
+from adaos.domain.node_identity import node_identities_match
 from adaos.services.node_config import load_config
 from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.skill.activation import (
@@ -186,7 +187,7 @@ def _skill_event_targets_this_node(evt: object) -> bool:
     target_node_id = _target_node_id_from_event(evt)
     if not target_node_id:
         return True
-    return target_node_id == _local_node_id()
+    return node_identities_match(target_node_id, _local_node_id())
 
 
 def _webspace_id_from_event(evt: object) -> str:

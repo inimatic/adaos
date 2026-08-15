@@ -1301,6 +1301,23 @@ def test_call_tool_allows_prompt_project_file_save_without_approval(monkeypatch)
     assert calls == ["run_sync", "prompt_engineer_skill:prompt_save_project_file"]
 
 
+def test_canonical_local_target_does_not_proxy_from_hub() -> None:
+    conf = SimpleNamespace(role="hub")
+
+    assert not tool_bridge_module._should_proxy_tool_call_to_target(
+        conf=conf,
+        tool_name="weather_skill:get_snapshot",
+        target_node_id="hub:node-1",
+        local_node_id="node-1",
+    )
+    assert tool_bridge_module._should_proxy_tool_call_to_target(
+        conf=conf,
+        tool_name="weather_skill:get_snapshot",
+        target_node_id="member:node-2",
+        local_node_id="node-1",
+    )
+
+
 def test_call_tool_blocks_cross_node_mutation_without_approval(monkeypatch) -> None:
     published = _patch_runtime_approval_pending_actions(monkeypatch)
 

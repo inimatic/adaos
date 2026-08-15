@@ -423,6 +423,29 @@ def test_wait_for_server_start_rejects_listener_without_ready_health(monkeypatch
     )
 
 
+def test_wait_for_server_start_grants_bounded_pre_listener_process_grace(monkeypatch):
+    clock = {"now": 0.0}
+
+    monkeypatch.setattr(api_cmd.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        api_cmd.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+    monkeypatch.setattr(api_cmd.psutil, "pid_exists", lambda pid: pid == 4321)
+    monkeypatch.setattr(api_cmd, "_find_listening_server_pid", lambda _host, _port: None)
+
+    assert not api_cmd._wait_for_server_start(
+        "127.0.0.1",
+        8777,
+        timeout=0.8,
+        expected_pid=4321,
+        stability=0,
+        readiness_grace=0.2,
+    )
+    assert clock["now"] >= 1.0
+
+
 def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     monkeypatch,
     tmp_path,
@@ -453,9 +476,10 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     monkeypatch.setattr(
         api_cmd,
         "_wait_for_server_start",
-        lambda _host, _port, *, timeout, expected_git_commit: observed.update(
+        lambda _host, _port, *, timeout, expected_git_commit, expected_pid: observed.update(
             timeout=timeout,
             expected_git_commit=expected_git_commit,
+            expected_pid=expected_pid,
         )
         or False,
     )
@@ -464,7 +488,7 @@ def test_api_restart_uses_configured_start_timeout_and_reports_launch_log(
     result = runner.invoke(app, ["restart"])
 
     assert result.exit_code == 1
-    assert observed == {"timeout": 75.0, "expected_git_commit": "abc123"}
+    assert observed == {"timeout": 75.0, "expected_git_commit": "abc123", "expected_pid": 4321}
     assert "base_timeout=75s" in result.stdout
     assert "readiness_grace=60s" in result.stdout
     assert "alive=true" in result.stdout

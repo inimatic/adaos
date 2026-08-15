@@ -15,6 +15,7 @@ from typing import Any
 
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.domain import Event
+from adaos.domain.node_identity import node_identities_match
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.capacity import invalidate_local_capacity_cache
 from adaos.services.io_web.toast import WebToastService
@@ -960,7 +961,7 @@ def submit_marketplace_install_action(
     if target_kind not in {"skill", "scenario"} or not target_id:
         raise ValueError("marketplace_install_requires_target")
     local_node_id = str(getattr(getattr(runtime, "config", None), "node_id", "") or "").strip()
-    if target_node_id and target_node_id != local_node_id:
+    if target_node_id and not node_identities_match(target_node_id, local_node_id):
         raise ValueError("marketplace_install_remote_target_unsupported")
     return submit_install_operation(
         target_kind=target_kind,

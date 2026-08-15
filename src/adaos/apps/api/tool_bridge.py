@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from adaos.apps.api.auth import require_token
+from adaos.domain.node_identity import node_identities_match, node_identity_token
 from adaos.services.observe import attach_http_trace_headers
 from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.eventbus import emit
@@ -244,13 +245,13 @@ def _runtime_action_risk(
         elif local_write_tool:
             side_effect_class = "local_write"
             include_node_targets = False
-        elif effective_target and effective_target != str(local_node_id or "").strip():
+        elif effective_target and not node_identities_match(effective_target, local_node_id):
             if any(tool_name.startswith(prefix) for prefix in _HUB_LOCAL_TOOL_PREFIXES):
                 side_effect_class = "local_write"
                 include_node_targets = False
             else:
                 side_effect_class = "cross_node"
-        elif effective_target and effective_target == str(local_node_id or "").strip():
+        elif effective_target and node_identities_match(effective_target, local_node_id):
             include_node_targets = False
     elif side_effect_class in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}:
         include_node_targets = False
@@ -1023,13 +1024,13 @@ def _resolve_tool_webspace_id(payload: Dict[str, Any]) -> str:
 
 def _resolve_target_node_id(payload: Dict[str, Any]) -> str:
     meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
-    return str(
+    return node_identity_token(
         payload.get("target_node_id")
         or payload.get("node_id")
         or meta.get("target_node_id")
         or meta.get("node_target_id")
         or ""
-    ).strip()
+    )
 
 
 def _is_loopback_base_url(base_url: str | None) -> bool:
@@ -1178,7 +1179,7 @@ def _should_proxy_tool_call_to_target(
 ) -> bool:
     if str(getattr(conf, "role", "") or "").strip().lower() != "hub":
         return False
-    if not target_node_id or target_node_id == local_node_id:
+    if not target_node_id or node_identities_match(target_node_id, local_node_id):
         return False
     tool_token = str(tool_name or "").strip()
     # Some tools expose hub-side projections of member state. Even when the UI
@@ -1550,7 +1551,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     webspace_id = _resolve_tool_webspace_id(payload)
     target_node_id = _resolve_target_node_id(payload)
     conf = getattr(ctx, "config", None)
-    local_node_id = str(getattr(conf, "node_id", "") or "").strip()
+    local_node_id = node_identity_token(getattr(conf, "node_id", ""))
     gate_started_at = time.perf_counter()
     action_risk = await _enforce_runtime_action_gate(
         body=body,
@@ -1713,7 +1714,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
 
         base_url = target.get("base_url") or directory.get_node_base_url(target_node_id)
         if _is_loopback_base_url(base_url):
-            if target_node_id and target_node_id == local_node_id:
+            if target_node_id and node_identities_match(target_node_id, local_node_id):
                 raise HTTPException(
                     status_code=404,
                     detail=f"local skill '{skill_name}', tool '{public_tool}' is unavailable: {e}",
@@ -1728,7 +1729,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 )
             raise HTTPException(status_code=503, detail="member base_url is loopback-only and the live member link is unavailable")
         if not base_url:
-            if target_node_id and target_node_id == local_node_id:
+            if target_node_id and node_identities_match(target_node_id, local_node_id):
                 raise HTTPException(
                     status_code=404,
                     detail=f"local skill '{skill_name}', tool '{public_tool}' is unavailable: {e}",

@@ -16,6 +16,7 @@ import y_py as Y
 from adaos.services.eventbus import LocalEventBus
 import logging
 from adaos.domain import Event
+from adaos.domain.node_identity import node_identities_match
 from adaos.services.agent_context import get_ctx
 from adaos.services.node_config import load_config
 from adaos.services.runtime_identity import runtime_transition_role
@@ -564,7 +565,7 @@ class RouterService:
             local_node_id = str(get_ctx().config.node_id or "").strip()
         except Exception:
             local_node_id = ""
-        return not local_node_id or target_node_id == local_node_id
+        return not local_node_id or node_identities_match(target_node_id, local_node_id)
 
     def _event_originates_from_remote_member(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
@@ -577,7 +578,7 @@ class RouterService:
             local_node_id = str(get_ctx().config.node_id or "").strip()
         except Exception:
             local_node_id = ""
-        if local_node_id and origin_node_id == local_node_id:
+        if local_node_id and node_identities_match(origin_node_id, local_node_id):
             return False
         return not self._event_targets_local_node(payload)
 
@@ -3270,7 +3271,7 @@ class RouterService:
             publish_unqualified = (
                 not source_node_id
                 or not local_node_id
-                or source_node_id == local_node_id
+                or node_identities_match(source_node_id, local_node_id)
             )
             topics: list[str] = []
             if publish_unqualified:

@@ -230,6 +230,19 @@ def test_marketplace_install_action_parses_table_event_and_rejects_remote_target
     assert submitted[0]["webspace_id"] == "desktop"
     assert submitted[0]["initiator"]["target_node_id"] == "hub-local"
 
+    canonical_result = operations_manager.submit_marketplace_install_action(
+        {
+            "value": {
+                "kind": "skill",
+                "id": "weather_skill",
+                "target_node_id": "hub:hub-local",
+            }
+        },
+        ctx=ctx,
+    )
+    assert canonical_result["operation_id"] == "op-1"
+    assert submitted[1]["initiator"]["target_node_id"] == "hub:hub-local"
+
     with pytest.raises(ValueError, match="marketplace_install_remote_target_unsupported"):
         operations_manager.submit_marketplace_install_action(
             {

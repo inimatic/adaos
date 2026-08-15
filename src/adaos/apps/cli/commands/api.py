@@ -1422,6 +1422,7 @@ def _wait_for_server_start(
     *,
     timeout: float,
     expected_git_commit: str | None = None,
+    expected_pid: int | None = None,
     stability: float | None = None,
     readiness_grace: float | None = None,
 ) -> bool:
@@ -1436,10 +1437,20 @@ def _wait_for_server_start(
         if readiness_grace is None
         else max(0.0, float(readiness_grace))
     )
+    process_progress_observed = False
     listener_progress_observed = False
     ready_since: float | None = None
     while time.monotonic() < deadline:
         owner_pid = _find_listening_server_pid(host, port)
+        spawned_process_alive = bool(expected_pid and psutil.pid_exists(int(expected_pid)))
+        if spawned_process_alive and not process_progress_observed:
+            # Uvicorn binds its socket after lifespan startup. A live child is
+            # therefore meaningful bounded progress even before a listener
+            # exists, especially with a large local skill catalog.
+            process_progress_observed = True
+            deadline += readiness_grace_window
+        elif expected_pid and process_progress_observed and not spawned_process_alive and not owner_pid:
+            return False
         if (
             not owner_pid
             or owner_pid == os.getpid()
@@ -1986,6 +1997,7 @@ def restart():
             port,
             timeout=start_timeout,
             expected_git_commit=expected_git_commit,
+            expected_pid=launch.pid,
         ):
             alive = psutil.pid_exists(launch.pid)
             readiness_grace = _api_restart_readiness_grace_seconds()

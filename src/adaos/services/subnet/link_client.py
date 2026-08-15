@@ -18,6 +18,7 @@ import y_py as Y
 from adaos.apps.cli.active_control import resolve_control_token
 from adaos.build_info import BUILD_INFO
 from adaos.domain import Event as DomainEvent
+from adaos.domain.node_identity import node_identities_match
 from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.agent_context import get_ctx
 from adaos.services.core_slots import active_slot_manifest, slot_status
@@ -2127,7 +2128,7 @@ class MemberLinkClient:
             or ""
         ).strip()
         local_node_id = str(getattr(get_ctx().config, "node_id", "") or "").strip()
-        if target_node_id and local_node_id and target_node_id != local_node_id:
+        if target_node_id and local_node_id and not node_identities_match(target_node_id, local_node_id):
             return
         mirrored_payload["_meta"] = meta
         self._last_hub_event_type = event_type

@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from adaos.domain.node_identity import node_identities_match
+
 
 @dataclass(frozen=True, slots=True)
 class BootstrapBootOperations:
@@ -338,7 +340,10 @@ class BootstrapBootCoordinator:
                         or meta.get("node_target_id")
                         or ""
                     ).strip()
-                    if not target_node_id or target_node_id == str(getattr(conf, "node_id", "") or "").strip():
+                    if not target_node_id or node_identities_match(
+                        target_node_id,
+                        getattr(conf, "node_id", ""),
+                    ):
                         return
                     try:
                         asyncio.get_running_loop().create_task(
