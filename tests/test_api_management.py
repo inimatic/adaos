@@ -675,10 +675,11 @@ def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch)
     payload = resp.json()
     refresh = payload["runtime_refresh"]
     assert payload["updated"] is True
-    assert "runtime_update:demo:workspace" in skill_mgr.calls
+    assert "runtime_update:demo:workspace" not in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
     assert any(call.startswith("activate_for_space:demo:2.0.0:B:default") for call in skill_mgr.calls)
     assert refresh["ok"] is True
+    assert refresh["isolated_candidate"] is True
     assert refresh["prepared_version"] == "2.0.0"
     assert refresh["prepared_slot"] == "B"
     assert refresh["activated_slot"] == "B"
@@ -692,6 +693,12 @@ def test_skill_update_refreshes_runtime_when_source_version_changed(monkeypatch)
         "activate",
         "converge",
     ]
+    assert refresh["lifecycle_stages"][0] == {
+        "stage": "runtime_update",
+        "ok": True,
+        "skipped": True,
+        "reason": "versioned_candidate_isolated",
+    }
 
 
 def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -> None:
@@ -734,8 +741,15 @@ def test_skill_update_fails_when_active_runtime_does_not_converge(monkeypatch) -
     assert "did not converge" in detail["runtime_refresh"]["failure_reason"]
     assert detail["runtime_refresh"]["prepared_version"] == "2.0.0"
     assert detail["runtime_refresh"]["prepared_slot"] == "B"
-    assert "runtime_update:demo:workspace" in skill_mgr.calls
+    assert "runtime_update:demo:workspace" not in skill_mgr.calls
     assert "prepare_runtime:demo" in skill_mgr.calls
+    assert detail["runtime_refresh"]["isolated_candidate"] is True
+    assert detail["runtime_refresh"]["lifecycle_stages"][0] == {
+        "stage": "runtime_update",
+        "ok": True,
+        "skipped": True,
+        "reason": "versioned_candidate_isolated",
+    }
     assert bus_events == []
     assert rebuilds == []
 
