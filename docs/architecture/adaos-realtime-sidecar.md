@@ -238,7 +238,12 @@ Success criteria:
   port (`ADAOS_REALTIME_CONTROL_PORT`, default NATS port plus four). The response
   carries `adaos.realtime_sidecar.control.v1`; readiness must not open the NATS
   listener or increment local/remote session counters. PID ownership remains a
-  non-invasive fallback, while raw TCP connect is legacy opt-in only.
+  non-invasive fallback, while raw TCP connect is legacy opt-in only. This also
+  applies to synchronous listener snapshots used by runtime diagnostics: when
+  PID discovery is unavailable because `y_py` is loaded, adopted-process
+  liveness is read from the control port and a managed child is verified by the
+  following asynchronous control probe. Snapshot collection must never use the
+  NATS data port as a bind probe.
 - [x] `[must]` Request graceful sidecar process shutdown before forced
   termination. Managed restart gives each live relay time to close its remote
   WebSocket with a close frame; the peer must not observe synthetic `1006`
