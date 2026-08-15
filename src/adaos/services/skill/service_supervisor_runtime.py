@@ -405,7 +405,12 @@ async def _on_skill_rolledback(payload: Dict[str, Any]) -> None:
 
 @subscribe("skills.deactivated")
 async def _on_skill_deactivated(payload: Dict[str, Any]) -> None:
-    await _stop_if_service(payload.get("name") or payload.get("skill_name"), reason="skills.deactivated")
+    skill_name = str(payload.get("name") or payload.get("skill_name") or "").strip()
+    if skill_name:
+        from adaos.sdk.core.decorators import deactivate_skill_subscriptions
+
+        deactivate_skill_subscriptions({skill_name})
+    await _stop_if_service(skill_name, reason="skills.deactivated")
 
 
 @subscribe("subnet.stopping")

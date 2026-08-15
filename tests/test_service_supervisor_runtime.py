@@ -42,11 +42,17 @@ class _FailingShutdownSupervisor(_FakeSupervisor):
 
 def test_service_supervisor_runtime_stops_service_on_skill_deactivated(monkeypatch) -> None:
     fake = _FakeSupervisor()
+    deactivated: list[set[str]] = []
     monkeypatch.setattr(runtime_module, "get_service_supervisor", lambda: fake)
+    monkeypatch.setattr(
+        "adaos.sdk.core.decorators.deactivate_skill_subscriptions",
+        lambda names: deactivated.append(set(names)),
+    )
 
     asyncio.run(runtime_module._on_skill_deactivated({"name": "service_skill"}))
 
     assert fake.events == [("stop", "service_skill")]
+    assert deactivated == [{"service_skill"}]
 
 
 def test_service_supervisor_runtime_forces_discovery_on_skill_activation(monkeypatch) -> None:

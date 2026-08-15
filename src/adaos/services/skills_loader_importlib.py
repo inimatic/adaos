@@ -35,9 +35,20 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         loaded_declaration_manifests: set[Path] = set()
         import_timings: list[dict[str, Any]] = []
         discovery_timings: dict[str, float] = {}
+        deactivated_runtime_skills = await asyncio.to_thread(self._discover_deactivated_runtime_skills, root)
+        if deactivated_runtime_skills:
+            _LOG.warning(
+                "quarantined skill handlers excluded from runtime bootstrap skills=%s",
+                ",".join(sorted(deactivated_runtime_skills)),
+            )
 
         discovery_started_at = time.perf_counter()
         runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
+        runtime_handlers = [
+            (handler, skill_name)
+            for handler, skill_name in runtime_handlers
+            if not skill_name or skill_name not in deactivated_runtime_skills
+        ]
         discovery_timings["runtime"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
         import_timings.extend(
             await self._load_discovered_handlers(
@@ -51,7 +62,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Dev/fast-path: load handlers straight from the workspace tree when a
         # skill does not have an installed runtime bundle under .runtime.
         discovery_started_at = time.perf_counter()
-        workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, loaded)
+        excluded_skills = loaded | deactivated_runtime_skills
+        workspace_handlers = await asyncio.to_thread(self._discover_workspace_handlers, root, excluded_skills)
         discovery_timings["workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
         import_timings.extend(
             await self._load_discovered_handlers(
@@ -65,7 +77,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         # Repo-bundled workspace skills are a final fallback for builtin skills
         # when the node-local workspace tree does not contain the sources.
         discovery_started_at = time.perf_counter()
-        repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, loaded)
+        excluded_skills = loaded | deactivated_runtime_skills
+        repo_handlers = await asyncio.to_thread(self._discover_repo_workspace_handlers, root, excluded_skills)
         discovery_timings["repo_workspace"] = round((time.perf_counter() - discovery_started_at) * 1000.0, 3)
         import_timings.extend(
             await self._load_discovered_handlers(
@@ -77,10 +90,11 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         )
         slowest_imports = sorted(import_timings, key=lambda item: float(item.get("elapsed_ms") or 0.0), reverse=True)[:5]
         _LOG.info(
-            "skill handler import completed elapsed_s=%.3f loaded_skills=%d source_sync=%s candidate=%s "
+            "skill handler import completed elapsed_s=%.3f loaded_skills=%d quarantined_skills=%d source_sync=%s candidate=%s "
             "discovery_ms=%s slowest_imports=%s",
             time.perf_counter() - started_at,
             len(loaded),
+            len(deactivated_runtime_skills),
             source_sync_enabled,
             self._runtime_candidate_mode(),
             json.dumps(discovery_timings, sort_keys=True, separators=(",", ":")),
@@ -92,6 +106,18 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         target = str(skill_name or "").strip()
         if not target:
             return {"ok": False, "reason": "skill_name_missing", "handlers": []}
+        deactivation = await asyncio.to_thread(
+            SkillRuntimeEnvironment(skills_root=root, skill_name=target).read_deactivation
+        )
+        if bool(deactivation.get("deactivated")):
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "skill_runtime_deactivated",
+                "skill": target,
+                "deactivation": deactivation,
+                "handlers": [],
+            }
         runtime_handlers = await asyncio.to_thread(self._discover_runtime_handlers, root)
         handlers = [handler for handler, name in runtime_handlers if name == target]
         if not handlers:
@@ -393,6 +419,23 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             for handler in sorted(fallback_handlers):
                 handlers.append((handler, skill_name))
         return handlers
+
+    @staticmethod
+    def _discover_deactivated_runtime_skills(root: Path) -> set[str]:
+        runtime_root = root / ".runtime"
+        if not runtime_root.exists():
+            return set()
+        deactivated: set[str] = set()
+        for skill_dir in runtime_root.iterdir():
+            if not skill_dir.is_dir() or skill_dir.name.startswith((".", "_")):
+                continue
+            payload = SkillRuntimeEnvironment(
+                skills_root=root,
+                skill_name=skill_dir.name,
+            ).read_deactivation()
+            if bool(payload.get("deactivated")):
+                deactivated.add(skill_dir.name)
+        return deactivated
 
     def _discover_workspace_handlers(self, root: Path, loaded: set[str]) -> Iterable[Tuple[Path, Optional[str]]]:
         if not root.exists():

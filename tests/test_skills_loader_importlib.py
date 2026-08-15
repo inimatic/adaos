@@ -122,6 +122,37 @@ def test_runtime_handler_discovery_uses_bounded_source_layout(tmp_path, monkeypa
     assert ImportlibSkillsLoader()._discover_runtime_handlers(tmp_path) == [(handler, "bounded_skill")]
 
 
+def test_importlib_loader_excludes_deactivated_runtime_and_workspace_fallback(tmp_path, monkeypatch) -> None:
+    runtime_skill = tmp_path / ".runtime" / "quarantined_skill"
+    version_root = runtime_skill / "v1.0"
+    slot_root = version_root / "slots" / "A"
+    runtime_handler = slot_root / "src" / "skills" / "quarantined_skill" / "handlers" / "main.py"
+    runtime_handler.parent.mkdir(parents=True)
+    runtime_handler.write_text("VALUE = 'runtime'\n", encoding="utf-8")
+    (runtime_skill / "current_version").write_text("1.0\n", encoding="utf-8")
+    (version_root / "active").write_text("A\n", encoding="utf-8")
+    (slot_root / "resolved.manifest.json").write_text('{"name":"quarantined_skill"}\n', encoding="utf-8")
+    (runtime_skill / "deactivated.json").write_text(
+        '{"deactivated":true,"reason":"tests_failed"}\n',
+        encoding="utf-8",
+    )
+
+    workspace_handler = tmp_path / "quarantined_skill" / "handlers" / "main.py"
+    workspace_handler.parent.mkdir(parents=True)
+    workspace_handler.write_text("VALUE = 'workspace'\n", encoding="utf-8")
+
+    loaded: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda handler, **_kwargs: loaded.append(handler))
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert loaded == []
+    reload_result = asyncio.run(loader.reload_skill_handlers(tmp_path, "quarantined_skill"))
+    assert reload_result["ok"] is False
+    assert reload_result["skipped"] is True
+    assert reload_result["reason"] == "skill_runtime_deactivated"
+
+
 def test_importlib_loader_loads_skill_data_projections(tmp_path, monkeypatch) -> None:
     skill_dir = tmp_path / "infrastate_skill"
     handlers_dir = skill_dir / "handlers"

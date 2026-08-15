@@ -7,7 +7,7 @@ from pathlib import Path
 import queue
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from datetime import datetime, timezone
 
 from adaos.domain import Event
@@ -892,6 +892,22 @@ def attach_event_logger(bus: EventBus, logger: Optional[logging.Logger] = None) 
     except Exception:
         include_payload = False
 
+    def _diagnostic_fields(ev: Event) -> dict[str, Any]:
+        if str(getattr(ev, "type", "") or "") != "skill.service.issue":
+            return {}
+        payload = getattr(ev, "payload", None)
+        if not isinstance(payload, dict):
+            return {}
+        issue = payload.get("issue") if isinstance(payload.get("issue"), dict) else {}
+        message = str(issue.get("message") or "").strip()
+        return {
+            "skill": str(payload.get("skill") or "").strip() or None,
+            "issue_id": str(issue.get("id") or "").strip() or None,
+            "issue_type": str(issue.get("type") or "").strip() or None,
+            "issue_severity": str(issue.get("severity") or "").strip() or None,
+            "issue_message": message[:512] or None,
+        }
+
     def _handler(ev: Event) -> None:
         iso_time = datetime.fromtimestamp(getattr(ev, "ts", 0), tz=timezone.utc).isoformat() if getattr(ev, "ts", None) else None
         payload = ev.payload if include_payload else None
@@ -904,6 +920,7 @@ def attach_event_logger(bus: EventBus, logger: Optional[logging.Logger] = None) 
                     "source": ev.source,
                     "ts": ev.ts,
                     "payload": payload,
+                    **_diagnostic_fields(ev),
                 }
             },
         )

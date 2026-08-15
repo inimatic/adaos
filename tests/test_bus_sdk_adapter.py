@@ -17,6 +17,25 @@ async def _run_bus_flow(seen: dict) -> None:
     await asyncio.sleep(0)
 
 
+async def _emit_service_issue() -> None:
+    await bus.emit(
+        "skill.service.issue",
+        {
+            "skill": "media_indexer_skill",
+            "issue": {
+                "id": "iss.test",
+                "type": "endpoint_unhealthy",
+                "severity": "warning",
+                "message": "healthcheck failed",
+                "details": {"token": "must-not-be-logged"},
+            },
+        },
+        source="skill.service",
+        actor="pytest",
+    )
+    await asyncio.sleep(0)
+
+
 def test_bus_emit_and_on(monkeypatch) -> None:
     ctx = get_ctx()
     seen: dict[str, str] = {}
@@ -39,3 +58,18 @@ def test_bus_emit_and_on(monkeypatch) -> None:
     assert records
     assert records[-1].msg == "event"
     assert getattr(records[-1], "extra", {}).get("type") == "unit.test"
+
+    asyncio.run(_emit_service_issue())
+    issue_record = next(
+        record
+        for record in reversed(records)
+        if getattr(record, "extra", {}).get("type") == "skill.service.issue"
+    )
+    issue_extra = getattr(issue_record, "extra", {})
+    assert issue_extra["payload"] is None
+    assert issue_extra["skill"] == "media_indexer_skill"
+    assert issue_extra["issue_id"] == "iss.test"
+    assert issue_extra["issue_type"] == "endpoint_unhealthy"
+    assert issue_extra["issue_severity"] == "warning"
+    assert issue_extra["issue_message"] == "healthcheck failed"
+    assert "must-not-be-logged" not in str(issue_extra)

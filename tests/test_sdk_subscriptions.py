@@ -124,8 +124,14 @@ def test_register_subscriptions_replaces_skill_generation(monkeypatch) -> None:
     decorators.subscriptions.append(("topic.demo", new_handler))
     asyncio.run(decorators.register_subscriptions(skill_names={"demo_skill"}, force=True))
     assert len(bus.handlers) == 1
+    current_handler = bus.handlers[0][1]
     assert decorators.subscriptions == [("topic.demo", new_handler)]
-    asyncio.run(bus.handlers[0][1](SimpleNamespace(payload={})))  # type: ignore[misc]
+    asyncio.run(current_handler(SimpleNamespace(payload={})))  # type: ignore[misc]
+
+    deactivated = decorators.deactivate_skill_subscriptions({"demo_skill"})
+    assert deactivated == {"skills": ["demo_skill"], "removed_handlers": 1}
+    assert bus.handlers == []
+    asyncio.run(current_handler(SimpleNamespace(payload={})))  # type: ignore[misc]
 
     assert calls == ["old", "new"]
 

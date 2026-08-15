@@ -584,6 +584,24 @@ def _remove_registered_skill_bus_handlers(skill_names: Iterable[str]) -> int:
     return removed
 
 
+def deactivate_skill_subscriptions(skill_names: Iterable[str]) -> dict[str, Any]:
+    """Invalidate and remove in-process handlers while preserving reload declarations."""
+    targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
+    if not targets:
+        return {"skills": [], "removed_handlers": 0}
+    for skill_name in targets:
+        _SKILL_SUBSCRIPTION_GENERATIONS[skill_name] = int(
+            _SKILL_SUBSCRIPTION_GENERATIONS.get(skill_name) or 0
+        ) + 1
+    removed = _remove_registered_skill_bus_handlers(targets)
+    _LOG.warning(
+        "deactivated skill subscriptions removed skills=%s removed_bus_handlers=%d",
+        ",".join(sorted(targets)),
+        removed,
+    )
+    return {"skills": sorted(targets), "removed_handlers": removed}
+
+
 def _target_subscription_entries(skill_names: Iterable[str] | None) -> list[Tuple[str, Callable]]:
     targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
     if not targets:
