@@ -7424,6 +7424,153 @@ async def _apply_room_materialized_payload(
         return b"", {"ok": False, "ready": False, "error": f"{type(exc).__name__}: {exc}", "phase_timings_ms": phase_timings_ms}
 
 
+def _apply_materialized_payload_detached_sync(
+    webspace_id: str,
+    payload: Mapping[str, Any],
+    *,
+    reason: str,
+    materialization_identity: Mapping[str, Any] | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """Commit a materialized payload without creating an owner-loop YRoom."""
+
+    total_started = time.perf_counter()
+    phase_timings_ms: dict[str, float] = {}
+    ydoc_timings_ms: dict[str, float] = {}
+    worker_thread_id = threading.get_ident()
+    try:
+        import y_py as Y  # pylint: disable=import-outside-toplevel
+        from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
+        from adaos.services.yjs.doc import get_ydoc  # pylint: disable=import-outside-toplevel
+
+        runtime = WebspaceScenarioRuntime()
+        update = b""
+        snapshot: dict[str, Any] = {"ready": False}
+        with get_ydoc(
+            webspace_id,
+            timings=ydoc_timings_ms,
+            timing_prefix="detached_",
+            load_mark_roots=["ui", "data", "registry", "runtime"],
+            governed=True,
+        ) as ydoc:
+            stage_started = time.perf_counter()
+            before = Y.encode_state_vector(ydoc)
+            phase_timings_ms["encode_state_vector"] = _elapsed_ms_since(stage_started)
+
+            stage_started = time.perf_counter()
+            with ystore_write_metadata_sync(
+                root_names=["ui", "data", "registry", "runtime"],
+                source=f"yjs.gateway_ws.{reason}.detached_materialized_payload",
+                owner="core:yjs_gateway",
+                channel="core.yjs.gateway.detached_materialized_payload",
+                governed=True,
+            ):
+                runtime.apply_materialized_payload_to_doc(
+                    ydoc,
+                    webspace_id,
+                    payload,
+                    materialization_identity=materialization_identity,
+                    verify_branch_fingerprints="scenario_switch" in str(reason or "").lower(),
+                )
+            phase_timings_ms["branch_apply"] = _elapsed_ms_since(stage_started)
+
+            stage_started = time.perf_counter()
+            apply_summary = getattr(runtime, "_last_apply_summary", None)
+            snapshot = _materialized_payload_apply_ready_snapshot(payload, apply_summary)
+            if snapshot is None:
+                snapshot = _room_effective_branch_snapshot(ydoc)
+            phase_timings_ms["effective_snapshot"] = _elapsed_ms_since(stage_started)
+            if not bool(snapshot.get("ready")):
+                phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+                return b"", {
+                    "ok": False,
+                    "ready": False,
+                    "snapshot": snapshot,
+                    "apply_summary": apply_summary,
+                    "semantic_timings_ms": getattr(runtime, "_last_rebuild_timings_ms", None),
+                    "ydoc_timings_ms": ydoc_timings_ms,
+                    "phase_timings_ms": phase_timings_ms,
+                    "worker_thread_id": worker_thread_id,
+                }
+
+            stage_started = time.perf_counter()
+            update = bytes(Y.encode_state_as_update(ydoc, before) or b"")
+            phase_timings_ms["encode_update"] = _elapsed_ms_since(stage_started)
+
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        payload_ui = payload.get("ui") if isinstance(payload.get("ui"), Mapping) else {}
+        committed_scenario = str(
+            payload_ui.get("current_scenario")
+            or snapshot.get("current_scenario")
+            or payload.get("scenario_id")
+            or ""
+        ).strip()
+        return update, {
+            "ok": True,
+            "ready": True,
+            "snapshot": snapshot,
+            "apply_summary": getattr(runtime, "_last_apply_summary", None),
+            "semantic_timings_ms": getattr(runtime, "_last_rebuild_timings_ms", None),
+            "ydoc_timings_ms": ydoc_timings_ms,
+            "phase_timings_ms": phase_timings_ms,
+            "worker_thread_id": worker_thread_id,
+            "committed_scenario": committed_scenario,
+            "update_bytes": len(update),
+        }
+    except BaseException as exc:
+        if _is_control_flow_base_exception(exc):
+            raise
+        phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+        return b"", {
+            "ok": False,
+            "ready": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "ydoc_timings_ms": ydoc_timings_ms,
+            "phase_timings_ms": phase_timings_ms,
+            "worker_thread_id": worker_thread_id,
+        }
+
+
+def _detached_live_refresh_response(
+    webspace_id: str,
+    *,
+    reason: str,
+    persist_repair: bool,
+    force_full_state_update: bool,
+    update: bytes = b"",
+    result: Mapping[str, Any] | None = None,
+    phase_timings_ms: Mapping[str, float] | None = None,
+    skipped: str = "",
+) -> dict[str, Any]:
+    direct_result = dict(result or {})
+    ready = bool(direct_result.get("ready")) if direct_result else bool(skipped)
+    update_size = len(update or b"")
+    return {
+        "ok": ready,
+        "webspace_id": webspace_id,
+        "reason": reason,
+        "mode": "detached_no_live_transport",
+        "skipped": skipped or None,
+        "room_present": False,
+        "room_created": False,
+        "room_dropped": False,
+        "room_repaired": update_size > 0,
+        "repair_bytes": update_size,
+        "repair_persisted": bool(persist_repair and ready and update_size > 0),
+        "force_full_state_update": bool(force_full_state_update),
+        "materialized_payload_applied": bool(direct_result and ready),
+        "materialized_payload_update_bytes": update_size,
+        "materialized_payload": direct_result or None,
+        "broadcast_diagnostics": {},
+        "fallback_repair": False,
+        "semantic_repair": False,
+        "thread_handoff": "detached_worker" if direct_result else "not_required",
+        "closed_connections": 0,
+        "closed_webrtc_peers": 0,
+        "reset_route_runtime": False,
+        "phase_timings_ms": dict(phase_timings_ms or {}),
+    }
+
+
 async def _update_live_webspace_effective_branches(
     webspace_id: str,
     *,
@@ -7449,6 +7596,94 @@ async def _update_live_webspace_effective_branches(
     phase_timings_ms["room_lookup"] = _elapsed_ms_since(stage_started)
     bootstrap_materialization: dict[str, Any] | None = None
     if room is None:
+        room_lock = _room_locks.setdefault(key, asyncio.Lock())
+        async with room_lock:
+            room = y_server.rooms.get(key)
+            if room is None and not _webspace_has_live_transports(key):
+                if not isinstance(materialized_payload, Mapping) or not materialized_payload:
+                    phase_timings_ms["room_create"] = 0.0
+                    phase_timings_ms["detached_apply"] = 0.0
+                    phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+                    return _detached_live_refresh_response(
+                        key,
+                        reason=reason,
+                        persist_repair=persist_repair,
+                        force_full_state_update=force_full_state_update,
+                        phase_timings_ms=phase_timings_ms,
+                        skipped="no_live_transport",
+                    )
+                if not persist_repair:
+                    phase_timings_ms["room_create"] = 0.0
+                    phase_timings_ms["detached_apply"] = 0.0
+                    phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+                    return _detached_live_refresh_response(
+                        key,
+                        reason=reason,
+                        persist_repair=persist_repair,
+                        force_full_state_update=force_full_state_update,
+                        phase_timings_ms=phase_timings_ms,
+                        skipped="durable_payload_already_committed",
+                    )
+
+                payload_scenario = str(materialized_payload.get("scenario_id") or "").strip()
+                previous_authoritative_scenario = _authoritative_current_scenario(key)
+                if payload_scenario:
+                    note_authoritative_current_scenario(
+                        key,
+                        payload_scenario,
+                        reason=f"{reason}:detached_prepare",
+                    )
+                stage_started = time.perf_counter()
+                update, detached_result = await asyncio.to_thread(
+                    _apply_materialized_payload_detached_sync,
+                    key,
+                    materialized_payload,
+                    reason=reason,
+                    materialization_identity=materialization_identity,
+                )
+                phase_timings_ms["room_create"] = 0.0
+                phase_timings_ms["detached_apply"] = _elapsed_ms_since(stage_started)
+                phase_timings_ms["total"] = _elapsed_ms_since(total_started)
+                if bool(detached_result.get("ready")):
+                    committed_scenario = str(detached_result.get("committed_scenario") or payload_scenario).strip()
+                    if committed_scenario:
+                        note_authoritative_current_scenario(
+                            key,
+                            committed_scenario,
+                            reason=f"{reason}:detached_commit",
+                        )
+                    invalidate_live_map_value_cache(key)
+                elif payload_scenario and _authoritative_current_scenario(key) == payload_scenario:
+                    if previous_authoritative_scenario:
+                        note_authoritative_current_scenario(
+                            key,
+                            previous_authoritative_scenario,
+                            reason=f"{reason}:detached_rollback",
+                        )
+                    else:
+                        _clear_authoritative_current_scenario(
+                            key,
+                            reason=f"{reason}:detached_failed",
+                        )
+                _ylog.info(
+                    "refreshed detached Yjs state without live transport webspace=%s reason=%s update_bytes=%s ready=%s worker_thread=%s phases=%s",
+                    key,
+                    reason,
+                    len(update or b""),
+                    bool(detached_result.get("ready")),
+                    detached_result.get("worker_thread_id"),
+                    json.dumps(phase_timings_ms, ensure_ascii=True, sort_keys=True),
+                )
+                return _detached_live_refresh_response(
+                    key,
+                    reason=reason,
+                    persist_repair=persist_repair,
+                    force_full_state_update=force_full_state_update,
+                    update=update,
+                    result=detached_result,
+                    phase_timings_ms=phase_timings_ms,
+                )
+
         if isinstance(materialized_payload, Mapping) and materialized_payload:
             bootstrap_materialization = {
                 "webspace_id": key,
@@ -8088,7 +8323,12 @@ async def stop_y_server() -> None:
         _cancel_idle_room_reset(webspace_id)
     for webspace_id in list(getattr(y_server, "rooms", {}).keys()):
         try:
-            await reset_live_webspace_room(str(webspace_id), close_reason="y_server_shutdown")
+            await reset_live_webspace_room(
+                str(webspace_id),
+                close_reason="y_server_shutdown",
+                reset_route_runtime=False,
+                prewarm_after_reset=False,
+            )
         except Exception:
             _ylog.debug("failed to reset room during y_server shutdown webspace=%s", webspace_id, exc_info=True)
     try:

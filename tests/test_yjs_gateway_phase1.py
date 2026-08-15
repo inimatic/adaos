@@ -2282,6 +2282,45 @@ def test_idle_room_reset_evicts_without_prewarm_or_route_reset(monkeypatch) -> N
     gateway_module.y_server.rooms.clear()
 
 
+def test_stop_y_server_does_not_prewarm_rooms_or_reset_route(monkeypatch) -> None:
+    key = "gateway-shutdown-no-prewarm"
+    gateway_module.y_server.rooms[key] = object()
+    reset_calls: list[dict[str, object]] = []
+
+    async def _fake_reset(
+        webspace_id: str,
+        *,
+        close_reason: str = "webspace_reload",
+        reset_route_runtime: bool = True,
+        prewarm_after_reset: bool | None = None,
+    ) -> dict[str, object]:
+        reset_calls.append(
+            {
+                "webspace_id": webspace_id,
+                "close_reason": close_reason,
+                "reset_route_runtime": reset_route_runtime,
+                "prewarm_after_reset": prewarm_after_reset,
+            }
+        )
+        gateway_module.y_server.rooms.pop(webspace_id, None)
+        return {"ok": True}
+
+    monkeypatch.setattr(gateway_module, "reset_live_webspace_room", _fake_reset)
+    monkeypatch.setattr(gateway_module, "_y_server_started", True)
+    monkeypatch.setattr(gateway_module, "_y_server_task", None)
+
+    asyncio.run(gateway_module.stop_y_server())
+
+    assert reset_calls == [
+        {
+            "webspace_id": key,
+            "close_reason": "y_server_shutdown",
+            "reset_route_runtime": False,
+            "prewarm_after_reset": False,
+        }
+    ]
+
+
 def test_gateway_transport_snapshot_reports_room_diagnostics() -> None:
     class _FakeStatsStream:
         def __init__(self, *, buffer_used: int, waiting_send: int, waiting_receive: int) -> None:
@@ -2533,6 +2572,89 @@ def test_apply_materialized_payload_reports_gateway_phase_timings(monkeypatch) -
 
     gateway_module.y_server.rooms.pop(key, None)
     gateway_module._YROOM_LIFECYCLE.clear()
+
+
+def test_materialized_payload_without_transport_commits_in_worker_without_room(monkeypatch) -> None:
+    key = "gateway-detached-materialized"
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._room_locks.pop(key, None)
+    worker_threads: list[int] = []
+    get_room_calls: list[str] = []
+
+    def _fake_detached(webspace_id, payload, **_kwargs):
+        assert webspace_id == key
+        assert payload["scenario_id"] == "media_center"
+        worker_threads.append(threading.get_ident())
+        return b"detached-update", {
+            "ok": True,
+            "ready": True,
+            "committed_scenario": "media_center",
+            "worker_thread_id": threading.get_ident(),
+            "apply_summary": {"changed_branches": 1},
+        }
+
+    async def _unexpected_get_room(name: str):
+        get_room_calls.append(name)
+        raise AssertionError("detached refresh must not create a YRoom")
+
+    monkeypatch.setattr(gateway_module, "_webspace_has_live_transports", lambda _key: False)
+    monkeypatch.setattr(gateway_module, "_apply_materialized_payload_detached_sync", _fake_detached)
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _unexpected_get_room)
+
+    async def _exercise() -> tuple[int, dict[str, object]]:
+        owner_thread = threading.get_ident()
+        result = await gateway_module.apply_materialized_payload_to_live_room(
+            key,
+            {"scenario_id": "media_center", "ui": {"current_scenario": "media_center"}},
+            reason="scenario_switch_rebuild",
+        )
+        return owner_thread, result
+
+    try:
+        owner_thread, result = asyncio.run(_exercise())
+        assert result["ok"] is True
+        assert result["mode"] == "detached_no_live_transport"
+        assert result["room_present"] is False
+        assert result["room_created"] is False
+        assert result["materialized_payload_applied"] is True
+        assert result["materialized_payload_update_bytes"] == len(b"detached-update")
+        assert result["thread_handoff"] == "detached_worker"
+        assert worker_threads and worker_threads[0] != owner_thread
+        assert get_room_calls == []
+    finally:
+        gateway_module._room_locks.pop(key, None)
+        gateway_module._AUTHORITATIVE_SCENARIO_LEASES.pop(key, None)
+
+
+def test_reconcile_without_transport_defers_without_room_creation(monkeypatch) -> None:
+    key = "gateway-detached-reconcile"
+    gateway_module.y_server.rooms.pop(key, None)
+    gateway_module._room_locks.pop(key, None)
+    get_room_calls: list[str] = []
+
+    async def _unexpected_get_room(name: str):
+        get_room_calls.append(name)
+        raise AssertionError("reconcile without transport must not create a YRoom")
+
+    monkeypatch.setattr(gateway_module, "_webspace_has_live_transports", lambda _key: False)
+    monkeypatch.setattr(gateway_module.y_server, "get_room", _unexpected_get_room)
+
+    try:
+        result = asyncio.run(
+            gateway_module.reconcile_live_webspace_effective_branches(
+                key,
+                reason="skill_runtime_migration_sync",
+            )
+        )
+        assert result["ok"] is True
+        assert result["mode"] == "detached_no_live_transport"
+        assert result["skipped"] == "no_live_transport"
+        assert result["room_present"] is False
+        assert result["room_created"] is False
+        assert result["semantic_repair"] is False
+        assert get_room_calls == []
+    finally:
+        gateway_module._room_locks.pop(key, None)
 
 
 def test_apply_materialized_payload_does_not_wait_for_client_sync_without_clients(monkeypatch) -> None:
