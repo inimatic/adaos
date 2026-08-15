@@ -539,10 +539,12 @@ class SupervisorUpdateExecution:
                     "manifest": manifest,
                 }
             )
+            candidate_cleanup: dict[str, Any] | None = None
             if candidate_prewarm_state == "ready":
                 failure_phase = "launch"
-                old_active_proc = manager._proc
-                old_active_url = manager.runtime_base_url
+                active_retirement: dict[str, Any] = {}
+                cutover_result: dict[str, Any] = {}
+                cold_fallback_enabled = operations.warm_switch_cold_fallback_enabled()
                 operations.write_core_update_status(
                     {
                         "state": "restarting",
@@ -563,36 +565,45 @@ class SupervisorUpdateExecution:
                         "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                         "candidate_memory_guard": candidate_memory_guard,
                         "message": (
-                            f"candidate slot {target_slot} is ready; promoting before stopping active runtime"
+                            f"candidate slot {target_slot} is ready; retiring active transport owner before promotion"
                             if target_slot
-                            else "candidate runtime is ready; promoting before stopping active runtime"
+                            else "candidate runtime is ready; retiring active transport owner before promotion"
                         ),
                         "manifest": manifest,
                     }
                 )
                 try:
-                    await manager._promote_candidate_runtime(
+                    cutover_result = await manager._single_owner_candidate_cutover(
                         slot=target_slot,
                         reason="supervisor.fast_cutover",
+                        restore_active_on_failure=not cold_fallback_enabled,
                     )
+                    active_retirement = (
+                        cutover_result.get("active_retirement")
+                        if isinstance(cutover_result.get("active_retirement"), dict)
+                        else {}
+                    )
+                    if not bool(cutover_result.get("ok")):
+                        raise RuntimeError(str(cutover_result.get("error") or "atomic candidate cutover failed"))
                 except Exception as exc:
                     operations.clear_core_update_plan()
                     latest_guard = manager._candidate_memory_guard_snapshot()
                     blocked_by_memory = not bool(latest_guard.get("allowed"))
                     if blocked_by_memory:
                         candidate_memory_guard = latest_guard
-                    if not operations.warm_switch_cold_fallback_enabled():
-                        cleanup_kwargs = {
-                            "reason": (
-                                "supervisor.candidate.cutover_memory_blocked"
-                                if blocked_by_memory
-                                else "supervisor.candidate.cutover_deferred"
-                            ),
-                            "slot": target_slot,
-                        }
-                        if blocked_by_memory:
-                            cleanup_kwargs["graceful"] = False
-                        candidate_cleanup = await manager._cleanup_candidate_runtime(**cleanup_kwargs)
+                    candidate_cleanup = (
+                        cutover_result.get("candidate_cleanup")
+                        if isinstance(cutover_result.get("candidate_cleanup"), dict)
+                        else {}
+                    )
+                    active_restore = (
+                        cutover_result.get("active_restore")
+                        if isinstance(cutover_result.get("active_restore"), dict)
+                        else None
+                    )
+                    if not cold_fallback_enabled:
+                        if not bool((active_restore or {}).get("ok")):
+                            raise RuntimeError("failed to restore active runtime after candidate cutover failure") from exc
                         manager._schedule_planned_transition(
                             {
                                 "action": action,
@@ -606,14 +617,14 @@ class SupervisorUpdateExecution:
                             scheduled_for=time.time() + operations.warm_switch_defer_sec(),
                             planned_reason="candidate_memory_blocked" if blocked_by_memory else "candidate_cutover_failed",
                             message=(
-                                f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate before active shutdown"
+                                f"core update deferred; candidate slot {target_slot} exceeded the warm-switch memory gate during atomic cutover"
                                 if blocked_by_memory and target_slot
-                                else "core update deferred; candidate runtime exceeded the warm-switch memory gate before active shutdown"
+                                else "core update deferred; candidate runtime exceeded the warm-switch memory gate during atomic cutover"
                                 if blocked_by_memory
                                 else
-                                f"core update deferred; candidate slot {target_slot} cutover failed before active shutdown"
+                                f"core update deferred; candidate slot {target_slot} cutover failed and the previous runtime was restored"
                                 if target_slot
-                                else "core update deferred; candidate cutover failed before active shutdown"
+                                else "core update deferred; candidate cutover failed and the previous runtime was restored"
                             ),
                             extra_status={
                                 "target_slot": target_slot,
@@ -628,6 +639,8 @@ class SupervisorUpdateExecution:
                                 "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                                 "candidate_memory_guard": candidate_memory_guard,
                                 "candidate_cleanup": candidate_cleanup,
+                                "active_retirement": active_retirement,
+                                "active_restore": active_restore,
                                 "manifest": manifest,
                             },
                             extra_attempt={
@@ -640,17 +653,6 @@ class SupervisorUpdateExecution:
                         )
                         return
 
-                    cleanup_kwargs = {
-                        "reason": (
-                            "supervisor.candidate.cutover_memory_fallback"
-                            if blocked_by_memory
-                            else "supervisor.candidate.cutover_fallback"
-                        ),
-                        "slot": target_slot,
-                    }
-                    if blocked_by_memory:
-                        cleanup_kwargs["graceful"] = False
-                    candidate_cleanup = await manager._cleanup_candidate_runtime(**cleanup_kwargs)
                     candidate_prewarm_state = "cutover_fallback"
                     candidate_prewarm_message = f"{type(exc).__name__}: {exc}"
                     operations.write_core_update_status(
@@ -685,13 +687,9 @@ class SupervisorUpdateExecution:
                     operations.activate_slot(target_slot)
                     used_candidate_cutover = True
                     candidate_launch_state = "promoted_to_active"
-                    candidate_launch_message = "passive candidate runtime promoted to active via warm-switch cutover"
-                    if old_active_proc is not None and old_active_proc.poll() is None:
-                        manager._schedule_retired_runtime_stop(
-                            proc=old_active_proc,
-                            base_url=old_active_url,
-                            reason="supervisor.fast_cutover.old_active_stop",
-                        )
+                    candidate_launch_message = (
+                        "passive candidate runtime promoted after the previous transport owner stopped"
+                    )
                     operations.write_core_update_status(
                         {
                             "state": "restarting",
@@ -711,10 +709,11 @@ class SupervisorUpdateExecution:
                             "candidate_prewarm_message": candidate_launch_message,
                             "candidate_prewarm_ready_at": candidate_prewarm_ready_at,
                             "candidate_memory_guard": candidate_memory_guard,
+                            "active_retirement": active_retirement,
                             "message": (
-                                f"prepared slot {target_slot} activated via warm-switch cutover; awaiting validation"
+                                f"prepared slot {target_slot} activated via single-owner cutover; awaiting validation"
                                 if target_slot
-                                else "prepared slot activated via warm-switch cutover; awaiting validation"
+                                else "prepared slot activated via single-owner cutover; awaiting validation"
                             ),
                             "manifest": manifest,
                         }
@@ -779,7 +778,6 @@ class SupervisorUpdateExecution:
                     }
                 )
             operations.activate_slot(target_slot)
-            candidate_cleanup: dict[str, Any] | None = None
             candidate_launch_state = candidate_prewarm_state
             candidate_launch_message = candidate_prewarm_message
             if candidate_prewarm_state == "ready":

@@ -2019,6 +2019,7 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
     activated_slots: list[str] = []
     candidate_calls: list[tuple[str, str | None]] = []
     promote_calls: list[tuple[str, str]] = []
+    cutover_order: list[str] = []
 
     async def _shutdown(**kwargs):
         lifecycle_calls.append("shutdown")
@@ -2041,23 +2042,27 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
         candidate_calls.append((reason, slot))
         return {"ok": True, "stopped": True, "slot": slot}
 
-    async def _promote_candidate_runtime(*, slot: str, reason: str):
+    async def _single_owner_candidate_cutover(
+        *, slot: str, reason: str, restore_active_on_failure: bool
+    ):
+        assert restore_active_on_failure is True
+        cutover_order.extend(("retire", "promote"))
         promote_calls.append((slot, reason))
         return {
             "ok": True,
-            "accepted": True,
-            "runtime": {
-                "transition_role": "active",
-                "runtime_instance_id": "rt-b-c-12345678",
-                "runtime_port": 8778,
+            "active_retirement": {
+                "ok": True,
+                "stopped": True,
+                "invariant": "active_stopped_before_candidate_promotion",
             },
+            "invariant": "no_concurrent_active_transport_owners",
         }
 
     monkeypatch.setattr(manager, "_request_runtime_shutdown", _shutdown)
     monkeypatch.setattr(manager, "_ensure_runtime_stopped_for_update", _ensure_stopped)
     monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
     monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
-    monkeypatch.setattr(manager, "_promote_candidate_runtime", _promote_candidate_runtime)
+    monkeypatch.setattr(manager, "_single_owner_candidate_cutover", _single_owner_candidate_cutover)
     monkeypatch.setattr(supervisor, "activate_slot", lambda slot: activated_slots.append(str(slot)))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: desired_running_states.append(bool(manager._desired_running)))
 
@@ -2085,6 +2090,8 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
     assert lifecycle_calls == []
     assert candidate_calls == [("prewarm", "B")]
     assert promote_calls == [("B", "supervisor.fast_cutover")]
+    assert cutover_order == ["retire", "promote"]
+    assert status["active_retirement"]["invariant"] == "active_stopped_before_candidate_promotion"
     assert desired_running_states[-1] is True
 
 
@@ -2181,23 +2188,26 @@ def test_prepare_worker_rechecks_starting_candidate_before_shutdown(monkeypatch,
         cleanup_calls.append((reason, slot))
         return {"ok": True, "stopped": True, "slot": slot}
 
-    async def _promote_candidate_runtime(*, slot: str, reason: str):
+    async def _single_owner_candidate_cutover(
+        *, slot: str, reason: str, restore_active_on_failure: bool
+    ):
+        assert restore_active_on_failure is True
         promote_calls.append((slot, reason))
         return {
             "ok": True,
-            "accepted": True,
-            "runtime": {
-                "transition_role": "active",
-                "runtime_instance_id": "rt-b-c-12345678",
-                "runtime_port": 8778,
+            "active_retirement": {
+                "ok": True,
+                "stopped": True,
+                "invariant": "active_stopped_before_candidate_promotion",
             },
+            "invariant": "no_concurrent_active_transport_owners",
         }
 
     monkeypatch.setattr(manager, "_request_runtime_shutdown", _shutdown)
     monkeypatch.setattr(manager, "_ensure_runtime_stopped_for_update", _ensure_stopped)
     monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
     monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
-    monkeypatch.setattr(manager, "_promote_candidate_runtime", _promote_candidate_runtime)
+    monkeypatch.setattr(manager, "_single_owner_candidate_cutover", _single_owner_candidate_cutover)
     monkeypatch.setattr(
         manager,
         "status",
@@ -2513,7 +2523,7 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_is_not_ready_if_explic
     assert activated_slots == ["B"]
 
 
-def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fails(monkeypatch, tmp_path) -> None:
+def test_prepare_worker_restores_active_when_single_owner_candidate_cutover_fails(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.delenv("ADAOS_SUPERVISOR_COLD_CUTOVER_FALLBACK", raising=False)
     monkeypatch.setattr(
@@ -2529,7 +2539,7 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
         },
     )
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
-    cleanup_calls: list[tuple[str, str | None]] = []
+    cutover_order: list[str] = []
 
     async def _shutdown(**kwargs):
         return {"ok": True}
@@ -2545,18 +2555,26 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
             "ready_at": 223.0,
         }
 
-    async def _cleanup_candidate_runtime(*, reason: str, slot: str | None = None):
-        cleanup_calls.append((reason, slot))
-        return {"ok": True, "stopped": True, "slot": slot}
-
-    async def _promote_candidate_runtime(*, slot: str, reason: str):
-        raise RuntimeError("candidate reconnect failed")
+    async def _single_owner_candidate_cutover(
+        *, slot: str, reason: str, restore_active_on_failure: bool
+    ):
+        assert slot == "B"
+        assert reason == "supervisor.fast_cutover"
+        assert restore_active_on_failure is True
+        cutover_order.extend(("retire", "promote", "cleanup", "restore"))
+        return {
+            "ok": False,
+            "error": "RuntimeError: candidate reconnect failed",
+            "active_retirement": {"ok": True, "stopped": True},
+            "candidate_cleanup": {"ok": True, "stopped": True, "slot": "B"},
+            "active_restore": {"ok": True, "pid": 4242},
+            "invariant": "no_concurrent_active_transport_owners",
+        }
 
     monkeypatch.setattr(manager, "_request_runtime_shutdown", _shutdown)
     monkeypatch.setattr(manager, "_ensure_runtime_stopped_for_update", _ensure_stopped)
     monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
-    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
-    monkeypatch.setattr(manager, "_promote_candidate_runtime", _promote_candidate_runtime)
+    monkeypatch.setattr(manager, "_single_owner_candidate_cutover", _single_owner_candidate_cutover)
     monkeypatch.setattr(supervisor, "activate_slot", lambda slot: None)
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
 
@@ -2578,7 +2596,9 @@ def test_prepare_worker_defers_without_stopping_active_when_candidate_cutover_fa
     assert status["planned_reason"] == "candidate_cutover_failed"
     assert status["candidate_prewarm_state"] == "cutover_deferred"
     assert "candidate reconnect failed" in str(status["candidate_prewarm_message"] or "")
-    assert cleanup_calls == [("supervisor.candidate.cutover_deferred", "B")]
+    assert cutover_order == ["retire", "promote", "cleanup", "restore"]
+    assert status["candidate_cleanup"]["stopped"] is True
+    assert status["active_restore"]["ok"] is True
 
 
 def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_explicitly_enabled(
@@ -2600,7 +2620,6 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_expli
     )
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
     lifecycle_calls: list[str] = []
-    cleanup_calls: list[tuple[str, str | None]] = []
     activated_slots: list[str] = []
 
     async def _shutdown(**kwargs):
@@ -2619,18 +2638,25 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_expli
             "ready_at": 223.0,
         }
 
-    async def _cleanup_candidate_runtime(*, reason: str, slot: str | None = None):
-        cleanup_calls.append((reason, slot))
-        return {"ok": True, "stopped": True, "slot": slot}
-
-    async def _promote_candidate_runtime(*, slot: str, reason: str):
-        raise RuntimeError("candidate reconnect failed")
+    async def _single_owner_candidate_cutover(
+        *, slot: str, reason: str, restore_active_on_failure: bool
+    ):
+        assert slot == "B"
+        assert reason == "supervisor.fast_cutover"
+        assert restore_active_on_failure is False
+        return {
+            "ok": False,
+            "error": "RuntimeError: candidate reconnect failed",
+            "active_retirement": {"ok": True, "stopped": True},
+            "candidate_cleanup": {"ok": True, "stopped": True, "slot": "B"},
+            "active_restore": None,
+            "invariant": "no_concurrent_active_transport_owners",
+        }
 
     monkeypatch.setattr(manager, "_request_runtime_shutdown", _shutdown)
     monkeypatch.setattr(manager, "_ensure_runtime_stopped_for_update", _ensure_stopped)
     monkeypatch.setattr(manager, "_candidate_prewarm", _candidate_prewarm)
-    monkeypatch.setattr(manager, "_cleanup_candidate_runtime", _cleanup_candidate_runtime)
-    monkeypatch.setattr(manager, "_promote_candidate_runtime", _promote_candidate_runtime)
+    monkeypatch.setattr(manager, "_single_owner_candidate_cutover", _single_owner_candidate_cutover)
     monkeypatch.setattr(supervisor, "activate_slot", lambda slot: activated_slots.append(str(slot)))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
 
@@ -2653,8 +2679,123 @@ def test_prepare_worker_uses_cold_fallback_when_candidate_cutover_fails_if_expli
     assert status["candidate_prewarm_state"] == "cutover_fallback"
     assert "candidate reconnect failed" in str(status["candidate_prewarm_message"] or "")
     assert lifecycle_calls == ["shutdown", "stopped"]
-    assert cleanup_calls == [("supervisor.candidate.cutover_fallback", "B")]
+    assert status["candidate_cleanup"]["stopped"] is True
     assert activated_slots == ["B"]
+
+
+def test_candidate_cutover_holds_lock_until_previous_owner_stops(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 31338
+
+        def __init__(self) -> None:
+            self.running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+    old_proc = _Proc()
+    manager._proc = old_proc
+    observed: list[str] = []
+
+    async def _terminate(**kwargs):  # noqa: ANN003
+        assert manager._lock.locked()
+        assert kwargs["proc"] is old_proc
+        observed.append("active_stopped")
+        old_proc.running = False
+
+    async def _promote_locked(*, slot: str, reason: str):
+        assert manager._lock.locked()
+        assert old_proc.poll() is not None
+        observed.append("candidate_promoted")
+        return {"ok": True, "slot": slot, "reason": reason}
+
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+    monkeypatch.setattr(manager, "_promote_candidate_runtime_locked", _promote_locked)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    result = asyncio.run(
+        manager._single_owner_candidate_cutover(
+            slot="B",
+            reason="test.atomic_cutover",
+            restore_active_on_failure=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["invariant"] == "no_concurrent_active_transport_owners"
+    assert observed == ["active_stopped", "candidate_promoted"]
+    assert manager._desired_running is True
+
+
+def test_candidate_cutover_cleans_partial_candidate_before_restoring_active(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        next_pid = 32000
+
+        def __init__(self) -> None:
+            self.running = True
+            self.pid = self.next_pid
+            type(self).next_pid += 1
+
+        def poll(self):
+            return None if self.running else 0
+
+    old_proc = _Proc()
+    candidate_proc = _Proc()
+    manager._proc = old_proc
+    manager._candidate_proc = candidate_proc
+    manager._candidate_slot = "B"
+    observed: list[str] = []
+
+    async def _terminate(*, proc, **kwargs):  # noqa: ANN003
+        assert manager._lock.locked()
+        if proc is old_proc:
+            observed.append("active_stopped")
+        elif proc is candidate_proc:
+            assert old_proc.poll() is not None
+            observed.append("candidate_cleaned")
+        proc.running = False
+
+    async def _promote_locked(*, slot: str, reason: str):
+        assert manager._lock.locked()
+        assert old_proc.poll() is not None
+        observed.append("candidate_promotion_failed")
+        raise RuntimeError("authority confirmation timed out")
+
+    async def _spawn_locked(*, reason: str, **kwargs):  # noqa: ANN003
+        assert manager._lock.locked()
+        assert candidate_proc.poll() is not None
+        observed.append("active_restored")
+        manager._proc = _Proc()
+
+    monkeypatch.setattr(manager, "_terminate_proc_locked", _terminate)
+    monkeypatch.setattr(manager, "_promote_candidate_runtime_locked", _promote_locked)
+    monkeypatch.setattr(manager, "_spawn_runtime_locked", _spawn_locked)
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+
+    result = asyncio.run(
+        manager._single_owner_candidate_cutover(
+            slot="B",
+            reason="test.atomic_cutover",
+            restore_active_on_failure=True,
+        )
+    )
+
+    assert result["ok"] is False
+    assert "authority confirmation timed out" in result["error"]
+    assert result["candidate_cleanup"]["lifecycle_scope"] == "runtime_retire"
+    assert result["active_restore"]["ok"] is True
+    assert observed == [
+        "active_stopped",
+        "candidate_promotion_failed",
+        "candidate_cleaned",
+        "active_restored",
+    ]
 
 
 def test_promote_candidate_runtime_adopts_candidate_process(monkeypatch, tmp_path) -> None:
@@ -6986,12 +7127,15 @@ def test_restart_runtime_records_last_stop_and_start_reason(monkeypatch, tmp_pat
         def poll():
             return None
 
-    async def _fake_terminate_proc_locked(*, proc=None, base_url=None, graceful: bool, reason: str) -> None:
+    async def _fake_terminate_proc_locked(
+        *, proc=None, base_url=None, graceful: bool, reason: str, lifecycle_scope: str = "subnet"
+    ) -> None:
         captured["terminate"] = {
             "proc": proc,
             "base_url": base_url,
             "graceful": graceful,
             "reason": reason,
+            "lifecycle_scope": lifecycle_scope,
         }
         manager._proc = None
 
@@ -7180,12 +7324,15 @@ def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears
         def poll():
             return None
 
-    async def _fake_terminate_proc_locked(*, proc=None, base_url=None, graceful: bool, reason: str) -> None:
+    async def _fake_terminate_proc_locked(
+        *, proc=None, base_url=None, graceful: bool, reason: str, lifecycle_scope: str = "subnet"
+    ) -> None:
         captured["terminate"] = {
             "proc": proc,
             "base_url": base_url,
             "graceful": graceful,
             "reason": reason,
+            "lifecycle_scope": lifecycle_scope,
         }
 
     manager._candidate_proc = _CandidateProc()
@@ -7197,6 +7344,7 @@ def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears
     payload = asyncio.run(manager.stop_candidate_runtime(reason="test.candidate.stop"))
 
     assert captured["terminate"]["reason"] == "test.candidate.stop"
+    assert captured["terminate"]["lifecycle_scope"] == "runtime_retire"
     assert payload["candidate_slot"] is None
     assert payload["candidate_last_stop_reason"] == "test.candidate.stop"
 

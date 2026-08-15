@@ -6211,6 +6211,7 @@ class SupervisorManager:
             base_url=candidate_base_url,
             graceful=graceful,
             reason=reason,
+            lifecycle_scope="runtime_retire",
         )
         self._candidate_last_stop_reason = str(reason or "supervisor.candidate.stop")
         self._process_supervisor.track_candidate(None)
@@ -6263,6 +6264,101 @@ class SupervisorManager:
 
         task.add_done_callback(_retire_done)
         return task
+
+    async def _single_owner_candidate_cutover(
+        self,
+        *,
+        slot: str,
+        reason: str,
+        restore_active_on_failure: bool,
+    ) -> dict[str, Any]:
+        """Transfer transport ownership without exposing an interleaving restart window."""
+
+        started_at = time.time()
+        async with self._lock:
+            old_proc = self._proc
+            old_pid = getattr(old_proc, "pid", None) if old_proc is not None else None
+            old_base_url = self._managed_proc_base_url(old_proc) if old_proc is not None else None
+            old_was_running = bool(old_proc is not None and old_proc.poll() is None)
+            self._desired_running = False
+            self._persist_runtime_state()
+            active_retirement: dict[str, Any] = {
+                "ok": True,
+                "stopped": False,
+                "pid": old_pid,
+                "base_url": old_base_url,
+                "reason": "active_runtime_not_running",
+                "invariant": "active_stopped_before_candidate_promotion",
+            }
+            candidate_cleanup: dict[str, Any] | None = None
+            active_restore: dict[str, Any] | None = None
+            try:
+                if old_was_running:
+                    retirement_started_at = time.time()
+                    await self._terminate_proc_locked(
+                        proc=old_proc,
+                        base_url=old_base_url,
+                        graceful=True,
+                        reason="supervisor.fast_cutover.active_retire",
+                        lifecycle_scope="runtime_retire",
+                    )
+                    if old_proc is not None and old_proc.poll() is None:
+                        raise RuntimeError("active runtime still owns transport after cutover retirement")
+                    active_retirement = {
+                        "ok": True,
+                        "stopped": True,
+                        "pid": old_pid,
+                        "base_url": old_base_url,
+                        "elapsed_ms": round(max(0.0, time.time() - retirement_started_at) * 1000.0, 3),
+                        "invariant": "active_stopped_before_candidate_promotion",
+                    }
+                promotion = await self._promote_candidate_runtime_locked(slot=slot, reason=reason)
+            except Exception as exc:
+                current_candidate_slot = str(self._candidate_slot or "").strip().upper() or None
+                candidate_was_running = bool(self._candidate_proc is not None and self._candidate_proc.poll() is None)
+                if self._candidate_proc is not None:
+                    await self._terminate_candidate_proc_locked(
+                        graceful=True,
+                        reason="supervisor.candidate.atomic_cutover_failed",
+                    )
+                candidate_cleanup = {
+                    "ok": True,
+                    "stopped": candidate_was_running,
+                    "slot": current_candidate_slot,
+                    "lifecycle_scope": "runtime_retire",
+                }
+                if restore_active_on_failure:
+                    restore_started_at = time.time()
+                    self._desired_running = True
+                    await self._spawn_runtime_locked(reason="supervisor.fast_cutover.restore_after_failure")
+                    restored_proc = self._proc
+                    active_restore = {
+                        "ok": restored_proc is not None and restored_proc.poll() is None,
+                        "pid": getattr(restored_proc, "pid", None) if restored_proc is not None else None,
+                        "elapsed_ms": round(max(0.0, time.time() - restore_started_at) * 1000.0, 3),
+                    }
+                self._persist_runtime_state()
+                return {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "active_retirement": active_retirement,
+                    "candidate_cleanup": candidate_cleanup,
+                    "active_restore": active_restore,
+                    "elapsed_ms": round(max(0.0, time.time() - started_at) * 1000.0, 3),
+                    "invariant": "no_concurrent_active_transport_owners",
+                }
+
+            self._desired_running = True
+            self._persist_runtime_state()
+            return {
+                "ok": True,
+                "promotion": promotion,
+                "active_retirement": active_retirement,
+                "candidate_cleanup": candidate_cleanup,
+                "active_restore": active_restore,
+                "elapsed_ms": round(max(0.0, time.time() - started_at) * 1000.0, 3),
+                "invariant": "no_concurrent_active_transport_owners",
+            }
 
     async def restart_runtime(self, *, reason: str = "supervisor.restart") -> dict[str, Any]:
         decision = await self._transition_continuity_guard_decision_async(operation="restart")
@@ -6615,7 +6711,7 @@ class SupervisorManager:
                 "slot": current_slot,
             }
 
-    async def _promote_candidate_runtime(self, *, slot: str, reason: str) -> dict[str, Any]:
+    async def _promote_candidate_runtime_locked(self, *, slot: str, reason: str) -> dict[str, Any]:
         resolved_slot = str(slot or "").strip().upper()
         current_candidate_slot = str(self._candidate_slot or "").strip().upper()
         candidate_proc = self._candidate_proc
@@ -6654,27 +6750,30 @@ class SupervisorManager:
         if not bool(reconnect.get("ok")) or (authority_required and authority.get("ready") is not True):
             raise RuntimeError("candidate runtime did not acquire hub-root route authority")
         promoted_instance_id = str(runtime.get("runtime_instance_id") or self._candidate_runtime_instance_id or "").strip() or None
-        async with self._lock:
-            proc = self._candidate_proc
-            if proc is None or proc.poll() is not None:
-                raise RuntimeError("candidate runtime exited before supervisor adopted it")
-            self._process_supervisor.track_active(proc)
-            self._managed_runtime_instance_id = promoted_instance_id
-            self._managed_transition_role = "active"
-            self._managed_slot = resolved_slot
-            self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
-            self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
-            self._managed_runtime_cwd = self._candidate_runtime_cwd
-            self._process_supervisor.track_candidate(None)
-            self._candidate_slot = None
-            self._candidate_runtime_instance_id = None
-            self._candidate_transition_role = None
-            self._candidate_runtime_cwd = None
-            self._last_start_at = time.time()
-            self._last_error = None
-            self._restart_count += 1
-            self._persist_runtime_state()
+        proc = self._candidate_proc
+        if proc is None or proc.poll() is not None:
+            raise RuntimeError("candidate runtime exited before supervisor adopted it")
+        self._process_supervisor.track_active(proc)
+        self._managed_runtime_instance_id = promoted_instance_id
+        self._managed_transition_role = "active"
+        self._managed_slot = resolved_slot
+        self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
+        self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
+        self._managed_runtime_cwd = self._candidate_runtime_cwd
+        self._process_supervisor.track_candidate(None)
+        self._candidate_slot = None
+        self._candidate_runtime_instance_id = None
+        self._candidate_transition_role = None
+        self._candidate_runtime_cwd = None
+        self._last_start_at = time.time()
+        self._last_error = None
+        self._restart_count += 1
+        self._persist_runtime_state()
         return payload
+
+    async def _promote_candidate_runtime(self, *, slot: str, reason: str) -> dict[str, Any]:
+        async with self._lock:
+            return await self._promote_candidate_runtime_locked(slot=slot, reason=reason)
 
     async def _monitor_iteration_loop(self) -> None:
         await self._monitoring.run_iteration_loop(
