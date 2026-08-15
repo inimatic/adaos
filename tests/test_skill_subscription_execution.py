@@ -72,11 +72,33 @@ def test_async_subscription_attributes_handler_that_blocks_event_loop(monkeypatc
     subscription_execution.reset_subscription_execution_runtime()
     incident_registry.reset_incident_registry()
     monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", "0.05")
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S", "0.05")
+    handler_active = threading.Event()
 
     async def blocking_handler() -> None:
+        handler_active.set()
         time.sleep(0.08)
 
+    def correlate_stall() -> None:
+        assert handler_active.wait(1.0)
+        subscription_execution.correlate_runtime_event_loop_stall(
+            stack_frames=[
+                {
+                    "filename": (
+                        "/workspace/skills/.runtime/evolved_skill/v1/slots/A/"
+                        "src/skills/evolved_skill/handlers.py"
+                    ),
+                    "lineno": 10,
+                    "function": "on_operations_changed",
+                }
+            ],
+            stall_ms=80.0,
+            threshold_ms=20.0,
+        )
+
     try:
+        correlator = threading.Thread(target=correlate_stall)
+        correlator.start()
         asyncio.run(
             subscription_execution.run_async_subscription(
                 blocking_handler,
@@ -85,14 +107,18 @@ def test_async_subscription_attributes_handler_that_blocks_event_loop(monkeypatc
                 handler="handlers.main.on_operations_changed",
             )
         )
+        correlator.join(timeout=1.0)
         execution = subscription_execution.subscription_execution_snapshot()
         incidents = incident_registry.incident_registry_snapshot()
 
         assert execution["active_total"] == 0
         assert execution["top_handlers"][0]["execution_mode"] == "async_owner_loop"
         assert execution["top_handlers"][0]["blocking_total"] == 1
-        assert incidents["items"][0]["signal"] == "async_execution_budget_exceeded"
-        assert incidents["items"][0]["domain"] == "skill:evolved_skill"
+        assert execution["top_handlers"][0]["event_loop_stall_total"] == 1
+        assert "event_loop_stall_circuit_opened" in {item["signal"] for item in incidents["items"]}
+        assert {item["domain"] for item in incidents["items"]} == {"skill:evolved_skill"}
+        stall_incident = next(item for item in incidents["items"] if item["signal"] == "event_loop_stall_circuit_opened")
+        assert stall_incident["severity"] == "degraded"
     finally:
         incident_registry.reset_incident_registry()
 
@@ -104,11 +130,30 @@ def test_async_subscription_circuit_blocks_repeated_slow_handler(monkeypatch) ->
     monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S", "0.05")
     monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_TTL_S", "30")
     calls = 0
+    handler_active = threading.Event()
 
     async def blocking_handler() -> None:
         nonlocal calls
         calls += 1
+        handler_active.set()
         time.sleep(0.08)
+
+    def correlate_stall() -> None:
+        assert handler_active.wait(1.0)
+        subscription_execution.correlate_runtime_event_loop_stall(
+            stack_frames=[
+                {
+                    "filename": (
+                        "/workspace/skills/.runtime/evolved_skill/v1/slots/A/"
+                        "src/skills/evolved_skill/handlers.py"
+                    ),
+                    "lineno": 20,
+                    "function": "on_runtime_event",
+                }
+            ],
+            stall_ms=80.0,
+            threshold_ms=20.0,
+        )
 
     async def run() -> tuple[object, object]:
         first = await subscription_execution.run_async_subscription(
@@ -126,7 +171,10 @@ def test_async_subscription_circuit_blocks_repeated_slow_handler(monkeypatch) ->
         return first, second
 
     try:
+        correlator = threading.Thread(target=correlate_stall)
+        correlator.start()
         asyncio.run(run())
+        correlator.join(timeout=1.0)
         execution = subscription_execution.subscription_execution_snapshot()
 
         assert calls == 1
@@ -137,6 +185,48 @@ def test_async_subscription_circuit_blocks_repeated_slow_handler(monkeypatch) ->
     finally:
         subscription_execution.reset_subscription_execution_runtime()
         incident_registry.reset_incident_registry()
+
+
+def test_event_loop_stall_does_not_open_circuit_for_core_handler() -> None:
+    subscription_execution.reset_subscription_execution_runtime()
+
+    async def run() -> list[dict]:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def handler() -> None:
+            started.set()
+            await release.wait()
+
+        task = asyncio.create_task(
+            subscription_execution.run_async_subscription(
+                handler,
+                skill="<unknown>",
+                topic="sys.ready",
+                handler="adaos.services.nlu.teacher_store_runtime._on_sys_ready",
+            )
+        )
+        await started.wait()
+        attributed = subscription_execution.correlate_runtime_event_loop_stall(
+            stack_frames=[
+                {
+                    "filename": "/repo/src/adaos/services/nlu/teacher_store_runtime.py",
+                    "lineno": 300,
+                    "function": "_on_sys_ready",
+                }
+            ],
+            stall_ms=5000.0,
+            threshold_ms=250.0,
+        )
+        release.set()
+        await task
+        return attributed
+
+    attributed = asyncio.run(run())
+    snapshot = subscription_execution.subscription_execution_snapshot()
+
+    assert attributed == []
+    assert snapshot["open_circuit_total"] == 0
 
 
 def test_sync_subscription_reports_active_blocker(monkeypatch) -> None:

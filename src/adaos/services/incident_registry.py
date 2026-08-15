@@ -774,6 +774,10 @@ def record_skill_handler_pressure(
 ) -> dict[str, Any]:
     skill_token = _clean_token(skill, fallback="unknown")
     signal_token = _clean_token(signal, fallback="execution_pressure")
+    degraded_signals = {
+        "execution_budget_exceeded",
+        "event_loop_stall_circuit_opened",
+    }
     evidence = {
         "skill": skill_token,
         "topic": _clean_token(topic),
@@ -786,7 +790,7 @@ def record_skill_handler_pressure(
     return record_incident(
         incident_class="skill_handler_pressure",
         signal=signal_token,
-        severity="degraded" if signal_token == "execution_budget_exceeded" else "warning",
+        severity="degraded" if signal_token in degraded_signals else "warning",
         domain=f"skill:{skill_token}",
         component="skill_subscription_execution",
         source="skill_subscription_execution",

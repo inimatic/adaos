@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -79,6 +80,8 @@ async def test_subnet_ws_sends_hello_ack_before_member_registration(monkeypatch)
     websocket = _FakeWebSocket()
     events: list[str] = []
     manager = _FakeManager(websocket, events)
+    owner_thread = threading.get_ident()
+    access_threads: list[int] = []
 
     monkeypatch.setattr(
         link_ws,
@@ -93,11 +96,19 @@ async def test_subnet_ws_sends_hello_ack_before_member_registration(monkeypatch)
         ),
     )
     monkeypatch.setattr(link_ws, "get_hub_link_manager", lambda: manager)
-    monkeypatch.setattr(access_links, "authorize_link", lambda kind, node_id: (True, ""))  # noqa: ARG005
+    def authorize_link(kind, node_id):  # noqa: ANN001, ANN202, ARG001
+        access_threads.append(threading.get_ident())
+        return True, ""
+
+    def touch_member_link(node_id, **kwargs):  # noqa: ANN001, ANN202
+        access_threads.append(threading.get_ident())
+        events.append(f"touch:{node_id}:{kwargs.get('connection_state')}")
+
+    monkeypatch.setattr(access_links, "authorize_link", authorize_link)
     monkeypatch.setattr(
         access_links,
         "touch_member_link",
-        lambda node_id, **kwargs: events.append(f"touch:{node_id}:{kwargs.get('connection_state')}"),
+        touch_member_link,
     )
 
     await link_ws.subnet_ws(websocket)  # type: ignore[arg-type]
@@ -119,6 +130,8 @@ async def test_subnet_ws_sends_hello_ack_before_member_registration(monkeypatch)
         "touch:member-1:closed",
         "unregister:member-1",
     ]
+    assert access_threads
+    assert all(thread_id != owner_thread for thread_id in access_threads)
 
 
 @pytest.mark.asyncio

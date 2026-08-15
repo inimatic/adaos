@@ -123,11 +123,20 @@ class RuntimeEventLoopWatchdog:
                 observed_at = time.monotonic()
                 stall_ms = (observed_at - probe_started) * 1000.0
                 record_runtime_event_loop_watchdog_probe(elapsed_ms=stall_ms, stalled=True)
-                frames: list[dict[str, Any]] = []
+                frames = _stack_frames(self._loop_thread_id)
+                skill_stall_candidates: list[dict[str, str]] = []
+                try:
+                    from adaos.services.skill.subscription_execution import (
+                        capture_active_skill_handlers_for_stack,
+                    )
+
+                    skill_stall_candidates = capture_active_skill_handlers_for_stack(frames)
+                except Exception:
+                    _LOG.exception("event-loop stall skill attribution capture failed")
                 process_sample: dict[str, Any] = {}
-                if observed_at - last_report_at >= self._report_interval_sec:
+                report_incident = observed_at - last_report_at >= self._report_interval_sec
+                if report_incident:
                     last_report_at = observed_at
-                    frames = _stack_frames(self._loop_thread_id)
                     try:
                         process_sample = capture_process_activity_sample()
                     except Exception as exc:
@@ -163,7 +172,20 @@ class RuntimeEventLoopWatchdog:
                         stalled=False,
                         completed_stall=True,
                     )
-                    if frames:
+                    try:
+                        from adaos.services.skill.subscription_execution import (
+                            correlate_runtime_event_loop_stall,
+                        )
+
+                        correlate_runtime_event_loop_stall(
+                            stack_frames=frames,
+                            stall_ms=completed_stall_ms,
+                            threshold_ms=self._threshold_sec * 1000.0,
+                            candidates=skill_stall_candidates,
+                        )
+                    except Exception:
+                        _LOG.exception("event-loop stall skill correlation failed")
+                    if frames and report_incident:
                         try:
                             record_runtime_event_loop_stall(
                                 stall_ms=completed_stall_ms,

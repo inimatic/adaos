@@ -177,7 +177,7 @@ async def subnet_ws(websocket: WebSocket) -> None:
         try:
             from adaos.services.access_links import authorize_link
 
-            allowed, reason = authorize_link("member", node_id)
+            allowed, reason = await asyncio.to_thread(authorize_link, "member", node_id)
             if not allowed:
                 await websocket.send_json({"t": "hello.ack", "ok": False, "error": f"device_{reason or 'denied'}"})
                 await websocket.close(code=1008)
@@ -212,7 +212,8 @@ async def subnet_ws(websocket: WebSocket) -> None:
         try:
             from adaos.services.access_links import touch_member_link
 
-            touch_member_link(
+            await asyncio.to_thread(
+                touch_member_link,
                 node_id,
                 hostname=str(hostname) if hostname else None,
                 node_names=list(node_names) if isinstance(node_names, list) else [],
@@ -371,7 +372,8 @@ async def subnet_ws(websocket: WebSocket) -> None:
             try:
                 from adaos.services.access_links import touch_member_link
 
-                touch_member_link(
+                await asyncio.to_thread(
+                    touch_member_link,
                     node_id,
                     hostname=str(hostname) if hostname else None,
                     node_names=list(node_names) if isinstance(node_names, list) else [],

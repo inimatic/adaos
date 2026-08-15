@@ -60,6 +60,34 @@ def test_migration_candidates_include_only_runtime_behind(monkeypatch, tmp_path)
     assert {item["reason"] for item in result} == {"runtime_version_behind"}
 
 
+def test_migration_candidates_exclude_uninstalled_workspace_artifacts(monkeypatch, tmp_path):
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(
+            workspace_dir=lambda: tmp_path,
+            skills_workspace_dir=lambda: tmp_path / "skills",
+        )
+    )
+    for skill_name in ("installed_skill", "workspace_only_skill"):
+        (tmp_path / "skills" / skill_name).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(worker, "_registered_skill_names", lambda _ctx: ["installed_skill"])
+    monkeypatch.setattr(
+        worker,
+        "_registry_versions",
+        lambda _ctx: {"installed_skill": "1.1.0", "workspace_only_skill": "9.0.0"},
+    )
+    monkeypatch.setattr(worker, "_workspace_skill_source", lambda _ctx, name: tmp_path / "skills" / name)
+    monkeypatch.setattr(
+        worker,
+        "_read_local_artifact_version",
+        lambda path: "1.1.0" if path.name == "installed_skill" else "9.0.0",
+    )
+
+    result = worker.migration_candidates(ctx, _FakeManager({}))
+
+    assert [item["skill"] for item in result] == ["installed_skill"]
+
+
 def test_migration_candidates_force_includes_requested_name(monkeypatch, tmp_path):
     ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: tmp_path, skills_workspace_dir=lambda: tmp_path / "skills"))
 

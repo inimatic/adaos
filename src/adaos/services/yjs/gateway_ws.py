@@ -4634,7 +4634,8 @@ async def _reject_yws_guard_connection(
         try:
             from adaos.services.access_links import touch_browser_session
 
-            touch_browser_session(
+            await asyncio.to_thread(
+                touch_browser_session,
                 dev_id,
                 webspace_id=webspace_id,
                 connection_state=state_token,
@@ -8557,11 +8558,12 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         reason = _browser_env_rejected_reason(dev_id, browser_metadata)
         allowed = reason is None
         if allowed:
-            allowed, reason = authorize_link("browser", dev_id)
+            allowed, reason = await asyncio.to_thread(authorize_link, "browser", dev_id)
         if not allowed:
             reason_token = str(reason or "denied").strip().lower() or "denied"
             try:
-                touch_browser_session(
+                await asyncio.to_thread(
+                    touch_browser_session,
                     dev_id,
                     webspace_id=webspace_id,
                     connection_state=reason_token,
@@ -8587,7 +8589,8 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
         try:
             from adaos.services.access_links import touch_browser_session
 
-            touch_browser_session(
+            await asyncio.to_thread(
+                touch_browser_session,
                 dev_id,
                 webspace_id=webspace_id,
                 connection_state="yws_disabled",
@@ -8701,7 +8704,8 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
     try:
         from adaos.services.access_links import touch_browser_session
 
-        touch_browser_session(
+        await asyncio.to_thread(
+            touch_browser_session,
             dev_id,
             webspace_id=webspace_id,
             connection_state="connected",
@@ -8765,7 +8769,8 @@ async def _yws_impl(websocket: WebSocket, room: str | None) -> None:
             try:
                 from adaos.services.access_links import touch_browser_session
 
-                touch_browser_session(
+                await asyncio.to_thread(
+                    touch_browser_session,
                     dev_id,
                     webspace_id=webspace_id,
                     connection_state="closed",
@@ -8919,10 +8924,11 @@ async def browser_session_authorize(
         reason = _browser_env_rejected_reason(dev_id, metadata)
         allowed = reason is None
         if allowed:
-            allowed, reason = authorize_link("browser", dev_id)
+            allowed, reason = await asyncio.to_thread(authorize_link, "browser", dev_id)
         if not allowed:
             try:
-                touch_browser_session(
+                await asyncio.to_thread(
+                    touch_browser_session,
                     dev_id,
                     webspace_id=webspace_id,
                     connection_state=reason or "denied",
@@ -9033,7 +9039,8 @@ async def process_events_command(
             try:
                 from adaos.services.access_links import touch_browser_session
 
-                touch_browser_session(
+                await asyncio.to_thread(
+                    touch_browser_session,
                     captured_device,
                     webspace_id=captured_ws,
                     connection_state=env_reject_reason,

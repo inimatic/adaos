@@ -346,7 +346,10 @@ def migration_candidates(
 ) -> list[dict[str, Any]]:
     registry_versions = _registry_versions(ctx)
     requested_name = str(name or "").strip()
-    names = {requested_name} if requested_name else (set(_registered_skill_names(ctx)) | set(registry_versions))
+    # Workspace registry entries describe materialized artifacts, not install
+    # intent.  Only the installed registry may enroll a skill in an automatic
+    # runtime migration; an explicit request may still recover one by name.
+    names = {requested_name} if requested_name else set(_registered_skill_names(ctx))
     candidates: list[dict[str, Any]] = []
     for name in sorted(names):
         source = _workspace_skill_source(ctx, name)

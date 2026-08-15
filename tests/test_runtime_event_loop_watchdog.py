@@ -4,6 +4,7 @@ import threading
 
 from adaos.services import incident_registry, reliability
 from adaos.services import runtime_event_loop_watchdog as watchdog_module
+from adaos.services.skill import subscription_execution
 
 
 class _UnresponsiveLoop:
@@ -14,6 +15,14 @@ class _UnresponsiveLoop:
 class _ResponsiveLoop:
     def call_soon_threadsafe(self, callback) -> None:
         callback()
+
+
+class _DelayedLoop:
+    def __init__(self, delay_s: float) -> None:
+        self.delay_s = delay_s
+
+    def call_soon_threadsafe(self, callback) -> None:
+        threading.Timer(self.delay_s, callback).start()
 
 
 def test_watchdog_captures_loop_stack_while_probe_is_unacknowledged(monkeypatch) -> None:
@@ -87,6 +96,54 @@ def test_watchdog_acks_responsive_loop_without_stall(monkeypatch) -> None:
         watchdog.stop()
 
     assert probes[0]["stalled"] is False
+
+
+def test_watchdog_preserves_skill_attribution_until_stall_completion(monkeypatch) -> None:
+    correlated = threading.Event()
+    captured = [
+        {
+            "handler_key": "demo\0topic\0handler",
+            "skill": "demo_skill",
+            "topic": "topic",
+            "handler": "handler",
+        }
+    ]
+    correlation: dict = {}
+
+    monkeypatch.setattr(watchdog_module, "set_runtime_event_loop_watchdog_state", lambda **_kwargs: {})
+    monkeypatch.setattr(watchdog_module, "record_runtime_event_loop_watchdog_probe", lambda **_kwargs: {})
+    monkeypatch.setattr(watchdog_module, "record_runtime_event_loop_stall", lambda **_kwargs: {})
+    monkeypatch.setattr(watchdog_module, "capture_process_activity_sample", lambda: {})
+    monkeypatch.setattr(
+        subscription_execution,
+        "capture_active_skill_handlers_for_stack",
+        lambda _frames: captured,
+    )
+
+    def correlate(**kwargs):
+        correlation.update(kwargs)
+        correlated.set()
+        return []
+
+    monkeypatch.setattr(subscription_execution, "correlate_runtime_event_loop_stall", correlate)
+
+    watchdog = watchdog_module.RuntimeEventLoopWatchdog(
+        loop=_DelayedLoop(0.06),  # type: ignore[arg-type]
+        loop_thread_id=threading.get_ident(),
+        config=watchdog_module.RuntimeEventLoopWatchdogConfig(
+            interval_sec=0.05,
+            threshold_ms=10.0,
+            report_interval_sec=1.0,
+        ),
+    )
+    watchdog.start()
+    try:
+        assert correlated.wait(1.0)
+    finally:
+        watchdog.stop()
+
+    assert correlation["candidates"] == captured
+    assert correlation["stall_ms"] >= 50.0
 
 
 def test_watchdog_reliability_signal_tracks_stalls() -> None:

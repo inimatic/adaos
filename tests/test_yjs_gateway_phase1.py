@@ -1015,18 +1015,29 @@ def test_browser_auth_response_marks_denial_as_terminal_login() -> None:
 
 def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
     touched: list[dict[str, object]] = []
+    owner_thread = threading.get_ident()
+    access_threads: list[int] = []
 
     from adaos.services import access_links
+
+    def authorize_link(kind, entry_id):  # noqa: ANN001, ANN202, ARG001
+        access_threads.append(threading.get_ident())
+        return False, "revoked"
+
+    def touch_browser_session(device_id, **kwargs):  # noqa: ANN001, ANN202
+        access_threads.append(threading.get_ident())
+        touched.append({"device_id": device_id, **kwargs})
+        return {}
 
     monkeypatch.setattr(
         access_links,
         "authorize_link",
-        lambda kind, entry_id: (False, "revoked"),
+        authorize_link,
     )
     monkeypatch.setattr(
         access_links,
         "touch_browser_session",
-        lambda device_id, **kwargs: touched.append({"device_id": device_id, **kwargs}) or {},
+        touch_browser_session,
     )
 
     payload = asyncio.run(
@@ -1046,6 +1057,8 @@ def test_browser_session_authorize_reports_revoked_device(monkeypatch) -> None:
     assert payload["allowed"] is False
     assert payload["reason"] == "revoked"
     assert payload["next"] == "login"
+    assert access_threads
+    assert all(thread_id != owner_thread for thread_id in access_threads)
     assert touched == [
         {
             "device_id": "dev_tv",

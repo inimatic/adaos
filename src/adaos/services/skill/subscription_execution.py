@@ -65,6 +65,8 @@ def _stats_row(key: str, *, skill: str, topic: str, handler: str) -> dict[str, A
             "failed_total": 0,
             "overload_total": 0,
             "blocking_total": 0,
+            "wall_budget_total": 0,
+            "event_loop_stall_total": 0,
             "circuit_open_total": 0,
             "circuit_rejected_total": 0,
             "max_duration_s": 0.0,
@@ -130,7 +132,7 @@ def _trip_circuit_locked(
         "incident_count": incident_count,
         "duration_s": round(max(0.0, duration_s), 6),
         "threshold_s": threshold_s,
-        "reason": "async_execution_budget_exceeded",
+        "reason": "event_loop_stall_attributed",
     }
     _CIRCUITS[key] = row
     return row
@@ -172,12 +174,13 @@ async def _watch_blocking_handler(token: str, threshold_s: float) -> None:
         key = str(row.get("handler_key") or "")
         stats = _STATS.get(key)
         if stats is not None:
-            stats["blocking_total"] = int(stats.get("blocking_total") or 0) + 1
+            stats["wall_budget_total"] = int(stats.get("wall_budget_total") or 0) + 1
         payload = dict(row)
     started = float(payload.get("running_at") or payload.get("queued_at") or time.time())
     duration_s = max(0.0, time.time() - started)
     _LOG.warning(
-        "skill subscription exceeded execution budget skill=%s topic=%s handler=%s duration=%.3fs threshold=%.3fs thread=%s",
+        "skill subscription remained active beyond wall budget skill=%s topic=%s handler=%s "
+        "duration=%.3fs threshold=%.3fs thread=%s",
         payload.get("skill"),
         payload.get("topic"),
         payload.get("handler"),
@@ -190,7 +193,7 @@ async def _watch_blocking_handler(token: str, threshold_s: float) -> None:
         skill=str(payload.get("skill") or "<unknown>"),
         topic=str(payload.get("topic") or "<unknown>"),
         handler=str(payload.get("handler") or "<unknown>"),
-        signal="execution_budget_exceeded",
+        signal="wall_budget_exceeded",
         duration_s=duration_s,
         pending=int(payload.get("pending_at_submit") or 0),
         threshold_s=threshold_s,
@@ -432,12 +435,6 @@ async def run_async_subscription(
             stats["last_started_at"] = started_at
 
     threshold_s = _env_float("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", 1.0, minimum=0.05, maximum=300.0)
-    circuit_threshold_s = _env_float(
-        "ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S",
-        2.0,
-        minimum=0.05,
-        maximum=300.0,
-    )
     watchdog = asyncio.create_task(
         _watch_blocking_handler(token, threshold_s),
         name=f"skill-async-subscription-watchdog:{skill}:{topic}",
@@ -454,7 +451,6 @@ async def run_async_subscription(
     finally:
         finished_at = time.time()
         duration_s = max(0.0, finished_at - started_at)
-        circuit_opened: dict[str, Any] | None = None
         with _LOCK:
             active = _ACTIVE.pop(token, None) or {}
             watchdog_reported = bool(active.get("watchdog_reported"))
@@ -470,23 +466,12 @@ async def run_async_subscription(
                 stats["last_finished_at"] = finished_at
                 stats["last_error"] = type(error).__name__ if error is not None else None
                 if duration_s >= threshold_s and not watchdog_reported:
-                    stats["blocking_total"] = int(stats.get("blocking_total") or 0) + 1
-                if duration_s >= circuit_threshold_s:
-                    circuit_opened = _trip_circuit_locked(
-                        key,
-                        skill=skill,
-                        topic=topic,
-                        handler=handler,
-                        duration_s=duration_s,
-                        threshold_s=circuit_threshold_s,
-                        now=finished_at,
-                    )
-                    stats["circuit_open_total"] = int(stats.get("circuit_open_total") or 0) + 1
-                    stats["circuit_open_until"] = circuit_opened.get("open_until")
+                    stats["wall_budget_total"] = int(stats.get("wall_budget_total") or 0) + 1
         watchdog.cancel()
         if duration_s >= threshold_s and not watchdog_reported:
             _LOG.warning(
-                "async skill subscription exceeded execution budget skill=%s topic=%s handler=%s duration=%.3fs threshold=%.3fs",
+                "async skill subscription exceeded wall budget skill=%s topic=%s handler=%s "
+                "duration=%.3fs threshold=%.3fs",
                 skill,
                 topic,
                 handler,
@@ -498,33 +483,116 @@ async def run_async_subscription(
                 skill=skill,
                 topic=topic,
                 handler=handler,
-                signal="async_execution_budget_exceeded",
+                signal="async_wall_budget_exceeded",
                 duration_s=duration_s,
                 pending=pending + 1,
                 threshold_s=threshold_s,
             )
-        if circuit_opened is not None:
-            _LOG.error(
-                "async skill subscription circuit opened skill=%s topic=%s handler=%s duration=%.3fs "
-                "threshold=%.3fs ttl_s=%.1f incident=%s",
-                skill,
-                topic,
-                handler,
-                duration_s,
-                circuit_threshold_s,
-                float(circuit_opened.get("ttl_s") or 0.0),
-                circuit_opened.get("incident_count"),
+
+
+def _stack_matches_skill(skill: str, stack_frames: list[dict[str, Any]]) -> bool:
+    token = str(skill or "").strip().lower()
+    if not token or token == "<unknown>":
+        return False
+    for frame in stack_frames:
+        filename = str(frame.get("filename") or "").replace("\\", "/").lower()
+        if f"/{token}/" in filename or f"_{token}_" in filename:
+            return True
+    return False
+
+
+def capture_active_skill_handlers_for_stack(stack_frames: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Snapshot active skill handlers whose source path is present in a stalled stack."""
+
+    matched: list[dict[str, str]] = []
+    with _LOCK:
+        seen: set[str] = set()
+        for active in _ACTIVE.values():
+            key = str(active.get("handler_key") or "")
+            skill = str(active.get("skill") or "<unknown>")
+            if key in seen or not _stack_matches_skill(skill, stack_frames):
+                continue
+            seen.add(key)
+            matched.append(
+                {
+                    "handler_key": key,
+                    "skill": skill,
+                    "topic": str(active.get("topic") or "<unknown>"),
+                    "handler": str(active.get("handler") or "<unknown>"),
+                }
             )
-            await asyncio.to_thread(
-                _record_pressure,
+    return matched
+
+
+def correlate_runtime_event_loop_stall(
+    *,
+    stack_frames: list[dict[str, Any]],
+    stall_ms: float,
+    threshold_ms: float,
+    candidates: list[dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Attribute a confirmed owner-loop stall to handlers present in its stack."""
+
+    duration_s = max(0.0, float(stall_ms) / 1000.0)
+    threshold_s = _env_float(
+        "ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S",
+        2.0,
+        minimum=0.05,
+        maximum=300.0,
+    )
+    if duration_s < threshold_s:
+        return []
+    now = time.time()
+    attributed: list[dict[str, Any]] = []
+    matched = candidates if candidates is not None else capture_active_skill_handlers_for_stack(stack_frames)
+    with _LOCK:
+        seen: set[str] = set()
+        for active in matched:
+            key = str(active.get("handler_key") or "")
+            skill = str(active.get("skill") or "<unknown>")
+            if key in seen or not key or skill == "<unknown>":
+                continue
+            seen.add(key)
+            topic = str(active.get("topic") or "<unknown>")
+            handler = str(active.get("handler") or "<unknown>")
+            stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
+            stats["blocking_total"] = int(stats.get("blocking_total") or 0) + 1
+            stats["event_loop_stall_total"] = int(stats.get("event_loop_stall_total") or 0) + 1
+            stats["last_event_loop_stall_ms"] = round(max(0.0, float(stall_ms)), 3)
+            stats["last_event_loop_stall_at"] = now
+            circuit = _trip_circuit_locked(
+                key,
                 skill=skill,
                 topic=topic,
                 handler=handler,
-                signal="handler_circuit_opened",
                 duration_s=duration_s,
-                pending=pending + 1,
-                threshold_s=circuit_threshold_s,
+                threshold_s=threshold_s,
+                now=now,
             )
+            stats["circuit_open_total"] = int(stats.get("circuit_open_total") or 0) + 1
+            stats["circuit_open_until"] = circuit.get("open_until")
+            attributed.append({**circuit, "stall_ms": round(float(stall_ms), 3)})
+    for item in attributed:
+        _LOG.error(
+            "async skill subscription circuit opened after attributed event-loop stall "
+            "skill=%s topic=%s handler=%s stall_ms=%.1f watchdog_threshold_ms=%.1f ttl_s=%.1f incident=%s",
+            item.get("skill"),
+            item.get("topic"),
+            item.get("handler"),
+            float(item.get("stall_ms") or 0.0),
+            float(threshold_ms),
+            float(item.get("ttl_s") or 0.0),
+            item.get("incident_count"),
+        )
+        _record_pressure(
+            skill=str(item.get("skill") or "<unknown>"),
+            topic=str(item.get("topic") or "<unknown>"),
+            handler=str(item.get("handler") or "<unknown>"),
+            signal="event_loop_stall_circuit_opened",
+            duration_s=duration_s,
+            threshold_s=threshold_s,
+        )
+    return attributed
 
 
 def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
@@ -581,6 +649,8 @@ def reset_subscription_execution_runtime() -> None:
 
 
 __all__ = [
+    "capture_active_skill_handlers_for_stack",
+    "correlate_runtime_event_loop_stall",
     "reset_subscription_execution_runtime",
     "run_async_subscription",
     "run_sync_subscription",
