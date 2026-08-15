@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
-import sys
+import re
+import tempfile
 import threading
 import time
-import traceback
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,25 +24,49 @@ from adaos.services.reliability import (
 _LOG = logging.getLogger("adaos.runtime.event_loop_watchdog")
 
 
+_THREAD_HEADER_RE = re.compile(r"^(?:Current thread|Thread) 0x([0-9a-fA-F]+)")
+_FAULT_FRAME_RE = re.compile(r'^\s*File "(?P<filename>.*)", line (?P<lineno>\d+) in (?P<function>.*)$')
+
+
 def _stack_frames(thread_id: int, *, limit: int = 40) -> list[dict[str, Any]]:
+    """Sample a thread stack without transferring live frame locals across threads."""
     try:
-        frame = sys._current_frames().get(int(thread_id))  # type: ignore[attr-defined]
-    except Exception:
-        frame = None
-    if frame is None:
-        return []
-    try:
-        extracted = traceback.extract_stack(frame, limit=max(1, min(int(limit), 80)))
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
+            faulthandler.dump_traceback(file=output, all_threads=True)
+            output.flush()
+            output.seek(0)
+            dump = output.read()
     except Exception:
         return []
-    return [
-        {
-            "filename": str(item.filename or ""),
-            "lineno": int(item.lineno or 0),
-            "function": str(item.name or ""),
-        }
-        for item in extracted
-    ]
+
+    target_thread_id = int(thread_id)
+    current_thread_id: int | None = None
+    newest_first: list[dict[str, Any]] = []
+    for line in dump.splitlines():
+        header = _THREAD_HEADER_RE.match(line)
+        if header:
+            try:
+                current_thread_id = int(header.group(1), 16)
+            except ValueError:
+                current_thread_id = None
+            if newest_first and current_thread_id != target_thread_id:
+                break
+            continue
+        if current_thread_id != target_thread_id:
+            continue
+        frame = _FAULT_FRAME_RE.match(line)
+        if frame:
+            newest_first.append(
+                {
+                    "filename": str(frame.group("filename") or ""),
+                    "lineno": int(frame.group("lineno") or 0),
+                    "function": str(frame.group("function") or ""),
+                }
+            )
+
+    capped = newest_first[: max(1, min(int(limit), 80))]
+    capped.reverse()
+    return capped
 
 
 @dataclass(frozen=True)
@@ -124,7 +149,10 @@ class RuntimeEventLoopWatchdog:
 
                 observed_at = time.monotonic()
                 active_stall_started = probe_started
-                stall_ms = (observed_at - probe_started) * 1000.0
+                stall_ms = max(
+                    self._threshold_sec * 1000.0,
+                    (observed_at - probe_started) * 1000.0,
+                )
                 record_runtime_event_loop_watchdog_probe(elapsed_ms=stall_ms, stalled=True)
                 frames = _stack_frames(self._loop_thread_id)
                 last_frames = frames

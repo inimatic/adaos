@@ -68,6 +68,27 @@ def test_watchdog_captures_loop_stack_while_probe_is_unacknowledged(monkeypatch)
     assert states[-1]["running"] is False
 
 
+def test_stack_sampling_parses_faulthandler_without_live_frame_access(monkeypatch) -> None:
+    target = threading.get_ident()
+
+    def dump_traceback(*, file, all_threads: bool) -> None:
+        assert all_threads is True
+        file.write(
+            f'Thread 0x{target:x} (most recent call first):\n'
+            '  File "worker.py", line 42 in blocked_call\n'
+            '  File "runtime.py", line 7 in run\n\n'
+            'Current thread 0x123 (most recent call first):\n'
+            '  File "watchdog.py", line 1 in sample\n'
+        )
+
+    monkeypatch.setattr(watchdog_module.faulthandler, "dump_traceback", dump_traceback)
+
+    assert watchdog_module._stack_frames(target) == [
+        {"filename": "runtime.py", "lineno": 7, "function": "run"},
+        {"filename": "worker.py", "lineno": 42, "function": "blocked_call"},
+    ]
+
+
 def test_watchdog_acks_responsive_loop_without_stall(monkeypatch) -> None:
     probe_recorded = threading.Event()
     probes: list[dict] = []
