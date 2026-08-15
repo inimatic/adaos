@@ -812,6 +812,12 @@ class BootstrapService:
         except Exception:
             pass
         await self._lifecycle.stop()
+        status_watchdog = getattr(self, "_status_watchdog", None)
+        if status_watchdog is not None:
+            try:
+                status_watchdog.close()
+            except Exception:
+                self._log.debug("status watchdog shutdown failed", exc_info=True)
         await bus.emit("sys.stopped", {}, source="lifecycle", actor="system")
 
     async def switch_role(self, app: Any, role: str, *, hub_url: str | None = None, subnet_id: str | None = None) -> NodeConfig:
@@ -888,6 +894,22 @@ def _svc() -> BootstrapService:
 
 def is_ready() -> bool:
     return _svc().is_ready()
+
+
+def control_report_runtime_snapshot() -> dict[str, Any]:
+    service = _SERVICE
+    watchdog = getattr(service, "_status_watchdog", None) if service is not None else None
+    if watchdog is None or not hasattr(watchdog, "control_report_snapshot"):
+        return {
+            "available": False,
+            "in_flight": False,
+            "executor": "not_started",
+            "ordered": True,
+        }
+    return {
+        "available": True,
+        **watchdog.control_report_snapshot(),
+    }
 
 
 async def request_hub_root_reconnect(

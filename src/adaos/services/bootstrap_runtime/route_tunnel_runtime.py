@@ -100,10 +100,18 @@ def _route_http_lane_index(key: str, workers: int) -> int:
 class NatsRouteTunnelRuntime:
     """Own browser/root route tunnel state for one NATS connection."""
 
-    def __init__(self, service: Any, *, rate_limited_log: Any, is_ready: Any) -> None:
+    def __init__(
+        self,
+        service: Any,
+        *,
+        rate_limited_log: Any,
+        is_ready: Any,
+        report_control_lifecycle: Any = None,
+    ) -> None:
         self._service = service
         self._rate_limited_log = rate_limited_log
         self._is_ready = is_ready
+        self._report_control_lifecycle = report_control_lifecycle
         self.hub_id: str | None = None
         self.tunnels: dict[str, dict[str, Any]] = {}
         self.tunnel_tasks: dict[str, asyncio.Task] = {}
@@ -4472,6 +4480,12 @@ class NatsRouteTunnelRuntime:
                 _update_route_protocol_runtime()
             except Exception:
                 pass
+            if callable(self._report_control_lifecycle):
+                report_task = asyncio.create_task(
+                    self._report_control_lifecycle("route.ready"),
+                    name="adaos-control-report-route-ready",
+                )
+                sub_workers.append(report_task)
         except Exception as e:
             # Do not fail the whole IO stack: this is an optional fallback used only when
             # browser connects through Root (api.inimatic.com) and needs a NATS tunnel.

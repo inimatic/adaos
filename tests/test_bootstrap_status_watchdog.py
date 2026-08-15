@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +44,43 @@ async def test_status_watchdog_reports_control_lifecycle() -> None:
     await service.report_control_lifecycle("sys.ready")
 
     assert reported == ["hub"]
+    assert service.control_report_snapshot()["executor"] == "dedicated_single_worker"
+
+
+async def test_status_watchdog_serializes_control_reports_in_request_order() -> None:
+    emitted: list[tuple[str, dict]] = []
+    reported: list[str] = []
+    service = _status_service(emitted=emitted, reported=reported)
+    first_started = threading.Event()
+    release_first = threading.Event()
+    state = {"route": "unknown"}
+
+    def _report(_config) -> None:
+        captured = state["route"]
+        if not first_started.is_set():
+            first_started.set()
+            release_first.wait(timeout=2.0)
+        reported.append(captured)
+
+    service._report_control = _report
+    first = asyncio.create_task(service.report_control_lifecycle("nats.initial_connect"))
+    deadline = time.monotonic() + 2.0
+    while not first_started.is_set() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert first_started.is_set()
+
+    state["route"] = "ready"
+    second = asyncio.create_task(service.report_control_lifecycle("route.ready"))
+    release_first.set()
+    await asyncio.gather(first, second)
+
+    assert reported == ["unknown", "ready"]
+    snapshot = service.control_report_snapshot()
+    assert snapshot["requested_total"] == 2
+    assert snapshot["completed_total"] == 2
+    assert snapshot["failed_total"] == 0
+    assert snapshot["last_trigger"] == "route.ready"
+    service.close()
 
 
 async def test_status_watchdog_deduplicates_node_status() -> None:

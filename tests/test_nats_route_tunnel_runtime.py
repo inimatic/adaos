@@ -44,6 +44,53 @@ async def test_candidate_route_runtime_stays_passive_without_subscribing() -> No
 
 
 @pytest.mark.asyncio
+async def test_route_runtime_reports_control_state_after_subscription_is_ready() -> None:
+    subscriptions: list[str] = []
+    reports: list[str] = []
+    authority_ready = asyncio.Event()
+    service = SimpleNamespace(
+        _log=logging.getLogger("test.nats-route-runtime"),
+        _route_policy=HubRouteProxyPolicy(),
+        _mark_hub_root_authority_ready=authority_ready.set,
+    )
+
+    async def _subscribe(subject: str, *, cb: object) -> object:
+        subscriptions.append(subject)
+        return SimpleNamespace(subject=subject, cb=cb)
+
+    async def _report(trigger: str) -> None:
+        assert authority_ready.is_set()
+        reports.append(trigger)
+
+    workers: list[asyncio.Task] = []
+    runtime = NatsRouteTunnelRuntime(
+        service,
+        rate_limited_log=lambda *args, **kwargs: None,
+        is_ready=lambda: True,
+        report_control_lifecycle=_report,
+    )
+
+    await runtime.install(
+        nc=SimpleNamespace(),
+        subscribe=_subscribe,
+        sub_workers=workers,
+        hub_id="sn_ready",
+        candidate_passive_mode=False,
+        runtime_instance="active",
+        hub_nats_verbose=False,
+        hub_nats_quiet=True,
+    )
+    await asyncio.sleep(0)
+
+    assert subscriptions == ["route.v2.to_hub.sn_ready.*"]
+    assert reports == ["route.ready"]
+    await runtime.close()
+    for worker in workers:
+        worker.cancel()
+    await asyncio.gather(*workers, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_route_runtime_closes_owned_tunnels_and_tasks() -> None:
     closed = asyncio.Event()
 

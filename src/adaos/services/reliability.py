@@ -1724,6 +1724,19 @@ def runtime_signal_snapshot() -> dict[str, Any]:
     from adaos.services.logging import logging_queue_snapshot
     from adaos.services.subnet_heartbeat_runtime import heartbeat_persistence_snapshot
 
+    try:
+        from adaos.services.bootstrap import control_report_runtime_snapshot
+
+        control_report = control_report_runtime_snapshot()
+    except Exception as exc:
+        control_report = {
+            "available": False,
+            "in_flight": False,
+            "executor": "snapshot_failed",
+            "ordered": True,
+            "last_error": f"{type(exc).__name__}: {exc}",
+        }
+
     with _LOCK:
         return {
             "root_control": _ROOT_CONTROL.to_dict(),
@@ -1733,6 +1746,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
             "logging_queue": logging_queue_snapshot(),
             "subnet_heartbeat_persistence": heartbeat_persistence_snapshot(),
+            "root_control_report": control_report,
         }
 
 

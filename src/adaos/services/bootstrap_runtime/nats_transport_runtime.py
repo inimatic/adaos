@@ -2812,6 +2812,7 @@ async def _run_nats_root_transport(
                     service,
                     rate_limited_log=_rl_log,
                     is_ready=is_ready,
+                    report_control_lifecycle=report_control_lifecycle,
                 )
                 await route_runtime.install(
                     nc=nc,
