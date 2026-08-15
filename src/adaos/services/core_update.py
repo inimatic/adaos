@@ -914,6 +914,12 @@ def write_status(payload: dict[str, Any], *, publish_events: bool = True) -> dic
     return merged
 
 
+async def write_status_async(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = await asyncio.to_thread(write_status, payload, publish_events=False)
+    _publish_status_events(merged)
+    return merged
+
+
 def finalize_runtime_boot_status(
     *,
     supervisor_authorized: bool = False,

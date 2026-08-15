@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 import time
 import types
 
@@ -603,11 +604,11 @@ def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable
         calls.append(url)
         raise TimeoutError("supervisor unavailable")
 
-    def _write_status(_payload):
+    async def _write_status(_payload):
         raise AssertionError("runtime fallback must not write local update status")
 
     monkeypatch.setattr("requests.post", _post)
-    monkeypatch.setattr(api_server, "write_core_update_status", _write_status)
+    monkeypatch.setattr(api_server, "write_core_update_status_async", _write_status)
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
@@ -662,12 +663,21 @@ def test_admin_update_status_includes_runtime_identity(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
-    monkeypatch.setattr(api_server, "finalize_core_update_boot_status", lambda: None)
-    monkeypatch.setattr(api_server, "read_core_update_status", lambda: {"state": "idle"})
-    monkeypatch.setattr(api_server, "read_core_update_last_result", lambda: {"state": "succeeded"})
-    monkeypatch.setattr(api_server, "read_core_update_plan", lambda: None)
-    monkeypatch.setattr(api_server, "core_slot_status", lambda: {"active_slot": "B"})
-    monkeypatch.setattr(api_server, "active_slot_manifest", lambda: {"slot": "B"})
+    owner_thread = threading.get_ident()
+    read_threads: list[int] = []
+
+    def _read(value):
+        def _inner():
+            read_threads.append(threading.get_ident())
+            return value
+
+        return _inner
+
+    monkeypatch.setattr(api_server, "read_core_update_status", _read({"state": "idle"}))
+    monkeypatch.setattr(api_server, "read_core_update_last_result", _read({"state": "succeeded"}))
+    monkeypatch.setattr(api_server, "read_core_update_plan", _read(None))
+    monkeypatch.setattr(api_server, "core_slot_status", _read({"active_slot": "B"}))
+    monkeypatch.setattr(api_server, "active_slot_manifest", _read({"slot": "B"}))
 
     payload = asyncio.run(api_server.admin_update_status())
 
@@ -676,6 +686,8 @@ def test_admin_update_status_includes_runtime_identity(monkeypatch) -> None:
     assert payload["runtime"]["slot"] == "B"
     assert payload["runtime"]["runtime_port"] == 8778
     assert payload["runtime"]["admin_mutation_allowed"] is False
+    assert len(read_threads) == 5
+    assert all(thread_id != owner_thread for thread_id in read_threads)
 
 
 def test_supervisor_manages_sidecar_helper(monkeypatch) -> None:

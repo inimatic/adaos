@@ -219,12 +219,11 @@ from adaos.services.agent_context import get_ctx as _get_ctx
 from adaos.services.io_console import print_text
 from adaos.services.capacity import install_io_in_capacity, get_local_capacity
 from adaos.services.core_update import clear_plan as clear_core_update_plan
-from adaos.services.core_update import finalize_runtime_boot_status as finalize_core_update_boot_status
 from adaos.services.core_update import read_last_result as read_core_update_last_result
 from adaos.services.core_update import read_plan as read_core_update_plan
 from adaos.services.core_update import read_status as read_core_update_status
 from adaos.services.core_update import write_plan as write_core_update_plan
-from adaos.services.core_update import write_status as write_core_update_status
+from adaos.services.core_update import write_status_async as write_core_update_status_async
 from adaos.services.core_update_policy import core_update_reactions_disabled_reason
 from adaos.services.core_slots import active_slot, active_slot_manifest, slot_status as core_slot_status
 from adaos.services.node_config import save_config
@@ -716,6 +715,11 @@ async def _run_core_update_shutdown(app: FastAPI, *, reason: str, drain_timeout_
     asyncio.create_task(_request_process_shutdown(signal_delay_sec), name="core-update-shutdown")
 
 
+async def _read_core_update_status_async() -> dict[str, Any]:
+    status = await asyncio.to_thread(read_core_update_status)
+    return status if isinstance(status, dict) else {}
+
+
 async def _core_update_countdown_worker(
     app: FastAPI,
     *,
@@ -728,7 +732,7 @@ async def _core_update_countdown_worker(
     signal_delay_sec: float,
 ) -> None:
     started_at = time.time()
-    write_core_update_status(
+    await write_core_update_status_async(
         {
             "state": "countdown",
             "phase": "countdown",
@@ -754,8 +758,8 @@ async def _core_update_countdown_worker(
             "created_at": time.time(),
             "expires_at": time.time() + 1800.0,
         }
-        write_core_update_plan(plan)
-        write_core_update_status(
+        await asyncio.to_thread(write_core_update_plan, plan)
+        await write_core_update_status_async(
             {
                 "state": "restarting",
                 "phase": "shutdown",
@@ -775,7 +779,7 @@ async def _core_update_countdown_worker(
             signal_delay_sec=signal_delay_sec,
         )
     except asyncio.CancelledError:
-        write_core_update_status(
+        await write_core_update_status_async(
             {
                 "state": "cancelled",
                 "phase": "countdown",
@@ -2050,24 +2054,25 @@ async def admin_update_start(body: CoreUpdateStartRequest):
     _ensure_runtime_admin_mutation_allowed("update.start")
     disabled_reason = core_update_reactions_disabled_reason()
     if disabled_reason:
+        status = await _read_core_update_status_async()
         return {
             "ok": True,
             "accepted": False,
             "skipped": True,
             "reason": disabled_reason,
-            "status": read_core_update_status(),
+            "status": status,
         }
     supervisor_payload = await asyncio.to_thread(_try_forward_update_start_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
-        return {"ok": True, "accepted": False, "status": read_core_update_status()}
+        return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}
     if getattr(app.state, "shutdown_requested", False):
-        return {"ok": True, "accepted": False, "status": read_core_update_status()}
+        return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}
 
-    clear_core_update_plan()
-    write_core_update_status(
+    await asyncio.to_thread(clear_core_update_plan)
+    status = await write_core_update_status_async(
         {
             "state": "countdown",
             "phase": "countdown",
@@ -2096,7 +2101,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
         name="core-update-countdown",
     )
     app.state.core_update_task = task
-    return {"ok": True, "accepted": True, "status": read_core_update_status()}
+    return {"ok": True, "accepted": True, "status": status}
 
 
 @app.post("/api/admin/update/cancel", dependencies=[Depends(require_token)])
@@ -2106,9 +2111,9 @@ async def admin_update_cancel(body: CoreUpdateCancelRequest):
     if supervisor_payload is not None:
         return supervisor_payload
     task = getattr(app.state, "core_update_task", None)
-    clear_core_update_plan()
+    await asyncio.to_thread(clear_core_update_plan)
     if task is None or task.done():
-        status = write_core_update_status(
+        status = await write_core_update_status_async(
             {
                 "state": "cancelled",
                 "phase": "countdown",
@@ -2120,15 +2125,16 @@ async def admin_update_cancel(body: CoreUpdateCancelRequest):
 
     task.cancel()
     app.state.core_update_task = None
-    status = write_core_update_status(
+    current_status = await _read_core_update_status_async()
+    status = await write_core_update_status_async(
         {
             "state": "cancelled",
             "phase": "countdown",
-            "action": str((read_core_update_status() or {}).get("action") or "update"),
+            "action": str(current_status.get("action") or "update"),
             "message": "core update cancelled by request",
             "reason": body.reason,
-            "drain_timeout_sec": float((read_core_update_status() or {}).get("drain_timeout_sec") or _DEFAULT_SHUTDOWN_DRAIN_SEC),
-            "signal_delay_sec": float((read_core_update_status() or {}).get("signal_delay_sec") or _DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC),
+            "drain_timeout_sec": float(current_status.get("drain_timeout_sec") or _DEFAULT_SHUTDOWN_DRAIN_SEC),
+            "signal_delay_sec": float(current_status.get("signal_delay_sec") or _DEFAULT_SHUTDOWN_SIGNAL_DELAY_SEC),
         }
     )
     return {"ok": True, "accepted": True, "status": status}
@@ -2139,24 +2145,25 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
     _ensure_runtime_admin_mutation_allowed("update.rollback")
     disabled_reason = core_update_reactions_disabled_reason()
     if disabled_reason:
+        status = await _read_core_update_status_async()
         return {
             "ok": True,
             "accepted": False,
             "skipped": True,
             "reason": disabled_reason,
-            "status": read_core_update_status(),
+            "status": status,
         }
     supervisor_payload = await asyncio.to_thread(_try_forward_update_rollback_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
-        return {"ok": True, "accepted": False, "status": read_core_update_status()}
+        return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}
     if getattr(app.state, "shutdown_requested", False):
-        return {"ok": True, "accepted": False, "status": read_core_update_status()}
+        return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}
 
-    clear_core_update_plan()
-    write_core_update_status(
+    await asyncio.to_thread(clear_core_update_plan)
+    status = await write_core_update_status_async(
         {
             "state": "countdown",
             "phase": "countdown",
@@ -2183,7 +2190,7 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
         name="core-update-rollback-countdown",
     )
     app.state.core_update_task = task
-    return {"ok": True, "accepted": True, "status": read_core_update_status()}
+    return {"ok": True, "accepted": True, "status": status}
 
 
 @app.post("/api/admin/update/reconcile", dependencies=[Depends(require_token)])
@@ -2191,29 +2198,32 @@ async def admin_update_reconcile(body: CoreUpdateReconcileRequest):
     _ensure_runtime_admin_mutation_allowed("update.reconcile")
     disabled_reason = core_update_reactions_disabled_reason()
     if disabled_reason:
+        status = await _read_core_update_status_async()
         return {
             "ok": True,
             "accepted": False,
             "skipped": True,
             "reason": disabled_reason,
-            "status": read_core_update_status(),
+            "status": status,
         }
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
+        status = await _read_core_update_status_async()
         return {
             "ok": True,
             "accepted": False,
             "skipped": True,
             "reason": "update_task_in_progress",
-            "status": read_core_update_status(),
+            "status": status,
         }
     if getattr(app.state, "shutdown_requested", False):
+        status = await _read_core_update_status_async()
         return {
             "ok": True,
             "accepted": False,
             "skipped": True,
             "reason": "runtime_shutdown_requested",
-            "status": read_core_update_status(),
+            "status": status,
         }
     try:
         from adaos.services.root.core_update_sync import reconcile_hub_core_update
@@ -2224,6 +2234,7 @@ async def admin_update_reconcile(body: CoreUpdateReconcileRequest):
             countdown_sec=float(body.countdown_sec),
         )
     except Exception as exc:
+        status = await _read_core_update_status_async()
         raise HTTPException(
             status_code=503,
             detail={
@@ -2232,16 +2243,17 @@ async def admin_update_reconcile(body: CoreUpdateReconcileRequest):
                 "error_type": type(exc).__name__,
                 "message": str(exc)[:500],
                 "reason": body.reason,
-                "status": read_core_update_status(),
+                "status": status,
             },
         )
     payload = result if isinstance(result, dict) else {"ok": bool(result)}
+    status = await _read_core_update_status_async()
     return {
         "ok": True,
         "accepted": bool(payload.get("needs_update") or payload.get("dispatch")),
         "reason": body.reason,
         "result": payload,
-        "status": read_core_update_status(),
+        "status": status,
     }
 
 
@@ -2363,28 +2375,27 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
 
 @app.get("/api/admin/update/status", dependencies=[Depends(require_token)])
 async def admin_update_status():
-    try:
-        finalized = finalize_core_update_boot_status()
-    except Exception:
-        finalized = None
+    status_payload, last_result, plan, slots, manifest = await asyncio.gather(
+        asyncio.to_thread(read_core_update_status),
+        asyncio.to_thread(read_core_update_last_result),
+        asyncio.to_thread(read_core_update_plan),
+        asyncio.to_thread(core_slot_status),
+        asyncio.to_thread(active_slot_manifest),
+    )
     return {
         "ok": True,
-        "status": finalized if isinstance(finalized, dict) else read_core_update_status(),
-        "last_result": read_core_update_last_result(),
-        "plan": read_core_update_plan(),
-        "slots": core_slot_status(),
-        "active_manifest": active_slot_manifest(),
+        "status": status_payload,
+        "last_result": last_result,
+        "plan": plan,
+        "slots": slots,
+        "active_manifest": manifest,
         "runtime": _runtime_identity_public_payload(),
     }
 
 
 @app.get("/api/supervisor/public/update-status")
 async def supervisor_public_update_status():
-    try:
-        finalized = finalize_core_update_boot_status()
-    except Exception:
-        finalized = None
-    status_payload = finalized if isinstance(finalized, dict) else read_core_update_status()
+    status_payload = await _read_core_update_status_async()
     runtime_payload = _runtime_identity_public_payload()
     runtime_payload["runtime_state"] = "ready" if is_ready() else "starting"
     return {
