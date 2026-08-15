@@ -183,10 +183,27 @@ async def _probe_nats_protocol_roundtrip(nc: Any, *, timeout_s: float) -> dict[s
     setattr(nc, "_adaos_last_roundtrip_ok_at", finished_at)
     setattr(nc, "_adaos_last_roundtrip_duration_s", finished_at - started_at)
     setattr(nc, "_adaos_last_roundtrip_error", None)
+    setattr(nc, "_adaos_roundtrip_retry_due_at", None)
     transport = getattr(nc, "_transport", None)
     if transport is not None:
         setattr(transport, "_adaos_last_protocol_roundtrip_at", finished_at)
     return {"ok": True, "error": None, "duration_s": finished_at - started_at}
+
+
+def _nats_roundtrip_failure_limit() -> int:
+    try:
+        value = int(os.getenv("HUB_NATS_ROUNDTRIP_FAILURES", "2") or "2")
+    except Exception:
+        value = 2
+    return max(2, min(value, 5))
+
+
+def _nats_roundtrip_retry_s(*, interval_s: float) -> float:
+    try:
+        value = float(os.getenv("HUB_NATS_ROUNDTRIP_RETRY_S", "2") or "2")
+    except Exception:
+        value = 2.0
+    return max(0.2, min(value, max(0.2, float(interval_s))))
 
 
 def _sidecar_failback_due(
@@ -921,6 +938,15 @@ async def _run_nats_root_transport(
                                     return None
                                 return None
 
+                            def _nc_until(attr: str) -> float | None:
+                                try:
+                                    value = getattr(nc_for_diag, attr, None)
+                                    if isinstance(value, (int, float)):
+                                        return round(max(0.0, float(value) - now_mono), 3)
+                                except Exception:
+                                    return None
+                                return None
+
                             connected_attr = getattr(nc_for_diag, "is_connected", None)
                             closed_attr = getattr(nc_for_diag, "is_closed", None)
                             connect_url = server if server is not None else nats_last_server
@@ -954,6 +980,9 @@ async def _run_nats_root_transport(
                                 ),
                                 "protocol_roundtrip_consecutive_failures": int(
                                     getattr(nc_for_diag, "_adaos_roundtrip_consecutive_failures", 0) or 0
+                                ),
+                                "protocol_roundtrip_retry_in_s": _nc_until(
+                                    "_adaos_roundtrip_retry_due_at"
                                 ),
                                 "last_protocol_roundtrip_duration_s": getattr(
                                     nc_for_diag, "_adaos_last_roundtrip_duration_s", None
@@ -1849,6 +1878,7 @@ async def _run_nats_root_transport(
                             setattr(nc, "_adaos_roundtrip_failure_total", 0)
                             setattr(nc, "_adaos_roundtrip_consecutive_failures", 0)
                             setattr(nc, "_adaos_last_roundtrip_error", None)
+                            setattr(nc, "_adaos_roundtrip_retry_due_at", None)
                         except Exception:
                             pass
 
@@ -2927,13 +2957,7 @@ async def _run_nats_root_transport(
                                 )
                             except Exception:
                                 roundtrip_timeout_s = 5.0
-                            try:
-                                roundtrip_failure_limit = int(
-                                    os.getenv("HUB_NATS_ROUNDTRIP_FAILURES", "1") or "1"
-                                )
-                            except Exception:
-                                roundtrip_failure_limit = 1
-                            roundtrip_failure_limit = max(1, min(roundtrip_failure_limit, 5))
+                            roundtrip_failure_limit = _nats_roundtrip_failure_limit()
                             previous_failures = int(
                                 getattr(nc, "_adaos_roundtrip_consecutive_failures", 0) or 0
                             )
@@ -2980,6 +3004,16 @@ async def _run_nats_root_transport(
                                         err=error if isinstance(error, Exception) else None,
                                     )
                                     raise RuntimeError(_msg) from error
+                                retry_s = _nats_roundtrip_retry_s(interval_s=roundtrip_interval_s)
+                                last_roundtrip_probe_at = time.monotonic() - max(
+                                    0.0,
+                                    max(5.0, roundtrip_interval_s) - retry_s,
+                                )
+                                setattr(
+                                    nc,
+                                    "_adaos_roundtrip_retry_due_at",
+                                    time.monotonic() + retry_s,
+                                )
 
                         failback_enabled = _env_truthy(
                             os.getenv("HUB_NATS_SIDECAR_FAILBACK_ENABLE"),

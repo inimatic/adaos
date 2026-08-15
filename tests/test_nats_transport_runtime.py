@@ -9,6 +9,20 @@ import pytest
 from adaos.services.bootstrap_runtime import nats_root_runtime, nats_transport_runtime
 
 
+def test_protocol_roundtrip_requires_confirmation_and_bounds_retry(monkeypatch) -> None:
+    monkeypatch.delenv("HUB_NATS_ROUNDTRIP_FAILURES", raising=False)
+    monkeypatch.delenv("HUB_NATS_ROUNDTRIP_RETRY_S", raising=False)
+
+    assert nats_transport_runtime._nats_roundtrip_failure_limit() == 2
+    assert nats_transport_runtime._nats_roundtrip_retry_s(interval_s=30.0) == 2.0
+
+    monkeypatch.setenv("HUB_NATS_ROUNDTRIP_FAILURES", "1")
+    monkeypatch.setenv("HUB_NATS_ROUNDTRIP_RETRY_S", "90")
+
+    assert nats_transport_runtime._nats_roundtrip_failure_limit() == 2
+    assert nats_transport_runtime._nats_roundtrip_retry_s(interval_s=30.0) == 30.0
+
+
 @pytest.mark.asyncio
 async def test_root_entrypoint_only_composes_transport_owner(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
