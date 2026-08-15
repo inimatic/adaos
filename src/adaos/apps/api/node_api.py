@@ -4251,8 +4251,16 @@ async def node_reliability_supervisor_channel() -> dict[str, Any]:
     return await asyncio.to_thread(_node_reliability_supervisor_channel_payload)
 
 
+def _runtime_node_config() -> Any:
+    try:
+        conf = getattr(get_ctx(), "config", None)
+    except Exception:
+        conf = None
+    return conf if conf is not None else load_config()
+
+
 def _node_reliability_supervisor_channel_payload() -> dict[str, Any]:
-    conf = load_config()
+    conf = _runtime_node_config()
     route_mode, connected = route_info(conf.role)
     lifecycle = runtime_lifecycle_snapshot()
     runtime = supervisor_channel_runtime_snapshot(

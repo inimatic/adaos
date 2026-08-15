@@ -3121,6 +3121,39 @@ def _media_update_guard_snapshot(*, role: str, runtime: dict[str, Any] | None) -
     }
 
 
+def media_update_guard_runtime_snapshot(*, role: str) -> dict[str, Any]:
+    """Read the live media update guard without inventory or durable-state scans."""
+
+    try:
+        from adaos.services.webrtc.peer import webrtc_peer_snapshot
+
+        live_webrtc = webrtc_peer_snapshot()
+        available = True
+    except Exception:
+        live_webrtc = {}
+        available = False
+
+    counts = {
+        "live_connected_peers": int(live_webrtc.get("connected_peers") or 0),
+        "incoming_audio_tracks": int(live_webrtc.get("incoming_audio_tracks") or 0),
+        "incoming_video_tracks": int(live_webrtc.get("incoming_video_tracks") or 0),
+        "loopback_audio_tracks": int(live_webrtc.get("loopback_audio_tracks") or 0),
+        "loopback_video_tracks": int(live_webrtc.get("loopback_video_tracks") or 0),
+    }
+    runtime = {
+        "counts": counts,
+        # Direct member media is not admitted yet. Its future session authority
+        # must be exposed here as an in-memory snapshot too.
+        "member_browser_direct": {},
+    }
+    return {
+        "available": available,
+        "source": "live_session_authority",
+        "inventory_scanned": False,
+        "update_guard": _media_update_guard_snapshot(role=role, runtime=runtime),
+    }
+
+
 def _sidecar_continuity_contract(
     *,
     enabled: bool,
@@ -3912,6 +3945,108 @@ def _member_rollout_state(update_state: str, *, snapshot_state: str) -> str:
 
 def _connected_to_subnet_alias(connected_to_hub: bool | None) -> bool | None:
     return connected_to_hub if isinstance(connected_to_hub, bool) else None
+
+
+def _live_hub_member_connection_state_snapshot(
+    *,
+    role: str,
+    route_mode: str | None,
+    connected_to_hub: bool | None,
+) -> dict[str, Any]:
+    """Return only live link authority for critical-path supervisor decisions."""
+
+    role_norm = str(role or "").strip().lower()
+    now = time.time()
+    if role_norm == "hub":
+        try:
+            from adaos.services.subnet.link_manager import hub_link_manager_snapshot
+
+            raw = hub_link_manager_snapshot()
+        except Exception:
+            raw = {"members": [], "updated_at": now}
+        members = raw.get("members") if isinstance(raw.get("members"), list) else []
+        connected_members = [
+            item
+            for item in members
+            if isinstance(item, dict) and bool(item.get("connected", True))
+        ]
+        snapshot_states = [
+            _member_snapshot_state(
+                connected=True,
+                last_snapshot_ago_s=item.get("last_snapshot_ago_s"),
+            )
+            for item in connected_members
+        ]
+        update_states: list[str] = []
+        for item in connected_members:
+            node_snapshot = item.get("node_snapshot") if isinstance(item.get("node_snapshot"), dict) else {}
+            update_status = (
+                node_snapshot.get("update_status")
+                if isinstance(node_snapshot.get("update_status"), dict)
+                else {}
+            )
+            update_states.append(str(update_status.get("state") or "").strip().lower())
+        if not connected_members:
+            assessment_state = "idle"
+            assessment_reason = "no_members_connected"
+        elif "failed" in update_states:
+            assessment_state = "degraded"
+            assessment_reason = "member_update_failed"
+        elif "stale" in snapshot_states:
+            assessment_state = "degraded"
+            assessment_reason = "member_snapshots_stale"
+        elif "pending" in snapshot_states:
+            assessment_state = "pressure"
+            assessment_reason = "member_snapshots_pending"
+        else:
+            assessment_state = "nominal"
+            assessment_reason = "member_links_and_snapshots_connected"
+        return {
+            "role": "hub",
+            "assessment": {
+                "state": assessment_state,
+                "reason": assessment_reason,
+            },
+            "member_total": len(connected_members),
+            "connected_total": len(connected_members),
+            "updated_at": float(raw.get("updated_at") or now),
+            "source": "hub_link_manager_live",
+            "durable_inventory_scanned": False,
+        }
+
+    try:
+        from adaos.services.subnet.link_client import member_link_client_snapshot
+
+        raw = member_link_client_snapshot()
+    except Exception:
+        raw = {"connected": False, "updated_at": now}
+    transition_state = str(raw.get("transition_state") or "").strip().lower()
+    connected = bool(raw.get("connected"))
+    if connected:
+        state = "connected"
+    elif str(route_mode or "") == "ws":
+        state = "member_link"
+    else:
+        state = "disconnected"
+    reason = "linked_to_hub" if connected else "member_link_down"
+    if not connected and transition_state in {"waiting_restart", "restarting", "paused_for_update"}:
+        state = transition_state
+        reason = str(raw.get("transition_reason") or transition_state)
+    return {
+        "role": "member",
+        "assessment": {
+            "state": "nominal" if connected else "degraded",
+            "reason": reason,
+        },
+        "route_mode": route_mode,
+        "connected_to_subnet": connected_to_hub,
+        "connected_to_hub": connected_to_hub,
+        "state": state,
+        "hub": raw,
+        "updated_at": float(raw.get("updated_at") or now),
+        "source": "member_link_client_live",
+        "durable_inventory_scanned": False,
+    }
 
 
 def hub_member_connection_state_snapshot(
@@ -6993,6 +7128,7 @@ def supervisor_channel_runtime_snapshot(
 ) -> dict[str, Any]:
     """Build the bounded channel contract consumed by the supervisor watchdog."""
 
+    started_at = time.perf_counter()
     channel_diagnostics = channel_diagnostics_snapshot()
     transport_strategy = hub_root_transport_strategy_snapshot()
     hub_root_protocol = hub_root_protocol_snapshot()
@@ -7002,12 +7138,10 @@ def supervisor_channel_runtime_snapshot(
         connected_to_hub=connected_to_hub,
         hub_root_protocol=hub_root_protocol,
     )
-    member_state = hub_member_connection_state_snapshot(
+    member_state = _live_hub_member_connection_state_snapshot(
         role=role,
         route_mode=route_mode,
         connected_to_hub=connected_to_hub,
-        node_id=node_id,
-        node_names=node_names,
     )
     readiness_tree = build_readiness_tree(
         role=role,
@@ -7024,17 +7158,7 @@ def supervisor_channel_runtime_snapshot(
         channel_diagnostics=channel_diagnostics,
         transport_strategy=transport_strategy,
     )
-    section_timeout = _runtime_snapshot_timeout_sec()
-    media_runtime = _run_bounded_runtime_section(
-        section="media",
-        timeout_sec=section_timeout,
-        fn=lambda: media_plane_runtime_snapshot(
-            role=role,
-            route_mode=route_mode,
-            connected_to_hub=connected_to_hub,
-        ),
-        fallback={"available": False, "update_guard": {}},
-    )
+    media_runtime = media_update_guard_runtime_snapshot(role=role)
     sidecar_runtime = sidecar_runtime_snapshot(
         role=role,
         readiness_tree=readiness_tree,
@@ -7112,6 +7236,14 @@ def supervisor_channel_runtime_snapshot(
         },
         "media_runtime": {
             "update_guard": dict(media_runtime.get("update_guard") or {}),
+        },
+        "collection": {
+            "profile": "critical_path_live_only",
+            "duration_ms": round(max(0.0, (time.perf_counter() - started_at) * 1000.0), 3),
+            "durable_inventory_scanned": False,
+            "media_inventory_scanned": False,
+            "member_source": member_state.get("source"),
+            "media_source": media_runtime.get("source"),
         },
     }
 

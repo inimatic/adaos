@@ -2760,6 +2760,67 @@ def test_media_plane_runtime_snapshot_does_not_block_update_for_trackless_hub_pe
     assert guard["criticality"] == "hub_live_media"
 
 
+def test_media_update_guard_runtime_snapshot_uses_live_webrtc_authority(monkeypatch) -> None:
+    from adaos.services.reliability import media_update_guard_runtime_snapshot
+
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.webrtc.peer",
+        SimpleNamespace(
+            webrtc_peer_snapshot=lambda: {
+                "connected_peers": 1,
+                "incoming_audio_tracks": 0,
+                "incoming_video_tracks": 1,
+                "loopback_audio_tracks": 0,
+                "loopback_video_tracks": 1,
+            }
+        ),
+    )
+
+    snapshot = media_update_guard_runtime_snapshot(role="hub")
+
+    assert snapshot["source"] == "live_session_authority"
+    assert snapshot["inventory_scanned"] is False
+    assert snapshot["update_guard"]["observed_live_topology"] == "hub_webrtc_loopback"
+    assert snapshot["update_guard"]["hub_runtime_update"] == "preserve_sidecar"
+
+
+def test_live_hub_member_connection_snapshot_uses_link_manager_only(monkeypatch) -> None:
+    from adaos.services import reliability
+
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.subnet.link_manager",
+        SimpleNamespace(
+            hub_link_manager_snapshot=lambda: {
+                "members": [
+                    {
+                        "node_id": "member-1",
+                        "connected": True,
+                        "last_snapshot_ago_s": 2.0,
+                        "node_snapshot": {"update_status": {"state": "succeeded"}},
+                    }
+                ],
+                "updated_at": 123.0,
+            }
+        ),
+    )
+
+    snapshot = reliability._live_hub_member_connection_state_snapshot(
+        role="hub",
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    assert snapshot["assessment"] == {
+        "state": "nominal",
+        "reason": "member_links_and_snapshots_connected",
+    }
+    assert snapshot["connected_total"] == 1
+    assert snapshot["source"] == "hub_link_manager_live"
+    assert snapshot["durable_inventory_scanned"] is False
+
+
 def test_member_reliability_snapshot_uses_connected_to_hub_for_route_and_sync() -> None:
     _reset_state()
 
@@ -2912,7 +2973,7 @@ def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         node_api,
-        "load_config",
+        "_runtime_node_config",
         lambda: SimpleNamespace(role="hub", node_id="node-1", node_names=[]),
     )
     monkeypatch.setattr(node_api, "route_info", lambda role: (role, True))
@@ -2930,6 +2991,20 @@ def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
     assert len(response.content) < 1024
 
 
+def test_supervisor_channel_uses_bootstrap_config_without_reload(monkeypatch) -> None:
+    from adaos.apps.api import node_api
+
+    conf = SimpleNamespace(role="hub", node_id="node-1", node_names=[])
+    monkeypatch.setattr(node_api, "get_ctx", lambda: SimpleNamespace(config=conf))
+    monkeypatch.setattr(
+        node_api,
+        "load_config",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime config must stay in memory")),
+    )
+
+    assert node_api._runtime_node_config() is conf
+
+
 def test_node_reliability_supervisor_channel_collects_off_event_loop(monkeypatch) -> None:
     import threading
     from types import SimpleNamespace
@@ -2944,7 +3019,7 @@ def test_node_reliability_supervisor_channel_collects_off_event_loop(monkeypatch
 
     monkeypatch.setattr(
         node_api,
-        "load_config",
+        "_runtime_node_config",
         lambda: _record(SimpleNamespace(node_id="node-1", role="hub", node_names=[])),
     )
     monkeypatch.setattr(node_api, "route_info", lambda _role: _record(("online", True)))
@@ -2990,7 +3065,7 @@ def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monk
     monkeypatch.setattr(reliability, "hub_member_semantic_channels_snapshot", lambda **_kwargs: {})
     monkeypatch.setattr(
         reliability,
-        "hub_member_connection_state_snapshot",
+        "_live_hub_member_connection_state_snapshot",
         lambda **_kwargs: {
             "state": "ready",
             "connected_total": 1,
@@ -3020,11 +3095,7 @@ def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monk
             "hub_root_browser": {"effective_status": "ready", "effective_state": "stable"},
         },
     )
-    monkeypatch.setattr(
-        reliability,
-        "_run_bounded_runtime_section",
-        lambda **_kwargs: {"update_guard": {}},
-    )
+    monkeypatch.setattr(reliability, "media_update_guard_runtime_snapshot", lambda **_kwargs: {"update_guard": {}})
     monkeypatch.setattr(
         reliability,
         "sidecar_runtime_snapshot",
@@ -3050,6 +3121,80 @@ def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monk
         "status": "ready",
         "updated_at": 123.0,
     }
+    assert snapshot["collection"]["profile"] == "critical_path_live_only"
+    assert snapshot["collection"]["durable_inventory_scanned"] is False
+
+
+def test_supervisor_channel_runtime_snapshot_avoids_durable_inventory(monkeypatch) -> None:
+    from adaos.services import reliability
+
+    monkeypatch.setattr(reliability, "channel_diagnostics_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_root_transport_strategy_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_root_protocol_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_member_semantic_channels_snapshot", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        reliability,
+        "_live_hub_member_connection_state_snapshot",
+        lambda **_kwargs: {
+            "assessment": {"state": "idle", "reason": "no_members_connected"},
+            "member_total": 0,
+            "connected_total": 0,
+            "source": "hub_link_manager_live",
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "hub_member_connection_state_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("durable member inventory must not be scanned")),
+    )
+    monkeypatch.setattr(
+        reliability,
+        "media_plane_runtime_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("media inventory must not be scanned")),
+    )
+    monkeypatch.setattr(
+        reliability,
+        "media_update_guard_runtime_snapshot",
+        lambda **_kwargs: {
+            "source": "live_session_authority",
+            "update_guard": {"live_session_present": False},
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "build_readiness_tree",
+        lambda **_kwargs: {
+            "root_control": {"status": "ready"},
+            "route": {"status": "ready"},
+            "hub_member": {"status": "ready"},
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "channel_overview_snapshot",
+        lambda **_kwargs: {
+            "hub_root": {"effective_status": "ready", "effective_state": "stable"},
+            "hub_root_browser": {"effective_status": "ready", "effective_state": "stable"},
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "sidecar_runtime_snapshot",
+        lambda **_kwargs: {"continuity_contract": {}},
+    )
+
+    snapshot = reliability.supervisor_channel_runtime_snapshot(
+        node_id="node-1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    assert snapshot["media_runtime"]["update_guard"]["live_session_present"] is False
+    assert snapshot["collection"]["media_inventory_scanned"] is False
 
 
 def test_skill_runtime_migration_update_gate_snapshot_omits_failure_details(monkeypatch) -> None:
