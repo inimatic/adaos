@@ -1503,26 +1503,34 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
 
     # Используем общий путь исполнения как в CLI (SkillManager.run_tool)
     payload: Dict[str, Any] = dict(body.arguments or {})
-    implicit_dev_webspace = (not body.dev) and _webspace_uses_dev_runtime(payload)
+    implicit_dev_webspace = (not body.dev) and await asyncio.to_thread(
+        _webspace_uses_dev_runtime,
+        payload,
+    )
 
     mgr = await _skill_manager_for_context(ctx)
-    if implicit_dev_webspace and _implicit_dev_runtime_available(ctx, mgr, skill_name):
+    if implicit_dev_webspace and await asyncio.to_thread(
+        _implicit_dev_runtime_available,
+        ctx,
+        mgr,
+        skill_name,
+    ):
         body = body.model_copy(update={"dev": True})
 
     accepting_new_work = is_accepting_new_work()
     # Preserve the cheap legacy path for obviously read-only calls while the
     # runtime is ready. A read intent or a lifecycle exception, however, must
     # always be authorized from the active resolved manifest.
-    declared_side_effects = (
-        ""
-        if accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool)
-        else _declared_tool_side_effects(
+    if accepting_new_work and body.intent != "read" and _looks_readonly_tool(public_tool):
+        declared_side_effects = ""
+    else:
+        declared_side_effects = await asyncio.to_thread(
+            _declared_tool_side_effects,
             mgr,
             skill_name=skill_name,
             public_tool=public_tool,
             dev=bool(body.dev),
         )
-    )
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
     if body.intent == "read" and not trusted_read_only:
         raise HTTPException(
@@ -1655,7 +1663,11 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 float(local_timings.get("run_tool_ms") or 0.0),
             )
     except (FileNotFoundError, RuntimeError, KeyError) as e:
-        local_runtime_resolved = local_execution_started and _runtime_ready(mgr, skill_name)
+        local_runtime_resolved = local_execution_started and await asyncio.to_thread(
+            _runtime_ready,
+            mgr,
+            skill_name,
+        )
         if local_execution_started and (mutating_call or local_runtime_resolved):
             missing_domain_value = isinstance(e, (FileNotFoundError, KeyError))
             raise HTTPException(
@@ -1678,7 +1690,11 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
 
         # Найти online-ноду с этим skill (используем только runtime; workspace-fallback отключён)
         directory = get_directory()
-        candidates = directory.find_nodes_with_skill(skill_name, require_online=True)
+        candidates = await asyncio.to_thread(
+            directory.find_nodes_with_skill,
+            skill_name,
+            require_online=True,
+        )
         # Сначала активные, затем по last_seen убыв.
         mgr = get_hub_link_manager()
         candidates.sort(key=lambda n: (not mgr.is_connected(n.get("node_id", "")), not bool(n.get("active"))), reverse=False)
@@ -1720,7 +1736,10 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         else:
             rpc_error = None
 
-        base_url = target.get("base_url") or directory.get_node_base_url(target_node_id)
+        base_url = target.get("base_url") or await asyncio.to_thread(
+            directory.get_node_base_url,
+            target_node_id,
+        )
         if _is_loopback_base_url(base_url):
             if target_node_id and node_identities_match(target_node_id, local_node_id):
                 raise HTTPException(

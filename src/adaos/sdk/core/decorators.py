@@ -655,10 +655,16 @@ async def register_subscriptions(
         if skill_name:
             generation = int(_SKILL_SUBSCRIPTION_GENERATIONS.setdefault(skill_name, 1))
             if skill_name not in activation_policy_by_skill:
-                activation_policy_by_skill[skill_name] = _load_subscription_activation_policy(skill_name)
+                activation_policy_by_skill[skill_name] = await asyncio.to_thread(
+                    _load_subscription_activation_policy,
+                    skill_name,
+                )
             activation_policy = activation_policy_by_skill.get(skill_name)
             if skill_name not in receiver_patterns_by_skill:
-                receiver_patterns_by_skill[skill_name] = _load_subscription_stream_receiver_patterns(skill_name)
+                receiver_patterns_by_skill[skill_name] = await asyncio.to_thread(
+                    _load_subscription_stream_receiver_patterns,
+                    skill_name,
+                )
             receiver_patterns = receiver_patterns_by_skill.get(skill_name) or ()
 
         if skill_name:
@@ -822,7 +828,12 @@ async def register_subscriptions(
             )
     for skill, entries in sorted(skill_summaries.items()):
         summary = ", ".join(f"{topic}: {handler}" for topic, handler in entries)
-        _LOG.info("skill=%s subscriptions=[%s]%s", skill, summary, _subscription_log_suffix(skill))
+        _LOG.info(
+            "skill=%s subscriptions=[%s]%s",
+            skill,
+            summary,
+            _subscription_policy_log_suffix(activation_policy_by_skill.get(skill)),
+        )
 
     if not target_skills:
         _registered = True
@@ -894,7 +905,7 @@ def resolve_tool(module_name: str, public_name: str) -> Callable | None:
 def _infer_skill_name(fn: Callable) -> Optional[str]:
     """���஡����� ������ ��� ���몠 �� ��� � 䠩�� handlers/main.py."""
     try:
-        path = Path(inspect.getfile(fn)).resolve()
+        path = Path(inspect.getfile(fn))
     except Exception:
         return None
     parts = list(path.parts)
@@ -965,6 +976,13 @@ def _loaded_skill_log_paths(ctx: object, skill_name: str) -> dict[str, Path]:
     }
 
 
+def _subscription_policy_log_suffix(policy: Any) -> str:
+    if policy is None:
+        return ""
+    strategy = subscription_strategy_for_policy(policy)
+    return f" activation={policy.mode} subscription_strategy={strategy}"
+
+
 def _subscription_log_suffix(skill_name: str) -> str:
     token = str(skill_name or "").strip()
     if not token or token == "<unknown>":
@@ -974,7 +992,4 @@ def _subscription_log_suffix(skill_name: str) -> str:
         policy = load_skill_activation_policy(ctx.paths.workspace_dir(), token, fallback_to_scan=True)
     except Exception:
         return ""
-    if policy is None:
-        return ""
-    strategy = subscription_strategy_for_policy(policy)
-    return f" activation={policy.mode} subscription_strategy={strategy}"
+    return _subscription_policy_log_suffix(policy)

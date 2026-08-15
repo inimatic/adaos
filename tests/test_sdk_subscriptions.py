@@ -47,6 +47,24 @@ def test_loaded_skill_root_prefers_runtime_source_tree(monkeypatch) -> None:
     )
 
 
+def test_infer_skill_name_does_not_resolve_imported_handler_path(monkeypatch) -> None:
+    def handler(_evt):
+        return None
+
+    monkeypatch.setattr(
+        decorators.inspect,
+        "getfile",
+        lambda _fn: "D:/adaos/skills/weather_skill/handlers/main.py",
+    )
+    monkeypatch.setattr(
+        decorators.Path,
+        "resolve",
+        lambda _path: (_ for _ in ()).throw(AssertionError("resolve must not run")),
+    )
+
+    assert decorators._infer_skill_name(handler) == "weather_skill"
+
+
 def test_subscription_log_suffix_includes_activation_strategy(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "infrascope_skill"

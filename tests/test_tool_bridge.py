@@ -597,12 +597,15 @@ def test_webspace_runtime_resolution_uses_registered_kind(monkeypatch) -> None:
 
 def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> None:
     calls: list[str] = []
+    owner_thread_id = threading.get_ident()
+    preflight_thread_ids: list[int] = []
 
     class _FakeSkillManager:
         def __init__(self, **_kwargs) -> None:
             return None
 
         def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            preflight_thread_ids.append(threading.get_ident())
             raise RuntimeError("metadata is optional for this legacy test skill")
 
         def run_dev_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout=None):
@@ -615,11 +618,15 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
     async def _fake_run_sync(func, *args, **kwargs):
         return func(*args, **kwargs)
 
+    def _webspace_uses_dev_runtime(_payload) -> bool:
+        preflight_thread_ids.append(threading.get_ident())
+        return True
+
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
-    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda payload: True)
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", _webspace_uses_dev_runtime)
     monkeypatch.setattr(tool_bridge_module.anyio.to_thread, "run_sync", _fake_run_sync)
 
     result = asyncio.run(
@@ -636,6 +643,8 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
 
     assert result["ok"] is True
     assert calls == ["recipe_skill:list_recipes"]
+    assert len(preflight_thread_ids) == 2
+    assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
 
 
 def test_call_tool_uses_installed_runtime_for_dev_webspace_without_dev_skill(monkeypatch) -> None:
