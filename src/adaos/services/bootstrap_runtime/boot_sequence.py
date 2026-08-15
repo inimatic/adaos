@@ -84,6 +84,39 @@ class BootstrapBootCoordinator:
             pass
         conf = getattr(service.ctx, "config", None) or operations.load_config(ctx=service.ctx)
         candidate_runtime_mode = bool(service._nats_policy.runtime_candidate_mode())
+        diag_log = logging.getLogger("adaos.diagnostics")
+        startup_log = logging.getLogger("adaos.startup")
+        startup_stage_logs_enabled = str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        try:
+            startup_stage_slow_s = max(0.0, float(os.getenv("ADAOS_STARTUP_STAGE_SLOW_S") or "1"))
+        except (TypeError, ValueError):
+            startup_stage_slow_s = 1.0
+
+        def _startup_stage_mark(stage: str, *, started: float | None = None, failed: Exception | None = None) -> float:
+            now = time.perf_counter()
+            if started is None:
+                if startup_stage_logs_enabled:
+                    startup_log.info("startup stage start stage=%s", stage)
+                return now
+            duration = now - started
+            if failed is not None:
+                startup_log.warning(
+                    "startup stage failed stage=%s duration_s=%.3f error=%s",
+                    stage,
+                    duration,
+                    type(failed).__name__,
+                )
+            elif duration >= startup_stage_slow_s:
+                startup_log.warning("startup stage slow stage=%s duration_s=%.3f", stage, duration)
+            elif startup_stage_logs_enabled:
+                startup_log.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
+            return now
+
         async def _run_release_validation_autorun(trigger: str) -> None:
             try:
                 from adaos.services.release_validation_autorun import (
@@ -165,11 +198,15 @@ class BootstrapBootCoordinator:
         _report_control_lifecycle = service._status_watchdog.report_control_lifecycle
         _emit_node_status = service._status_watchdog.emit_node_status
 
+        _prepare_started = _startup_stage_mark("bootstrap_prepare_environment")
         service._prepare_environment()
+        _startup_stage_mark("bootstrap_prepare_environment", started=_prepare_started)
         # local adapter over LocalEventBus
+        _io_bus_started = _startup_stage_mark("bootstrap_connect_io_bus")
         core_bus = service.ctx.bus if isinstance(service.ctx.bus, operations.local_event_bus_type) else operations.local_event_bus_type()
         io_bus: Any = operations.local_io_bus_type(core=core_bus)
         await io_bus.connect()
+        _startup_stage_mark("bootstrap_connect_io_bus", started=_io_bus_started)
         print("[bootstrap] IO bus: LocalEventBus")
         service._io_bus = io_bus
         # Attach chat IO -> NLU bridge (e.g. Telegram text -> nlp.intent.detect.request)
@@ -182,19 +219,30 @@ class BootstrapBootCoordinator:
             setattr(app.state, "bus", io_bus)
         except Exception:
             pass
+        _boot_event_started = _startup_stage_mark("bootstrap_emit_sys_boot_start")
         await operations.bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
+        _startup_stage_mark("bootstrap_emit_sys_boot_start", started=_boot_event_started)
         if not candidate_runtime_mode:
+            _managed_nlu_started = _startup_stage_mark("bootstrap_ensure_managed_nlu_skills")
             await asyncio.to_thread(operations.ensure_managed_nlu_service_skills, service._log)
+            _startup_stage_mark("bootstrap_ensure_managed_nlu_skills", started=_managed_nlu_started)
+        _handler_import_started = _startup_stage_mark("bootstrap_import_skill_handlers")
         await service.skills_loader.import_all_handlers(service.ctx.paths.skills_dir())
+        _startup_stage_mark("bootstrap_import_skill_handlers", started=_handler_import_started)
         # Start service-type skills (external processes).
         if candidate_runtime_mode:
             service._log.info("skipping service skill startup for candidate runtime prewarm")
         else:
+            _service_skills_started = _startup_stage_mark("bootstrap_start_service_skills")
             try:
                 await operations.get_service_supervisor().start_all()
-            except Exception:
+                _startup_stage_mark("bootstrap_start_service_skills", started=_service_skills_started)
+            except Exception as exc:
+                _startup_stage_mark("bootstrap_start_service_skills", started=_service_skills_started, failed=exc)
                 service._log.warning("failed to start service skills", exc_info=True)
+        _subscriptions_started = _startup_stage_mark("bootstrap_register_subscriptions")
         await operations.register_subscriptions()
+        _startup_stage_mark("bootstrap_register_subscriptions", started=_subscriptions_started)
         if str(getattr(conf, "role", "") or "").strip().lower() == "hub":
             try:
                 from adaos.services.subnet.link_manager import get_hub_link_manager as _get_hub_link_manager
@@ -654,29 +702,6 @@ class BootstrapBootCoordinator:
                     t.start()
         except Exception:
             pass
-        diag_log = logging.getLogger("adaos.diagnostics")
-        startup_log = logging.getLogger("adaos.startup")
-        startup_stage_logs_enabled = str(os.getenv("ADAOS_STARTUP_STAGE_LOGS") or "").strip().lower() in {"1", "true", "yes", "on"}
-
-        def _startup_stage_mark(stage: str, *, started: float | None = None, failed: Exception | None = None) -> float:
-            now = time.perf_counter()
-            if started is None:
-                if startup_stage_logs_enabled:
-                    startup_log.info("startup stage start stage=%s", stage)
-                return now
-            duration = now - started
-            if failed is None:
-                if startup_stage_logs_enabled:
-                    startup_log.info("startup stage done stage=%s duration_s=%.3f", stage, duration)
-            else:
-                startup_log.warning(
-                    "startup stage failed stage=%s duration_s=%.3f error=%s",
-                    stage,
-                    duration,
-                    type(failed).__name__,
-                )
-            return now
-
         try:
             from adaos.services.agent_context import get_ctx as _get_ctx
             from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized as _reconcile_workspace_db_to_materialized
