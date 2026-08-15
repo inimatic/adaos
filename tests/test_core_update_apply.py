@@ -1161,6 +1161,7 @@ def test_bootstrap_critical_paths_include_runtime_projection_helpers() -> None:
     assert "src/adaos/services/subnet/link_client.py" in critical
     assert "src/adaos/services/subnet/link_manager.py" in critical
     assert "src/adaos/services/eventbus.py" in critical
+    assert "src/adaos/adapters/sdk/inproc_skill_context.py" in critical
     assert "src/adaos/ports/skill_context.py" in critical
     assert "src/adaos/sdk/core/_ctx.py" in critical
     assert "src/adaos/sdk/core/decorators.py" in critical

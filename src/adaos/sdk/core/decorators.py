@@ -4,11 +4,12 @@ import asyncio
 import inspect
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from adaos.sdk.data.bus import on, emit, _thread_safe_plain
-from adaos.sdk.data.context import set_current_skill, clear_current_skill
+from adaos.sdk.data.context import clear_current_skill
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkRuntimeNotInitialized
 from adaos.sdk.io.context import io_meta
@@ -908,43 +909,60 @@ def _infer_skill_name(fn: Callable) -> Optional[str]:
 
 
 def _maybe_push_skill(fn: Callable, skill_name: Optional[str]) -> bool:
-    """
-    ��⠭����� CurrentSkill �� �६� �맮�� ��ࠡ��稪�.
-
-    1) ��⠥��� �१ SkillContextService (set_current_skill).
-    2) �᫨ ���뮪 �� ������ � registry, ����塞 ���� � skill root
-       �� 䠩�� ������� � ��뢠�� ctx.skill_ctx.set(...) �������.
-    """
+    """Bind an already imported handler to its skill without hot-path I/O."""
     if not skill_name:
         return False
 
     try:
-        if set_current_skill(skill_name):
-            return True
-    except SdkRuntimeNotInitialized:
-        _LOG.debug("AgentContext not available when setting skill=%s", skill_name)
-    except Exception:
-        _LOG.warning("set_current_skill failed for %s", skill_name, exc_info=True)
-
-    try:
         ctx = require_ctx("sdk.data.skill_memory")
-        handler_path = Path(inspect.getfile(fn)).resolve()
-        parts = list(handler_path.parts)
-        skill_root: Path | None = None
-        for idx in range(len(parts) - 1, -1, -1):
-            part = parts[idx]
-            if part == "skills" and idx + 1 < len(parts):
-                skill_root = Path(*parts[: idx + 2])  # .../skills/<skill_name>
-                break
+        skill_root = _loaded_skill_root(fn, skill_name)
         if skill_root is None:
             return False
         skill_ctx = getattr(ctx, "skill_ctx", None)
         if not skill_ctx:
             return False
-        return bool(skill_ctx.set(skill_name, skill_root))
+        bind_loaded = getattr(skill_ctx, "set_loaded", None)
+        if not callable(bind_loaded):
+            return False
+        log_paths = _loaded_skill_log_paths(ctx, skill_name)
+        return bool(bind_loaded(skill_name, skill_root, **log_paths))
+    except SdkRuntimeNotInitialized:
+        _LOG.debug("AgentContext not available when setting skill=%s", skill_name)
     except Exception:
-        _LOG.debug("fallback skill_ctx.set failed for %s", skill_name, exc_info=True)
-        return False
+        _LOG.debug("loaded skill_ctx binding failed for %s", skill_name, exc_info=True)
+    return False
+
+
+def _loaded_skill_root(fn: Callable, skill_name: str) -> Path | None:
+    try:
+        handler_path = Path(inspect.getfile(fn))
+    except Exception:
+        return None
+    parts = list(handler_path.parts)
+    token = str(skill_name or "").strip().casefold()
+    for idx in range(len(parts) - 2, -1, -1):
+        if parts[idx].casefold() != "skills":
+            continue
+        candidate = parts[idx + 1]
+        if candidate.casefold() == token:
+            return Path(*parts[: idx + 2])
+    return None
+
+
+def _loaded_skill_log_paths(ctx: object, skill_name: str) -> dict[str, Path]:
+    paths = getattr(ctx, "paths", None)
+    base = getattr(paths, "base", None)
+    if base is None:
+        return {}
+    logs_dir = Path(base) / "logs"
+    raw_token = str(skill_name or "").strip()
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_token).strip(".") or "unknown"
+    return {
+        "logs_dir": logs_dir,
+        "service_log_path": logs_dir / f"service.{token}.log",
+        "runtime_log_path": logs_dir / f"service.{token}.runtime.log",
+        "ui_diagnostics_log_path": logs_dir / f"service.{token}.ui_runtime.log",
+    }
 
 
 def _subscription_log_suffix(skill_name: str) -> str:

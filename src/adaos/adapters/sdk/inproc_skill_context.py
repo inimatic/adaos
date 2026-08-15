@@ -37,6 +37,27 @@ class InprocSkillContext(SkillContextPort):
                 )
             except Exception:
                 pass
+        return self.set_loaded(
+            name,
+            path,
+            logs_dir=logs_dir,
+            service_log_path=service_log_path,
+            runtime_log_path=runtime_log_path,
+            ui_diagnostics_log_path=ui_diagnostics_log_path,
+        )
+
+    def set_loaded(
+        self,
+        name: str,
+        path: Path,
+        *,
+        logs_dir: Path | None = None,
+        service_log_path: Path | None = None,
+        runtime_log_path: Path | None = None,
+        ui_diagnostics_log_path: Path | None = None,
+    ) -> bool:
+        """Bind an imported skill without filesystem or repository discovery."""
+
         _current_skill.set(
             CurrentSkill(
                 name=name,

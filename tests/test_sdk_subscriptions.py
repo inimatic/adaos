@@ -7,8 +7,44 @@ from types import ModuleType, SimpleNamespace
 
 from adaos.sdk.data import bus as data_bus
 from adaos.sdk.core import decorators
+from adaos.adapters.sdk.inproc_skill_context import InprocSkillContext
 from adaos.services.status.hot_events import HotEventBudget
 from adaos.services.workspace_registry import write_workspace_registry
+
+
+def test_subscription_skill_context_binding_never_uses_repository_discovery(tmp_path: Path, monkeypatch) -> None:
+    skill_root = tmp_path / "skills" / "weather_skill"
+    handler_path = skill_root / "handlers" / "main.py"
+    skill_ctx = InprocSkillContext()
+    ctx = SimpleNamespace(paths=SimpleNamespace(base=tmp_path), skill_ctx=skill_ctx)
+
+    def handler(_evt):
+        return None
+
+    monkeypatch.setattr(decorators, "require_ctx", lambda _reason: ctx)
+    monkeypatch.setattr(decorators.inspect, "getfile", lambda _fn: str(handler_path))
+
+    assert decorators._maybe_push_skill(handler, "weather_skill") is True
+    current = skill_ctx.get()
+    assert current is not None
+    assert current.name == "weather_skill"
+    assert current.path == skill_root
+    assert current.runtime_log_path == tmp_path / "logs" / "service.weather_skill.runtime.log"
+
+
+def test_loaded_skill_root_prefers_runtime_source_tree(monkeypatch) -> None:
+    def handler(_evt):
+        return None
+
+    monkeypatch.setattr(
+        decorators.inspect,
+        "getfile",
+        lambda _fn: "D:/adaos/skills/.runtime/weather_skill/v1/slots/A/src/skills/weather_skill/handlers/main.py",
+    )
+
+    assert decorators._loaded_skill_root(handler, "weather_skill") == Path(
+        "D:/adaos/skills/.runtime/weather_skill/v1/slots/A/src/skills/weather_skill"
+    )
 
 
 def test_subscription_log_suffix_includes_activation_strategy(tmp_path: Path, monkeypatch) -> None:

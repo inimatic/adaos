@@ -27,5 +27,15 @@ class SkillContextPort(Protocol):
         runtime_log_path: Path | None = None,
         ui_diagnostics_log_path: Path | None = None,
     ) -> bool: ...
+    def set_loaded(
+        self,
+        name: str,
+        path: Path,
+        *,
+        logs_dir: Path | None = None,
+        service_log_path: Path | None = None,
+        runtime_log_path: Path | None = None,
+        ui_diagnostics_log_path: Path | None = None,
+    ) -> bool: ...
     def clear(self) -> None: ...
     def get(self) -> Optional[CurrentSkill]: ...

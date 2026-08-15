@@ -123,6 +123,7 @@ RUNTIME_SKILL_CONTROL_PATHS: tuple[str, ...] = (
     # Installed skill runtimes import SDK/service surfaces from the root
     # environment. If these paths drift from the active slot, skill tools can
     # pass core validation and still fail later with ImportError.
+    "src/adaos/adapters/sdk/inproc_skill_context.py",
     "src/adaos/ports/skill_context.py",
     "src/adaos/sdk/core/_ctx.py",
     "src/adaos/sdk/core/decorators.py",

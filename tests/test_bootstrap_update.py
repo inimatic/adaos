@@ -68,6 +68,7 @@ def test_managed_rasa_service_skill_bootstrap_helpers_are_promoted() -> None:
 
 
 def test_skill_facing_sdk_surfaces_are_bootstrap_promoted() -> None:
+    assert "src/adaos/adapters/sdk/inproc_skill_context.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/ports/skill_context.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/sdk/core/_ctx.py" in BOOTSTRAP_CRITICAL_PATHS
     assert "src/adaos/sdk/core/decorators.py" in BOOTSTRAP_CRITICAL_PATHS
