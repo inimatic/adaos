@@ -54,6 +54,17 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "upstream_host": None,
         "upstream_port": None,
         "upstream_url": None,
+        "active_sessions": 0,
+        "accepted_total": 0,
+        "upstream_connect_total": 0,
+        "upstream_disconnect_total": 0,
+        "session_resume_total": 0,
+        "handshake_failure_total": 0,
+        "downstream_protocol_failure_total": 0,
+        "downstream_reconnect_required_total": 0,
+        "uncertain_send_total": 0,
+        "pending_total": 0,
+        "max_pending_total": 0,
     },
     "yws": {
         "listener_ready": False,
@@ -63,6 +74,17 @@ _ROUTE_TUNNEL_RUNTIME_STATE: dict[str, dict[str, Any]] = {
         "upstream_host": None,
         "upstream_port": None,
         "upstream_url": None,
+        "active_sessions": 0,
+        "accepted_total": 0,
+        "upstream_connect_total": 0,
+        "upstream_disconnect_total": 0,
+        "session_resume_total": 0,
+        "handshake_failure_total": 0,
+        "downstream_protocol_failure_total": 0,
+        "downstream_reconnect_required_total": 0,
+        "uncertain_send_total": 0,
+        "pending_total": 0,
+        "max_pending_total": 0,
     },
 }
 _ROUTE_TUNNEL_DIAG_CACHE: dict[str, Any] = {
@@ -632,6 +654,17 @@ def _reset_route_tunnel_runtime_state() -> None:
                 "upstream_host": upstream_host,
                 "upstream_port": upstream_port,
                 "upstream_url": _route_tunnel_upstream_url(host=upstream_host, port=upstream_port, path=path),
+                "active_sessions": 0,
+                "accepted_total": 0,
+                "upstream_connect_total": 0,
+                "upstream_disconnect_total": 0,
+                "session_resume_total": 0,
+                "handshake_failure_total": 0,
+                "downstream_protocol_failure_total": 0,
+                "downstream_reconnect_required_total": 0,
+                "uncertain_send_total": 0,
+                "pending_total": 0,
+                "max_pending_total": 0,
             }
         )
 
@@ -642,6 +675,16 @@ def _set_route_tunnel_runtime_state(kind: str, **values: Any) -> None:
         return
     entry = _ROUTE_TUNNEL_RUNTIME_STATE.setdefault(key, {})
     entry.update(values)
+
+
+def _increment_route_tunnel_runtime_counter(kind: str, field: str, delta: int = 1) -> int:
+    key = str(kind or "").strip().lower()
+    if key not in _ROUTE_TUNNEL_RUNTIME_STATE:
+        return 0
+    entry = _ROUTE_TUNNEL_RUNTIME_STATE.setdefault(key, {})
+    value = max(0, int(entry.get(field) or 0) + int(delta))
+    entry[field] = value
+    return value
 
 
 def _route_tunnel_runtime_state(kind: str) -> dict[str, Any]:
@@ -707,6 +750,23 @@ def realtime_sidecar_route_tunnel_listeners(*, role: str | None = None) -> dict[
             "upstream_path": path,
             "upstream_configured": int(upstream_port) > 0,
             "lifecycle_manager": lifecycle_manager,
+            "sessions": {
+                "active": int(runtime_state.get("active_sessions") or 0),
+                "accepted_total": int(runtime_state.get("accepted_total") or 0),
+                "upstream_connect_total": int(runtime_state.get("upstream_connect_total") or 0),
+                "upstream_disconnect_total": int(runtime_state.get("upstream_disconnect_total") or 0),
+                "session_resume_total": int(runtime_state.get("session_resume_total") or 0),
+                "handshake_failure_total": int(runtime_state.get("handshake_failure_total") or 0),
+                "downstream_protocol_failure_total": int(
+                    runtime_state.get("downstream_protocol_failure_total") or 0
+                ),
+                "downstream_reconnect_required_total": int(
+                    runtime_state.get("downstream_reconnect_required_total") or 0
+                ),
+                "uncertain_send_total": int(runtime_state.get("uncertain_send_total") or 0),
+                "pending_total": int(runtime_state.get("pending_total") or 0),
+                "max_pending_total": int(runtime_state.get("max_pending_total") or 0),
+            },
         }
     return listeners
 
@@ -788,6 +848,12 @@ def realtime_sidecar_route_tunnel_contract(*, role: str | None = None) -> dict[s
                 "port": listener.get("upstream_port"),
                 "url": listener.get("upstream_url"),
             },
+            "reconnect_policy": {
+                "session_aware_paths": ["/ws/subnet"] if kind == "ws" else [],
+                "session_resume": "hello_handshake" if kind == "ws" else "unsupported",
+                "protocol_opaque": "downstream_reconnect_required",
+            },
+            "sessions": dict(listener.get("sessions") or {}),
             "blockers": blockers,
         }
 
@@ -3209,11 +3275,14 @@ class RealtimeSidecarServer:
         except Exception:
             return 0.25
 
-    def _route_tunnel_replay_limit(self) -> int:
+    def _route_tunnel_handshake_timeout_s(self) -> float:
         try:
-            return max(0, int(str(os.getenv("ADAOS_REALTIME_ROUTE_REPLAY_LIMIT", "32") or "32").strip()))
+            return max(
+                0.25,
+                float(os.getenv("ADAOS_REALTIME_ROUTE_HANDSHAKE_TIMEOUT_S", "3.0") or "3.0"),
+            )
         except Exception:
-            return 32
+            return 3.0
 
     def _route_tunnel_queue_limit(self) -> int:
         try:
@@ -3225,6 +3294,30 @@ class RealtimeSidecarServer:
         target_host = _route_tunnel_upstream_host()
         target_port = _route_tunnel_upstream_port()
         return f"ws://{target_host}:{target_port}{requested_path}"
+
+    @staticmethod
+    def _route_tunnel_json_message(message: Any) -> dict[str, Any] | None:
+        try:
+            if isinstance(message, bytes):
+                message = message.decode("utf-8")
+            payload = json.loads(message) if isinstance(message, str) else None
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @classmethod
+    def _route_tunnel_is_subnet_hello(cls, message: Any) -> bool:
+        payload = cls._route_tunnel_json_message(message)
+        return bool(payload and str(payload.get("t") or "").strip().lower() == "hello")
+
+    @classmethod
+    def _route_tunnel_subnet_ack(cls, message: Any) -> tuple[bool, str]:
+        payload = cls._route_tunnel_json_message(message)
+        if not payload or str(payload.get("t") or "").strip().lower() != "hello.ack":
+            return False, "hello_ack_required"
+        if payload.get("ok") is not True:
+            return False, str(payload.get("error") or "hello_rejected")
+        return True, "ready"
 
     async def _handle_route_tunnel_websocket(
         self,
@@ -3260,62 +3353,148 @@ class RealtimeSidecarServer:
                 await websocket.close(code=1008, reason="unexpected_path")
             return
         reconnect_delay_s = self._route_tunnel_reconnect_delay_s()
-        replay_limit = self._route_tunnel_replay_limit()
+        handshake_timeout_s = self._route_tunnel_handshake_timeout_s()
+        session_aware_reconnect = kind == "ws" and requested_path_only == "/ws/subnet"
         outgoing: asyncio.Queue[Any] = asyncio.Queue(maxsize=self._route_tunnel_queue_limit())
-        replay: deque[Any] = deque(maxlen=replay_limit)
         client_done = asyncio.Event()
+        bootstrap_ready = asyncio.Event()
+        bootstrap_message: Any = None
+        successful_handshakes = 0
+        session_pending = 0
+        relay_tasks: set[asyncio.Task[Any]] = set()
+        active_upstream: Any = None
+
+        def _adjust_queue_depth(delta: int) -> None:
+            nonlocal session_pending
+            session_pending = max(0, session_pending + int(delta))
+            pending_total = _increment_route_tunnel_runtime_counter(kind, "pending_total", delta)
+            runtime_state = _route_tunnel_runtime_state(kind)
+            _set_route_tunnel_runtime_state(
+                kind,
+                max_pending_total=max(
+                    int(runtime_state.get("max_pending_total") or 0),
+                    pending_total,
+                ),
+            )
 
         async def _client_reader() -> None:
+            nonlocal bootstrap_message
             try:
                 async for message in websocket:
-                    if replay_limit > 0:
-                        replay.append(message)
+                    if session_aware_reconnect and self._route_tunnel_is_subnet_hello(message):
+                        if bootstrap_message is not None:
+                            _increment_route_tunnel_runtime_counter(kind, "downstream_protocol_failure_total")
+                            with contextlib.suppress(Exception):
+                                await websocket.close(code=1002, reason="duplicate_hello")
+                            return
+                        bootstrap_message = message
+                        bootstrap_ready.set()
+                        continue
+                    if session_aware_reconnect and bootstrap_message is None:
+                        _increment_route_tunnel_runtime_counter(kind, "downstream_protocol_failure_total")
+                        with contextlib.suppress(Exception):
+                            await websocket.close(code=1002, reason="hello_required")
+                        return
                     await outgoing.put(message)
+                    _adjust_queue_depth(1)
             finally:
                 client_done.set()
 
-        async def _send_to_upstream(upstream_ws: Any, replay_messages: list[Any]) -> None:
-            for message in replay_messages:
-                await upstream_ws.send(message)
+        async def _send_to_upstream(upstream_ws: Any) -> None:
             while not client_done.is_set():
                 try:
                     message = await asyncio.wait_for(outgoing.get(), timeout=0.25)
                 except asyncio.TimeoutError:
                     continue
-                await upstream_ws.send(message)
+                _adjust_queue_depth(-1)
+                try:
+                    await upstream_ws.send(message)
+                except Exception:
+                    _increment_route_tunnel_runtime_counter(kind, "uncertain_send_total")
+                    raise
 
         async def _recv_from_upstream(upstream_ws: Any) -> None:
             async for message in upstream_ws:
                 await websocket.send(message)
 
+        async def _wait_for_bootstrap() -> Any:
+            while bootstrap_message is None and not client_done.is_set():
+                try:
+                    await asyncio.wait_for(bootstrap_ready.wait(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+            if bootstrap_message is None:
+                raise RuntimeError("downstream_closed_before_hello")
+            return bootstrap_message
+
         client_task = asyncio.create_task(_client_reader(), name=f"adaos-realtime-{kind}-proxy-client")
+        _increment_route_tunnel_runtime_counter(kind, "accepted_total")
+        _increment_route_tunnel_runtime_counter(kind, "active_sessions")
         try:
             while not client_done.is_set() and not self._stopped.is_set():
                 target = self._route_tunnel_target_url(requested_path=requested_path)
                 try:
                     upstream_ws = await self._connect_route_tunnel_upstream(target=target)
+                    active_upstream = upstream_ws
                 except Exception as exc:
                     self._log(
                         f"{kind} proxy upstream connect failed target={target} err={type(exc).__name__}: {exc}"
                     )
+                    if not session_aware_reconnect:
+                        _increment_route_tunnel_runtime_counter(kind, "downstream_reconnect_required_total")
+                        client_task.cancel()
+                        with contextlib.suppress(Exception):
+                            await websocket.close(code=1012, reason="upstream_connect_failed")
+                        break
                     try:
                         await asyncio.wait_for(client_done.wait(), timeout=reconnect_delay_s)
                     except asyncio.TimeoutError:
                         continue
                     break
 
-                replay_messages = list(replay)
+                _increment_route_tunnel_runtime_counter(kind, "upstream_connect_total")
+                if session_aware_reconnect:
+                    try:
+                        await upstream_ws.send(await _wait_for_bootstrap())
+                        acknowledgement = await asyncio.wait_for(
+                            upstream_ws.recv(),
+                            timeout=handshake_timeout_s,
+                        )
+                        ack_ok, ack_reason = self._route_tunnel_subnet_ack(acknowledgement)
+                        if not ack_ok:
+                            raise RuntimeError(ack_reason)
+                        if successful_handshakes == 0:
+                            await websocket.send(acknowledgement)
+                        else:
+                            _increment_route_tunnel_runtime_counter(kind, "session_resume_total")
+                        successful_handshakes += 1
+                    except Exception as exc:
+                        _increment_route_tunnel_runtime_counter(kind, "handshake_failure_total")
+                        self._log(
+                            f"{kind} proxy upstream handshake failed target={target} "
+                            f"err={type(exc).__name__}: {exc}"
+                        )
+                        with contextlib.suppress(Exception):
+                            await upstream_ws.close()
+                        active_upstream = None
+                        with contextlib.suppress(Exception):
+                            await websocket.close(code=1012, reason="upstream_handshake_failed")
+                        break
+
                 self._log(
-                    f"{kind} proxy upstream connected target={target} replay={len(replay_messages)}"
+                    f"{kind} proxy upstream connected target={target} "
+                    f"resume={'handshake' if successful_handshakes > 1 else 'initial'} "
+                    f"pending={outgoing.qsize()}"
                 )
                 send_task = asyncio.create_task(
-                    _send_to_upstream(upstream_ws, replay_messages),
+                    _send_to_upstream(upstream_ws),
                     name=f"adaos-realtime-{kind}-proxy-upstream",
                 )
                 recv_task = asyncio.create_task(
                     _recv_from_upstream(upstream_ws),
                     name=f"adaos-realtime-{kind}-proxy-downstream",
                 )
+                relay_tasks.update((send_task, recv_task))
                 done, pending = await asyncio.wait(
                     [send_task, recv_task],
                     return_when=asyncio.FIRST_COMPLETED,
@@ -3327,21 +3506,46 @@ class RealtimeSidecarServer:
                         await task
                 with contextlib.suppress(Exception):
                     await upstream_ws.close()
+                active_upstream = None
                 if client_done.is_set():
                     break
+                _increment_route_tunnel_runtime_counter(kind, "upstream_disconnect_total")
+                errors: list[Exception] = []
                 for task in done:
                     try:
                         await task
                     except Exception as exc:
-                        self._log(
-                            f"{kind} proxy upstream disconnected target={target} err={type(exc).__name__}: {exc}"
-                        )
-                        break
+                        errors.append(exc)
+                relay_tasks.difference_update((send_task, recv_task))
+                if errors:
+                    exc = errors[0]
+                    self._log(
+                        f"{kind} proxy upstream disconnected target={target} "
+                        f"err={type(exc).__name__}: {exc}"
+                    )
+                else:
+                    self._log(f"{kind} proxy upstream disconnected target={target}")
+                if not session_aware_reconnect:
+                    _increment_route_tunnel_runtime_counter(kind, "downstream_reconnect_required_total")
+                    client_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await websocket.close(code=1012, reason="upstream_reconnect_required")
+                    break
                 try:
                     await asyncio.wait_for(client_done.wait(), timeout=reconnect_delay_s)
                 except asyncio.TimeoutError:
                     continue
         finally:
+            _increment_route_tunnel_runtime_counter(kind, "active_sessions", -1)
+            if session_pending:
+                _increment_route_tunnel_runtime_counter(kind, "pending_total", -session_pending)
+            if active_upstream is not None:
+                with contextlib.suppress(Exception):
+                    await active_upstream.close()
+            for task in relay_tasks:
+                task.cancel()
+            if relay_tasks:
+                await asyncio.gather(*relay_tasks, return_exceptions=True)
             client_task.cancel()
             with contextlib.suppress(BaseException):
                 await client_task

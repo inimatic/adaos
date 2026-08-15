@@ -73,6 +73,7 @@ from adaos.services.reliability import (
     supervisor_channel_runtime_snapshot,
     yjs_sync_runtime_snapshot,
 )
+from adaos.services.reliability_runtime_beacon import run_reliability_runtime_beacon
 from adaos.services.operations import submit_install_operation
 from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.scenario.webspace_runtime import (
@@ -4254,7 +4255,7 @@ async def node_reliability_runtime(
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
     started_at = time.time()
-    return await asyncio.to_thread(
+    return await run_reliability_runtime_beacon(
         _thin_runtime_reliability_response,
         webspace_id=webspace_id,
         mode="runtime",
@@ -4291,7 +4292,7 @@ async def node_reliability_summary(
     started_at = time.time()
     requested_mode = str(mode or "compat").strip().lower()
     if requested_mode in {"runtime", "beacon"}:
-        return await asyncio.to_thread(
+        return await run_reliability_runtime_beacon(
             _thin_runtime_reliability_response,
             webspace_id=webspace_id,
             mode="runtime",

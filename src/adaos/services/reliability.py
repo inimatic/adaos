@@ -1722,6 +1722,7 @@ def set_integration_readiness(
 
 def runtime_signal_snapshot() -> dict[str, Any]:
     from adaos.services.logging import logging_queue_snapshot
+    from adaos.services.reliability_runtime_beacon import reliability_runtime_beacon_snapshot
     from adaos.services.subnet_heartbeat_runtime import heartbeat_persistence_snapshot
 
     try:
@@ -1745,6 +1746,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "event_loop": runtime_event_loop_lag_snapshot(),
             "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
             "logging_queue": logging_queue_snapshot(),
+            "reliability_runtime_beacon": reliability_runtime_beacon_snapshot(),
             "subnet_heartbeat_persistence": heartbeat_persistence_snapshot(),
             "root_control_report": control_report,
         }

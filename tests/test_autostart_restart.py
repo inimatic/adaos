@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 from pathlib import Path
 
 
@@ -66,8 +67,11 @@ def test_linux_restart_service_times_out_with_status_details(monkeypatch, tmp_pa
     monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: None)
 
     ticks = iter([0.0, 0.2, 45.2])
-    monkeypatch.setattr(autostart.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(autostart.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        autostart,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _: None),
+    )
 
     try:
         autostart.restart_service(_FakeCtx(tmp_path))
@@ -126,8 +130,11 @@ def test_linux_restart_service_waits_for_slow_systemd_restart(monkeypatch, tmp_p
     monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: ("127.0.0.1", 8778))
 
     ticks = iter([0.0, 30.0, 60.0, 60.1])
-    monkeypatch.setattr(autostart.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(autostart.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        autostart,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _: None),
+    )
 
     payload = autostart.restart_service(_FakeCtx(tmp_path))
 

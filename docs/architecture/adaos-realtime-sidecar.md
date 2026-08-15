@@ -215,6 +215,17 @@ Success criteria:
   runtime recreate `CONNECT` and every `SUB` on a new session. The sidecar must
   not reconnect its remote WebSocket transparently behind an already-open
   local socket because it cannot reconstruct NATS protocol state.
+- [x] `[must]` Do not replay an arbitrary tail of route WebSocket frames after
+  the local runtime changes. Already-sent control and Yjs frames do not share a
+  transport-level idempotency contract, and replay before session bootstrap can
+  create an unbounded `hello_required` reconnect loop. `/ws/subnet` may retain
+  its downstream socket only by storing the explicit `hello`, completing a new
+  `hello/hello.ack` exchange, and then forwarding only frames that were still
+  queued. Protocol-opaque `/ws` and `/yws` tunnels close downstream with 1012
+  after upstream loss so the owning client performs its normal reconnect and
+  state reconciliation. Session resume, handshake failure, forced downstream
+  reconnect, uncertain send, and queue-pressure counters are part of the
+  sidecar route-tunnel contract.
 - [x] `[must]` Never inject sidecar-originated NATS `PING` bytes into the
   transparent relay. A relay read boundary is not a NATS frame boundary, so a
   timer can insert `PING\r\n` inside a fragmented `PUB` payload and invalidate

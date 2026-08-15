@@ -481,7 +481,11 @@ def test_restart_service_uses_unit_name_on_linux(monkeypatch, tmp_path: Path) ->
     pid_values = iter([111, 222])
     monkeypatch.setattr(autostart, "_linux_service_main_pid", lambda scope: next(pid_values))
     monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: ("127.0.0.1", 8778))
-    monkeypatch.setattr(autostart.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        autostart,
+        "time",
+        SimpleNamespace(monotonic=autostart.time.monotonic, sleep=lambda _: None),
+    )
 
     payload = autostart.restart_service(_FakeCtx(tmp_path))
 

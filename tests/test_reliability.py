@@ -3615,6 +3615,50 @@ def test_node_reliability_runtime_builder_does_not_block_event_loop(monkeypatch)
     assert asyncio.run(_run()) is True
 
 
+def test_node_reliability_runtime_bypasses_saturated_default_executor(monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from adaos.apps.api import node_api
+    from adaos.services.reliability_runtime_beacon import reliability_runtime_beacon_snapshot
+
+    default_started = threading.Event()
+    default_release = threading.Event()
+
+    def _block_default_executor() -> None:
+        default_started.set()
+        default_release.wait(timeout=2.0)
+
+    monkeypatch.setattr(
+        node_api,
+        "_thin_runtime_reliability_payload",
+        lambda *_args, **_kwargs: {"ok": True, "schema": "test.runtime.v1"},
+    )
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        default_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-default-blocked")
+        loop.set_default_executor(default_executor)
+        blocker = loop.run_in_executor(None, _block_default_executor)
+        while not default_started.is_set():
+            await asyncio.sleep(0.005)
+        try:
+            response = await asyncio.wait_for(
+                node_api.node_reliability_runtime(webspace_id="desktop"),
+                timeout=0.5,
+            )
+            assert response.status_code == 200
+            assert response.headers["x-adaos-runtime-executor"] == "dedicated"
+            assert float(response.headers["x-adaos-runtime-queue-ms"]) < 250.0
+            snapshot = reliability_runtime_beacon_snapshot()
+            assert snapshot["executor"] == "dedicated_bounded"
+            assert snapshot["failed_total"] == 0
+        finally:
+            default_release.set()
+            await blocker
+
+    asyncio.run(_run())
+
+
 def test_node_reliability_summary_details_adds_on_demand_diagnostics(monkeypatch) -> None:
     from adaos.apps.api import node_api
     from adaos.apps.api.node_api import require_token, router

@@ -156,7 +156,7 @@ def test_runtime_memory_profile_session_writes_artifacts(monkeypatch, tmp_path: 
     monkeypatch.setattr(autostart_runner.tracemalloc, "is_tracing", lambda: True)
     monkeypatch.setattr(autostart_runner.tracemalloc, "take_snapshot", lambda: next(snapshots))
     monkeypatch.setattr(autostart_runner.tracemalloc, "stop", lambda: None)
-    monkeypatch.setattr(autostart_runner.time, "time", lambda: 100.0)
+    monkeypatch.setattr(runtime_memory_profile, "time", types.SimpleNamespace(time=lambda: 100.0))
 
     session = autostart_runner._RuntimeMemoryProfileSession()
     session.start()
@@ -205,7 +205,7 @@ def test_runtime_trace_profile_session_writes_trace_artifacts(monkeypatch, tmp_p
     monkeypatch.setattr(autostart_runner.tracemalloc, "is_tracing", lambda: True)
     monkeypatch.setattr(autostart_runner.tracemalloc, "take_snapshot", lambda: next(snapshots))
     monkeypatch.setattr(autostart_runner.tracemalloc, "stop", lambda: None)
-    monkeypatch.setattr(autostart_runner.time, "time", lambda: 100.0)
+    monkeypatch.setattr(runtime_memory_profile, "time", types.SimpleNamespace(time=lambda: 100.0))
 
     session = autostart_runner._RuntimeMemoryProfileSession()
     session.start()
@@ -1412,8 +1412,11 @@ def test_probe_update_runtime_fails_when_runtime_guard_fails(monkeypatch) -> Non
 
     time_values = iter([0.0, 0.0, 0.0, 1.0])
     monkeypatch.setattr(autostart_runner.requests, "get", _fake_get)
-    monkeypatch.setattr(autostart_runner.time, "time", lambda: next(time_values))
-    monkeypatch.setattr(autostart_runner.time, "sleep", lambda _: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "time",
+        types.SimpleNamespace(time=lambda: next(time_values), sleep=lambda _: None),
+    )
     monkeypatch.delenv("ADAOS_CORE_UPDATE_VALIDATE_STRICT", raising=False)
     monkeypatch.delenv("ADAOS_CORE_UPDATE_VALIDATE_RUNTIME", raising=False)
 
@@ -1494,8 +1497,11 @@ def test_probe_update_runtime_succeeds_after_initial_ping_failures(monkeypatch) 
 
     clock = _FakeClock()
     monkeypatch.setattr(autostart_runner.requests, "get", _fake_get)
-    monkeypatch.setattr(autostart_runner.time, "time", clock.time)
-    monkeypatch.setattr(autostart_runner.time, "sleep", clock.sleep)
+    monkeypatch.setattr(
+        autostart_runner,
+        "time",
+        types.SimpleNamespace(time=clock.time, sleep=clock.sleep),
+    )
     monkeypatch.delenv("ADAOS_CORE_UPDATE_VALIDATE_STRICT", raising=False)
     monkeypatch.delenv("ADAOS_CORE_UPDATE_VALIDATE_RUNTIME", raising=False)
 
