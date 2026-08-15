@@ -151,9 +151,11 @@ async def _best_effort_rebuild_webspace(
 def _scenario_projection_evidence(payload: dict[str, Any] | None, scenario_id: str) -> dict[str, Any]:
     token = str(scenario_id or "").strip()
     app_id = f"scenario:{token}"
-    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
-    catalog = data.get("catalog") if isinstance(data.get("catalog"), dict) else {}
-    installed = data.get("installed") if isinstance(data.get("installed"), dict) else {}
+    root: dict[str, Any] = payload if isinstance(payload, dict) else {}
+    if isinstance(root.get("data"), dict):
+        root = root["data"]
+    catalog = root.get("catalog") if isinstance(root.get("catalog"), dict) else {}
+    installed = root.get("installed") if isinstance(root.get("installed"), dict) else {}
     apps = catalog.get("apps") if isinstance(catalog.get("apps"), list) else []
     installed_apps = installed.get("apps") if isinstance(installed.get("apps"), list) else []
     catalog_present = any(
@@ -172,6 +174,7 @@ def _scenario_projection_evidence(payload: dict[str, Any] | None, scenario_id: s
         "installed_present": installed_present,
         "catalog_count": len(apps),
         "installed_count": len(installed_apps),
+        "payload_schema": str((payload or {}).get("schema") or ""),
     }
 
 

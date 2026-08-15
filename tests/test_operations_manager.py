@@ -677,10 +677,9 @@ def test_finalize_subprocess_scenario_install_requires_visible_desktop_projectio
         operations_manager,
         "get_webspace_rebuild_materialized_payload",
         lambda _webspace_id: {
-            "data": {
-                "catalog": {"apps": [{"id": "scenario:media_center", "scenario_id": "media_center"}]},
-                "installed": {"apps": ["scenario:media_center"]},
-            }
+            "schema": "adaos.webspace.materialized_payload.v1",
+            "catalog": {"apps": [{"id": "scenario:media_center", "scenario_id": "media_center"}]},
+            "installed": {"apps": ["scenario:media_center"]},
         },
     )
 
@@ -702,6 +701,7 @@ def test_finalize_subprocess_scenario_install_requires_visible_desktop_projectio
     ]
     assert result["projection"]["catalog_present"] is True
     assert result["projection"]["installed_present"] is True
+    assert result["projection"]["payload_schema"] == "adaos.webspace.materialized_payload.v1"
 
 
 def test_finalize_subprocess_scenario_install_rejects_missing_projection(monkeypatch) -> None:
@@ -721,7 +721,7 @@ def test_finalize_subprocess_scenario_install_rejects_missing_projection(monkeyp
     monkeypatch.setattr(
         operations_manager,
         "get_webspace_rebuild_materialized_payload",
-        lambda _webspace_id: {"data": {"catalog": {"apps": []}, "installed": {"apps": []}}},
+        lambda _webspace_id: {"catalog": {"apps": []}, "installed": {"apps": []}},
     )
 
     with pytest.raises(RuntimeError, match="post-install desktop projection is incomplete"):
