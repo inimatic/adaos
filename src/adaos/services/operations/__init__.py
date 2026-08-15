@@ -5,6 +5,7 @@ from .manager import (
     get_operation_manager,
     retry_operation,
     submit_install_operation,
+    submit_marketplace_install_action,
     submit_update_operation,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "get_operation_manager",
     "retry_operation",
     "submit_install_operation",
+    "submit_marketplace_install_action",
     "submit_update_operation",
 ]

@@ -9728,6 +9728,35 @@ async def process_events_command(
         await _ack()
         return None
 
+    if kind == "infrastate.action" and str(payload.get("id") or "").strip() == "marketplace_install":
+        try:
+            from adaos.services.operations import submit_marketplace_install_action
+
+            operation = await asyncio.to_thread(
+                submit_marketplace_install_action,
+                payload,
+                webspace_id=webspace_id,
+                initiator_kind="events_ws",
+                ctx=get_agent_ctx(),
+            )
+        except ValueError as exc:
+            error = str(exc) or "marketplace_install_invalid"
+            _log.warning("marketplace install command rejected error=%s", error)
+            await _ack(False, error=error)
+            return None
+        except Exception as exc:
+            _log.warning("marketplace install command failed", exc_info=True)
+            await _ack(False, error=f"marketplace_install_failed:{type(exc).__name__}")
+            return None
+        await _ack(
+            data={
+                "action": "marketplace_install",
+                "operation_id": operation.get("operation_id"),
+                "operation": operation,
+            }
+        )
+        return None
+
     # Default behaviour for declarative host actions: publish unknown command
     # kinds to the local bus so skills can subscribe to their own UI events.
     if isinstance(kind, str) and kind.strip():

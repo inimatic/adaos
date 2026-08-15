@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from adaos.services.operations.manager import OperationManager
 import adaos.services.operations.manager as operations_manager
 
@@ -178,6 +180,7 @@ def test_operation_manager_persists_terminal_history_across_restart(monkeypatch,
         target_id="durable_skill",
         webspace_id="desktop",
     )
+
     manager.update_operation(
         operation.operation_id,
         status="succeeded",
@@ -193,6 +196,51 @@ def test_operation_manager_persists_terminal_history_across_restart(monkeypatch,
     assert snapshot["by_id"][operation.operation_id]["result"] == {"version": "1.2.3"}
     assert snapshot["notifications"][-1]["operation_id"] == operation.operation_id
     assert snapshot["persistence"]["healthy"] is True
+
+
+def test_marketplace_install_action_parses_table_event_and_rejects_remote_target(monkeypatch) -> None:
+    submitted: list[dict[str, object]] = []
+    ctx = _make_ctx()
+    ctx.config = SimpleNamespace(node_id="hub-local")
+
+    def _submit(**kwargs):
+        submitted.append(kwargs)
+        return {"operation_id": "op-1", "target_id": kwargs["target_id"]}
+
+    monkeypatch.setattr(operations_manager, "submit_install_operation", _submit)
+
+    result = operations_manager.submit_marketplace_install_action(
+        {
+            "value": {
+                "item": {
+                    "kind": "scenario",
+                    "id": "adaos_drive",
+                    "target_node_id": "hub-local",
+                    "webspace_id": "desktop",
+                }
+            }
+        },
+        initiator_kind="events_ws",
+        ctx=ctx,
+    )
+
+    assert result["operation_id"] == "op-1"
+    assert submitted[0]["target_kind"] == "scenario"
+    assert submitted[0]["target_id"] == "adaos_drive"
+    assert submitted[0]["webspace_id"] == "desktop"
+    assert submitted[0]["initiator"]["target_node_id"] == "hub-local"
+
+    with pytest.raises(ValueError, match="marketplace_install_remote_target_unsupported"):
+        operations_manager.submit_marketplace_install_action(
+            {
+                "value": {
+                    "kind": "skill",
+                    "id": "adaos_drive",
+                    "target_node_id": "member-remote",
+                }
+            },
+            ctx=ctx,
+        )
 
 
 def test_operation_manager_marks_interrupted_work_recoverable_after_restart(monkeypatch, tmp_path: Path) -> None:

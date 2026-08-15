@@ -929,16 +929,16 @@ def test_node_infrastate_action_marketplace_install_returns_fast_operation_ack(m
         lambda: SimpleNamespace(skills_repo=None, sql=None, git=None, paths=None, bus=_FakeBus(), caps=None, settings=None),
     )
 
-    def _submit_install_operation(**kwargs):
-        submitted.append(dict(kwargs))
+    def _submit_marketplace_install_action(payload, **kwargs):
+        submitted.append({"payload": payload, **kwargs})
         return {
             "operation_id": "op-scenario-install",
-            "target_kind": kwargs["target_kind"],
-            "target_id": kwargs["target_id"],
+            "target_kind": "scenario",
+            "target_id": "prompt_engineer_scenario",
             "status": "accepted",
         }
 
-    monkeypatch.setattr(node_api_module, "submit_install_operation", _submit_install_operation)
+    monkeypatch.setattr(node_api_module, "submit_marketplace_install_action", _submit_marketplace_install_action)
 
     result = asyncio.run(
         node_api_module.node_infrastate_action(
@@ -956,14 +956,10 @@ def test_node_infrastate_action_marketplace_install_returns_fast_operation_ack(m
     assert published == []
     assert wait_calls == []
     assert len(submitted) == 1
-    assert submitted[0]["target_kind"] == "scenario"
-    assert submitted[0]["target_id"] == "prompt_engineer_scenario"
+    assert submitted[0]["payload"]["value"]["kind"] == "scenario"
+    assert submitted[0]["payload"]["value"]["id"] == "prompt_engineer_scenario"
     assert submitted[0]["webspace_id"] == "desktop"
-    assert submitted[0]["initiator"] == {
-        "kind": "api.node",
-        "id": "marketplace_install",
-        "target_node_id": None,
-    }
+    assert submitted[0]["initiator_kind"] == "api.node"
     assert submitted[0]["ctx"] is not None
     assert result["ok"] is True
     assert result["accepted"] is True

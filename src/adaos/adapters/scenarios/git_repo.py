@@ -12,8 +12,11 @@ import yaml
 
 from adaos.adapters.git.workspace import SparseWorkspace, wait_for_materialized
 from adaos.services.workspace_registry import (
+    format_registry_payload_not_found,
     format_workspace_registry_not_found,
+    load_workspace_registry_git_ref,
     registry_pattern_set,
+    resolve_registry_payload_install_name,
     resolve_workspace_registry_install_name,
 )
 from adaos.services.git.availability import get_git_availability
@@ -162,6 +165,23 @@ class GitScenarioRepository(ScenarioRepository):
         workspace_root = self.paths.workspace_dir()
         av = get_git_availability(base_dir=self.paths.base_dir())
         if av.enabled and av.git_path and (workspace_root / ".git").exists():
+            try:
+                remote_registry = load_workspace_registry_git_ref(
+                    self.git,
+                    workspace_root,
+                    branch=self.monorepo_branch or "main",
+                )
+            except Exception:
+                remote_registry = None
+                _log.warning("failed to read remote scenario registry; falling back to workspace", exc_info=True)
+            if remote_registry is not None:
+                resolved, entry = resolve_registry_payload_install_name(
+                    remote_registry,
+                    kind="scenarios",
+                    name_or_id=name,
+                )
+                if entry is not None:
+                    return resolved
             sparse = SparseWorkspace(self.git, workspace_root)
             sparse.update(add=registry_pattern_set([]))
             try:
@@ -175,6 +195,10 @@ class GitScenarioRepository(ScenarioRepository):
                 fallback_to_scan=False,
             )
             if entry is None:
+                if remote_registry is not None:
+                    raise FileNotFoundError(
+                        format_registry_payload_not_found(remote_registry, kind="scenarios", name_or_id=name)
+                    )
                 raise FileNotFoundError(
                     format_workspace_registry_not_found(
                         workspace_root,
@@ -270,13 +294,25 @@ class GitScenarioRepository(ScenarioRepository):
         # в workspace: git pull может упасть, если в других подпапках есть незакоммиченные правки.
         # В таком случае полагаемся на уже имеющееся состояние репозитория; если сценарий не
         # материализуется, ниже будет явная FileNotFoundError.
+        pull_error: Exception | None = None
         if used_sparse:
             try:
                 self.git.pull(str(workspace_root))
-            except Exception:
-                pass
+            except Exception as exc:
+                pull_error = exc
+                _log.warning("scenario workspace pull failed target=%s; checking targeted archive fallback", target)
 
         scenario_dir: Path = self.paths.scenarios_dir() / name
+        if pull_error is not None and not scenario_dir.exists():
+            if not self.monorepo_url:
+                raise RuntimeError(f"scenario workspace pull failed and archive source is unavailable: {pull_error}") from pull_error
+            materialize_subpath_from_github_zip(
+                repo_url=self.monorepo_url,
+                branch=(branch or self.monorepo_branch or "main"),
+                dest_root=workspace_root,
+                subpath=target,
+                clean=True,
+            )
         try:
             wait_for_materialized(scenario_dir, files=_MANIFEST_NAMES)
         except FileNotFoundError as exc:  # pragma: no cover - defensive logging

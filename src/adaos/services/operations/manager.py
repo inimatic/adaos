@@ -848,6 +848,45 @@ def _find_present_scenario_meta(mgr: ScenarioManager, target_id: str) -> Any | N
     return None
 
 
+def submit_marketplace_install_action(
+    payload: dict[str, Any],
+    *,
+    webspace_id: str | None = None,
+    initiator_kind: str = "ui",
+    ctx: AgentContext | None = None,
+) -> dict[str, Any]:
+    runtime = ctx or get_ctx()
+    body = payload if isinstance(payload, dict) else {}
+    value = body.get("value") if isinstance(body.get("value"), dict) else {}
+    if isinstance(value.get("item"), dict):
+        value = value["item"]
+    target_kind = str(value.get("kind") or value.get("target_kind") or "").strip().lower()
+    target_id = str(value.get("id") or value.get("target_id") or "").strip()
+    target_node_id = str(
+        value.get("target_node_id")
+        or value.get("node_id")
+        or body.get("target_node_id")
+        or body.get("node_id")
+        or ""
+    ).strip()
+    if target_kind not in {"skill", "scenario"} or not target_id:
+        raise ValueError("marketplace_install_requires_target")
+    local_node_id = str(getattr(getattr(runtime, "config", None), "node_id", "") or "").strip()
+    if target_node_id and target_node_id != local_node_id:
+        raise ValueError("marketplace_install_remote_target_unsupported")
+    return submit_install_operation(
+        target_kind=target_kind,
+        target_id=target_id,
+        webspace_id=webspace_id or value.get("webspace_id") or body.get("webspace_id"),
+        initiator={
+            "kind": str(initiator_kind or "ui"),
+            "id": "marketplace_install",
+            "target_node_id": target_node_id or None,
+        },
+        ctx=runtime,
+    )
+
+
 def submit_install_operation(
     *,
     target_kind: str,

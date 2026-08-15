@@ -351,6 +351,51 @@ def find_workspace_registry_entry(
     return None
 
 
+def find_registry_payload_entry(
+    payload: dict[str, Any],
+    *,
+    kind: RegistryKind,
+    name_or_id: str,
+) -> dict[str, Any] | None:
+    needle = str(name_or_id or "").strip().lower()
+    if not needle:
+        return None
+    normalized = _normalize_registry_payload(payload)
+    for item in normalized.get(kind) or []:
+        if not isinstance(item, dict):
+            continue
+        names = {
+            str(item.get("name") or "").strip().lower(),
+            str(item.get("id") or "").strip().lower(),
+        }
+        if needle in names:
+            return dict(item)
+    return None
+
+
+def load_workspace_registry_git_ref(
+    git: Any,
+    workspace_root: Path,
+    *,
+    remote: str = "origin",
+    branch: str = "main",
+) -> dict[str, Any]:
+    root = Path(workspace_root)
+    remote_name = str(remote or "origin").strip() or "origin"
+    branch_name = str(branch or "main").strip() or "main"
+    try:
+        git.fetch(str(root), remote=remote_name, branch=branch_name)
+    except Exception:
+        # A cached remote ref is still preferable to a generated registry
+        # modified in the local workspace.
+        pass
+    raw = git.show(str(root), f"{remote_name}/{branch_name}:registry.json")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise WorkspaceRegistryError("remote workspace registry must be an object")
+    return _normalize_registry_payload(payload)
+
+
 def workspace_registry_install_name(entry: dict[str, Any], *, kind: RegistryKind) -> str:
     install = entry.get("install")
     install_name = _clean_text(install.get("name")) if isinstance(install, dict) else ""
@@ -380,6 +425,39 @@ def resolve_workspace_registry_install_name(
         return str(name_or_id or "").strip(), None
     install_name = workspace_registry_install_name(entry, kind=kind)
     return install_name or str(name_or_id or "").strip(), entry
+
+
+def resolve_registry_payload_install_name(
+    payload: dict[str, Any],
+    *,
+    kind: RegistryKind,
+    name_or_id: str,
+) -> tuple[str, dict[str, Any] | None]:
+    entry = find_registry_payload_entry(payload, kind=kind, name_or_id=name_or_id)
+    if entry is None:
+        return str(name_or_id or "").strip(), None
+    install_name = workspace_registry_install_name(entry, kind=kind)
+    return install_name or str(name_or_id or "").strip(), entry
+
+
+def format_registry_payload_not_found(
+    payload: dict[str, Any],
+    *,
+    kind: RegistryKind,
+    name_or_id: str,
+    limit: int = 8,
+) -> str:
+    noun = "skill" if kind == "skills" else "scenario"
+    requested = str(name_or_id or "").strip()
+    normalized = _normalize_registry_payload(payload)
+    entries = [item for item in normalized.get(kind) or [] if isinstance(item, dict)]
+    candidates = [workspace_registry_install_name(item, kind=kind) for item in entries[:limit]]
+    candidates = [item for item in dict.fromkeys(candidates) if item]
+    suffix = f" Available {kind} include: {', '.join(candidates)}." if candidates else ""
+    return (
+        f"{noun} '{requested}' is not listed in remote registry.json. "
+        f"Install by the registry 'name' field, not by an arbitrary label.{suffix}"
+    )
 
 
 def format_workspace_registry_not_found(
@@ -837,11 +915,16 @@ __all__ = [
     "REGISTRY_FORMAT_VERSION",
     "WorkspaceRegistryError",
     "build_registry_entry",
+    "find_registry_payload_entry",
     "find_workspace_registry_entry",
+    "format_registry_payload_not_found",
     "list_workspace_registry_entries",
+    "load_workspace_registry_git_ref",
     "load_workspace_registry",
     "rebuild_workspace_registry",
     "registry_pattern_set",
+    "resolve_registry_payload_install_name",
+    "resolve_workspace_registry_install_name",
     "set_workspace_registry_channel",
     "upsert_workspace_registry_entry",
     "workspace_registry_is_git_tracked",

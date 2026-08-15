@@ -74,7 +74,7 @@ from adaos.services.reliability import (
     yjs_sync_runtime_snapshot,
 )
 from adaos.services.reliability_runtime_beacon import run_reliability_runtime_beacon
-from adaos.services.operations import submit_install_operation
+from adaos.services.operations import submit_marketplace_install_action
 from adaos.services.runtime_topology import supervisor_base_from_env
 from adaos.services.scenario.webspace_runtime import (
     WebspaceService,
@@ -5115,35 +5115,24 @@ async def node_infrastate_action(payload: InfrastateActionRequest) -> dict[str, 
     ctx = get_ctx()
     action_id = str(payload.id or "").strip()
     if action_id == "marketplace_install":
-        value = payload.value if isinstance(payload.value, dict) else {}
-        target_kind = str(value.get("kind") or value.get("target_kind") or "").strip().lower()
-        target_id = str(value.get("id") or value.get("target_id") or "").strip()
-        target_node_id = str(
-            value.get("target_node_id")
-            or value.get("node_id")
-            or payload.target_node_id
-            or payload.node_id
-            or ""
-        ).strip()
-        if target_kind not in {"skill", "scenario"} or not target_id:
+        action_payload = payload.model_dump(exclude_none=True)
+        try:
+            operation = submit_marketplace_install_action(
+                action_payload,
+                webspace_id=target_webspace_id,
+                initiator_kind="api.node",
+                ctx=ctx,
+            )
+        except ValueError as exc:
             return {
                 "ok": False,
                 "accepted": False,
                 "webspace_id": target_webspace_id,
                 "action": action_id,
-                "error": "marketplace_install_requires_target",
+                "error": str(exc) or "marketplace_install_invalid",
             }
-        operation = submit_install_operation(
-            target_kind=target_kind,
-            target_id=target_id,
-            webspace_id=target_webspace_id,
-            initiator={
-                "kind": "api.node",
-                "id": "marketplace_install",
-                "target_node_id": target_node_id or None,
-            },
-            ctx=ctx,
-        )
+        value = payload.value if isinstance(payload.value, dict) else {}
+        target_node_id = str(value.get("target_node_id") or value.get("node_id") or payload.target_node_id or payload.node_id or "").strip()
         return {
             "ok": True,
             "accepted": True,

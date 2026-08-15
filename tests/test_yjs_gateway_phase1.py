@@ -3269,6 +3269,50 @@ def test_process_events_command_publishes_generic_skill_event(monkeypatch) -> No
     assert responses[-1]["data"] == {"event_type": "custom.location.requested"}
 
 
+def test_process_events_command_submits_marketplace_operation_before_ack(monkeypatch) -> None:
+    published: list[object] = []
+    responses: list[dict[str, object]] = []
+    submitted: list[dict[str, object]] = []
+
+    class _Bus:
+        def publish(self, event: object) -> None:
+            published.append(event)
+
+    ctx = SimpleNamespace(bus=_Bus(), config=SimpleNamespace(node_id="hub-local"))
+    monkeypatch.setattr(gateway_module, "get_agent_ctx", lambda: ctx)
+
+    from adaos.services import operations as operations_module
+
+    def _submit(payload, **kwargs):
+        submitted.append({"payload": payload, **kwargs})
+        return {"operation_id": "op-1", "status": "accepted", "target_id": "adaos_drive"}
+
+    monkeypatch.setattr(operations_module, "submit_marketplace_install_action", _submit)
+
+    async def _send_response(msg: dict[str, object]) -> None:
+        responses.append(msg)
+
+    asyncio.run(
+        gateway_module.process_events_command(
+            kind="infrastate.action",
+            cmd_id="cmd-install-1",
+            payload={
+                "id": "marketplace_install",
+                "value": {"kind": "scenario", "id": "adaos_drive", "target_node_id": "hub-local"},
+            },
+            device_id="dev-1",
+            webspace_id="desktop",
+            send_response=_send_response,
+        )
+    )
+
+    assert published == []
+    assert submitted[0]["payload"]["value"]["id"] == "adaos_drive"
+    assert submitted[0]["webspace_id"] == "desktop"
+    assert responses[-1]["ok"] is True
+    assert responses[-1]["data"]["operation_id"] == "op-1"
+
+
 def test_process_events_command_routes_subscribed_skill_update_through_coordinator(monkeypatch) -> None:
     from adaos.services import agent_context as agent_context_module
     from adaos.services import artifact_subscription_update as update_service_module

@@ -21,16 +21,64 @@ from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services import workspace_sync as workspace_sync_module
 from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
 from adaos.services.workspace_registry import (
+    load_workspace_registry_git_ref,
     list_workspace_registry_entries,
     load_workspace_registry,
     rebuild_workspace_registry,
     registry_pattern_set,
+    resolve_registry_payload_install_name,
     set_workspace_registry_channel,
     upsert_workspace_registry_entry,
     WorkspaceRegistryError,
     write_workspace_registry,
     workspace_registry_path,
 )
+
+
+def _capture_registry_errors(monkeypatch) -> list[str]:
+    messages: list[str] = []
+
+    def _capture(message: str, *args, **_kwargs) -> None:
+        messages.append(message % args if args else message)
+
+    monkeypatch.setattr(workspace_registry_module._LOG, "error", _capture)
+    return messages
+
+
+def test_remote_registry_resolution_uses_cached_tracking_ref_when_fetch_fails(tmp_path: Path):
+    payload = {
+        "version": 2,
+        "updated_at": "2026-08-15T00:00:00+00:00",
+        "skills": [],
+        "scenarios": [
+            {
+                "kind": "scenario",
+                "id": "adaos_drive",
+                "name": "adaos_drive",
+                "version": "0.1.0",
+                "install": {"kind": "scenario", "name": "adaos_drive", "id": "adaos_drive"},
+            }
+        ],
+    }
+
+    class _Git:
+        def fetch(self, *_args, **_kwargs):
+            raise RuntimeError("network unavailable")
+
+        def show(self, _root, spec):
+            assert spec == "origin/main:registry.json"
+            return json.dumps(payload)
+
+    observed = load_workspace_registry_git_ref(_Git(), tmp_path, remote="origin", branch="main")
+    resolved, entry = resolve_registry_payload_install_name(
+        observed,
+        kind="scenarios",
+        name_or_id="adaos_drive",
+    )
+
+    assert resolved == "adaos_drive"
+    assert entry is not None
+    assert entry["version"] == "0.1.0"
 
 
 def test_rebuild_workspace_registry_reads_skill_and_scenario_manifests(tmp_path: Path):
@@ -154,9 +202,8 @@ def test_rebuild_workspace_registry_accepts_scenario_json_as_derived_runtime_pro
     assert "unsupported declaration files" not in caplog.text
 
 
-def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_path: Path, caplog, monkeypatch):
-    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
-    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_path: Path, monkeypatch):
+    errors = _capture_registry_errors(monkeypatch)
     workspace = tmp_path / "workspace"
     scenario_dir = workspace / "scenarios" / "legacy_scene"
     scenario_dir.mkdir(parents=True)
@@ -168,8 +215,8 @@ def test_rebuild_workspace_registry_rejects_scenario_without_scenario_yaml(tmp_p
     payload = rebuild_workspace_registry(workspace)
 
     assert payload["scenarios"] == []
-    assert "required declaration is missing" in caplog.text
-    assert "unsupported_present=scenario.json" in caplog.text
+    assert any("required declaration is missing" in message for message in errors)
+    assert any("unsupported_present=scenario.json" in message for message in errors)
 
 
 def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path, caplog, monkeypatch):
@@ -190,9 +237,8 @@ def test_rebuild_workspace_registry_skips_sparse_placeholder_dirs(tmp_path: Path
     assert "required declaration is missing" not in caplog.text
 
 
-def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, caplog, monkeypatch):
-    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
-    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_path: Path, monkeypatch):
+    errors = _capture_registry_errors(monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True)
     workspace_registry_path(workspace).write_text(
@@ -227,8 +273,8 @@ def test_load_workspace_registry_rejects_entries_with_unsupported_manifest(tmp_p
 
     assert [item["name"] for item in payload["skills"]] == ["weather_skill"]
     assert payload["scenarios"] == []
-    assert "workspace registry entry rejected" in caplog.text
-    assert "required=scenario.yaml" in caplog.text
+    assert any("workspace registry entry rejected" in message for message in errors)
+    assert any("required=scenario.yaml" in message for message in errors)
 
 
 def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Path):
@@ -277,9 +323,8 @@ def test_upsert_workspace_registry_entry_preserves_existing_entries(tmp_path: Pa
     assert items[1]["version"] == "2.0.0"
 
 
-def test_upsert_workspace_registry_entry_rejects_missing_required_declaration(tmp_path: Path, caplog, monkeypatch):
-    monkeypatch.setattr(logging.getLogger("adaos"), "propagate", True)
-    caplog.set_level(logging.ERROR, logger="adaos.workspace_registry")
+def test_upsert_workspace_registry_entry_rejects_missing_required_declaration(tmp_path: Path, monkeypatch):
+    errors = _capture_registry_errors(monkeypatch)
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "browsers_skill"
     skill_dir.mkdir(parents=True)
@@ -320,7 +365,7 @@ def test_upsert_workspace_registry_entry_rejects_missing_required_declaration(tm
     with pytest.raises(FileNotFoundError):
         upsert_workspace_registry_entry(workspace, "skills", skill_dir)
 
-    assert "required declaration is missing" in caplog.text
+    assert any("required declaration is missing" in message for message in errors)
 
 
 def test_registry_entry_includes_tags_and_publisher(tmp_path: Path):
