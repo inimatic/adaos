@@ -110,11 +110,11 @@ _MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
     "public_bases": [],
     "last_error": None,
 }
-_REALTIME_LISTENER_PORT_CACHE: dict[str, Any] = {
+_REALTIME_CONTROL_READY_CACHE: dict[str, Any] = {
     "host": None,
     "port": None,
     "checked_at": 0.0,
-    "open": False,
+    "ready": False,
 }
 
 _LIFECYCLE_RUNTIME_FIELDS = (
@@ -1274,31 +1274,62 @@ def _find_realtime_listener_pid(host: str, port: int) -> int | None:
     return None
 
 
-def _is_port_open_sync(host: str, port: int, *, timeout_s: float = 0.15) -> bool:
+def _is_realtime_sidecar_control_ready_sync(
+    host: str,
+    control_port: int,
+    *,
+    timeout_s: float = 0.15,
+) -> bool:
+    normalized_host = str(host or "127.0.0.1").strip() or "127.0.0.1"
+    url_host = (
+        f"[{normalized_host}]"
+        if ":" in normalized_host and not normalized_host.startswith("[")
+        else normalized_host
+    )
+    request = UrlRequest(
+        f"http://{url_host}:{int(control_port)}/ready",
+        headers={"Accept": "application/json", "Connection": "close"},
+    )
     try:
-        with socket.create_connection((str(host or "127.0.0.1"), int(port)), timeout=max(0.05, float(timeout_s))):
-            return True
+        with urlopen(request, timeout=max(0.05, float(timeout_s))) as response:
+            if int(getattr(response, "status", 0) or 0) != 200:
+                return False
+            payload = json.loads(response.read(2049).decode("utf-8", errors="strict"))
     except Exception:
         return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("schema") == "adaos.realtime_sidecar.control.v1"
+        and payload.get("ready") is True
+    )
 
 
-def _cached_realtime_listener_port_open(host: str, port: int, *, ttl_s: float = 1.0) -> bool:
+def _cached_realtime_sidecar_control_ready(
+    host: str,
+    control_port: int,
+    *,
+    ttl_s: float = 1.0,
+) -> bool:
     now = time.monotonic()
-    cached_host = str(_REALTIME_LISTENER_PORT_CACHE.get("host") or "")
-    cached_port = int(_REALTIME_LISTENER_PORT_CACHE.get("port") or 0)
-    checked_at = float(_REALTIME_LISTENER_PORT_CACHE.get("checked_at") or 0.0)
-    if cached_host == str(host or "") and cached_port == int(port) and now - checked_at <= max(0.0, float(ttl_s)):
-        return bool(_REALTIME_LISTENER_PORT_CACHE.get("open"))
-    opened = _is_port_open_sync(host, port)
-    _REALTIME_LISTENER_PORT_CACHE.update(
+    cached_host = str(_REALTIME_CONTROL_READY_CACHE.get("host") or "")
+    cached_port = int(_REALTIME_CONTROL_READY_CACHE.get("port") or 0)
+    checked_at = float(_REALTIME_CONTROL_READY_CACHE.get("checked_at") or 0.0)
+    if (
+        cached_host == str(host or "")
+        and cached_port == int(control_port)
+        and now - checked_at <= max(0.0, float(ttl_s))
+    ):
+        return bool(_REALTIME_CONTROL_READY_CACHE.get("ready"))
+    ready = _is_realtime_sidecar_control_ready_sync(host, control_port)
+    _REALTIME_CONTROL_READY_CACHE.update(
         {
             "host": str(host or ""),
-            "port": int(port),
+            "port": int(control_port),
             "checked_at": now,
-            "open": opened,
+            "ready": ready,
         }
     )
-    return opened
+    return ready
 
 
 def _terminate_process_tree(pid: int) -> bool:
@@ -1837,6 +1868,7 @@ def _realtime_sidecar_listener_snapshot(
 ) -> dict[str, Any]:
     host = realtime_sidecar_host()
     port = realtime_sidecar_port()
+    control_port = realtime_sidecar_control_port()
     enablement_policy = realtime_sidecar_enablement_policy(role=role)
     pid_scan_skipped = _skip_realtime_listener_pid_scan()
     listener_pid = None if pid_scan_skipped else _find_realtime_listener_pid(host, port)
@@ -1857,8 +1889,19 @@ def _realtime_sidecar_listener_snapshot(
         managed_alive = False
         managed_exit_code = None
     listener_running = bool(isinstance(listener_pid, int) and listener_pid > 0)
-    if not listener_running and (pid_scan_skipped or enablement_policy.get("enabled") is True or proc is not None):
-        listener_running = _cached_realtime_listener_port_open(host, port)
+    listener_liveness_basis = "listener_pid" if listener_running else None
+    if not listener_running and managed_alive and pid_scan_skipped:
+        # The async supervisor health check verifies the control endpoint. A
+        # managed live process is sufficient for this synchronous snapshot and
+        # avoids blocking its event loop while the child is still binding.
+        listener_running = True
+        listener_liveness_basis = "managed_process"
+    elif not listener_running and (
+        pid_scan_skipped or enablement_policy.get("enabled") is True or proc is not None
+    ):
+        listener_running = _cached_realtime_sidecar_control_ready(host, control_port)
+        if listener_running:
+            listener_liveness_basis = "control_ready"
     listener_matches_managed = bool(
         listener_running
         and isinstance(listener_pid, int)
@@ -1871,6 +1914,7 @@ def _realtime_sidecar_listener_snapshot(
     payload = {
         "host": host,
         "port": int(port),
+        "control_port": int(control_port),
         "local_url": realtime_sidecar_local_url(),
         "log_path": str(realtime_sidecar_log_path()),
         "diag_path": str(realtime_sidecar_diag_path()),
@@ -1879,6 +1923,7 @@ def _realtime_sidecar_listener_snapshot(
         "managed_exit_code": managed_exit_code,
         "listener_pid": int(listener_pid) if isinstance(listener_pid, int) and listener_pid > 0 else None,
         "listener_running": listener_running,
+        "listener_liveness_basis": listener_liveness_basis,
         "listener_matches_managed": listener_matches_managed,
         "adopted_listener": adopted_listener,
         "enablement_policy": enablement_policy,
@@ -1920,8 +1965,10 @@ def realtime_sidecar_listener_snapshot(
         except Exception:
             pass
         try:
-            listener_running = _cached_realtime_listener_port_open(host, port)
+            control_port = realtime_sidecar_control_port()
+            listener_running = _cached_realtime_sidecar_control_ready(host, control_port)
         except Exception:
+            control_port = None
             listener_running = False
         try:
             enablement_policy = realtime_sidecar_enablement_policy(role=role)
@@ -1936,6 +1983,7 @@ def realtime_sidecar_listener_snapshot(
         return {
             "host": host,
             "port": port,
+            "control_port": control_port,
             "local_url": f"nats://{host}:{port}",
             "log_path": None,
             "diag_path": None,
@@ -1944,6 +1992,7 @@ def realtime_sidecar_listener_snapshot(
             "managed_exit_code": managed_exit_code,
             "listener_pid": None,
             "listener_running": bool(listener_running),
+            "listener_liveness_basis": "control_ready" if listener_running else None,
             "listener_matches_managed": False,
             "adopted_listener": bool(listener_running),
             "enablement_policy": enablement_policy,

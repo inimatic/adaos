@@ -685,13 +685,20 @@ def test_realtime_sidecar_listener_snapshot_skips_pid_scan_when_y_py_loaded(
         "_find_realtime_listener_pid",
         lambda _host, _port: (_ for _ in ()).throw(AssertionError("pid scan must be skipped")),
     )
-    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+    control_probes: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_cached_realtime_sidecar_control_ready",
+        lambda host, port: control_probes.append((host, port)) or True,
+    )
 
     snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(role="hub")
 
     assert snapshot["listener_running"] is True
     assert snapshot["listener_pid"] is None
+    assert snapshot["listener_liveness_basis"] == "control_ready"
     assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
+    assert control_probes == [("127.0.0.1", realtime_sidecar_mod.realtime_sidecar_control_port())]
 
 
 def test_realtime_sidecar_listener_snapshot_handles_managed_process_when_pid_scan_is_skipped(
@@ -705,13 +712,18 @@ def test_realtime_sidecar_listener_snapshot_handles_managed_process_when_pid_sca
             return None
 
     monkeypatch.setattr(realtime_sidecar_mod, "_skip_realtime_listener_pid_scan", lambda: True)
-    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_cached_realtime_sidecar_control_ready",
+        lambda _host, _port: (_ for _ in ()).throw(AssertionError("managed snapshot must not open a socket")),
+    )
 
     snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(_ManagedProcess(), role="hub")
 
     assert snapshot["managed_pid"] == 321
     assert snapshot["managed_alive"] is True
     assert snapshot["listener_running"] is True
+    assert snapshot["listener_liveness_basis"] == "managed_process"
     assert snapshot["listener_pid"] is None
     assert snapshot["listener_matches_managed"] is False
     assert snapshot["adopted_listener"] is True
@@ -726,7 +738,7 @@ def test_realtime_sidecar_listener_snapshot_reports_internal_diagnostic_failure(
         "_realtime_sidecar_listener_snapshot",
         lambda _proc=None, **_kwargs: (_ for _ in ()).throw(RuntimeError("snapshot exploded")),
     )
-    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_listener_port_open", lambda _host, _port: True)
+    monkeypatch.setattr(realtime_sidecar_mod, "_cached_realtime_sidecar_control_ready", lambda _host, _port: True)
 
     snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(role="hub")
 
