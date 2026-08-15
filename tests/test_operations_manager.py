@@ -597,6 +597,7 @@ def test_submit_scenario_update_operation_blocks_failed_dependencies_in_prod(mon
 def test_submit_install_operation_uses_isolated_subprocess_when_enabled(monkeypatch) -> None:
     docs: dict[str, _FakeYDoc] = {}
     spawned: list[dict[str, object]] = []
+    finalized: list[dict[str, str]] = []
 
     @contextmanager
     def _get_ydoc(webspace_id: str):
@@ -619,12 +620,17 @@ def test_submit_install_operation_uses_isolated_subprocess_when_enabled(monkeypa
         spawned.append({"argv": list(argv), "env": dict(kwargs.get("env") or {})})
         return _FakeProc()
 
+    async def _finalize(**kwargs):
+        finalized.append(dict(kwargs))
+        return {"materialization_ready": True}
+
     monkeypatch.setenv("ADAOS_TESTING", "0")
     monkeypatch.setenv("ADAOS_OPERATIONS_INSTALL_SUBPROCESS", "1")
     monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
     monkeypatch.setattr(operations_manager, "async_get_ydoc", _async_get_ydoc)
     monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
     monkeypatch.setattr(operations_manager.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(operations_manager, "_finalize_subprocess_install", _finalize)
     monkeypatch.setattr(operations_manager, "_MANAGERS", {})
 
     ctx = _make_ctx()
@@ -641,6 +647,91 @@ def test_submit_install_operation_uses_isolated_subprocess_when_enabled(monkeypa
     assert spawned[0]["argv"][:4] == [sys.executable, "-m", "adaos", "scenario"]
     assert spawned[0]["argv"][4:] == ["install", "demo_scene"]
     assert spawned[0]["env"]["ADAOS_DISABLE_PREFERRED_PYTHON_REEXEC"] == "1"
+    assert finalized == [{"target_kind": "scenario", "target_id": "demo_scene", "webspace_id": "default"}]
+    assert result["result"]["finalization"]["materialization_ready"] is True
+
+
+def test_finalize_subprocess_scenario_install_requires_visible_desktop_projection(monkeypatch) -> None:
+    invalidated: list[tuple[str, str]] = []
+    rebuilds: list[dict[str, object]] = []
+
+    monkeypatch.setattr(operations_manager, "invalidate_local_capacity_cache", lambda: None)
+    monkeypatch.setattr(
+        operations_manager.scenarios_loader,
+        "invalidate_cache",
+        lambda *, scenario_id, space: invalidated.append((scenario_id, space)),
+    )
+    monkeypatch.setattr(
+        operations_manager.scenarios_loader,
+        "read_manifest",
+        lambda scenario_id, space="workspace": {"id": scenario_id, "type": "desktop"},
+    )
+    monkeypatch.setattr(operations_manager, "invalidate_webspace_materialization_cache", lambda *args, **kwargs: {})
+
+    async def _rebuild(webspace_id: str, **kwargs):
+        rebuilds.append({"webspace_id": webspace_id, **kwargs})
+        return {"status": "ready", "materialization": {"ready": True}}
+
+    monkeypatch.setattr(operations_manager, "rebuild_webspace_from_sources", _rebuild)
+    monkeypatch.setattr(
+        operations_manager,
+        "get_webspace_rebuild_materialized_payload",
+        lambda _webspace_id: {
+            "data": {
+                "catalog": {"apps": [{"id": "scenario:media_center", "scenario_id": "media_center"}]},
+                "installed": {"apps": ["scenario:media_center"]},
+            }
+        },
+    )
+
+    result = asyncio.run(
+        operations_manager._finalize_subprocess_install(
+            target_kind="scenario",
+            target_id="media_center",
+            webspace_id="desktop",
+        )
+    )
+
+    assert invalidated == [("media_center", "workspace"), ("media_center", "dev")]
+    assert rebuilds == [
+        {
+            "webspace_id": "desktop",
+            "action": "scenario_install_sync",
+            "source_of_truth": "scenario_projection",
+        }
+    ]
+    assert result["projection"]["catalog_present"] is True
+    assert result["projection"]["installed_present"] is True
+
+
+def test_finalize_subprocess_scenario_install_rejects_missing_projection(monkeypatch) -> None:
+    monkeypatch.setattr(operations_manager, "invalidate_local_capacity_cache", lambda: None)
+    monkeypatch.setattr(operations_manager.scenarios_loader, "invalidate_cache", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        operations_manager.scenarios_loader,
+        "read_manifest",
+        lambda scenario_id, space="workspace": {"id": scenario_id, "type": "desktop"},
+    )
+    monkeypatch.setattr(operations_manager, "invalidate_webspace_materialization_cache", lambda *args, **kwargs: {})
+
+    async def _rebuild(_webspace_id: str, **_kwargs):
+        return {"status": "ready", "materialization": {"ready": True}}
+
+    monkeypatch.setattr(operations_manager, "rebuild_webspace_from_sources", _rebuild)
+    monkeypatch.setattr(
+        operations_manager,
+        "get_webspace_rebuild_materialized_payload",
+        lambda _webspace_id: {"data": {"catalog": {"apps": []}, "installed": {"apps": []}}},
+    )
+
+    with pytest.raises(RuntimeError, match="post-install desktop projection is incomplete"):
+        asyncio.run(
+            operations_manager._finalize_subprocess_install(
+                target_kind="scenario",
+                target_id="media_center",
+                webspace_id="desktop",
+            )
+        )
 
 
 def test_operation_manager_cancels_only_governed_subprocess_work(monkeypatch) -> None:
@@ -740,12 +831,16 @@ def test_retry_operation_is_idempotent_per_source_attempt(monkeypatch) -> None:
         spawned.append(list(argv))
         return _FakeProc()
 
+    async def _finalize(**_kwargs):
+        return {"materialization_ready": True}
+
     monkeypatch.setenv("ADAOS_TESTING", "0")
     monkeypatch.setenv("ADAOS_OPERATIONS_INSTALL_SUBPROCESS", "1")
     monkeypatch.setattr(operations_manager, "get_ydoc", _get_ydoc)
     monkeypatch.setattr(operations_manager, "async_get_ydoc", _async_get_ydoc)
     monkeypatch.setattr(operations_manager, "WebToastService", _FakeToastService)
     monkeypatch.setattr(operations_manager.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(operations_manager, "_finalize_subprocess_install", _finalize)
     monkeypatch.setattr(operations_manager, "_MANAGERS", {})
 
     ctx = _make_ctx()

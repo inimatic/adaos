@@ -113,6 +113,20 @@ def test_webspace_cache_owner_invalidates_materialized_entries_by_identity() -> 
     assert caches.get_materialized_webspace("three") is None
 
 
+def test_webspace_cache_owner_clears_desktop_scenario_discovery() -> None:
+    caches = WebspaceCacheState()
+    cache_key = "workspace:C:/workspace/scenarios"
+    caches.put_desktop_scenarios(
+        cache_key,
+        1.0,
+        (("C:/workspace/scenarios/alpha", 1, 0),),
+        [("alpha", "Alpha")],
+    )
+
+    assert caches.clear_desktop_scenarios() == 1
+    assert caches.get_desktop_scenarios(cache_key) is None
+
+
 def test_materialization_executor_owner_reuses_and_replaces_executor() -> None:
     owner = MaterializationExecutorOwner()
 

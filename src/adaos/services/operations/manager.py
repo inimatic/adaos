@@ -16,6 +16,7 @@ from typing import Any
 from adaos.adapters.db import SqliteScenarioRegistry, SqliteSkillRegistry
 from adaos.domain import Event
 from adaos.services.agent_context import AgentContext, get_ctx
+from adaos.services.capacity import invalidate_local_capacity_cache
 from adaos.services.io_web.toast import WebToastService
 from adaos.services.platform_notifications import replace_platform_notifications
 from adaos.services.scenario.manager import (
@@ -24,9 +25,11 @@ from adaos.services.scenario.manager import (
     dependency_failure_message,
 )
 from adaos.services.scenario.webspace_runtime import (
+    get_webspace_rebuild_materialized_payload,
     invalidate_webspace_materialization_cache,
     rebuild_webspace_from_sources,
 )
+from adaos.services.scenarios import loader as scenarios_loader
 from adaos.services.skill.manager import SkillManager
 from adaos.services.yjs.doc import async_get_ydoc, get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata, ystore_write_metadata_sync
@@ -126,9 +129,9 @@ async def _best_effort_rebuild_webspace(
     action: str,
     source_of_truth: str,
     scenario_id: str | None = None,
-) -> None:
+) -> dict[str, Any] | None:
     try:
-        await rebuild_webspace_from_sources(
+        return await rebuild_webspace_from_sources(
             webspace_id,
             action=action,
             scenario_id=scenario_id,
@@ -142,6 +145,88 @@ async def _best_effort_rebuild_webspace(
             scenario_id or "-",
             exc_info=True,
         )
+        return None
+
+
+def _scenario_projection_evidence(payload: dict[str, Any] | None, scenario_id: str) -> dict[str, Any]:
+    token = str(scenario_id or "").strip()
+    app_id = f"scenario:{token}"
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
+    catalog = data.get("catalog") if isinstance(data.get("catalog"), dict) else {}
+    installed = data.get("installed") if isinstance(data.get("installed"), dict) else {}
+    apps = catalog.get("apps") if isinstance(catalog.get("apps"), list) else []
+    installed_apps = installed.get("apps") if isinstance(installed.get("apps"), list) else []
+    catalog_present = any(
+        isinstance(item, dict)
+        and (
+            str(item.get("id") or "").strip() == app_id
+            or str(item.get("scenario_id") or "").strip() == token
+        )
+        for item in apps
+    )
+    installed_present = app_id in {str(item or "").strip() for item in installed_apps}
+    return {
+        "scenario_id": token,
+        "app_id": app_id,
+        "catalog_present": catalog_present,
+        "installed_present": installed_present,
+        "catalog_count": len(apps),
+        "installed_count": len(installed_apps),
+    }
+
+
+async def _finalize_subprocess_install(
+    *,
+    target_kind: str,
+    target_id: str,
+    webspace_id: str,
+) -> dict[str, Any]:
+    invalidate_local_capacity_cache()
+    if target_kind == "scenario":
+        scenarios_loader.invalidate_cache(scenario_id=target_id, space="workspace")
+        scenarios_loader.invalidate_cache(scenario_id=target_id, space="dev")
+
+    invalidate_webspace_materialization_cache(
+        webspace_id,
+        reason=f"{target_kind}_install_subprocess_completed:{target_id}",
+        action=f"{target_kind}_install_sync",
+        source_of_truth="operation_manager",
+    )
+    rebuild = await rebuild_webspace_from_sources(
+        webspace_id,
+        action=f"{target_kind}_install_sync",
+        source_of_truth="skill_runtime" if target_kind == "skill" else "scenario_projection",
+    )
+    materialization = rebuild.get("materialization") if isinstance(rebuild, dict) else None
+    if isinstance(materialization, dict) and materialization.get("ready") is False:
+        raise RuntimeError(
+            "post-install webspace materialization is not ready: "
+            f"missing={materialization.get('missing_required_branches') or materialization.get('missing_branches') or []}"
+        )
+
+    result: dict[str, Any] = {
+        "webspace_id": webspace_id,
+        "materialization_ready": materialization.get("ready") if isinstance(materialization, dict) else None,
+        "rebuild_status": str(rebuild.get("status") or "") if isinstance(rebuild, dict) else "",
+    }
+    if target_kind != "scenario":
+        return result
+
+    manifest = scenarios_loader.read_manifest(target_id, space="workspace")
+    if not isinstance(manifest, dict) or str(manifest.get("type") or "").strip().lower() != "desktop":
+        result["desktop_projection_required"] = False
+        return result
+
+    evidence = _scenario_projection_evidence(get_webspace_rebuild_materialized_payload(webspace_id), target_id)
+    result["desktop_projection_required"] = True
+    result["projection"] = evidence
+    if not evidence["catalog_present"] or not evidence["installed_present"]:
+        raise RuntimeError(
+            "post-install desktop projection is incomplete: "
+            f"scenario={target_id} catalog_present={evidence['catalog_present']} "
+            f"installed_present={evidence['installed_present']}"
+        )
+    return result
 
 
 async def _terminate_subprocess(proc: asyncio.subprocess.Process, *, grace_s: float = 5.0) -> None:
@@ -975,12 +1060,56 @@ def submit_install_operation(
                     },
                 )
                 return
+            handle.update(
+                progress=85,
+                message="Refreshing parent runtime after isolated install",
+                current_step="install.subprocess.finalize",
+            )
+            finalize_timeout_s = _timeout_env_seconds("ADAOS_INSTALL_FINALIZE_TIMEOUT_S", 60.0)
+            try:
+                finalization = await asyncio.wait_for(
+                    _finalize_subprocess_install(
+                        target_kind=target_kind,
+                        target_id=target_id,
+                        webspace_id=ws,
+                    ),
+                    timeout=finalize_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                message = f"post-install finalization timed out after {finalize_timeout_s:.0f}s"
+                handle.failed(
+                    message=message,
+                    error={
+                        "type": "PostInstallFinalizationTimeout",
+                        "message": message,
+                        "target_kind": target_kind,
+                        "target_id": target_id,
+                        "installed": True,
+                        "retryable": True,
+                    },
+                )
+                return
+            except Exception as exc:
+                message = f"post-install finalization failed: {type(exc).__name__}: {exc}"
+                handle.failed(
+                    message=message,
+                    error={
+                        "type": "PostInstallFinalizationError",
+                        "message": message,
+                        "target_kind": target_kind,
+                        "target_id": target_id,
+                        "installed": True,
+                        "retryable": True,
+                    },
+                )
+                return
             handle.succeeded(
                 result={
                     "target_kind": target_kind,
                     "target_id": target_id,
                     "webspace_id": ws,
                     "mode": "subprocess",
+                    "finalization": finalization,
                 },
                 message=f"Installed {target_kind} {target_id}",
             )

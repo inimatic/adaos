@@ -4606,6 +4606,7 @@ def invalidate_webspace_materialization_cache(
     dropped_cache = _drop_materialized_cache_for_webspace(target, scenario_id=explicit_scenario)
     _RUNTIME.cache.clear_skill_declarations()
     _RUNTIME.cache.clear_skill_source_fingerprints()
+    materialization["desktop_scenario_cache_dropped"] = _RUNTIME.cache.clear_desktop_scenarios()
     materialization["cache_dropped"] = dropped_cache
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
     return _set_webspace_rebuild_status(

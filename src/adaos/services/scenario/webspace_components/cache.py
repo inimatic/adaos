@@ -234,6 +234,11 @@ class WebspaceCacheState:
     ) -> None:
         self._desktop_scenarios[key] = (float(cached_at), stamp, list(entries))
 
+    def clear_desktop_scenarios(self) -> int:
+        total = len(self._desktop_scenarios)
+        self._desktop_scenarios.clear()
+        return total
+
     @staticmethod
     def _weight(value: Mapping[str, Any]) -> int:
         try:
