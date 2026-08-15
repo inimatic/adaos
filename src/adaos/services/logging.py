@@ -17,6 +17,9 @@ from adaos.ports import EventBus
 
 _ACTIVE_QUEUE_HANDLER: NonBlockingQueueHandler | None = None
 _ACTIVE_QUEUE_LOCK = threading.RLock()
+_ORIGINAL_LOGGER_ADD_HANDLER = logging.Logger.addHandler
+_DIRECT_HANDLER_REDIRECT_TOTAL = 0
+_RECENT_DIRECT_HANDLER_REDIRECTS: list[dict[str, object]] = []
 
 
 def _json_formatter(record: logging.LogRecord) -> str:
@@ -440,6 +443,8 @@ class SuppressSkillContextFilter(logging.Filter):
     """Keep skill-scoped records out of the platform-wide adaos.log handlers."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if str(record.name or "").startswith("adaos.scenario."):
+            return False
         captured = str(getattr(record, "adaos_skill_name", "") or "").strip()
         if captured:
             return False
@@ -516,6 +521,80 @@ class SkillContextLogRouter(logging.Handler):
         return handler
 
 
+class ScenarioLogRouter(logging.Handler):
+    """Write dedicated scenario logs from the shared listener thread."""
+
+    def __init__(
+        self,
+        paths: PathProvider,
+        *,
+        level: int,
+        max_bytes: int = 5_000_000,
+        backup_count: int = 3,
+    ) -> None:
+        super().__init__(level=level)
+        self._logs_dir = Path(paths.logs_dir()) / "scenarios"
+        self._max_bytes = max_bytes
+        self._backup_count = backup_count
+        self._handlers: dict[str, RotatingFileHandler] = {}
+        self._configs: dict[str, tuple[int, int]] = {}
+        self.setFormatter(JsonFormatter())
+
+    def configure(self, scenario_id: str, *, max_bytes: int, backup_count: int) -> None:
+        safe_id = scenario_id.replace("/", "_").replace("\\", "_")
+        config = (max(1, int(max_bytes)), max(0, int(backup_count)))
+        if self._configs.get(safe_id) == config:
+            return
+        self._configs[safe_id] = config
+        handler = self._handlers.pop(safe_id, None)
+        if handler is not None:
+            handler.close()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        prefix = "adaos.scenario."
+        logger_name = str(record.name or "")
+        if not logger_name.startswith(prefix):
+            return
+        scenario_id = logger_name[len(prefix) :].strip()
+        if not scenario_id:
+            return
+        try:
+            handler = self._handler_for(scenario_id)
+            handler.handle(record)
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        for handler in list(self._handlers.values()):
+            try:
+                handler.close()
+            except Exception:
+                pass
+        self._handlers.clear()
+        super().close()
+
+    def _handler_for(self, scenario_id: str) -> RotatingFileHandler:
+        safe_id = scenario_id.replace("/", "_").replace("\\", "_")
+        handler = self._handlers.get(safe_id)
+        if handler is not None:
+            return handler
+        self._logs_dir.mkdir(parents=True, exist_ok=True)
+        max_bytes, backup_count = self._configs.get(
+            safe_id,
+            (self._max_bytes, self._backup_count),
+        )
+        handler = TolerantRotatingFileHandler(
+            self._logs_dir / f"{safe_id}.log",
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        handler.setLevel(self.level)
+        handler.setFormatter(self.formatter or JsonFormatter())
+        self._handlers[safe_id] = handler
+        return handler
+
+
 def _logging_queue_capacity() -> int:
     try:
         value = int(str(os.getenv("ADAOS_LOG_QUEUE_CAPACITY") or "4096").strip())
@@ -542,6 +621,52 @@ def _all_loggers() -> list[logging.Logger]:
     return loggers
 
 
+def _is_nonblocking_logger_handler(
+    item: logging.Handler,
+    active: NonBlockingQueueHandler | None,
+) -> bool:
+    return item is active or isinstance(item, (NonBlockingQueueHandler, logging.NullHandler))
+
+
+def _record_direct_handler_redirect(logger: logging.Logger, handler: logging.Handler) -> None:
+    global _DIRECT_HANDLER_REDIRECT_TOTAL
+    _DIRECT_HANDLER_REDIRECT_TOTAL += 1
+    _RECENT_DIRECT_HANDLER_REDIRECTS.append(
+        {
+            "at": time.time(),
+            "logger": str(logger.name or "root"),
+            "handler": type(handler).__name__,
+        }
+    )
+    del _RECENT_DIRECT_HANDLER_REDIRECTS[:-20]
+
+
+def _protected_logger_add_handler(self: logging.Logger, handler: logging.Handler) -> None:
+    """Prevent runtime code from installing output I/O on caller threads."""
+    with _ACTIVE_QUEUE_LOCK:
+        active = _ACTIVE_QUEUE_HANDLER
+        if active is None or _is_nonblocking_logger_handler(handler, active):
+            _ORIGINAL_LOGGER_ADD_HANDLER(self, handler)
+            return
+        retained = [item for item in self.handlers if _is_nonblocking_logger_handler(item, active)]
+        if active not in retained:
+            retained.append(active)
+        removed = [item for item in self.handlers if item not in retained]
+        self.handlers[:] = retained
+        self.propagate = False
+        _record_direct_handler_redirect(self, handler)
+    for item in [*removed, handler]:
+        try:
+            item.close()
+        except Exception:
+            pass
+
+
+def _install_nonblocking_handler_guard() -> None:
+    if logging.Logger.addHandler is not _protected_logger_add_handler:
+        logging.Logger.addHandler = _protected_logger_add_handler
+
+
 def _route_existing_output_handlers_through_queue(handler: NonBlockingQueueHandler) -> None:
     for logger in _all_loggers():
         direct_handlers = [
@@ -551,8 +676,18 @@ def _route_existing_output_handlers_through_queue(handler: NonBlockingQueueHandl
         ]
         if not direct_handlers:
             continue
-        logger.handlers[:] = [handler]
+        logger.handlers[:] = [
+            item for item in logger.handlers if _is_nonblocking_logger_handler(item, handler)
+        ]
+        if handler not in logger.handlers:
+            logger.handlers.append(handler)
         logger.propagate = False
+        for item in direct_handlers:
+            _record_direct_handler_redirect(logger, item)
+            try:
+                item.close()
+            except Exception:
+                pass
 
 
 def _unsafe_direct_logging_handlers(handler: NonBlockingQueueHandler | None) -> list[dict[str, str]]:
@@ -590,26 +725,58 @@ def logging_queue_snapshot() -> dict[str, object]:
                 "last_listener_failure": None,
                 "pipeline_closed": False,
                 "pipeline_closed_at": None,
+                "redirected_direct_handler_total": _DIRECT_HANDLER_REDIRECT_TOTAL,
+                "recent_direct_handler_redirects": list(_RECENT_DIRECT_HANDLER_REDIRECTS),
                 "unsafe_direct_handlers": _unsafe_direct_logging_handlers(None),
             }
         snapshot = handler.snapshot()
+        snapshot["redirected_direct_handler_total"] = _DIRECT_HANDLER_REDIRECT_TOTAL
+        snapshot["recent_direct_handler_redirects"] = list(_RECENT_DIRECT_HANDLER_REDIRECTS)
         snapshot["unsafe_direct_handlers"] = _unsafe_direct_logging_handlers(handler)
         return snapshot
 
 
-def configure_skill_module_logging(module_name: str) -> None:
-    """Route a synthetic skill module through the protected logging queue."""
-    name = str(module_name or "").strip()
+def configure_nonblocking_logger(logger_name: str, *, level: int | None = None) -> bool:
+    """Route a logger through the process-owned nonblocking output queue."""
+    name = str(logger_name or "").strip()
     if not name:
-        return
+        return False
     with _ACTIVE_QUEUE_LOCK:
         handler = _ACTIVE_QUEUE_HANDLER
         if handler is None:
-            return
+            return False
         logger = logging.getLogger(name)
         logger.handlers[:] = [handler]
-        logger.setLevel(handler.level)
+        logger.setLevel(handler.level if level is None else level)
         logger.propagate = False
+        return True
+
+
+def configure_skill_module_logging(module_name: str) -> None:
+    """Route a synthetic skill module through the protected logging queue."""
+    configure_nonblocking_logger(module_name)
+
+
+def configure_scenario_logging(
+    logger_name: str,
+    scenario_id: str,
+    *,
+    level: int,
+    max_bytes: int,
+    backup_count: int,
+) -> bool:
+    with _ACTIVE_QUEUE_LOCK:
+        handler = _ACTIVE_QUEUE_HANDLER
+        if handler is None:
+            return False
+        router = next(
+            (item for item in handler._output_handlers if isinstance(item, ScenarioLogRouter)),
+            None,
+        )
+        if router is None:
+            return False
+        router.configure(scenario_id, max_bytes=max_bytes, backup_count=backup_count)
+        return configure_nonblocking_logger(logger_name, level=level)
 
 
 def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
@@ -661,6 +828,7 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     output_handlers: list[logging.Handler] = [stream_h, file_h]
     if skill_h is not None:
         output_handlers.append(skill_h)
+    output_handlers.append(ScenarioLogRouter(paths, level=logger.level))
 
     log_queue: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=_logging_queue_capacity())
     queue_handler = NonBlockingQueueHandler(log_queue, level=logger.level)
@@ -694,6 +862,7 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
 
     with _ACTIVE_QUEUE_LOCK:
         _ACTIVE_QUEUE_HANDLER = queue_handler
+        _install_nonblocking_handler_guard()
 
     # Optional noise suppression (apply to handlers so it affects all child loggers).
     try:

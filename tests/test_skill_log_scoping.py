@@ -362,6 +362,49 @@ def test_setup_logging_removes_direct_output_handlers(tmp_path: Path) -> None:
     assert logging_queue_snapshot()["unsafe_direct_handlers"] == []
 
 
+def test_logging_queue_redirects_handlers_added_after_setup(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    logger = setup_logging(paths, level="DEBUG")
+    queue_handler = logger.handlers[0]
+    library_logger = logging.getLogger("test.direct.late")
+    direct_path = tmp_path / "late-direct.log"
+    before = int(logging_queue_snapshot()["redirected_direct_handler_total"])
+
+    library_logger.addHandler(logging.FileHandler(direct_path, encoding="utf-8"))
+    library_logger.warning("record after direct handler attempt")
+    queue_handler.flush()
+
+    snapshot = logging_queue_snapshot()
+    assert library_logger.handlers == [queue_handler]
+    assert library_logger.propagate is False
+    assert snapshot["redirected_direct_handler_total"] == before + 1
+    assert snapshot["recent_direct_handler_redirects"][-1]["logger"] == "test.direct.late"
+    assert snapshot["recent_direct_handler_redirects"][-1]["handler"] == "FileHandler"
+    assert snapshot["unsafe_direct_handlers"] == []
+    assert not direct_path.exists() or direct_path.read_text(encoding="utf-8") == ""
+
+
+def test_scenario_logs_use_shared_nonblocking_listener(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    set_ctx(SimpleNamespace(paths=paths, settings=SimpleNamespace(scenario_log_level="INFO")))
+    logger = setup_logging(paths, level="DEBUG")
+    queue_handler = logger.handlers[0]
+    try:
+        from adaos.sdk.core.logging import setup_scenario_logger
+
+        scenario_logger, log_path = setup_scenario_logger("demo_scenario")
+        scenario_logger.info("scenario record")
+        queue_handler.flush()
+
+        assert scenario_logger.handlers == [queue_handler]
+        assert json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])["msg"] == "scenario record"
+        assert logging_queue_snapshot()["unsafe_direct_handlers"] == []
+    finally:
+        clear_ctx()
+
+
 def test_logging_queue_restarts_unexpectedly_stopped_listener(tmp_path: Path) -> None:
     paths = PathProvider(tmp_path)
     paths.ensure_tree()

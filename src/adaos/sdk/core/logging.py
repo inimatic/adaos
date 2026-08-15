@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional, Tuple
 from datetime import datetime, timezone
@@ -66,13 +65,21 @@ def setup_scenario_logger(
     resolved_level = (level or ctx.settings.scenario_log_level or "INFO").upper()
     numeric_level = getattr(logging, resolved_level, logging.INFO)
     logger.setLevel(numeric_level)
-    logger.handlers.clear()
-    logger.propagate = False
+    from adaos.services.logging import configure_scenario_logging, setup_logging
 
-    handler = RotatingFileHandler(logfile, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
-    handler.setLevel(numeric_level)
-    handler.setFormatter(JsonFormatter())
-    logger.addHandler(handler)
+    def configure() -> bool:
+        return configure_scenario_logging(
+            name,
+            scenario_id,
+            level=numeric_level,
+            max_bytes=max_bytes,
+            backup_count=backup_count,
+        )
+
+    if not configure():
+        setup_logging(paths, level=resolved_level)
+        if not configure():
+            raise RuntimeError("nonblocking scenario logging is unavailable")
 
     return logger, logfile
 
