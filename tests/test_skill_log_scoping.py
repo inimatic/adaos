@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,35 @@ from adaos.services.logging import configure_skill_module_logging, logging_queue
 from adaos.services.root_mcp.logs import list_local_logs
 from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 import adaos.services.ui_runtime_diagnostics as ui_runtime_diagnostics
+
+
+@pytest.mark.asyncio
+async def test_ui_runtime_diagnostics_resolves_log_paths_off_event_loop(tmp_path: Path, monkeypatch) -> None:
+    main_thread_id = threading.get_ident()
+    path_threads: list[int] = []
+
+    def _log_path(skill_id: str) -> Path:
+        path_threads.append(threading.get_ident())
+        return tmp_path / f"{skill_id}.jsonl"
+
+    monkeypatch.setattr(ui_runtime_diagnostics, "_log_path_for_skill", _log_path)
+    result = await ingest_ui_runtime_diagnostics(
+        {
+            "webspace_id": "desktop",
+            "events": [
+                {
+                    "level": "warning",
+                    "source": "ui.modal",
+                    "code": "modal.not_found",
+                    "message": "Modal missing.",
+                    "skillId": "browsers_skill",
+                }
+            ],
+        }
+    )
+
+    assert result["accepted"] == 1
+    assert path_threads and all(thread_id != main_thread_id for thread_id in path_threads)
 
 
 @pytest.mark.asyncio

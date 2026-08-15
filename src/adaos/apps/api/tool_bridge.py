@@ -1,4 +1,5 @@
 # src\adaos\api\tool_bridge.py
+import asyncio
 import copy
 import hashlib
 import json
@@ -46,6 +47,21 @@ _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
 _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
 )
+
+
+async def _skill_manager_for_context(ctx: AgentContext) -> SkillManager:
+    registry = await asyncio.to_thread(SqliteSkillRegistry, ctx.sql)
+    return SkillManager(
+        repo=ctx.skills_repo,
+        registry=registry,
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+        settings=ctx.settings,
+    )
+
+
 _LOCAL_WRITE_TOOL_NAMES: tuple[str, ...] = (
     "cv_descriptor:cv_descriptor_configure_model",
     "cv_descriptor:cv_descriptor_save_descriptor",
@@ -1489,15 +1505,7 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     payload: Dict[str, Any] = dict(body.arguments or {})
     implicit_dev_webspace = (not body.dev) and _webspace_uses_dev_runtime(payload)
 
-    mgr = SkillManager(
-        repo=ctx.skills_repo,
-        registry=SqliteSkillRegistry(ctx.sql),
-        git=ctx.git,
-        paths=ctx.paths,
-        bus=getattr(ctx, "bus", None),
-        caps=ctx.caps,
-        settings=ctx.settings,
-    )
+    mgr = await _skill_manager_for_context(ctx)
     if implicit_dev_webspace and _implicit_dev_runtime_available(ctx, mgr, skill_name):
         body = body.model_copy(update={"dev": True})
 

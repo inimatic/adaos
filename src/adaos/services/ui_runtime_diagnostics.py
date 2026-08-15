@@ -59,7 +59,7 @@ async def ingest_ui_runtime_diagnostics(
                 "level": normalized.get("level"),
                 "source": normalized.get("source"),
                 "code": normalized.get("code"),
-                "log_file": _log_path_for_skill(str(normalized["skill_id"])).name,
+                "log_file": f"service.{_safe_log_token(str(normalized['skill_id']))}.ui_runtime.log",
             }
         )
 

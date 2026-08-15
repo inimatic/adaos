@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import types
 from types import SimpleNamespace
 
@@ -28,6 +29,38 @@ def _reset_tool_bridge_runtime_guards() -> None:
     if hasattr(tool_bridge_module, "_TOOL_CALL_IDEMPOTENCY_CACHE"):
         tool_bridge_module._TOOL_CALL_IDEMPOTENCY_CACHE.clear()
     yield
+
+
+def test_skill_manager_registry_initialization_runs_off_event_loop(monkeypatch) -> None:
+    main_thread_id = threading.get_ident()
+    constructor_threads: list[int] = []
+    registry = object()
+    manager = object()
+
+    def _registry_factory(_sql):
+        constructor_threads.append(threading.get_ident())
+        return registry
+
+    def _manager_factory(**kwargs):
+        assert kwargs["registry"] is registry
+        return manager
+
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", _registry_factory)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _manager_factory)
+    ctx = SimpleNamespace(
+        sql=object(),
+        skills_repo=None,
+        git=None,
+        paths=None,
+        bus=None,
+        caps=None,
+        settings=None,
+    )
+
+    result = asyncio.run(tool_bridge_module._skill_manager_for_context(ctx))
+
+    assert result is manager
+    assert constructor_threads and constructor_threads[0] != main_thread_id
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LAST_SYNC_AT"):
         tool_bridge_module._WORKSPACE_RUNTIME_LAST_SYNC_AT.clear()
     if hasattr(tool_bridge_module, "_WORKSPACE_RUNTIME_LOCKS"):

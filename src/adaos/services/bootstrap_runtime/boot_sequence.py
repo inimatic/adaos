@@ -19,6 +19,14 @@ def _service_skills_block_boot() -> bool:
     }
 
 
+def _deferred_service_skills_delay_s() -> float:
+    try:
+        value = float(str(os.getenv("ADAOS_SERVICE_SKILLS_START_DELAY_S") or "30").strip())
+    except (TypeError, ValueError):
+        value = 30.0
+    return max(0.5, min(value, 300.0))
+
+
 @dataclass(frozen=True, slots=True)
 class BootstrapBootOperations:
     bus: Any
@@ -142,7 +150,7 @@ class BootstrapBootCoordinator:
         async def _start_deferred_service_skills() -> None:
             # Let the ASGI lifespan return and bind the listener before any
             # external process discovery competes for CPU or disk.
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_deferred_service_skills_delay_s())
             await _start_service_skills("post_ready_start_service_skills")
 
         async def _run_release_validation_autorun(trigger: str) -> None:
@@ -202,6 +210,23 @@ class BootstrapBootCoordinator:
                     )
             except Exception:
                 service._log.debug("failed to schedule autonomous release validation", exc_info=True)
+
+        core_channel_setup_complete = asyncio.Event()
+
+        async def _emit_sys_ready_after_channel_setup() -> None:
+            await core_channel_setup_complete.wait()
+            # Give Uvicorn one scheduling turn to finish lifespan and bind.
+            await asyncio.sleep(0.5)
+            started = _startup_stage_mark("post_ready_emit_sys_ready")
+            await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
+            _startup_stage_mark("post_ready_emit_sys_ready", started=started)
+            _schedule_release_validation_autorun("sys.ready")
+
+        def _schedule_sys_ready_handlers() -> None:
+            service._start_boot_task_once(
+                "adaos-sys-ready-handlers",
+                _emit_sys_ready_after_channel_setup,
+            )
 
         try:
             from adaos.services.system_model.service import (
@@ -760,9 +785,7 @@ class BootstrapBootCoordinator:
                     "deferring sys.ready handlers until candidate runtime promotion"
                 )
             else:
-                _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
-                await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
-                _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
+                _schedule_sys_ready_handlers()
             _node_status_started = _startup_stage_mark("bootstrap_emit_node_status")
             await _emit_node_status("candidate.ready" if candidate_runtime_mode else "sys.ready")
             _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
@@ -771,8 +794,6 @@ class BootstrapBootCoordinator:
                     await _finalize_runtime_boot_status()
             except Exception:
                 service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
-            if not candidate_runtime_mode:
-                _schedule_release_validation_autorun("sys.ready")
             _control_started = _startup_stage_mark("bootstrap_report_control_lifecycle")
             await _report_control_lifecycle("candidate.ready" if candidate_runtime_mode else "sys.ready")
             _startup_stage_mark("bootstrap_report_control_lifecycle", started=_control_started)
@@ -803,9 +824,7 @@ class BootstrapBootCoordinator:
                         "deferring sys.ready handlers until candidate runtime promotion"
                     )
                 else:
-                    _sys_ready_started = _startup_stage_mark("bootstrap_emit_sys_ready")
-                    await operations.bus.emit("sys.ready", {"ts": time.time()}, source="lifecycle", actor="system")
-                    _startup_stage_mark("bootstrap_emit_sys_ready", started=_sys_ready_started)
+                    _schedule_sys_ready_handlers()
                 _node_status_started = _startup_stage_mark("bootstrap_emit_node_status")
                 await _emit_node_status("candidate.ready" if candidate_runtime_mode else "sys.ready")
                 _startup_stage_mark("bootstrap_emit_node_status", started=_node_status_started)
@@ -814,8 +833,6 @@ class BootstrapBootCoordinator:
                         await _finalize_runtime_boot_status()
                 except Exception:
                     service._log.debug("failed to finalize core.update.status after runtime readiness", exc_info=True)
-                if not candidate_runtime_mode:
-                    _schedule_release_validation_autorun("sys.ready")
 
             # Keep the original boot-generation callback available to an
             # explicit member reconnect. If startup registration failed (for
@@ -881,4 +898,5 @@ class BootstrapBootCoordinator:
                 "adaos-service-skills-startup",
                 _start_deferred_service_skills,
             )
+        core_channel_setup_complete.set()
 

@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from adaos.services.bootstrap_runtime import BootstrapBootCoordinator, BootstrapLifecycleCoordinator
-from adaos.services.bootstrap_runtime.boot_sequence import _service_skills_block_boot
+from adaos.services.bootstrap_runtime.boot_sequence import (
+    _deferred_service_skills_delay_s,
+    _service_skills_block_boot,
+)
 
 
 pytestmark = pytest.mark.anyio
@@ -18,6 +21,11 @@ async def test_service_skills_do_not_block_boot_unless_explicitly_enabled(monkey
 
     monkeypatch.setenv("ADAOS_SERVICE_SKILLS_BLOCK_BOOT", "true")
     assert _service_skills_block_boot() is True
+
+    monkeypatch.delenv("ADAOS_SERVICE_SKILLS_START_DELAY_S", raising=False)
+    assert _deferred_service_skills_delay_s() == 30.0
+    monkeypatch.setenv("ADAOS_SERVICE_SKILLS_START_DELAY_S", "0")
+    assert _deferred_service_skills_delay_s() == 0.5
 
 
 async def test_lifecycle_coordinator_serializes_boot_attempts() -> None:
