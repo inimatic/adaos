@@ -442,6 +442,14 @@ shape adherence but support only a JSON Schema subset and do not guarantee
 semantic correctness; maintain a richer local schema plus deterministic
 semantic gates.
 
+Keep the exact Development Session/context packet as an audit artifact, but
+send Codex a bounded task projection. Include target authority, current issues,
+acceptance criteria, digests, required facets and minimal diagnostics. Omit
+duplicated workflow adapter catalogs, complete ABI inventories and other
+machine-discoverable reference tables; retain their digest/reference so Codex
+can inspect them on demand. The prompt is an execution view, not a second copy
+of the entire control plane.
+
 Make decision resolution explicit. Early discovery questions are not
 necessarily automation blockers. A later decision must classify a choice as
 source-derived, policy-default, proposed, or unresolved; only `unresolved` may
@@ -470,6 +478,64 @@ and invariant fields, inference/stopping policy, and independently verifiable
 implementation and acceptance coverage. The specific domain checks belong to
 the governing skill; the reusable job, schema, digest, and lifecycle rails
 belong to the platform.
+
+### Consumer-driven contract realization
+
+An implementation brief must identify the real consumer of every provider
+contract, not only the contract name. Generated mocks and local fixtures may
+exercise failure cases, but they must not redefine the consumer ABI. A
+conformance test that claims compatibility must import the published consumer
+normalizer/validator or run an equivalent package-owned conformance command.
+
+For each required provider, carry machine-readable metadata through the
+Development Session and Automation assignment:
+
+- contract and capability identity;
+- required public operations;
+- read-only consumer component and exact revision;
+- result, observation, artifact, and error shapes actually consumed;
+- ownership boundaries, especially which component owns tracking, execution,
+  data, and retries;
+- independently executable conformance and failure-recovery evidence.
+
+Builder checkpoint review must verify that a matching `provider_contracts`
+declaration exists and that every required operation is an exported tool. A
+skill-owned test named `manager_compatible` is not sufficient when it only
+checks a hand-written lookalike. Exercise the actual consumer path and include
+at least one value that would fail if a required nested field or summary path
+were absent.
+
+For source-derived systems, also carry an exact machine-readable system
+specification. Names such as "ConvNet-style", "standard preprocessing", or
+"equivalent architecture" leave room for the coding model to change the
+scientific intervention. Record ordered components, exact settings, locked
+invariants, the single intervention boundary, source refs and unresolved
+choices. Admission must fail while required choices are unresolved or while a
+component is described only by an analogy.
+
+### Installation is part of acceptance
+
+Passing source-tree tests is not a deliverable if the runtime installer will
+reject the package. Generated work must traverse the ordinary
+validate -> test -> package -> install -> activate path before Builder reports
+a usable candidate.
+
+Declare every heavy/native runtime import as a dependency. The manifest must
+also select an allowed isolation boundary: a service runtime, a vendor/shared
+policy explicitly admitted by the platform, or another supported provider.
+Do not rely on a library that happens to be installed in Builder's Python
+environment. Validation should predict installer refusal before packaging,
+and the environment evidence should identify the resolved library versions.
+
+Acceptance tests should use the bounded production entrypoint rather than a
+second test-only implementation. Recovery tests must inject a real failure at
+a declared checkpoint/observation boundary, restart through the public API,
+and prove idempotency. A test that invokes an already-completed run a second
+time is only a retry test, not crash recovery. For multi-arm experiments, run
+every bounded arm through the same entrypoint and verify the consumer-normalized
+result of each arm. Keep each native suite within its declared lifecycle time
+budget; reduce fixture cardinality or separate suites instead of replacing the
+production path with a faster look-alike.
 
 ## Data-plane decision table
 

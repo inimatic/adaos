@@ -104,6 +104,72 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
         change.get("acceptance_constraints") or []
     )[:100]
     projected_change["reviews"] = list(change.get("reviews") or [])[:100]
+    facets = dict(packet.get("facets") or {})
+    projected_facets: dict[str, Any] = {}
+    for facet_name, raw_facet in facets.items():
+        if not isinstance(raw_facet, Mapping):
+            continue
+        facet = dict(raw_facet)
+        common = {
+            key: facet.get(key)
+            for key in (
+                "status",
+                "inspection_status",
+                "source",
+                "schema",
+                "definition_ref",
+                "definition_digest",
+                "binding_digest",
+                "valid",
+                "ready",
+                "project_id",
+                "selected_profile_id",
+                "selected_mode",
+            )
+            if facet.get(key) not in (None, "", [], {})
+        }
+        if facet_name == "execution_authority":
+            common.update(
+                {
+                    key: facet.get(key)
+                    for key in ("allowed_paths", "actor", "phase")
+                    if facet.get(key) not in (None, "", [], {})
+                }
+            )
+        elif facet_name == "constraints":
+            common["issue_ids"] = [
+                str(item.get("issue_id") or "")
+                for item in facet.get("issue_acceptance") or []
+                if isinstance(item, Mapping) and str(item.get("issue_id") or "").strip()
+            ][:100]
+            common["acceptance_constraints"] = list(facet.get("acceptance_constraints") or [])[:100]
+            common["active_review_refs"] = list(facet.get("active_review_refs") or [])[:100]
+        elif facet_name == "workflow_definition":
+            common["diagnostics"] = list(facet.get("diagnostics") or [])[:20]
+            authoring = dict(facet.get("authoring") or {})
+            common["authoring"] = {
+                key: authoring.get(key)
+                for key in (
+                    "status",
+                    "definition_path",
+                    "definition_authority",
+                    "activation_boundary",
+                )
+                if authoring.get(key) not in (None, "", [], {})
+            }
+        elif facet_name == "data_policy":
+            mapping = dict(facet.get("implementation_mapping") or {})
+            common["implementation_mapping"] = {
+                key: mapping.get(key)
+                for key in ("status", "profile_id", "mode", "mapping_count", "missing", "ready")
+                if mapping.get(key) not in (None, "", [], {})
+            }
+        else:
+            for key in ("missing", "ambiguous", "diagnostics", "metrics"):
+                if facet.get(key) not in (None, "", [], {}):
+                    value = facet.get(key)
+                    common[key] = value[:20] if isinstance(value, list) else value
+        projected_facets[str(facet_name)] = common
     return {
         "schema": packet.get("schema"),
         "digest": packet.get("digest"),
@@ -116,7 +182,7 @@ def _context_packet_prompt_projection(value: Any) -> dict[str, Any]:
         "instruction_refs": list(packet.get("instruction_refs") or [])[:100],
         "previous_run": dict(packet.get("previous_run") or {}),
         "run": dict(packet.get("run") or {}),
-        "facets": dict(packet.get("facets") or {}),
+        "facets": projected_facets,
         "coverage": dict(packet.get("coverage") or {}),
         "budget": dict(packet.get("budget") or {}),
     }
@@ -1055,7 +1121,8 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
 14. Never substitute fabricated metrics, synthetic success defaults, placeholder digests, or caller-asserted invariants for requested execution. Fixtures may make tests bounded, but they must drive the same model, data, storage, tracker, recovery, and analysis components used by the real path.
 15. Resolve skill-owned runtime storage through AdaOS SDK/capability bindings. Do not let ordinary tool callers choose arbitrary filesystem roots. Use typed platform contracts such as ContentRef and tracker providers when the brief requires them instead of look-alike dictionaries local to the skill.
 16. Audit the final implementation against every Issue and acceptance criterion in the governed context. If any item is not implemented, state it as an open item; do not describe the project as complete. The prohibition on running a scientific workload during code generation does not permit omitting the executable scientific path.
-17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required."""
+17. Tests must be capable of failing for a stubbed implementation: cover real operator/model behavior, real manifest verification, storage isolation, provider calls, retry/idempotency boundaries, and event completeness where those concerns are required. Keep every native suite within its lifecycle time budget by bounding fixtures or splitting suites, never by replacing the production path with a faster look-alike.
+18. This checkout is an isolated candidate, not the canonical AdaOS workspace. Run source-tree validation and bounded tests here, but do not copy into or mutate the canonical workspace/runtime and do not publish, install, or activate the candidate yourself. The trusted worker finalizer owns package, install, activation, and rollback receipts after your turn."""
         required_result = required_result.format(
             target_id=target_id,
             companion=companion,

@@ -913,7 +913,18 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
                             }
                         ],
                     },
-                    "facets": {"execution_authority": {"status": "present"}},
+                    "facets": {
+                        "execution_authority": {"status": "present"},
+                        "workflow_definition": {
+                            "status": "present",
+                            "definition_digest": "sha256:" + "b" * 64,
+                            "authoring": {
+                                "status": "present",
+                                "definition_path": "workflow.json",
+                                "adapter_catalog": [{"implementation": "irrelevant.full.catalog"}],
+                            },
+                        },
+                    },
                     "coverage": {"ready": True},
                 },
             },
@@ -939,8 +950,13 @@ def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: P
     assert "fabricated metrics" in prompt
     assert "Resolve skill-owned runtime storage through AdaOS SDK" in prompt
     assert "does not permit omitting the executable scientific path" in prompt
+    assert "trusted worker finalizer owns package" in prompt
+    assert "do not copy into or mutate the canonical workspace/runtime" in prompt
+    assert "workflow.json" in prompt
+    assert "irrelevant.full.catalog" not in prompt
     assert packet["context_packet_digest"] == "sha256:" + "a" * 64
     assert packet["context_packet"]["change"]["change_id"] == "change.demo"
+    assert packet["context_packet"]["facets"]["workflow_definition"]["authoring"]["adapter_catalog"]
 
 
 def test_worker_compiles_manifest_bound_workflow_definition(tmp_path: Path) -> None:

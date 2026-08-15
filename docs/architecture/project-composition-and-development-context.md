@@ -5,7 +5,7 @@ Research Workbench pre-Codex milestone are specified here; a published Project
 catalog and transactional multi-component install/remove flow are follow-on
 work.
 
-Last reviewed: 2026-08-11.
+Last reviewed: 2026-08-16.
 
 This page defines the boundary between distributable AdaOS Projects,
 user-facing Applications, skill/scenario components, Builder development
@@ -54,6 +54,11 @@ The research-domain workflow remains owned by
     component is a `research.direction` skill. It normally uses the shared
     Research Workbench presentation and does not generate a scenario per
     direction.
+11. A Development Session carries consumer-owned contract requirements in
+    addition to read-only component context. Builder must prove that generated
+    providers export the required operations and survive the ordinary package,
+    install, and activation boundary; a target-owned mock is not compatibility
+    evidence.
 
 ## Vocabulary
 
@@ -230,6 +235,10 @@ context_members:
     relation: dependency
     access: read-only
     context: contract
+  - ref: skill:research_manager_skill
+    relation: consumer
+    access: read-only
+    context: contract
 
 artifact_inputs:
   - ref: artifact://skill/tlp_research_skill/part0
@@ -280,6 +289,38 @@ state, decisions, and public contracts rather than all implementation source.
 Codex receives full target source, read-only artifacts, and contract/docs views
 of dependencies; additional source is hydrated on demand. This reduces context
 load without hiding the exact objects and revisions on which the task depends.
+
+### Contract and scientific-system projection
+
+Read-only context controls what Codex may inspect; it does not by itself state
+what the generated target must implement. The immutable AutomationBrief also
+projects typed `contract_requirements` from each real consumer. A provider
+requirement names the contract/capability identity, required public operations,
+consumer component, ownership boundary, and conformance evidence. Builder
+checks the resulting provider declaration and exported operations before it
+accepts a checkpoint. Consumer-owned normalization and summary paths remain
+authoritative; target-owned mocks cannot replace them.
+
+Research directions additionally carry a source-grounded
+`system_specification`: ordered components and exact settings, locked
+invariants, the intended intervention boundary, decision status and source
+refs. This separates a scientific object from the prose used to discuss it.
+Admission rejects unresolved choices and analogy-only descriptions before
+Codex is allowed to fill them with plausible defaults.
+
+The Development Session therefore provides four different constraints:
+
+| Constraint | Purpose |
+| --- | --- |
+| target scope | which source Codex may change |
+| read-only context | which exact dependencies and artifacts it may inspect |
+| contract requirements | which external ABI the target must satisfy |
+| system specification | which scientific structure it must preserve |
+
+All four are digest-bound. Package installation is part of realization:
+dependency declarations and isolation policy are validated before checkpoint,
+then the ordinary package/install/activate lifecycle supplies the runtime
+receipt.
 
 ## Local-First Artifact Context
 

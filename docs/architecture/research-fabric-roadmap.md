@@ -143,8 +143,8 @@ scientific conclusion. A local demo is not production acceptance.
 | Distributed execution | Current/selected member-node execution through existing AdaOS semantics; no Ray provider | deliberately deferred until the complete local research loop is proven |
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
-| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | bounded three-epoch CPU workflow proof accepted; confirmatory scientific proof remains ARF6 work |
-| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, scope gate, and canonical preview | ARF7.1 validated locally on TLP; Codex realization is the next gate |
+| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | Builder-published direction skill `0.1.5` passes bounded realization acceptance; real-data workflow and confirmatory scientific proof remain ARF7.3/ARF6 work |
+| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, and canonical preview | ARF7.2 validated locally on TLP; ProjectRelease and accepted-workflow execution are the next gates |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
 | Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
 | Replication evaluation | TLP supplies one internal transparent case | no frozen PaperBench-like task package, target rubric evaluator, matched-budget baseline, or benchmark release |
@@ -163,7 +163,7 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF6 | TLP passes the deterministic scientific and operational reference proof | `hypothesis` | next scientific gate |
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
 | ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
-| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `specified` | current engineering gate |
+| ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; direction-skill checkpoint published, ProjectRelease not yet created | complete locally |
 | ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
 | ARF9 | ARRB measures replication on frozen PaperBench-like tasks and matched budgets | `hypothesis` | after autonomous TLP proof |
@@ -363,6 +363,56 @@ uses 10 paired confirmatory seeds, separates validation selection from sealed
 one-shot test access, and contains no per-epoch final-test obligation. It is
 ready for human acceptance and bounded Codex implementation, not accepted by
 the model and not evidence that TLP works.
+
+ARF7.2 realization receipt (2026-08-16): the accepted
+`project:tlp_research_03` handoff was exercised through ordinary Builder
+Automation, an isolated local Codex worker, trusted scope/test/package
+finalization, DEV activation, and the Forge checkpoint path. No target source
+was edited outside Builder. The five Builder tasks were deliberately retained
+as evidence rather than collapsed into a false one-shot success:
+
+- `0.1.1` passed superficial generation while remaining a stub;
+- the next candidate exposed undeclared heavy-dependency isolation;
+- `0.1.3` passed target-owned tests but did not match the real manager result
+  paths, exact source architecture, dataset acquisition, or crash semantics;
+- the corrected candidate exposed a core installer defect that reserved disk
+  for Torch even though the selected shared interpreter already satisfied the
+  graph, plus source-fidelity and archive-streaming defects found by an
+  independent audit;
+- task `task.01M03VG08VK5565HMHN62TMPEM` produced `0.1.5`, which passed the
+  trusted finalizer and independent native acceptance.
+
+The final direction skill declares and exports the four real
+`adaos.research.runner.v1` operations consumed by `research_manager_skill`,
+uses the notebook-grounded `3 -> 32 -> 64 -> 128` architecture with the sole
+pool2 intervention, identical Adam `lr=0.001`/no-scheduler training policy,
+paired initialization and random streams, three-epoch non-inferential smoke
+and fixed ten-seed confirmatory profiles, real checkpoint failure/resume,
+manager-normalized observations/results, digest-bound environment and
+artifacts, and a hard test seal. STL-10 acquisition hashes incrementally and
+streams only `train_X.bin`/`train_y.bin` from a path-safe archive; it never
+materializes test, unlabeled, or fold content.
+
+The independent machine receipt is: strict DEV validation with tool probing
+passed; seven runtime package tests passed inside the native lifecycle budget;
+`dataset_status` honestly reported `ready=false`, sealed test data, and zero
+test access because no real dataset was downloaded or scientific run started.
+The published skill checkpoint is Forge commit
+`954ce66745f4e035b9b7fb8e95d7e6f0dfbb776c`, package digest
+`sha256:447ad35bbd78ec51ffba97e417da6e9c107a10fb14d1013d46be7d0478a3465a`,
+active DEV version `0.1.5`. Builder publication remains `not_started`: this
+receipt closes direction-skill realization and validation, not ARF7.14
+ProjectRelease, ARF7.3 real-data execution, or ARF6 scientific evidence.
+
+The failures also hardened the generic rails. AutomationBrief now projects
+consumer-owned contract requirements; ResearchPrototype projects an exact
+source-grounded system specification; core validation checks required provider
+operations, dependency declarations, and heavy-runtime policy; installation
+reuses an already satisfying shared distribution graph before applying disk
+budget; and Codex receives a bounded prompt projection while the exact context
+packet remains the audit artifact. Future isolated workers are explicitly told
+to leave install/activation/publication to the trusted finalizer and to keep
+native suites within their lifecycle budget.
 
 Readiness update (2026-08-08): E002 completed the packaged three-epoch STL-10
 CPU run, immutable result fixation, independent artifact verification,
@@ -1232,13 +1282,17 @@ not substitute for this operator path.
   prototype, and Builder checkpoint digests; source inventory; scientific
   objective; implementation requirements; acceptance checks; and prohibited
   actions. Acceptance is idempotent and does not start Codex or an experiment.
-- [ ] `[must]` `ARF7-12` Make isolated Codex materialize the direction skill's
+- [x] `[must]` `ARF7-12` Make isolated Codex materialize the direction skill's
   operator, data preparation, runner, schemas, migrations, observations,
   analyses, and tests from the exact handoff. It may report blockers but cannot
-  amend the accepted objective or analysis to fit implementation results.
-- [ ] `[must]` `ARF7-13` Validate generated TLP code with ARF6 operator,
+  amend the accepted objective or analysis to fit implementation results. The
+  TLP receipt records every failed/intermediate task and exact final Forge
+  identity; no scientific workload ran during realization.
+- [x] `[must]` `ARF7-13` Validate generated TLP code with ARF6 operator,
   determinism, split, sealed-data, evidence, workflow, migration, and package
-  admission tests before Trial/Publication.
+  admission tests before Trial/Publication. The bounded real-path fixture also
+  exercises the published manager consumer, native package/install/activation,
+  crash/resume, and shared heavy-dependency resolution.
 - [ ] `[must]` `ARF7-14` Publish the direction Project as one exact
   ProjectRelease containing its owned direction/experiment components and
   instantiate Study/Campaign seed state from the accepted prototype without
