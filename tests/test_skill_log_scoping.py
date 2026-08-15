@@ -343,6 +343,25 @@ def test_logging_queue_survives_output_handler_failure(tmp_path: Path) -> None:
         output_handler.handle = original_handle
 
 
+def test_setup_logging_removes_direct_output_handlers(tmp_path: Path) -> None:
+    paths = PathProvider(tmp_path)
+    paths.ensure_tree()
+    root_logger = logging.getLogger()
+    direct_root = logging.StreamHandler()
+    direct_library = logging.StreamHandler()
+    library_logger = logging.getLogger("test.direct.library")
+    root_logger.addHandler(direct_root)
+    library_logger.handlers[:] = [direct_library]
+    library_logger.propagate = False
+
+    logger = setup_logging(paths, level="DEBUG")
+    queue_handler = logger.handlers[0]
+
+    assert root_logger.handlers == [queue_handler]
+    assert library_logger.handlers == [queue_handler]
+    assert logging_queue_snapshot()["unsafe_direct_handlers"] == []
+
+
 def test_logging_queue_restarts_unexpectedly_stopped_listener(tmp_path: Path) -> None:
     paths = PathProvider(tmp_path)
     paths.ensure_tree()

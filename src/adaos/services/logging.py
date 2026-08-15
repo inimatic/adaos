@@ -534,6 +534,42 @@ def _detach_queue_handler(handler: NonBlockingQueueHandler) -> None:
         logger.handlers[:] = [item for item in logger.handlers if item is not handler]
 
 
+def _all_loggers() -> list[logging.Logger]:
+    loggers: list[logging.Logger] = [logging.getLogger()]
+    for candidate in logging.Logger.manager.loggerDict.values():
+        if isinstance(candidate, logging.Logger):
+            loggers.append(candidate)
+    return loggers
+
+
+def _route_existing_output_handlers_through_queue(handler: NonBlockingQueueHandler) -> None:
+    for logger in _all_loggers():
+        direct_handlers = [
+            item
+            for item in logger.handlers
+            if item is not handler and not isinstance(item, logging.NullHandler)
+        ]
+        if not direct_handlers:
+            continue
+        logger.handlers[:] = [handler]
+        logger.propagate = False
+
+
+def _unsafe_direct_logging_handlers(handler: NonBlockingQueueHandler | None) -> list[dict[str, str]]:
+    unsafe: list[dict[str, str]] = []
+    for logger in _all_loggers():
+        for item in logger.handlers:
+            if item is handler or isinstance(item, (NonBlockingQueueHandler, logging.NullHandler)):
+                continue
+            unsafe.append(
+                {
+                    "logger": str(logger.name or "root"),
+                    "handler": type(item).__name__,
+                }
+            )
+    return unsafe[:100]
+
+
 def logging_queue_snapshot() -> dict[str, object]:
     with _ACTIVE_QUEUE_LOCK:
         handler = _ACTIVE_QUEUE_HANDLER
@@ -554,8 +590,11 @@ def logging_queue_snapshot() -> dict[str, object]:
                 "last_listener_failure": None,
                 "pipeline_closed": False,
                 "pipeline_closed_at": None,
+                "unsafe_direct_handlers": _unsafe_direct_logging_handlers(None),
             }
-        return handler.snapshot()
+        snapshot = handler.snapshot()
+        snapshot["unsafe_direct_handlers"] = _unsafe_direct_logging_handlers(handler)
+        return snapshot
 
 
 def configure_skill_module_logging(module_name: str) -> None:
@@ -637,6 +676,8 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
     logger.addHandler(queue_handler)
     logger.propagate = False
 
+    _route_existing_output_handlers_through_queue(queue_handler)
+
     # Normal imports use skills.*, while subscription and runtime loaders use
     # synthetic module names. Parent loggers cover the former; loaders bind the
     # latter explicitly through configure_skill_module_logging().
@@ -648,8 +689,8 @@ def setup_logging(paths: PathProvider, level: str = "INFO") -> logging.Logger:
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logger.level)
-    if queue_handler not in root_logger.handlers:
-        root_logger.addHandler(queue_handler)
+    root_logger.handlers[:] = [queue_handler]
+    root_logger.propagate = False
 
     with _ACTIVE_QUEUE_LOCK:
         _ACTIVE_QUEUE_HANDLER = queue_handler
