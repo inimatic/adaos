@@ -181,7 +181,7 @@ def test_repair_moved_venv_limits_site_package_reads_to_path_metadata(tmp_path: 
     assert package_source.read_text(encoding="utf-8") == str(original_venv)
 
 
-def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_path: Path) -> None:
+def test_copy_seed_venv_auto_uses_single_reflink_fallback_copy(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
     source = tmp_path / "source-venv"
@@ -205,10 +205,10 @@ def test_copy_seed_venv_uses_linux_reflink_copy_when_available(monkeypatch, tmp_
 
     assert result["ok"] is True
     assert result["seeded"] is True
-    assert result["copy_method"] == "cp_reflink"
+    assert result["copy_method"] == "cp_reflink_auto"
     assert result["copy_elapsed_s"] >= 0
     json.dumps(result)
-    assert calls == [["/bin/cp", "-a", "--reflink=always", f"{source}/.", str(target)]]
+    assert calls == [["/bin/cp", "-a", "--reflink=auto", f"{source}/.", str(target)]]
 
 
 def test_core_update_bulk_io_uses_idle_linux_priority_by_default(monkeypatch) -> None:

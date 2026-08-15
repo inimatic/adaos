@@ -414,7 +414,23 @@ def _copy_seed_venv_tree(source: Path, target: Path, *, checkout_dir: Path | Non
             # GNU cp would then create ``target/<source.name>`` and leave the
             # expected virtualenv executable one directory too deep.
             source_contents = f"{source}/."
-            if mode in {"auto", "reflink", "cow", "copy-on-write"}:
+            hardlink_enabled = _linux_hardlink_seed_allowed(
+                source=source,
+                target=target,
+                checkout_dir=checkout_dir,
+                mode=mode,
+            ) or _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "0")
+            if mode == "auto" and not hardlink_enabled:
+                attempt = _run_seed_copy_command(
+                    [cp, "-a", "--reflink=auto", source_contents, str(target)],
+                    source=source,
+                    target=target,
+                    method="cp_reflink_auto",
+                )
+                attempts.append(attempt)
+                if bool(attempt.get("ok")):
+                    return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
+            elif mode in {"auto", "reflink", "cow", "copy-on-write"}:
                 attempt = _run_seed_copy_command(
                     [cp, "-a", "--reflink=always", source_contents, str(target)],
                     source=source,
@@ -424,12 +440,6 @@ def _copy_seed_venv_tree(source: Path, target: Path, *, checkout_dir: Path | Non
                 attempts.append(attempt)
                 if bool(attempt.get("ok")):
                     return {**attempt, "attempts": _seed_copy_attempts_snapshot(attempts)}
-            hardlink_enabled = _linux_hardlink_seed_allowed(
-                source=source,
-                target=target,
-                checkout_dir=checkout_dir,
-                mode=mode,
-            ) or _env_flag("ADAOS_CORE_UPDATE_LINUX_SEED_HARDLINK", "0")
             if hardlink_enabled and mode not in {"reflink", "cow", "copy-on-write"}:
                 attempt = _run_seed_copy_command(
                     [cp, "-al", source_contents, str(target)],
