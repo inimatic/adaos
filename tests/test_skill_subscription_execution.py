@@ -97,6 +97,48 @@ def test_async_subscription_attributes_handler_that_blocks_event_loop(monkeypatc
         incident_registry.reset_incident_registry()
 
 
+def test_async_subscription_circuit_blocks_repeated_slow_handler(monkeypatch) -> None:
+    subscription_execution.reset_subscription_execution_runtime()
+    incident_registry.reset_incident_registry()
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", "0.05")
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S", "0.05")
+    monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_TTL_S", "30")
+    calls = 0
+
+    async def blocking_handler() -> None:
+        nonlocal calls
+        calls += 1
+        time.sleep(0.08)
+
+    async def run() -> tuple[object, object]:
+        first = await subscription_execution.run_async_subscription(
+            blocking_handler,
+            skill="evolved_skill",
+            topic="subnet.member.link.up",
+            handler="handlers.main.on_runtime_event",
+        )
+        second = await subscription_execution.run_async_subscription(
+            blocking_handler,
+            skill="evolved_skill",
+            topic="subnet.member.link.up",
+            handler="handlers.main.on_runtime_event",
+        )
+        return first, second
+
+    try:
+        asyncio.run(run())
+        execution = subscription_execution.subscription_execution_snapshot()
+
+        assert calls == 1
+        assert execution["open_circuit_total"] == 1
+        assert execution["open_circuits"][0]["skill"] == "evolved_skill"
+        assert execution["top_handlers"][0]["circuit_open_total"] == 1
+        assert execution["top_handlers"][0]["circuit_rejected_total"] == 1
+    finally:
+        subscription_execution.reset_subscription_execution_runtime()
+        incident_registry.reset_incident_registry()
+
+
 def test_sync_subscription_reports_active_blocker(monkeypatch) -> None:
     subscription_execution.reset_subscription_execution_runtime()
     incident_registry.reset_incident_registry()

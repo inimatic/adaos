@@ -553,6 +553,10 @@ def _warm_switch_defer_sec() -> float:
     return _RUNTIME_CONFIG.warm_switch_defer_sec()
 
 
+def _cutover_recovery_stable_sec() -> float:
+    return _RUNTIME_CONFIG.cutover_recovery_stable_sec()
+
+
 def _warm_switch_max_deferrals() -> int:
     return _RUNTIME_CONFIG.warm_switch_max_deferrals()
 
@@ -1549,7 +1553,14 @@ def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.7
             payload = response.json()
     except Exception:
         return False
-    return bool(isinstance(payload, dict) and payload.get("ok") is True)
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        return False
+    readiness = payload.get("readiness")
+    if isinstance(readiness, dict):
+        return readiness.get("ready") is True and str(readiness.get("state") or "").strip().lower() == "ready"
+    # Compatibility with a runtime from the generation immediately before the
+    # explicit boot-readiness contract was introduced.
+    return True
 
 
 def _runtime_listener_restart_timeout_sec() -> float:
@@ -4128,6 +4139,78 @@ class SupervisorManager:
             }
 
         return None
+
+    async def _candidate_cutover_recovery_guard_snapshot(self) -> dict[str, Any]:
+        runtime = await asyncio.to_thread(self.status)
+        runtime_ready = bool(
+            runtime.get("runtime_api_ready")
+            and str(runtime.get("runtime_state") or "").strip().lower() == "ready"
+        )
+        channel_runtime = await self._runtime_reliability_payload_async()
+        node = channel_runtime.get("node") if isinstance(channel_runtime.get("node"), dict) else {}
+        role = str(node.get("role") or self._managed_transition_role or self._sidecar_role() or "").strip().lower()
+        channel: dict[str, Any]
+        if role == "hub":
+            channel = self._hub_root_channel_state(channel_runtime)
+            channel_ready = self._hub_root_channel_ready(channel)
+        elif role == "member":
+            channel = self._member_hub_channel_state(channel_runtime)
+            channel_ready = bool(
+                channel.get("connected")
+                and str(channel.get("route_status") or "").strip().lower() == "ready"
+                and str(channel.get("hub_member_status") or "").strip().lower() == "ready"
+            )
+        else:
+            channel = {}
+            channel_ready = False
+        return {
+            "ready": bool(runtime_ready and channel_ready),
+            "runtime_ready": runtime_ready,
+            "runtime_state": str(runtime.get("runtime_state") or "").strip().lower() or None,
+            "runtime_instance_id": runtime.get("runtime_instance_id"),
+            "role": role or None,
+            "channel_ready": bool(channel_ready),
+            "channel": channel,
+            "captured_at": time.time(),
+        }
+
+    def _schedule_candidate_cutover_recovery_guard(
+        self,
+        *,
+        request: dict[str, Any],
+        status: dict[str, Any],
+        attempt: dict[str, Any],
+        guard: dict[str, Any],
+        now: float,
+    ) -> dict[str, Any]:
+        stable_sec = _cutover_recovery_stable_sec()
+        previous_ready_since = _epoch(
+            attempt.get("cutover_recovery_ready_since") or status.get("cutover_recovery_ready_since")
+        )
+        ready_since = previous_ready_since if bool(guard.get("ready")) else 0.0
+        if bool(guard.get("ready")) and ready_since <= 0.0:
+            ready_since = now
+        stable_for_sec = max(0.0, now - ready_since) if ready_since > 0.0 else 0.0
+        if bool(guard.get("ready")):
+            retry_after_sec = max(1.0, stable_sec - stable_for_sec)
+            message = "core update remains deferred until recovered runtime and channel pass the stability window"
+        else:
+            retry_after_sec = min(10.0, stable_sec)
+            message = "core update remains deferred until runtime boot and upstream channel recover"
+        diagnostics = {
+            "cutover_recovery_guard": guard,
+            "cutover_recovery_ready_since": ready_since or None,
+            "cutover_recovery_stable_sec": stable_sec,
+            "cutover_recovery_stable_for_sec": round(stable_for_sec, 3),
+        }
+        return self._schedule_planned_transition(
+            request=request,
+            scheduled_for=now + retry_after_sec,
+            planned_reason="candidate_cutover_recovery",
+            message=message,
+            extra_status=diagnostics,
+            extra_attempt=diagnostics,
+        )
 
     async def _transition_continuity_guard_decision_async(self, *, operation: str) -> dict[str, Any] | None:
         return await asyncio.to_thread(self._transition_continuity_guard_decision, operation=operation)
@@ -7331,6 +7414,24 @@ class SupervisorManager:
             scheduled_for = _epoch(attempt.get("scheduled_for") or status.get("scheduled_for"))
             if scheduled_for > 0.0 and scheduled_for <= now:
                 request = _request_from_attempt(attempt)
+                planned_reason = str(attempt.get("planned_reason") or status.get("planned_reason") or "").strip().lower()
+                if planned_reason in {"candidate_cutover_failed", "candidate_cutover_recovery"}:
+                    guard = await self._candidate_cutover_recovery_guard_snapshot()
+                    stable_sec = _cutover_recovery_stable_sec()
+                    ready_since = _epoch(
+                        attempt.get("cutover_recovery_ready_since")
+                        or status.get("cutover_recovery_ready_since")
+                    )
+                    stable = bool(guard.get("ready")) and ready_since > 0.0 and (now - ready_since) >= stable_sec
+                    if not stable:
+                        self._schedule_candidate_cutover_recovery_guard(
+                            request=request,
+                            status=status,
+                            attempt=attempt,
+                            guard=guard,
+                            now=now,
+                        )
+                        return
                 decision = await self._transition_continuity_guard_decision_async(
                     operation=str(request.get("action") or "update")
                 )

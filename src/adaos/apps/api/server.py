@@ -361,14 +361,134 @@ async def _runtime_process_activity_monitor() -> None:
 
 
 async def _run_boot_sequence_logged(app: FastAPI) -> None:
+    readiness = {
+        "state": "starting",
+        "ready": False,
+        "started_at": time.time(),
+        "completed_at": None,
+        "error_type": None,
+    }
+    app.state.runtime_boot_readiness = readiness
     try:
         with _StartupTimer("run_boot_sequence"):
             await run_boot_sequence(app)
     except asyncio.CancelledError:
+        readiness.update(
+            {
+                "state": "cancelled",
+                "ready": False,
+                "completed_at": time.time(),
+                "error_type": "CancelledError",
+            }
+        )
         raise
-    except Exception:
+    except Exception as exc:
+        readiness.update(
+            {
+                "state": "failed",
+                "ready": False,
+                "completed_at": time.time(),
+                "error_type": type(exc).__name__,
+            }
+        )
         _startup_log.exception("runtime boot sequence failed")
         raise
+    else:
+        readiness.update(
+            {
+                "state": "ready",
+                "ready": True,
+                "completed_at": time.time(),
+                "error_type": None,
+            }
+        )
+        _startup_log.info(
+            "runtime boot readiness reached elapsed_s=%.3f role=%s",
+            max(0.0, float(readiness["completed_at"]) - float(readiness["started_at"])),
+            runtime_transition_role(),
+        )
+
+
+def _runtime_boot_readiness_payload() -> dict[str, Any]:
+    source = getattr(app.state, "runtime_boot_readiness", None)
+    if not isinstance(source, dict):
+        return {
+            "state": "initializing",
+            "ready": False,
+            "started_at": None,
+            "completed_at": None,
+            "error_type": None,
+        }
+    return {
+        "state": str(source.get("state") or "initializing"),
+        "ready": source.get("ready") is True,
+        "started_at": source.get("started_at"),
+        "completed_at": source.get("completed_at"),
+        "error_type": str(source.get("error_type") or "").strip() or None,
+    }
+
+
+async def _start_post_boot_skill_runtime_migration(
+    app: FastAPI,
+    *,
+    reason: str,
+    allow_promoted_candidate: bool = False,
+) -> dict[str, Any]:
+    boot_task = getattr(app.state, "runtime_boot_task", None)
+    if isinstance(boot_task, asyncio.Task) and not boot_task.done():
+        await asyncio.shield(boot_task)
+    readiness = _runtime_boot_readiness_payload()
+    if not bool(readiness.get("ready")):
+        return {"ok": False, "started": False, "reason": "runtime_boot_not_ready", "readiness": readiness}
+    if runtime_transition_role() == "candidate" and not allow_promoted_candidate:
+        app.state.skill_runtime_migration_deferred_for_promotion = True
+        _startup_log.info("deferring post-boot skill runtime migration until candidate promotion")
+        return {"ok": True, "started": False, "reason": "candidate_deferred"}
+    if bool(getattr(app.state, "skill_runtime_migration_started", False)):
+        return {"ok": True, "started": False, "reason": "already_started"}
+
+    from adaos.services.core_slots import active_slot_manifest
+    from adaos.services.skill.runtime_migration_worker import start_background_migration
+    from adaos.services.yjs.webspace import default_webspace_id
+
+    manifest = active_slot_manifest()
+    migration = (
+        manifest.get("skill_runtime_migration")
+        if isinstance(manifest, dict) and isinstance(manifest.get("skill_runtime_migration"), dict)
+        else {}
+    )
+    if not (bool(migration.get("background_required")) or bool(migration.get("deferred"))):
+        return {"ok": True, "started": False, "reason": "not_required"}
+    app.state.skill_runtime_migration_started = True
+    app.state.skill_runtime_migration_deferred_for_promotion = False
+    try:
+        await start_background_migration(
+            get_ctx(),
+            reason=reason,
+            webspace_id=default_webspace_id(),
+            force=False,
+            run_tests=True,
+            # A completed core/release cutover has already materialized the
+            # authoritative WorkspaceLock. Re-running the legacy git sync can
+            # mistake release-owned files for local edits.
+            sync_workspace=False,
+        )
+    except Exception:
+        app.state.skill_runtime_migration_started = False
+        raise
+    return {"ok": True, "started": True, "reason": reason}
+
+
+async def _run_post_boot_skill_runtime_migration(app: FastAPI, *, reason: str) -> None:
+    try:
+        await _start_post_boot_skill_runtime_migration(app, reason=reason)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logging.getLogger("adaos.skill.runtime_migration").warning(
+            "failed to schedule post-boot skill runtime migration",
+            exc_info=True,
+        )
 
 
 async def _cancel_background_task(task: asyncio.Task[Any] | None, *, timeout: float = 5.0) -> None:
@@ -845,6 +965,16 @@ async def _runtime_context(app: FastAPI):
         app.state.shutdown_drain_timeout = _DEFAULT_SHUTDOWN_DRAIN_SEC
         app.state.shutdown_lifecycle_scope = "subnet"
         app.state.shutdown_stopping_emitted = False
+        app.state.runtime_boot_readiness = {
+            "state": "initializing",
+            "ready": False,
+            "started_at": None,
+            "completed_at": None,
+            "error_type": None,
+        }
+        app.state.skill_runtime_migration_started = False
+        app.state.skill_runtime_migration_deferred_for_promotion = False
+        app.state.skill_runtime_migration_start_task = None
         reset_runtime_lifecycle()
         app.state.core_update_task = None
         app.state.artifact_delayed_verification_task = None
@@ -1203,28 +1333,13 @@ async def _runtime_context(app: FastAPI):
         pass
 
     try:
-        from adaos.services.core_slots import active_slot_manifest
-        from adaos.services.skill.runtime_migration_worker import start_background_migration
-        from adaos.services.yjs.webspace import default_webspace_id
-
-        manifest = active_slot_manifest()
-        migration = manifest.get("skill_runtime_migration") if isinstance(manifest, dict) and isinstance(manifest.get("skill_runtime_migration"), dict) else {}
-        if bool(migration.get("background_required")) or bool(migration.get("deferred")):
-            await start_background_migration(
-                get_ctx(),
-                reason="core_update_post_boot",
-                webspace_id=default_webspace_id(),
-                force=False,
-                run_tests=True,
-                # A completed core/release cutover has already materialized the
-                # authoritative WorkspaceLock.  Re-running the legacy git
-                # workspace sync here mistakes release-owned files for local
-                # edits and can fail before runtime migration starts.
-                sync_workspace=False,
-            )
+        app.state.skill_runtime_migration_start_task = asyncio.create_task(
+            _run_post_boot_skill_runtime_migration(app, reason="core_update_post_boot"),
+            name="post-boot-skill-runtime-migration",
+        )
     except Exception:
         logging.getLogger("adaos.skill.runtime_migration").warning(
-            "failed to schedule post-boot skill runtime migration",
+            "failed to create post-boot skill runtime migration gate",
             exc_info=True,
         )
 
@@ -1248,6 +1363,10 @@ async def _runtime_context(app: FastAPI):
                 await asyncio.to_thread(watchdog.stop)
         finally:
             app.state.runtime_event_loop_watchdog = None
+        try:
+            await _cancel_background_task(getattr(app.state, "skill_runtime_migration_start_task", None))
+        finally:
+            app.state.skill_runtime_migration_start_task = None
         try:
             from adaos.services.skill.runtime_migration_worker import cancel_background_migration
 
@@ -1445,6 +1564,7 @@ async def ping():
         "ts": time.time(),
         "service": "adaos-runtime",
         "runtime": _runtime_identity_public_payload(),
+        "readiness": _runtime_boot_readiness_payload(),
     }
 
 
@@ -2139,6 +2259,17 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
             "reconnect": None,
         }
 
+    boot_readiness = _runtime_boot_readiness_payload()
+    if not bool(boot_readiness.get("ready")):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "error": "runtime_boot_not_ready",
+                "readiness": boot_readiness,
+            },
+        )
+
     handoff_unit: dict[str, Any] | None = None
     try:
         from adaos.services.autostart import ensure_linux_process_handoff_unit
@@ -2159,6 +2290,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                 "handoff_unit": handoff_unit,
             },
         )
+    previous_transition_role = str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "candidate").strip() or "candidate"
     os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = "active"
     reconnect_result: dict[str, Any] | None = None
     if bool(body.reconnect_hub_root):
@@ -2198,6 +2330,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         if not bool((reconnect_result or {}).get("ok")) or (
             hub_root_authority_required and authority.get("ready") is not True
         ):
+            os.environ["ADAOS_RUNTIME_TRANSITION_ROLE"] = previous_transition_role
             raise HTTPException(
                 status_code=503,
                 detail={
@@ -2207,6 +2340,14 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
                 },
             )
     service_start = _schedule_promoted_runtime_service_start(body.reason)
+    migration_start = asyncio.create_task(
+        _start_post_boot_skill_runtime_migration(
+            app,
+            reason="core_update_post_promotion",
+            allow_promoted_candidate=True,
+        ),
+        name="promoted-runtime-skill-migration",
+    )
     return {
         "ok": True,
         "accepted": True,
@@ -2215,6 +2356,7 @@ async def admin_runtime_promote_active(body: RuntimePromoteActiveRequest):
         "runtime": _runtime_identity_public_payload(),
         "reconnect": reconnect_result,
         "service_start": service_start,
+        "migration_start": {"background": True, "scheduled": True, "task": migration_start.get_name()},
         "supervisor_handoff_unit": handoff_unit,
     }
 

@@ -38,6 +38,12 @@ def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-12345678")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "starting", "ready": False, "started_at": 1.0, "completed_at": None},
+        raising=False,
+    )
 
     payload = asyncio.run(api_server.ping())
 
@@ -48,6 +54,61 @@ def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     assert payload["runtime"]["slot"] == "B"
     assert payload["runtime"]["runtime_port"] == 8778
     assert payload["runtime"]["admin_mutation_allowed"] is False
+    assert payload["readiness"]["ready"] is False
+
+
+def test_boot_sequence_readiness_changes_only_after_boot_completes(monkeypatch) -> None:
+    release = asyncio.Event()
+
+    async def _boot(_app) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(api_server, "run_boot_sequence", _boot)
+
+    async def _run() -> tuple[dict, dict]:
+        task = asyncio.create_task(api_server._run_boot_sequence_logged(api_server.app))
+        await asyncio.sleep(0)
+        starting = api_server._runtime_boot_readiness_payload()
+        release.set()
+        await task
+        return starting, api_server._runtime_boot_readiness_payload()
+
+    starting, ready = asyncio.run(_run())
+
+    assert starting["state"] == "starting"
+    assert starting["ready"] is False
+    assert ready["state"] == "ready"
+    assert ready["ready"] is True
+    assert ready["completed_at"] >= ready["started_at"]
+
+
+def test_candidate_defers_post_boot_migration_until_promotion(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setattr(api_server.app.state, "runtime_boot_task", None, raising=False)
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_started", False, raising=False)
+    monkeypatch.setattr(
+        api_server.app.state,
+        "skill_runtime_migration_deferred_for_promotion",
+        False,
+        raising=False,
+    )
+
+    payload = asyncio.run(
+        api_server._start_post_boot_skill_runtime_migration(
+            api_server.app,
+            reason="test.post_boot",
+        )
+    )
+
+    assert payload == {"ok": True, "started": False, "reason": "candidate_deferred"}
+    assert api_server.app.state.skill_runtime_migration_started is False
+    assert api_server.app.state.skill_runtime_migration_deferred_for_promotion is True
 
 
 def test_background_boot_defaults_to_supervisor_or_autostart(monkeypatch) -> None:
@@ -630,6 +691,12 @@ def test_candidate_runtime_can_be_promoted_to_active(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
 
     reconnect_calls: list[tuple[str | None, str | None, bool]] = []
     service_start_reasons: list[str] = []
@@ -735,6 +802,12 @@ def test_candidate_runtime_promotion_rejects_missing_hub_root_authority(monkeypa
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
     from adaos.services import autostart
 
     async def _reconnect(**_kwargs):
@@ -763,6 +836,28 @@ def test_candidate_runtime_promotion_rejects_missing_hub_root_authority(monkeypa
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail["error"] == "hub_root_authority_not_ready"
+    assert api_server.runtime_transition_role() == "candidate"
+
+
+def test_candidate_runtime_promotion_rejects_incomplete_boot(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "starting", "ready": False, "started_at": 1.0, "completed_at": None},
+        raising=False,
+    )
+
+    with pytest.raises(api_server.HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_runtime_promote_active(
+                api_server.RuntimePromoteActiveRequest(reason="test.cutover", reconnect_hub_root=True)
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "runtime_boot_not_ready"
+    assert api_server.runtime_transition_role() == "candidate"
 
 
 def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatch) -> None:
@@ -770,6 +865,12 @@ def test_member_candidate_promotion_does_not_claim_hub_root_authority(monkeypatc
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-abcdef12")
     monkeypatch.setenv("ADAOS_ACTIVE_CORE_SLOT", "B")
     monkeypatch.setenv("ADAOS_RUNTIME_PORT", "8778")
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
     from adaos.services import autostart
 
     wait_values: list[bool] = []

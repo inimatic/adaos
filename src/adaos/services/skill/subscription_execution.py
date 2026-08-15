@@ -21,6 +21,7 @@ _ACTIVE: dict[str, dict[str, Any]] = {}
 _PENDING_BY_HANDLER: dict[str, int] = defaultdict(int)
 _STATS: dict[str, dict[str, Any]] = {}
 _LAST_OVERLOAD_LOG_AT: dict[str, float] = {}
+_CIRCUITS: dict[str, dict[str, Any]] = {}
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -64,6 +65,8 @@ def _stats_row(key: str, *, skill: str, topic: str, handler: str) -> dict[str, A
             "failed_total": 0,
             "overload_total": 0,
             "blocking_total": 0,
+            "circuit_open_total": 0,
+            "circuit_rejected_total": 0,
             "max_duration_s": 0.0,
             "last_duration_s": 0.0,
             "last_started_at": None,
@@ -71,6 +74,65 @@ def _stats_row(key: str, *, skill: str, topic: str, handler: str) -> dict[str, A
             "last_error": None,
         }
         _STATS[key] = row
+    return row
+
+
+def _async_max_pending_per_handler() -> int:
+    return _env_int(
+        "ADAOS_SKILL_ASYNC_SUBSCRIPTION_MAX_PENDING_PER_HANDLER",
+        1,
+        minimum=1,
+        maximum=16,
+    )
+
+
+def _active_circuit_locked(key: str, now: float) -> dict[str, Any] | None:
+    row = _CIRCUITS.get(key)
+    if not isinstance(row, dict):
+        return None
+    if float(row.get("open_until") or 0.0) <= now:
+        return None
+    return row
+
+
+def _trip_circuit_locked(
+    key: str,
+    *,
+    skill: str,
+    topic: str,
+    handler: str,
+    duration_s: float,
+    threshold_s: float,
+    now: float,
+) -> dict[str, Any]:
+    previous = _CIRCUITS.get(key) if isinstance(_CIRCUITS.get(key), dict) else {}
+    incident_count = int((previous or {}).get("incident_count") or 0) + 1
+    base_ttl_s = _env_float(
+        "ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_TTL_S",
+        300.0,
+        minimum=5.0,
+        maximum=86400.0,
+    )
+    max_ttl_s = _env_float(
+        "ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_MAX_TTL_S",
+        3600.0,
+        minimum=base_ttl_s,
+        maximum=604800.0,
+    )
+    ttl_s = min(max_ttl_s, base_ttl_s * float(2 ** min(8, max(0, incident_count - 1))))
+    row = {
+        "skill": skill,
+        "topic": topic,
+        "handler": handler,
+        "opened_at": now,
+        "open_until": now + ttl_s,
+        "ttl_s": ttl_s,
+        "incident_count": incident_count,
+        "duration_s": round(max(0.0, duration_s), 6),
+        "threshold_s": threshold_s,
+        "reason": "async_execution_budget_exceeded",
+    }
+    _CIRCUITS[key] = row
     return row
 
 
@@ -278,13 +340,24 @@ async def run_async_subscription(
     """
 
     key = _handler_key(skill, topic, handler)
-    max_pending = _env_int("ADAOS_SKILL_SUBSCRIPTION_MAX_PENDING_PER_HANDLER", 2, minimum=1, maximum=64)
+    max_pending = _async_max_pending_per_handler()
     now = time.time()
     with _LOCK:
+        circuit = _active_circuit_locked(key, now)
+        if circuit is not None:
+            stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
+            stats["execution_mode"] = "async_owner_loop"
+            stats["circuit_rejected_total"] = int(stats.get("circuit_rejected_total") or 0) + 1
+            stats["last_circuit_rejected_at"] = now
+            circuit_payload = dict(circuit)
+        else:
+            circuit_payload = None
         pending = int(_PENDING_BY_HANDLER.get(key) or 0)
         stats = _stats_row(key, skill=skill, topic=topic, handler=handler)
         stats["execution_mode"] = "async_owner_loop"
-        if pending >= max_pending:
+        if circuit_payload is not None:
+            should_log = False
+        elif pending >= max_pending:
             stats["overload_total"] = int(stats.get("overload_total") or 0) + 1
             stats["last_overload_at"] = now
             last_log = float(_LAST_OVERLOAD_LOG_AT.get(key) or 0.0)
@@ -295,6 +368,27 @@ async def run_async_subscription(
             should_log = False
             _PENDING_BY_HANDLER[key] = pending + 1
             stats["submitted_total"] = int(stats.get("submitted_total") or 0) + 1
+    if circuit_payload is not None:
+        remaining_s = max(0.0, float(circuit_payload.get("open_until") or 0.0) - now)
+        _LOG.warning(
+            "async skill subscription circuit open skill=%s topic=%s handler=%s remaining_s=%.1f incident=%s",
+            skill,
+            topic,
+            handler,
+            remaining_s,
+            circuit_payload.get("incident_count"),
+        )
+        await asyncio.to_thread(
+            _record_pressure,
+            skill=skill,
+            topic=topic,
+            handler=handler,
+            signal="handler_circuit_open",
+            duration_s=float(circuit_payload.get("duration_s") or 0.0),
+            pending=pending,
+            threshold_s=float(circuit_payload.get("threshold_s") or 0.0),
+        )
+        return None
     if pending >= max_pending:
         if should_log:
             _LOG.warning(
@@ -338,6 +432,12 @@ async def run_async_subscription(
             stats["last_started_at"] = started_at
 
     threshold_s = _env_float("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", 1.0, minimum=0.05, maximum=300.0)
+    circuit_threshold_s = _env_float(
+        "ADAOS_SKILL_SUBSCRIPTION_CIRCUIT_BREAKER_S",
+        2.0,
+        minimum=0.05,
+        maximum=300.0,
+    )
     watchdog = asyncio.create_task(
         _watch_blocking_handler(token, threshold_s),
         name=f"skill-async-subscription-watchdog:{skill}:{topic}",
@@ -354,6 +454,7 @@ async def run_async_subscription(
     finally:
         finished_at = time.time()
         duration_s = max(0.0, finished_at - started_at)
+        circuit_opened: dict[str, Any] | None = None
         with _LOCK:
             active = _ACTIVE.pop(token, None) or {}
             watchdog_reported = bool(active.get("watchdog_reported"))
@@ -370,6 +471,18 @@ async def run_async_subscription(
                 stats["last_error"] = type(error).__name__ if error is not None else None
                 if duration_s >= threshold_s and not watchdog_reported:
                     stats["blocking_total"] = int(stats.get("blocking_total") or 0) + 1
+                if duration_s >= circuit_threshold_s:
+                    circuit_opened = _trip_circuit_locked(
+                        key,
+                        skill=skill,
+                        topic=topic,
+                        handler=handler,
+                        duration_s=duration_s,
+                        threshold_s=circuit_threshold_s,
+                        now=finished_at,
+                    )
+                    stats["circuit_open_total"] = int(stats.get("circuit_open_total") or 0) + 1
+                    stats["circuit_open_until"] = circuit_opened.get("open_until")
         watchdog.cancel()
         if duration_s >= threshold_s and not watchdog_reported:
             _LOG.warning(
@@ -390,6 +503,28 @@ async def run_async_subscription(
                 pending=pending + 1,
                 threshold_s=threshold_s,
             )
+        if circuit_opened is not None:
+            _LOG.error(
+                "async skill subscription circuit opened skill=%s topic=%s handler=%s duration=%.3fs "
+                "threshold=%.3fs ttl_s=%.1f incident=%s",
+                skill,
+                topic,
+                handler,
+                duration_s,
+                circuit_threshold_s,
+                float(circuit_opened.get("ttl_s") or 0.0),
+                circuit_opened.get("incident_count"),
+            )
+            await asyncio.to_thread(
+                _record_pressure,
+                skill=skill,
+                topic=topic,
+                handler=handler,
+                signal="handler_circuit_opened",
+                duration_s=duration_s,
+                pending=pending + 1,
+                threshold_s=circuit_threshold_s,
+            )
 
 
 def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
@@ -399,6 +534,7 @@ def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
         active = [dict(item) for item in _ACTIVE.values()]
         stats = [dict(item) for item in _STATS.values()]
         pending_total = sum(int(value or 0) for value in _PENDING_BY_HANDLER.values())
+        circuits = [dict(item) for item in _CIRCUITS.values() if float(item.get("open_until") or 0.0) > now]
     for item in active:
         started = float(item.get("running_at") or item.get("queued_at") or now)
         item["age_s"] = round(max(0.0, now - started), 3)
@@ -412,18 +548,24 @@ def subscription_execution_snapshot(*, limit: int = 25) -> dict[str, Any]:
             -float(item.get("max_duration_s") or 0.0),
         )
     )
+    circuits.sort(key=lambda item: (-float(item.get("open_until") or 0.0), str(item.get("handler") or "")))
+    for item in circuits:
+        item["remaining_s"] = round(max(0.0, float(item.get("open_until") or 0.0) - now), 3)
     return {
         "schema": "adaos.skill_subscription_execution.v1",
         "executor_workers": _env_int("ADAOS_SKILL_SUBSCRIPTION_WORKERS", 4, minimum=1, maximum=32),
         "max_pending_per_handler": _env_int(
             "ADAOS_SKILL_SUBSCRIPTION_MAX_PENDING_PER_HANDLER", 2, minimum=1, maximum=64
         ),
+        "async_max_pending_per_handler": _async_max_pending_per_handler(),
         "blocking_warn_s": _env_float(
             "ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", 1.0, minimum=0.05, maximum=300.0
         ),
         "active_total": len(active),
         "pending_total": pending_total,
+        "open_circuit_total": len(circuits),
         "active": active[:bounded_limit],
+        "open_circuits": circuits[:bounded_limit],
         "top_handlers": stats[:bounded_limit],
         "updated_at": now,
     }
@@ -435,6 +577,7 @@ def reset_subscription_execution_runtime() -> None:
         _PENDING_BY_HANDLER.clear()
         _STATS.clear()
         _LAST_OVERLOAD_LOG_AT.clear()
+        _CIRCUITS.clear()
 
 
 __all__ = [

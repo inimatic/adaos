@@ -159,6 +159,11 @@ class SupervisorRuntimeConfig:
             "ADAOS_SUPERVISOR_WARM_SWITCH_DEFER_SEC", 60.0, minimum=5.0
         )
 
+    def cutover_recovery_stable_sec(self) -> float:
+        return self._float(
+            "ADAOS_SUPERVISOR_CUTOVER_RECOVERY_STABLE_SEC", 30.0, minimum=5.0
+        )
+
     def warm_switch_max_deferrals(self) -> int:
         return self._int(
             "ADAOS_SUPERVISOR_WARM_SWITCH_MAX_DEFERRALS", 1, minimum=0

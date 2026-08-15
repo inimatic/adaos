@@ -1155,6 +1155,36 @@ def test_hub_root_root_probe_reads_fresh_control_report(monkeypatch) -> None:
     assert requests_seen[0]["params"] == {"hub_id": "sn_test"}
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"ok": True}, True),
+        ({"ok": True, "readiness": {"state": "starting", "ready": False}}, False),
+        ({"ok": True, "readiness": {"state": "ready", "ready": True}}, True),
+        ({"ok": True, "readiness": {"state": "failed", "ready": False}}, False),
+    ],
+)
+def test_runtime_api_ready_honors_explicit_boot_readiness(monkeypatch, payload, expected) -> None:
+    class _Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(supervisor.requests, "get", lambda *_args, **_kwargs: _Response())
+
+    assert supervisor._runtime_api_ready("http://127.0.0.1:8777", token=None) is expected
+
+
 def test_hub_root_root_probe_accepts_root_items_payload(monkeypatch) -> None:
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 
@@ -4045,6 +4075,90 @@ def test_supervisor_monitor_resumes_due_planned_transition(monkeypatch, tmp_path
 
     assert calls
     assert calls[0]["request"]["target_rev"] == "rev2026"
+
+
+def test_supervisor_monitor_waits_for_recovered_channel_after_failed_cutover(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_CUTOVER_RECOVERY_STABLE_SEC", "30")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    payload = {
+        "state": "planned",
+        "phase": "scheduled",
+        "action": "update",
+        "target_rev": "rev2026",
+        "target_version": "1.2.3",
+        "reason": "test.update",
+        "countdown_sec": 0.0,
+        "drain_timeout_sec": 10.0,
+        "signal_delay_sec": 0.25,
+        "scheduled_for": 499.0,
+        "planned_reason": "candidate_cutover_failed",
+    }
+    write_status(payload)
+    supervisor._write_update_attempt({**payload, "state": "planned", "updated_at": 490.0})
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[dict] = []
+
+    async def _guard() -> dict:
+        return {
+            "ready": False,
+            "runtime_ready": True,
+            "channel_ready": False,
+            "role": "hub",
+            "channel": {"route_status": "degraded"},
+        }
+
+    monkeypatch.setattr(manager, "_candidate_cutover_recovery_guard_snapshot", _guard)
+    monkeypatch.setattr(manager, "_begin_prepare_transition", lambda request: calls.append(dict(request)))
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert calls == []
+    status = read_status()
+    assert status["planned_reason"] == "candidate_cutover_recovery"
+    assert status["scheduled_for"] == 510.0
+    assert status["cutover_recovery_ready_since"] is None
+    assert status["cutover_recovery_guard"]["channel_ready"] is False
+
+
+def test_supervisor_monitor_resumes_after_cutover_recovery_stability_window(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_CUTOVER_RECOVERY_STABLE_SEC", "30")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
+    payload = {
+        "state": "planned",
+        "phase": "scheduled",
+        "action": "update",
+        "target_rev": "rev2026",
+        "target_version": "1.2.3",
+        "reason": "test.update",
+        "countdown_sec": 0.0,
+        "drain_timeout_sec": 10.0,
+        "signal_delay_sec": 0.25,
+        "scheduled_for": 499.0,
+        "planned_reason": "candidate_cutover_recovery",
+        "cutover_recovery_ready_since": 460.0,
+    }
+    write_status(payload)
+    supervisor._write_update_attempt({**payload, "state": "planned", "updated_at": 490.0})
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[dict] = []
+
+    async def _guard() -> dict:
+        return {"ready": True, "runtime_ready": True, "channel_ready": True, "role": "hub", "channel": {}}
+
+    async def _continuity(*, operation: str):
+        assert operation == "update"
+        return None
+
+    monkeypatch.setattr(manager, "_candidate_cutover_recovery_guard_snapshot", _guard)
+    monkeypatch.setattr(manager, "_transition_continuity_guard_decision_async", _continuity)
+    monkeypatch.setattr(manager, "_begin_prepare_transition", lambda request: calls.append(dict(request)))
+
+    asyncio.run(manager._maybe_resume_or_continue_transition())
+
+    assert len(calls) == 1
+    assert calls[0]["target_rev"] == "rev2026"
 
 
 def test_supervisor_monitor_reschedules_due_planned_transition_when_live_media_guard_active(monkeypatch, tmp_path) -> None:

@@ -70,6 +70,39 @@ def test_importlib_loader_keeps_event_loop_responsive_during_discovery_and_impor
     assert asyncio.run(_run()) >= 8
 
 
+def test_importlib_loader_keeps_declaration_loading_off_event_loop(tmp_path, monkeypatch) -> None:
+    handler = tmp_path / "slow_declaration_skill" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+    loader = ImportlibSkillsLoader()
+
+    monkeypatch.setattr(loader, "_discover_runtime_handlers", lambda _root: [(handler, "slow_declaration_skill")])
+    monkeypatch.setattr(loader, "_discover_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(loader, "_discover_repo_workspace_handlers", lambda _root, _loaded: [])
+    monkeypatch.setattr(loader, "_load_handler", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(loader, "_load_skill_declarations", lambda *_args, **_kwargs: time.sleep(0.08))
+
+    async def _run() -> int:
+        ticks = 0
+        done = asyncio.Event()
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            while not done.is_set():
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        ticker = asyncio.create_task(_ticker())
+        try:
+            await loader.import_all_handlers(tmp_path)
+        finally:
+            done.set()
+            await ticker
+        return ticks
+
+    assert asyncio.run(_run()) >= 6
+
+
 def test_runtime_handler_discovery_uses_bounded_source_layout(tmp_path, monkeypatch) -> None:
     runtime_skill = tmp_path / ".runtime" / "bounded_skill"
     version_root = runtime_skill / "v1.0"

@@ -104,15 +104,25 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         for handler in handlers:
-            self._load_skill_declarations(handler, loaded_declaration_manifests, skill_name=target)
+            declaration_started_at = time.perf_counter()
+            await asyncio.to_thread(
+                self._load_skill_declarations,
+                handler,
+                loaded_declaration_manifests,
+                skill_name=target,
+            )
+            declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
             import_started_at = time.perf_counter()
             await asyncio.to_thread(self._load_handler, handler, reload=True)
+            import_ms = (time.perf_counter() - import_started_at) * 1000.0
             self._log_slow_handler_import(
                 self._handler_import_timing(
                     handler=handler,
                     skill_name=target,
                     source="reload",
-                    elapsed_ms=(time.perf_counter() - import_started_at) * 1000.0,
+                    elapsed_ms=declaration_ms + import_ms,
+                    declaration_ms=declaration_ms,
+                    import_ms=import_ms,
                     loaded=True,
                 )
             )
@@ -194,23 +204,30 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             "repo_workspace": "repo workspace skill handler",
         }.get(source, f"{source} skill handler")
         for handler, skill_name in handlers:
-            self._load_skill_declarations(
+            handler_started_at = time.perf_counter()
+            declaration_started_at = time.perf_counter()
+            await asyncio.to_thread(
+                self._load_skill_declarations,
                 handler,
                 loaded_declaration_manifests,
                 skill_name=skill_name,
             )
+            declaration_ms = (time.perf_counter() - declaration_started_at) * 1000.0
             import_started_at = time.perf_counter()
             loaded_ok = await self._try_load_handler_async(
                 handler,
                 skill_name=skill_name,
                 source=source,
             )
+            import_ms = (time.perf_counter() - import_started_at) * 1000.0
             timings.append(
                 self._handler_import_timing(
                     handler=handler,
                     skill_name=skill_name,
                     source=source,
-                    elapsed_ms=(time.perf_counter() - import_started_at) * 1000.0,
+                    elapsed_ms=(time.perf_counter() - handler_started_at) * 1000.0,
+                    declaration_ms=declaration_ms,
+                    import_ms=import_ms,
                     loaded=loaded_ok,
                 )
             )
@@ -220,7 +237,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     _LOG.info("imported %s skill=%s path=%s", source_label, skill_name, handler)
                 else:
                     _LOG.info("imported %s path=%s", source_label, handler)
-            await asyncio.sleep(0)
+            await asyncio.sleep(self._handler_import_yield_sec())
         return timings
 
     @staticmethod
@@ -230,15 +247,32 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         skill_name: str | None,
         source: str,
         elapsed_ms: float,
+        declaration_ms: float | None = None,
+        import_ms: float | None = None,
         loaded: bool,
     ) -> dict[str, Any]:
-        return {
+        timing = {
             "skill": str(skill_name or "<unknown>"),
             "source": str(source or "unknown"),
             "elapsed_ms": round(max(0.0, float(elapsed_ms)), 3),
             "loaded": bool(loaded),
             "path": str(handler),
         }
+        if declaration_ms is not None:
+            timing["declaration_ms"] = round(max(0.0, float(declaration_ms)), 3)
+        if import_ms is not None:
+            timing["import_ms"] = round(max(0.0, float(import_ms)), 3)
+        return timing
+
+    @staticmethod
+    def _handler_import_yield_sec() -> float:
+        try:
+            return min(
+                0.25,
+                max(0.001, float(os.getenv("ADAOS_SKILL_HANDLER_IMPORT_YIELD_SEC", "0.01") or 0.01)),
+            )
+        except Exception:
+            return 0.01
 
     @staticmethod
     def _log_slow_handler_import(timing: dict[str, Any]) -> None:
