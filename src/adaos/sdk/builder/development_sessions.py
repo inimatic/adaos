@@ -25,6 +25,7 @@ from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation
 
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _COMPONENT_REF_RE = re.compile(r"^(skill|scenario):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
+_INSTRUCTION_KIND_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 
 
 class DevelopmentSessionError(SdkError):
@@ -144,6 +145,127 @@ def binding_for(builder_webspace_id: str) -> dict[str, Any] | None:
 
 def _within(root: Path, candidate: Path) -> bool:
     return candidate == root or root in candidate.parents
+
+
+def _instruction_kind(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if not _INSTRUCTION_KIND_RE.fullmatch(token):
+        raise DevelopmentSessionError("instruction kind contains unsupported characters")
+    return token
+
+
+def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def attach_instruction(
+    session_id: str,
+    kind: str,
+    value: Mapping[str, Any],
+    *,
+    expected_digest: str | None = None,
+    media_type: str = "application/json",
+) -> dict[str, Any]:
+    """Attach one immutable, digest-verified instruction to a session.
+
+    Development Sessions are generic Builder policy objects.  The instruction
+    kind identifies the producer contract (for example ``automation_brief``)
+    without teaching Builder about that producer's domain schema.
+    """
+
+    token = _session_id(session_id)
+    instruction_kind = _instruction_kind(kind)
+    payload = dict(value)
+    declared_digest = str(payload.get("digest") or "").strip()
+    required_digest = str(expected_digest or "").strip()
+    if required_digest and declared_digest != required_digest:
+        raise DevelopmentSessionError(
+            "instruction declared digest does not match the Development Session handoff"
+        )
+    content_digest = "sha256:" + hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    session_path = _path(token)
+    instruction_path = (session_path.parent / "instructions" / f"{instruction_kind}.json").resolve()
+    if not _within(session_path.parent, instruction_path):
+        raise DevelopmentSessionError("instruction path escapes Development Session root")
+    ref = f"instruction://builder/{token}/{instruction_kind}"
+    descriptor = {
+        "ref": ref,
+        "kind": instruction_kind,
+        "access": "read-only",
+        "media_type": str(media_type or "application/json").strip(),
+        "content_digest": content_digest,
+        "path": str(instruction_path),
+    }
+    with mutation_lock(session_path.parent / ".mutation.lock"):
+        session = get(token)
+        existing = next(
+            (
+                dict(item)
+                for item in session.get("instruction_inputs") or []
+                if str(item.get("kind") or "") == instruction_kind
+            ),
+            None,
+        )
+        if existing and existing != descriptor:
+            raise DevelopmentSessionError(
+                f"development session {token!r} already has another {instruction_kind!r} instruction"
+            )
+        if instruction_path.is_file():
+            current = json.loads(instruction_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(current, Mapping) or _canonical_bytes(current) != _canonical_bytes(payload):
+                raise DevelopmentSessionError("persisted instruction content does not match its descriptor")
+        else:
+            atomic_write_json(instruction_path, payload)
+        if not existing:
+            persisted = {key: item for key, item in session.items() if key != "state_path"}
+            persisted["instruction_inputs"] = [
+                *list(persisted.get("instruction_inputs") or []),
+                descriptor,
+            ]
+            validate(persisted)
+            atomic_write_json(session_path, persisted)
+    return {
+        "ok": True,
+        "idempotent": existing is not None,
+        "instruction": descriptor,
+        "session": get(token),
+    }
+
+
+def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
+    """Read an instruction only after verifying its descriptor and content."""
+
+    token = _session_id(session_id)
+    instruction_kind = _instruction_kind(kind)
+    session = get(token)
+    descriptor = next(
+        (
+            dict(item)
+            for item in session.get("instruction_inputs") or []
+            if str(item.get("kind") or "") == instruction_kind
+        ),
+        None,
+    )
+    if not descriptor:
+        raise DevelopmentSessionError(
+            f"development session {token!r} has no {instruction_kind!r} instruction"
+        )
+    session_root = _path(token).parent
+    path = Path(str(descriptor["path"])).resolve()
+    if not _within(session_root, path) or not path.is_file():
+        raise DevelopmentSessionError("instruction path is unavailable or escapes its session root")
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(value, Mapping):
+        raise DevelopmentSessionError("instruction content must be an object")
+    actual_digest = "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    if actual_digest != str(descriptor["content_digest"]):
+        raise DevelopmentSessionError("instruction content digest does not match its descriptor")
+    return {"ok": True, "instruction": descriptor, "value": dict(value)}
 
 
 def review_changes(session_id: str, paths: Sequence[str]) -> dict[str, Any]:
@@ -345,10 +467,12 @@ def create(
 
 __all__ = [
     "DevelopmentSessionError",
+    "attach_instruction",
     "bind",
     "binding_for",
     "create",
     "get",
+    "get_instruction",
     "list_sessions",
     "request_scope_expansion",
     "review_changes",

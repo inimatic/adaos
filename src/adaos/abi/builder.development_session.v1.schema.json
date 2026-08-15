@@ -20,6 +20,7 @@
     },
     "context_members": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/contextMember"}},
     "artifact_inputs": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/artifactInput"}},
+    "instruction_inputs": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/instructionInput"}},
     "scratch": {
       "type": "object", "required": ["owner", "access", "path"],
       "properties": {"owner": {"const": "session"}, "access": {"const": "read-write"}, "path": {"type": "string", "minLength": 1}},
@@ -54,6 +55,19 @@
     "artifactInput": {
       "type": "object", "required": ["ref", "access", "manifest_digest", "root_path"],
       "properties": {"ref": {"type": "string", "pattern": "^artifact://skill/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}, "access": {"const": "read-only"}, "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "root_path": {"type": "string", "minLength": 1}},
+      "additionalProperties": false
+    },
+    "instructionInput": {
+      "type": "object",
+      "required": ["ref", "kind", "access", "media_type", "content_digest", "path"],
+      "properties": {
+        "ref": {"type": "string", "pattern": "^instruction://builder/[A-Za-z0-9_.-]+/[a-z][a-z0-9_.-]{0,63}$"},
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
+        "access": {"const": "read-only"},
+        "media_type": {"type": "string", "minLength": 1},
+        "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "path": {"type": "string", "minLength": 1}
+      },
       "additionalProperties": false
     }
   },

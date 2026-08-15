@@ -324,6 +324,27 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     assert session["base_release"]["scope"] == "local"
     assert repeated["idempotent"] is True
 
+    brief = {"schema": "example.automation_brief.v1", "digest": digest, "objective": "Build it"}
+    attached = development_sessions.attach_instruction(
+        session["session_id"],
+        "automation_brief",
+        brief,
+        expected_digest=digest,
+    )
+    repeated_instruction = development_sessions.attach_instruction(
+        session["session_id"],
+        "automation_brief",
+        brief,
+        expected_digest=digest,
+    )
+    restored_instruction = development_sessions.get_instruction(
+        session["session_id"], "automation_brief"
+    )
+    assert attached["instruction"]["access"] == "read-only"
+    assert repeated_instruction["idempotent"] is True
+    assert restored_instruction["value"] == brief
+    assert restored_instruction["instruction"]["content_digest"].startswith("sha256:")
+
     bound = development_sessions.bind(session["session_id"], "desktop")
     restored = development_sessions.binding_for("desktop")
     assert bound["binding"]["focus_ref"] == "skill:tlp_direction"
@@ -369,6 +390,30 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         session_id="dev_0000_lexically_earlier",
     )
     assert development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"] == later["session"]["session_id"]
+
+
+def test_development_session_rejects_instruction_digest_drift(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    compositions.create(_project("tlp_research", "tlp_direction"))
+    source = tmp_path / "review.md"
+    source.write_text("review", encoding="utf-8")
+    artifact_context.add_path("tlp_direction", "part0", source)
+    digest = "sha256:" + "1" * 64
+    created = development_sessions.create(
+        "tlp_research",
+        automation_brief_digest=digest,
+        research_prototype_digest="sha256:" + "2" * 64,
+        artifact_groups=["part0"],
+        prohibited_actions=["No execution"],
+    )
+
+    with pytest.raises(development_sessions.DevelopmentSessionError, match="declared digest"):
+        development_sessions.attach_instruction(
+            created["session"]["session_id"],
+            "automation_brief",
+            {"digest": "sha256:" + "3" * 64},
+            expected_digest=digest,
+        )
 
 
 def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:
