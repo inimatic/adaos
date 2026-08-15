@@ -18,27 +18,50 @@ class SubnetDirectory:
         ctx = get_ctx()
         self.repo = SubnetRepo(ctx.sql)
         self.live: Dict[str, LiveState] = {}
+        self._registration_overlay: Dict[str, Dict[str, Any]] = {}
         # preload persisted nodes as offline until first heartbeat
         for n in self.repo.list_nodes():
             self.live[n["node_id"]] = {"online": False, "last_seen": float(n.get("last_seen") or 0.0)}
 
     # ------ lifecycle events ------
-    def on_register(self, node_info: Dict[str, Any]) -> None:
-        node = {
+    @staticmethod
+    def _registration_node(node_info: Dict[str, Any], *, last_seen: float) -> Dict[str, Any]:
+        return {
             "node_id": node_info.get("node_id"),
             "subnet_id": node_info.get("subnet_id"),
             "roles": list(node_info.get("roles") or []),
             "hostname": node_info.get("hostname"),
             "base_url": node_info.get("base_url"),
             "node_state": str(node_info.get("node_state") or "ready"),
-            "last_seen": time.time(),
+            "last_seen": last_seen,
         }
+
+    def accept_registration(self, node_info: Dict[str, Any]) -> bool:
+        """Admit a valid member without putting durable storage on the route path."""
+
+        node_id = str(node_info.get("node_id") or "").strip()
+        if not node_id:
+            raise ValueError("node_id is required")
+        known = node_id in self.live
+        was_online = self.is_online(node_id)
+        ts = time.time()
+        node = self._registration_node(node_info, last_seen=ts)
+        node["capacity"] = dict(node_info.get("capacity") or {})
+        self._registration_overlay[node_id] = node
+        self.live[node_id] = {"online": True, "last_seen": ts}
+        return not known or not was_online
+
+    def persist_registration(self, node_info: Dict[str, Any]) -> None:
+        node = self._registration_node(node_info, last_seen=time.time())
         self.repo.upsert_node(node)
         capacity = node_info.get("capacity") or {}
         self.repo.replace_io_capacity(node["node_id"], capacity.get("io") or [])
         self.repo.replace_skill_capacity(node["node_id"], capacity.get("skills") or [])
         self.repo.replace_scenario_capacity(node["node_id"], capacity.get("scenarios") or [])
-        self.live[node["node_id"]] = {"online": True, "last_seen": node["last_seen"]}
+
+    def on_register(self, node_info: Dict[str, Any]) -> None:
+        self.accept_registration(node_info)
+        self.persist_registration(node_info)
 
     def on_heartbeat(
         self,
@@ -48,19 +71,40 @@ class SubnetDirectory:
         node_state: str | None = None,
         base_url: str | None = None,
     ) -> None:
+        self.accept_heartbeat(
+            node_id,
+            capacity=capacity,
+            node_state=node_state,
+            base_url=base_url,
+        )
         self.persist_heartbeat(
             node_id,
             capacity,
             node_state=node_state,
             base_url=base_url,
         )
-        self._mark_heartbeat_live(node_id)
 
-    def accept_heartbeat(self, node_id: str) -> bool:
+    def accept_heartbeat(
+        self,
+        node_id: str,
+        *,
+        capacity: Optional[Dict[str, Any]] = None,
+        node_state: str | None = None,
+        base_url: str | None = None,
+    ) -> bool:
         """Accept liveness without putting durable storage on the route critical path."""
         if node_id not in self.live:
             return False
         self._mark_heartbeat_live(node_id)
+        overlay = self._registration_overlay.get(node_id)
+        if overlay is not None:
+            if isinstance(capacity, dict):
+                overlay["capacity"] = dict(capacity)
+            if node_state is not None:
+                overlay["node_state"] = str(node_state or "ready")
+            if base_url is not None:
+                overlay["base_url"] = str(base_url)
+            overlay["last_seen"] = float((self.live.get(node_id) or {}).get("last_seen") or time.time())
         return True
 
     def persist_heartbeat(
@@ -146,21 +190,29 @@ class SubnetDirectory:
 
     def find_nodes_with_skill(self, name: str, require_online: bool = True) -> List[Dict[str, Any]]:
         nodes = self.repo.nodes_with_skill(name)
+        known_ids = {str(item.get("node_id") or "") for item in nodes}
+        for node_id, overlay in self._registration_overlay.items():
+            skills = list((overlay.get("capacity") or {}).get("skills") or [])
+            if node_id not in known_ids and any(str(item.get("name") or "") == name for item in skills):
+                nodes.append(dict(overlay))
         if require_online:
             nodes = [n for n in nodes if self.is_online(n.get("node_id", ""))]
         return [n for n in nodes if str(n.get("node_state") or "ready") == "ready"]
 
     def get_node_base_url(self, node_id: str) -> Optional[str]:
-        n = self.repo.get_node(node_id)
+        n = self._registration_overlay.get(node_id) or self.repo.get_node(node_id)
         return n.get("base_url") if n else None
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
-        node = self.repo.get_node(node_id)
+        persisted = self.repo.get_node(node_id)
+        overlay = self._registration_overlay.get(node_id)
+        node = {**(persisted or {}), **(overlay or {})}
         if not node:
             return None
         item = dict(node)
         item["online"] = self.is_online(node_id)
-        item["capacity"] = {
+        overlay_capacity = overlay.get("capacity") if isinstance(overlay, dict) else None
+        item["capacity"] = dict(overlay_capacity) if isinstance(overlay_capacity, dict) else {
             "io": self.repo.io_for_node(node_id),
             "skills": self.repo.skills_for_node(node_id),
             "scenarios": self.repo.scenarios_for_node(node_id),
@@ -171,15 +223,21 @@ class SubnetDirectory:
 
     def list_known_nodes(self) -> List[Dict[str, Any]]:
         items = []
-        for n in self.repo.list_nodes():
+        persisted = {str(item.get("node_id") or ""): dict(item) for item in self.repo.list_nodes()}
+        node_ids = list(persisted)
+        node_ids.extend(node_id for node_id in self._registration_overlay if node_id not in persisted)
+        for node_id in node_ids:
+            overlay = self._registration_overlay.get(node_id)
+            n = {**persisted.get(node_id, {}), **(overlay or {})}
             node = dict(n)
-            node["online"] = self.is_online(n["node_id"])  # overlay live
-            node["capacity"] = {
-                "io": self.repo.io_for_node(n["node_id"]),
-                "skills": self.repo.skills_for_node(n["node_id"]),
-                "scenarios": self.repo.scenarios_for_node(n["node_id"]),
+            node["online"] = self.is_online(node_id)
+            overlay_capacity = overlay.get("capacity") if isinstance(overlay, dict) else None
+            node["capacity"] = dict(overlay_capacity) if isinstance(overlay_capacity, dict) else {
+                "io": self.repo.io_for_node(node_id),
+                "skills": self.repo.skills_for_node(node_id),
+                "scenarios": self.repo.scenarios_for_node(node_id),
             }
-            node["runtime_projection"] = self.repo.runtime_projection_for_node(n["node_id"])
+            node["runtime_projection"] = self.repo.runtime_projection_for_node(node_id)
             node.update(node_display_from_directory_node(node))
             items.append(node)
         return items
@@ -215,6 +273,7 @@ class SubnetDirectory:
     def clear_all(self) -> None:
         self.repo.clear_all()
         self.live.clear()
+        self._registration_overlay.clear()
 
 
 _DIR: SubnetDirectory | None = None

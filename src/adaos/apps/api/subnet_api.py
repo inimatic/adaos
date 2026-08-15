@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -17,16 +18,35 @@ from adaos.services.subnet_heartbeat_runtime import get_heartbeat_persistence_ru
 from adaos.sdk.data import bus
 
 router = APIRouter(tags=["subnet"])
+_LOG = logging.getLogger("adaos.subnet.api")
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+async def _emit_node_up(node_id: str) -> None:
+    try:
+        await bus.emit("net.subnet.node.up", {"node_id": node_id}, source="subnet_api", actor="system")
+    except Exception:
+        _LOG.warning("subnet node.up emission failed node_id=%s", node_id, exc_info=True)
+
+
+def _schedule_node_up(node_id: str) -> None:
+    task = asyncio.create_task(
+        _emit_node_up(node_id),
+        name=f"adaos-subnet-node-up:{node_id}",
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _register_directory_node(node_info: Dict[str, Any]) -> bool:
-    """Persist a registration and report whether it is an offline -> online edge."""
+    """Accept registration and schedule its durable projection."""
     directory = get_directory()
-    node_id = str(node_info.get("node_id") or "").strip()
-    known = bool(node_id and directory.repo.get_node(node_id))
-    was_online = bool(node_id and directory.is_online(node_id))
-    directory.on_register(node_info)
-    return not known or not was_online
+    became_online = directory.accept_registration(node_info)
+    get_heartbeat_persistence_runtime().submit_registration(
+        directory,
+        node_info=node_info,
+    )
+    return became_online
 
 
 def _heartbeat_directory_node(
@@ -37,7 +57,12 @@ def _heartbeat_directory_node(
     base_url: str | None,
 ) -> bool:
     directory = get_directory()
-    if not directory.accept_heartbeat(node_id):
+    if not directory.accept_heartbeat(
+        node_id,
+        capacity=capacity,
+        node_state=node_state,
+        base_url=base_url,
+    ):
         return False
     get_heartbeat_persistence_runtime().submit(
         directory,
@@ -101,8 +126,7 @@ async def register(body: RegisterRequest):
         raise HTTPException(status_code=400, detail="subnet mismatch")
 
     # Добавляем/обновляем запись в persistent directory
-    became_online = await asyncio.to_thread(
-        _register_directory_node,
+    became_online = _register_directory_node(
         {
             "node_id": body.node_id,
             "subnet_id": body.subnet_id,
@@ -111,14 +135,11 @@ async def register(body: RegisterRequest):
             "base_url": body.base_url,
             "node_state": body.node_state,
             "capacity": body.capacity or {},
-        },
+        }
     )
     # Сигнализируем о появлении ноды (node.up)
     if became_online:
-        try:
-            await bus.emit("net.subnet.node.up", {"node_id": body.node_id}, source="subnet_api", actor="system")
-        except Exception:
-            pass
+        _schedule_node_up(body.node_id)
 
     return RegisterResponse(ok=True, lease_seconds=LEASE_SECONDS_DEFAULT)
 

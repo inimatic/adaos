@@ -25,6 +25,11 @@ class _FakeDirectory:
         self.online = online
         self.repo = _FakeRepo(self)
         self.register_threads: list[int] = []
+        self.registrations: list[dict] = []
+        self.registration_started = threading.Event()
+        self.registration_release = threading.Event()
+        self.registration_release.set()
+        self.registration_error: Exception | None = None
         self.heartbeat_threads: list[int] = []
         self.persisted: list[tuple[str, dict | None]] = []
         self.persist_started = threading.Event()
@@ -35,12 +40,21 @@ class _FakeDirectory:
     def is_online(self, _node_id: str) -> bool:
         return self.online
 
-    def on_register(self, _node_info) -> None:
-        self.register_threads.append(threading.get_ident())
+    def accept_registration(self, _node_info) -> bool:
+        became_online = not self.known or not self.online
         self.known = True
         self.online = True
+        return became_online
 
-    def accept_heartbeat(self, _node_id: str) -> bool:
+    def persist_registration(self, node_info) -> None:
+        self.register_threads.append(threading.get_ident())
+        self.registration_started.set()
+        self.registration_release.wait(timeout=2.0)
+        if self.registration_error is not None:
+            raise self.registration_error
+        self.registrations.append(dict(node_info))
+
+    def accept_heartbeat(self, _node_id: str, **_kwargs) -> bool:
         if not self.known:
             return False
         self.online = True
@@ -60,8 +74,10 @@ def _hub_context():
 
 
 @pytest.mark.asyncio
-async def test_register_offloads_directory_io_and_emits_node_up_only_on_edge(monkeypatch) -> None:
+async def test_register_accepts_before_durable_io_and_emits_node_up_only_on_edge(monkeypatch) -> None:
     directory = _FakeDirectory()
+    directory.registration_release.clear()
+    runtime = HeartbeatPersistenceRuntime(idle_exit_s=0.05)
     emitted: list[str] = []
 
     async def _emit(event_type: str, *_args, **_kwargs) -> None:
@@ -69,6 +85,7 @@ async def test_register_offloads_directory_io_and_emits_node_up_only_on_edge(mon
 
     monkeypatch.setattr(subnet_api, "get_ctx", _hub_context)
     monkeypatch.setattr(subnet_api, "get_directory", lambda: directory)
+    monkeypatch.setattr(subnet_api, "get_heartbeat_persistence_runtime", lambda: runtime)
     monkeypatch.setattr(subnet_api.bus, "emit", _emit)
 
     request = subnet_api.RegisterRequest(node_id="member-1", subnet_id="sn-test")
@@ -76,12 +93,56 @@ async def test_register_offloads_directory_io_and_emits_node_up_only_on_edge(mon
 
     first = await subnet_api.register(request)
     second = await subnet_api.register(request)
+    await asyncio.sleep(0)
 
     assert first.ok is True
     assert second.ok is True
     assert emitted == ["net.subnet.node.up"]
+    await asyncio.to_thread(directory.registration_started.wait, 1.0)
     assert directory.register_threads
     assert all(thread_id != main_thread for thread_id in directory.register_threads)
+    assert directory.registrations == []
+    directory.registration_release.set()
+    await runtime.wait_idle()
+    assert directory.registrations
+    snapshot = runtime.snapshot()
+    assert snapshot["registration_accepted_total"] == 2
+    assert snapshot["registration_persisted_total"] >= 1
+    assert snapshot["executor"] == "dedicated_single_worker"
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_register_response_does_not_wait_for_node_up_handlers(monkeypatch) -> None:
+    directory = _FakeDirectory()
+    runtime = HeartbeatPersistenceRuntime(idle_exit_s=0.05)
+    emission_started = asyncio.Event()
+    emission_release = asyncio.Event()
+
+    async def _emit(*_args, **_kwargs) -> None:
+        emission_started.set()
+        await emission_release.wait()
+
+    monkeypatch.setattr(subnet_api, "get_ctx", _hub_context)
+    monkeypatch.setattr(subnet_api, "get_directory", lambda: directory)
+    monkeypatch.setattr(subnet_api, "get_heartbeat_persistence_runtime", lambda: runtime)
+    monkeypatch.setattr(subnet_api.bus, "emit", _emit)
+
+    response = await asyncio.wait_for(
+        subnet_api.register(subnet_api.RegisterRequest(node_id="member-1", subnet_id="sn-test")),
+        timeout=0.1,
+    )
+
+    assert response.ok is True
+    await asyncio.wait_for(emission_started.wait(), timeout=0.1)
+    assert len(subnet_api._BACKGROUND_TASKS) == 1
+    background_tasks = list(subnet_api._BACKGROUND_TASKS)
+    emission_release.set()
+    await asyncio.gather(*background_tasks)
+    await asyncio.sleep(0)
+    assert not subnet_api._BACKGROUND_TASKS
+    await runtime.wait_idle()
+    await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -139,4 +200,29 @@ async def test_heartbeat_persistence_coalesces_pending_state_and_reports_failure
     assert snapshot["status"] == "degraded"
     assert snapshot["failed_total"] == 1
     assert snapshot["last_error"] == "RuntimeError: disk unavailable"
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_registration_persistence_retries_failure_and_recovers() -> None:
+    directory = _FakeDirectory()
+    directory.registration_error = RuntimeError("database locked")
+    runtime = HeartbeatPersistenceRuntime(idle_exit_s=0.05)
+
+    runtime.submit_registration(directory, node_info={"node_id": "member-1", "subnet_id": "sn-test"})
+    await asyncio.to_thread(directory.registration_started.wait, 1.0)
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while runtime.snapshot()["registration_failed_total"] < 1:
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0.01)
+    snapshot = runtime.snapshot()
+    assert snapshot["status"] == "degraded"
+    assert snapshot["pending_registration_total"] == 1
+
+    directory.registration_error = None
+    await runtime.wait_idle(timeout_s=3.0)
+    snapshot = runtime.snapshot()
+    assert snapshot["status"] == "ready"
+    assert snapshot["registration_persisted_total"] == 1
+    assert snapshot["pending_registration_total"] == 0
     await runtime.close()

@@ -62,6 +62,13 @@ class _FakeRepo:
     def skills_for_node(self, node_id: str):
         return list(self.skills.get(node_id, []))
 
+    def nodes_with_skill(self, name: str):
+        return [
+            dict(node)
+            for node_id, node in self.nodes.items()
+            if any(str(item.get("name") or "") == name for item in self.skills.get(node_id, []))
+        ]
+
     def replace_skill_capacity(self, node_id: str, skills):
         self.skills[node_id] = list(skills or [])
 
@@ -104,6 +111,53 @@ def test_subnet_directory_get_node_returns_live_overlay_capacity_and_runtime_pro
     assert node["capacity"]["scenarios"] == [{"name": "kitchen"}]
     assert node["runtime_projection"]["primary_node_name"] == "Kitchen Member"
     assert node["runtime_projection"]["ready"] is True
+
+
+def test_subnet_directory_registration_overlay_is_queryable_before_persistence(monkeypatch) -> None:
+    repo = _FakeRepo()
+    monkeypatch.setattr(mod, "get_ctx", lambda: type("Ctx", (), {"sql": object()})())
+    monkeypatch.setattr(mod, "SubnetRepo", lambda sql: repo)
+    directory = mod.SubnetDirectory()
+    payload = {
+        "node_id": "member-new",
+        "subnet_id": "alpha",
+        "roles": ["member"],
+        "hostname": "new-node",
+        "base_url": "http://member-new.local",
+        "node_state": "ready",
+        "capacity": {
+            "io": [{"io_type": "stdout"}],
+            "skills": [{"name": "weather"}],
+            "scenarios": [{"name": "kitchen"}],
+        },
+    }
+
+    assert directory.accept_registration(payload) is True
+
+    node = directory.get_node("member-new")
+    assert node is not None
+    assert node["online"] is True
+    assert node["capacity"]["skills"] == [{"name": "weather"}]
+    assert directory.get_node_base_url("member-new") == "http://member-new.local"
+    assert [item["node_id"] for item in directory.find_nodes_with_skill("weather")] == ["member-new"]
+    assert "member-new" in {item["node_id"] for item in directory.list_known_nodes()}
+    assert repo.get_node("member-new") is None
+
+    assert directory.accept_heartbeat(
+        "member-new",
+        capacity={"skills": [{"name": "forecast"}]},
+        node_state="limited",
+        base_url="http://member-new-updated.local",
+    ) is True
+    updated = directory.get_node("member-new")
+    assert updated is not None
+    assert updated["capacity"]["skills"] == [{"name": "forecast"}]
+    assert updated["node_state"] == "limited"
+    assert directory.get_node_base_url("member-new") == "http://member-new-updated.local"
+
+    directory.persist_registration(payload)
+
+    assert repo.get_node("member-new") is not None
 
 
 def test_subnet_directory_ingest_snapshot_persists_scenarios_and_runtime_projection(monkeypatch) -> None:
