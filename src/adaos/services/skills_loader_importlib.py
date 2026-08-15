@@ -16,6 +16,7 @@ from adaos.services.agent_context import get_ctx
 from adaos.services.skill.manager import SkillManager
 from adaos.services.skill.declarations import load_runtime_skill_declarations
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+from adaos.services.skill.validation import runtime_async_blocking_issues
 from adaos.services.logging import configure_skill_module_logging
 import yaml
 
@@ -33,6 +34,7 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             await asyncio.to_thread(self._sync_runtime_from_workspace, root)
         loaded: set[str] = set()
         loaded_declaration_manifests: set[Path] = set()
+        runtime_safety_cache: dict[Path, list[dict[str, Any]]] = {}
         import_timings: list[dict[str, Any]] = []
         discovery_timings: dict[str, float] = {}
         deactivated_runtime_skills = await asyncio.to_thread(self._discover_deactivated_runtime_skills, root)
@@ -55,6 +57,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 runtime_handlers,
                 loaded=loaded,
                 loaded_declaration_manifests=loaded_declaration_manifests,
+                runtime_safety_cache=runtime_safety_cache,
+                skills_root=root,
                 source="runtime",
             )
         )
@@ -70,6 +74,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 workspace_handlers,
                 loaded=loaded,
                 loaded_declaration_manifests=loaded_declaration_manifests,
+                runtime_safety_cache=runtime_safety_cache,
+                skills_root=root,
                 source="workspace",
             )
         )
@@ -85,6 +91,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                 repo_handlers,
                 loaded=loaded,
                 loaded_declaration_manifests=loaded_declaration_manifests,
+                runtime_safety_cache=runtime_safety_cache,
+                skills_root=root,
                 source="repo_workspace",
             )
         )
@@ -130,6 +138,30 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         loaded_declaration_manifests: set[Path] = set()
         loaded_handlers: list[str] = []
         for handler in handlers:
+            issues = await asyncio.to_thread(self._runtime_safety_issues, handler)
+            if issues:
+                quarantine = await asyncio.to_thread(
+                    self._quarantine_runtime_safety_violation,
+                    root,
+                    target,
+                    handler,
+                    issues,
+                    source="reload",
+                )
+                from adaos.sdk.core.decorators import deactivate_skill_subscriptions
+
+                subscriptions = deactivate_skill_subscriptions({target})
+                await self._emit_runtime_safety_quarantine(target, quarantine)
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "runtime_safety_validation_failed",
+                    "skill": target,
+                    "deactivation": quarantine,
+                    "subscriptions": subscriptions,
+                    "issues": issues,
+                    "handlers": [],
+                }
             declaration_started_at = time.perf_counter()
             await asyncio.to_thread(
                 self._load_skill_declarations,
@@ -221,6 +253,8 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         *,
         loaded: set[str],
         loaded_declaration_manifests: set[Path],
+        runtime_safety_cache: dict[Path, list[dict[str, Any]]],
+        skills_root: Path,
         source: str,
     ) -> list[dict[str, Any]]:
         timings: list[dict[str, Any]] = []
@@ -231,6 +265,32 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
         }.get(source, f"{source} skill handler")
         for handler, skill_name in handlers:
             handler_started_at = time.perf_counter()
+            safety_root = self._skill_source_root(handler)
+            issues = runtime_safety_cache.get(safety_root)
+            if issues is None:
+                issues = await asyncio.to_thread(self._runtime_safety_issues, handler)
+                runtime_safety_cache[safety_root] = issues
+            if issues:
+                if skill_name:
+                    await asyncio.to_thread(
+                        self._quarantine_runtime_safety_violation,
+                        skills_root,
+                        skill_name,
+                        handler,
+                        issues,
+                        source=source,
+                    )
+                timings.append(
+                    self._handler_import_timing(
+                        handler=handler,
+                        skill_name=skill_name,
+                        source=source,
+                        elapsed_ms=(time.perf_counter() - handler_started_at) * 1000.0,
+                        loaded=False,
+                    )
+                )
+                await asyncio.sleep(self._handler_import_yield_sec())
+                continue
             declaration_started_at = time.perf_counter()
             await asyncio.to_thread(
                 self._load_skill_declarations,
@@ -265,6 +325,82 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
                     _LOG.info("imported %s path=%s", source_label, handler)
             await asyncio.sleep(self._handler_import_yield_sec())
         return timings
+
+    @staticmethod
+    def _skill_source_root(handler: Path) -> Path:
+        path = Path(handler)
+        if path.parent.name == "handlers":
+            return path.parent.parent
+        manifest = ImportlibSkillsLoader._find_skill_manifest(path)
+        return manifest.parent if manifest is not None else path.parent
+
+    @classmethod
+    def _runtime_safety_issues(cls, handler: Path) -> list[dict[str, Any]]:
+        root = cls._skill_source_root(handler)
+        return [
+            {
+                "level": issue.level,
+                "code": issue.code,
+                "message": issue.message,
+                "where": issue.where,
+            }
+            for issue in runtime_async_blocking_issues(root)
+        ]
+
+    @staticmethod
+    def _quarantine_runtime_safety_violation(
+        skills_root: Path,
+        skill_name: str,
+        handler: Path,
+        issues: list[dict[str, Any]],
+        *,
+        source: str,
+    ) -> dict[str, Any]:
+        payload = {
+            "deactivated": True,
+            "reason": "runtime_safety_validation_failed",
+            "failure_kind": "async_blocking_call",
+            "failed_stage": "handler_import_preflight",
+            "source": str(source or "runtime"),
+            "handler": str(handler),
+            "issues": list(issues),
+            "updated_at": time.time(),
+        }
+        environment = SkillRuntimeEnvironment(
+            skills_root=Path(skills_root),
+            skill_name=str(skill_name),
+        )
+        environment.ensure_base()
+        environment.write_deactivation(payload)
+        _LOG.error(
+            "skill runtime quarantined before handler import skill=%s source=%s path=%s issues=%s",
+            skill_name,
+            source,
+            handler,
+            json.dumps(issues, sort_keys=True, separators=(",", ":")),
+        )
+        return payload
+
+    @staticmethod
+    async def _emit_runtime_safety_quarantine(skill_name: str, payload: dict[str, Any]) -> None:
+        try:
+            await get_ctx().bus.emit(
+                "skills.deactivated",
+                {
+                    "name": str(skill_name),
+                    "skill_name": str(skill_name),
+                    "reason": "runtime_safety_validation_failed",
+                    "deactivation": dict(payload),
+                },
+                source="skills.loader.safety",
+                actor="system",
+            )
+        except Exception:
+            _LOG.debug(
+                "failed to emit skill runtime safety quarantine skill=%s",
+                skill_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _handler_import_timing(

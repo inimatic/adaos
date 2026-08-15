@@ -627,6 +627,12 @@ def _async_subscription_blocking_issues(skill_dir: Path) -> List[Issue]:
     return issues
 
 
+def runtime_async_blocking_issues(skill_dir: Path) -> List[Issue]:
+    """Return channel-safety violations that must block runtime handler import."""
+
+    return _async_subscription_blocking_issues(Path(skill_dir))
+
+
 def _as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []

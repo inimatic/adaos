@@ -153,6 +153,80 @@ def test_importlib_loader_excludes_deactivated_runtime_and_workspace_fallback(tm
     assert reload_result["reason"] == "skill_runtime_deactivated"
 
 
+def test_importlib_loader_quarantines_evolved_blocking_async_skill_before_import(tmp_path, monkeypatch) -> None:
+    skill_dir = tmp_path / "blocking_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "\n".join(
+            [
+                "import time",
+                "from adaos.sdk.core.decorators import subscribe",
+                "@subscribe('demo.changed')",
+                "async def on_demo_changed(payload):",
+                "    time.sleep(5)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: blocking_skill\nversion: '1.0.0'\nevents:\n  subscribe: [demo.changed]\n  publish: []\n",
+        encoding="utf-8",
+    )
+    imported: list[Path] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(loader, "_load_handler", lambda path, **_kwargs: imported.append(path))
+
+    asyncio.run(loader.import_all_handlers(tmp_path))
+
+    assert imported == []
+    marker = tmp_path / ".runtime" / "blocking_skill" / "deactivated.json"
+    payload = skills_loader_module.json.loads(marker.read_text(encoding="utf-8"))
+    assert payload["reason"] == "runtime_safety_validation_failed"
+    assert payload["failure_kind"] == "async_blocking_call"
+    assert payload["issues"][0]["code"] == "runtime.async_subscription_blocking_call"
+
+
+def test_importlib_loader_reload_quarantines_blocking_async_skill_and_removes_subscriptions(
+    tmp_path, monkeypatch
+) -> None:
+    skill_dir = tmp_path / "blocking_reload_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text(
+        "import requests\nasync def refresh():\n    requests.get('https://example.test')\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "skill.yaml").write_text(
+        "name: blocking_reload_skill\nversion: '1.0.0'\n",
+        encoding="utf-8",
+    )
+    deactivated: list[set[str]] = []
+    emitted: list[tuple[str, dict]] = []
+    loader = ImportlibSkillsLoader()
+    monkeypatch.setattr(
+        "adaos.sdk.core.decorators.deactivate_skill_subscriptions",
+        lambda names: deactivated.append(set(names)) or {"skills": sorted(names), "removed_handlers": 1},
+    )
+    monkeypatch.setattr(
+        loader,
+        "_emit_runtime_safety_quarantine",
+        lambda skill_name, payload: asyncio.sleep(
+            0,
+            result=emitted.append((skill_name, dict(payload))),
+        ),
+    )
+
+    result = asyncio.run(loader.reload_skill_handlers(tmp_path, "blocking_reload_skill"))
+
+    assert result["ok"] is False
+    assert result["reason"] == "runtime_safety_validation_failed"
+    assert deactivated == [{"blocking_reload_skill"}]
+    assert emitted[0][0] == "blocking_reload_skill"
+    assert result["subscriptions"]["removed_handlers"] == 1
+
+
 def test_importlib_loader_loads_skill_data_projections(tmp_path, monkeypatch) -> None:
     skill_dir = tmp_path / "infrastate_skill"
     handlers_dir = skill_dir / "handlers"
