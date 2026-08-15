@@ -2930,6 +2930,73 @@ def test_node_reliability_supervisor_channel_is_bounded(monkeypatch) -> None:
     assert len(response.content) < 1024
 
 
+def test_supervisor_channel_runtime_snapshot_drops_unbounded_member_history(monkeypatch) -> None:
+    from adaos.services import reliability
+
+    monkeypatch.setattr(reliability, "channel_diagnostics_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_root_transport_strategy_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_root_protocol_snapshot", lambda: {})
+    monkeypatch.setattr(reliability, "hub_member_semantic_channels_snapshot", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        reliability,
+        "hub_member_connection_state_snapshot",
+        lambda **_kwargs: {
+            "state": "ready",
+            "connected_total": 1,
+            "assessment": {"state": "healthy", "reason": "connected", "history": ["x" * 4096] * 100},
+            "hub": {
+                "connected": True,
+                "transition_state": "stable",
+                "history": ["x" * 4096] * 100,
+            },
+            "members": [{"payload": "x" * 4096}] * 100,
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "build_readiness_tree",
+        lambda **_kwargs: {
+            "root_control": {"status": "ready", "history": ["x" * 4096] * 100},
+            "route": {"status": "ready"},
+            "hub_member": {"status": "ready"},
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "channel_overview_snapshot",
+        lambda **_kwargs: {
+            "hub_root": {"effective_status": "ready", "effective_state": "stable", "history": ["x" * 4096] * 100},
+            "hub_root_browser": {"effective_status": "ready", "effective_state": "stable"},
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "_run_bounded_runtime_section",
+        lambda **_kwargs: {"update_guard": {}},
+    )
+    monkeypatch.setattr(
+        reliability,
+        "sidecar_runtime_snapshot",
+        lambda **_kwargs: {"continuity_contract": {}},
+    )
+
+    snapshot = reliability.supervisor_channel_runtime_snapshot(
+        node_id="node-1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    encoded = json.dumps(snapshot, sort_keys=True).encode("utf-8")
+    assert len(encoded) < 4096
+    assert snapshot["hub_member_connection_state"]["connected_total"] == 1
+    assert "members" not in snapshot["hub_member_connection_state"]
+    assert "history" not in snapshot["readiness_tree"]["root_control"]
+
+
 def test_skill_runtime_migration_update_gate_snapshot_omits_failure_details(monkeypatch) -> None:
     from adaos.services import reliability
 

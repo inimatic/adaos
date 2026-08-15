@@ -6933,6 +6933,12 @@ def supervisor_channel_runtime_snapshot(
         transport_strategy=transport_strategy,
         media_runtime=media_runtime,
     )
+    compact_member_assessment = (
+        member_state.get("assessment")
+        if isinstance(member_state.get("assessment"), dict)
+        else {}
+    )
+    compact_member_hub = member_state.get("hub") if isinstance(member_state.get("hub"), dict) else {}
     return {
         "node": {
             "role": role,
@@ -6943,12 +6949,17 @@ def supervisor_channel_runtime_snapshot(
             "connected_to_hub": connected_to_hub,
         },
         "readiness_tree": {
-            key: dict(readiness_tree.get(key) or {})
+            key: {
+                "status": (readiness_tree.get(key) or {}).get("status"),
+            }
             for key in ("root_control", "route", "hub_member")
             if isinstance(readiness_tree.get(key), dict)
         },
         "channel_overview": {
-            key: dict(channel_overview.get(key) or {})
+            key: {
+                "effective_status": (channel_overview.get(key) or {}).get("effective_status"),
+                "effective_state": (channel_overview.get(key) or {}).get("effective_state"),
+            }
             for key in ("hub_root", "hub_root_browser")
             if isinstance(channel_overview.get(key), dict)
         },
@@ -6956,7 +6967,25 @@ def supervisor_channel_runtime_snapshot(
             key: transport_strategy.get(key)
             for key in ("last_event", "last_summary", "selected_server", "effective_transport")
         },
-        "hub_member_connection_state": member_state,
+        "hub_member_connection_state": {
+            "state": member_state.get("state"),
+            "connected_total": member_state.get("connected_total"),
+            "assessment": {
+                "state": compact_member_assessment.get("state"),
+                "reason": compact_member_assessment.get("reason"),
+            },
+            "hub": {
+                key: compact_member_hub.get(key)
+                for key in (
+                    "connected",
+                    "transition_state",
+                    "transition_reason",
+                    "hub_url",
+                    "last_error",
+                    "last_close_reason",
+                )
+            },
+        },
         "sidecar_runtime": {
             "continuity_contract": dict(sidecar_runtime.get("continuity_contract") or {}),
         },
