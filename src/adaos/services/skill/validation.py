@@ -1,7 +1,7 @@
 # src/adaos/sdk/skill_validator.py
 
 from __future__ import annotations
-import ast, os, re, sys, json, subprocess, importlib.util
+import ast, os, re, shlex, sys, json, subprocess, importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +15,7 @@ from adaos.services.agent_context import AgentContext, get_ctx
 from adaos.services.conversational_pipeline import compile_conversational_package
 from adaos.services.webui_contract import validate_webui_contract
 from adaos.services.workflow_artifacts import WorkflowArtifactError, load_manifest_bound_workflow
+from adaos.services.skill.dependency_disk_guard import heavy_dependency_names, heavy_import_dependency_names
 
 SCHEMA_PATH = Path(__file__).with_name("skill_schema.json")
 WEBUI_SCHEMA_RES = ("adaos.abi", "webui.v1.schema.json")
@@ -293,11 +294,205 @@ def _static_checks(skill_dir: Path, install_mode: bool) -> List[Issue]:
             for item in conversational.validation.report.get("diagnostics") or []
         )
     issues.extend(validate_data_route_contract(data))
+    issues.extend(validate_provider_contract_declarations(data, install_mode=install_mode))
     issues.extend(_sdk_only_import_issues(skill_dir, manifest=data))
     issues.extend(_direct_projection_write_issues(skill_dir))
     issues.extend(_async_subscription_blocking_issues(skill_dir))
     issues.extend(_personalization_manifest_policy_issues(data, install_mode=install_mode))
+    issues.extend(validate_dependency_isolation_contract(skill_dir, data, install_mode=install_mode))
     issues.extend(_conversation_native_static_checks(skill_dir, manifest=data, install_mode=install_mode))
+    return issues
+
+
+def validate_provider_contract_declarations(
+    manifest: Dict[str, Any],
+    *,
+    install_mode: bool,
+) -> List[Issue]:
+    """Ensure a declared provider port is backed by public skill tools."""
+
+    tools = {
+        str(item.get("name") or "").strip()
+        for item in manifest.get("tools") or []
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    contracts = manifest.get("provider_contracts") or []
+    if not isinstance(contracts, list):
+        return [
+            Issue(
+                "error" if install_mode else "warning",
+                "provider_contracts.invalid",
+                "provider_contracts must be a list",
+                "provider_contracts",
+            )
+        ]
+    issues: List[Issue] = []
+    identities: set[tuple[str, str]] = set()
+    for index, item in enumerate(contracts):
+        where = f"provider_contracts[{index}]"
+        if not isinstance(item, dict):
+            issues.append(Issue("error", "provider_contracts.invalid", "provider contract must be an object", where))
+            continue
+        contract = str(item.get("contract") or "").strip()
+        capability = str(item.get("capability") or "").strip()
+        identity = (contract, capability)
+        if not contract or not capability:
+            issues.append(
+                Issue(
+                    "error" if install_mode else "warning",
+                    "provider_contracts.identity_missing",
+                    "provider contract requires non-empty contract and capability",
+                    where,
+                )
+            )
+        elif identity in identities:
+            issues.append(Issue("error", "provider_contracts.duplicate", "provider contract identity is duplicated", where))
+        identities.add(identity)
+        operations = item.get("operations") or []
+        if not isinstance(operations, list) or not operations:
+            issues.append(
+                Issue(
+                    "error" if install_mode else "warning",
+                    "provider_contracts.operations_missing",
+                    "provider contract requires at least one public operation",
+                    f"{where}.operations",
+                )
+            )
+            continue
+        missing = sorted(
+            str(operation).strip()
+            for operation in operations
+            if str(operation).strip() not in tools
+        )
+        if missing:
+            issues.append(
+                Issue(
+                    "error",
+                    "provider_contracts.operations_unexported",
+                    f"provider contract operations are not declared tools: {', '.join(missing)}",
+                    f"{where}.operations",
+                )
+            )
+    return issues
+
+
+def _manifest_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def validate_dependency_isolation_contract(
+    skill_dir: Path,
+    manifest: Dict[str, Any],
+    *,
+    install_mode: bool,
+) -> List[Issue]:
+    """Predict dependency-isolation failures before packaging or activation."""
+
+    runtime = manifest.get("runtime") if isinstance(manifest.get("runtime"), dict) else {}
+    environment = runtime.get("env") if isinstance(runtime.get("env"), dict) else {}
+    runtime_kind = str(runtime.get("kind") or "").strip().lower()
+    raw_mode = environment.get("dependency_mode") or environment.get("install_mode")
+    if raw_mode is None and runtime_kind != "service":
+        raw_mode = environment.get("mode")
+    mode = str(raw_mode or "auto").strip().lower()
+    level = "error" if install_mode else "warning"
+    issues: List[Issue] = []
+
+    if mode == "venv" and runtime_kind != "service":
+        issues.append(
+            Issue(
+                level,
+                "runtime.dependencies.invalid_mode",
+                "runtime.env.mode: venv requires runtime.kind: service",
+                "runtime.env.mode",
+            )
+        )
+    elif mode not in {"", "auto", "vendor", "shared", "core", "global", "venv"}:
+        issues.append(
+            Issue(
+                level,
+                "runtime.dependencies.invalid_mode",
+                f"unsupported Python dependency install mode: {mode}",
+                "runtime.env",
+            )
+        )
+
+    dependency_args = [str(item) for item in manifest.get("dependencies") or []]
+    requirements = Path(skill_dir) / "requirements.in"
+    if requirements.is_file():
+        try:
+            for line in requirements.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    dependency_args.extend(shlex.split(stripped, comments=True, posix=True))
+        except (OSError, UnicodeError, ValueError) as exc:
+            issues.append(
+                Issue(
+                    level,
+                    "runtime.dependencies.requirements_unreadable",
+                    f"requirements.in cannot be evaluated by dependency policy: {exc}",
+                    "requirements.in",
+                )
+            )
+            return issues
+
+    heavy = heavy_dependency_names(dependency_args)
+    imported_roots: set[str] = set()
+    for source in Path(skill_dir).rglob("*.py"):
+        if any(part in {".git", ".runtime", "vendor", "artifacts", "__pycache__"} for part in source.parts):
+            continue
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        except (OSError, UnicodeError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".", 1)[0])
+    imported_heavy = set(heavy_import_dependency_names(imported_roots))
+    declared_heavy = set(heavy)
+    undeclared_heavy = sorted(imported_heavy - declared_heavy)
+    if undeclared_heavy:
+        issues.append(
+            Issue(
+                level,
+                "runtime.dependencies.heavy_undeclared",
+                "heavy/native imports require an explicit dependency declaration: "
+                + ", ".join(undeclared_heavy),
+                "dependencies",
+            )
+        )
+    allow_keys = (
+        "allow_heavy_dependencies",
+        "allow_native_dependencies",
+        "allow_unsafe_dependencies",
+        "allow_heavy_vendor",
+        "allow_native_vendor",
+    )
+    explicitly_allowed = any(
+        _manifest_flag(config.get(key))
+        for config in (environment, runtime)
+        for key in allow_keys
+    )
+    if heavy and not explicitly_allowed:
+        boundary = (
+            "Keep heavy dependencies behind the service runtime boundary or explicitly set "
+            "runtime.env.allow_heavy_dependencies: true for a controlled transitional install."
+            if runtime_kind == "service"
+            else "Use a service runtime boundary or explicitly set runtime.env.allow_heavy_dependencies: true "
+            "for a controlled transitional install."
+        )
+        issues.append(
+            Issue(
+                level,
+                "runtime.dependencies.heavy_isolation",
+                f"heavy/native Python dependencies ({', '.join(heavy)}) violate the default isolation policy. {boundary}",
+                "dependencies",
+            )
+        )
     return issues
 
 

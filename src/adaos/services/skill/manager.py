@@ -148,14 +148,15 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "write", "mutate"}
 
 
-def _vendor_satisfies_requirements(vendor_dir: Path, args: Iterable[str]) -> bool:
-    """Return true only when the requested dependency graph is present in the vendor."""
+def _distributions_satisfy_requirements(
+    distributions: Iterable[importlib_metadata.Distribution],
+    args: Iterable[str],
+) -> bool:
+    """Return true only when a distribution set satisfies the requested graph."""
 
-    if not vendor_dir.is_dir():
-        return False
     installed: dict[str, tuple[Version, importlib_metadata.Distribution]] = {}
     try:
-        for distribution in importlib_metadata.distributions(path=[str(vendor_dir)]):
+        for distribution in distributions:
             name = str(distribution.metadata.get("Name") or "").strip()
             if not name:
                 continue
@@ -218,6 +219,28 @@ def _vendor_satisfies_requirements(vendor_dir: Path, args: Iterable[str]) -> boo
         if not _satisfied(requirement):
             return False
     return checked > 0
+
+
+def _vendor_satisfies_requirements(vendor_dir: Path, args: Iterable[str]) -> bool:
+    """Return true only when the requested dependency graph is present in the vendor."""
+
+    if not vendor_dir.is_dir():
+        return False
+    try:
+        distributions = importlib_metadata.distributions(path=[str(vendor_dir)])
+    except Exception:
+        return False
+    return _distributions_satisfy_requirements(distributions, args)
+
+
+def _environment_satisfies_requirements(args: Iterable[str]) -> bool:
+    """Check the active shared interpreter without invoking an installer."""
+
+    try:
+        distributions = importlib_metadata.distributions()
+    except Exception:
+        return False
+    return _distributions_satisfy_requirements(distributions, args)
 
 
 def _dev_tool_requires_caller_thread(tool_spec: Mapping[str, Any] | None) -> bool:
@@ -3638,6 +3661,14 @@ class SkillManager:
             uv_base.extend(["-c", str(constraints)])
 
         if mode == "shared":
+            if not has_requirements_file and _environment_satisfies_requirements(python_args):
+                _log.info(
+                    "reusing satisfied shared dependencies skill=%s interpreter=%s",
+                    slot.skill_name,
+                    sys.executable,
+                )
+                self._clear_runtime_vendor(vendor_dir)
+                return []
             shared_cmd = [*base_cmd, *python_args]
             ensure_dependency_disk_budget(
                 Path(sys.prefix),

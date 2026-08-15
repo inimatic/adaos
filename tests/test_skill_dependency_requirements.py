@@ -318,6 +318,7 @@ def test_explicit_shared_dependency_mode_installs_into_current_interpreter(monke
     monkeypatch.setattr(skill_manager_module, "ensure_dependency_disk_budget", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(mgr, "_constraints_file", lambda: None)
     monkeypatch.setattr(mgr, "_repo_root_for_dependency_resolution", lambda: tmp_path)
+    monkeypatch.setattr(skill_manager_module, "_environment_satisfies_requirements", lambda _args: False)
 
     paths = mgr._install_python_dependencies(
         manifest={
@@ -332,6 +333,41 @@ def test_explicit_shared_dependency_mode_installs_into_current_interpreter(monke
     assert len(commands) == 1
     assert "--target" not in commands[0]
     assert commands[0][-1] == "requests==2.31.0"
+
+
+def test_explicit_shared_dependency_mode_reuses_satisfied_interpreter(monkeypatch, tmp_path: Path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=SimpleNamespace(require=lambda *_args, **_kwargs: None))
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="shared_ml_skill")
+    env.prepare_version("1.0.0")
+    slot = env.build_slot_paths("1.0.0", "A")
+    skill_dir = tmp_path / "shared_ml_skill"
+    skill_dir.mkdir()
+
+    monkeypatch.setattr(
+        skill_manager_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("pip must not run")),
+    )
+    monkeypatch.setattr(
+        skill_manager_module,
+        "ensure_dependency_disk_budget",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("disk guard must not run")),
+    )
+    monkeypatch.setattr(skill_manager_module, "_environment_satisfies_requirements", lambda args: list(args) == ["torch"])
+    monkeypatch.setattr(mgr, "_constraints_file", lambda: None)
+    monkeypatch.setattr(mgr, "_repo_root_for_dependency_resolution", lambda: tmp_path)
+
+    paths = mgr._install_python_dependencies(
+        manifest={
+            "runtime": {"env": {"mode": "shared", "allow_heavy_dependencies": True}},
+            "dependencies": ["torch"],
+        },
+        slot=slot,
+        skill_dir=skill_dir,
+    )
+
+    assert paths == []
 
 
 def test_heavy_in_process_dependencies_can_be_explicitly_allowed(monkeypatch, tmp_path: Path) -> None:

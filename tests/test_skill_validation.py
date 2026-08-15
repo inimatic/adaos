@@ -39,6 +39,95 @@ def _write_skill(
     return skill_dir
 
 
+def test_strict_validation_predicts_heavy_dependency_isolation_failure(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=["dependencies:", "  - torch>=2.2.0"],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert report.ok is False
+    assert "runtime.dependencies.heavy_isolation" in {issue.code for issue in report.issues}
+
+
+def test_strict_validation_accepts_explicit_heavy_dependency_boundary(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "runtime:",
+            "  env:",
+            "    mode: shared",
+            "    allow_heavy_dependencies: true",
+            "dependencies:",
+            "  - torch>=2.2.0",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert "runtime.dependencies.heavy_isolation" not in {issue.code for issue in report.issues}
+
+
+def test_strict_validation_rejects_undeclared_heavy_runtime_import(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+import torch
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": bool(torch.__version__)}
+""",
+        manifest_extra=[
+            "runtime:",
+            "  env:",
+            "    mode: shared",
+            "    allow_heavy_dependencies: true",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, strict=True)
+
+    assert report.ok is False
+    assert "runtime.dependencies.heavy_undeclared" in {issue.code for issue in report.issues}
+
+
+def test_validation_rejects_unexported_provider_contract_operation(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=[
+            "provider_contracts:",
+            "  - contract: example.runner.v1",
+            "    capability: example.runner",
+            "    operations: [ping, collect_attempt]",
+        ],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir, install_mode=True)
+
+    assert report.ok is False
+    assert "provider_contracts.operations_unexported" in {issue.code for issue in report.issues}
+
+
 def test_skill_validation_blocks_conversation_storage_antipatterns(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

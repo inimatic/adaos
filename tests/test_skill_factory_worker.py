@@ -1021,6 +1021,79 @@ def test_worker_treats_browser_data_route_warnings_as_strict_errors(tmp_path: Pa
     assert checks == []
 
 
+def test_worker_rejects_skill_manifest_that_runtime_dependency_policy_will_refuse(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "dependencies": ["torch>=2.2.0"],
+                "tools": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_skill_dependency_isolation(workspace, checks, errors)
+
+    assert any("runtime.dependencies.heavy_isolation" in error for error in errors)
+    assert checks == []
+
+
+def test_worker_enforces_structured_brief_provider_contract(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_root = workspace / "skills" / "demo"
+    skill_root.mkdir(parents=True)
+    (skill_root / "skill.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "provider_contracts": [
+                    {
+                        "contract": "example.runner.v1",
+                        "capability": "example.runner",
+                        "operations": ["prepare_attempt"],
+                    }
+                ],
+                "tools": [{"name": "prepare_attempt", "input_schema": {"type": "object"}}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    assignment = {
+        "realize_request": {
+            "artifacts": {
+                "implementation_brief": json.dumps(
+                    {
+                        "contract_requirements": [
+                            {
+                                "id": "runner",
+                                "role": "provider",
+                                "contract": "example.runner.v1",
+                                "capability": "example.runner",
+                                "operations": ["prepare_attempt", "collect_attempt"],
+                            }
+                        ]
+                    }
+                )
+            }
+        }
+    }
+    checks: list[dict] = []
+    errors: list[str] = []
+
+    LocalSkillFactoryWorker._validate_brief_contract_requirements(assignment, workspace, checks, errors)
+
+    assert errors == ["implementation brief provider requirement runner is missing operations: collect_attempt"]
+    assert checks == []
+
+
 def test_worker_rejects_tests_that_pin_checkpoint_owned_versions(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     tests_dir = workspace / "skills" / "demo" / "tests"

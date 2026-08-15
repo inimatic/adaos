@@ -1207,6 +1207,8 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
             changed_paths=changed_paths,
         )
         self._validate_skill_data_routes(workspace, checks, errors)
+        self._validate_skill_dependency_isolation(workspace, checks, errors)
+        self._validate_brief_contract_requirements(assignment, workspace, checks, errors)
         for path in sorted(workspace.rglob("*.json")):
             if ".git" in path.parts:
                 continue
@@ -1452,6 +1454,118 @@ Conclude with a concise summary of implemented behavior and checks. The worker, 
                 )
             else:
                 checks.append({"kind": "skill.data_routes.strict", "path": relative, "ok": True})
+
+    @staticmethod
+    def _validate_skill_dependency_isolation(
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Reject manifests that the runtime installer will deterministically refuse."""
+
+        from adaos.services.skill.validation import validate_dependency_isolation_contract
+
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            relative = path.relative_to(workspace).as_posix()
+            try:
+                manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception as exc:
+                errors.append(f"{relative}: dependency isolation validation failed: {type(exc).__name__}: {exc}")
+                continue
+            if not isinstance(manifest, dict):
+                errors.append(f"{relative}: skill manifest must be an object")
+                continue
+            policy_issues = validate_dependency_isolation_contract(
+                path.parent,
+                manifest,
+                install_mode=True,
+            )
+            if policy_issues:
+                errors.extend(
+                    f"{relative}: {issue.code}: {issue.message} ({issue.where})"
+                    for issue in policy_issues
+                )
+            else:
+                checks.append({"kind": "skill.dependency_isolation.install", "path": relative, "ok": True})
+
+    @staticmethod
+    def _validate_brief_contract_requirements(
+        assignment: Mapping[str, Any],
+        workspace: Path,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+    ) -> None:
+        """Consumer-drive provider declarations from a structured implementation brief."""
+
+        request = assignment.get("realize_request") if isinstance(assignment.get("realize_request"), Mapping) else {}
+        artifacts = request.get("artifacts") if isinstance(request.get("artifacts"), Mapping) else {}
+        raw = artifacts.get("implementation_brief")
+        try:
+            brief = json.loads(str(raw or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(brief, Mapping):
+            return
+        requirements = [
+            dict(item)
+            for item in brief.get("contract_requirements") or []
+            if isinstance(item, Mapping) and str(item.get("role") or "").strip() == "provider"
+        ]
+        if not requirements:
+            return
+
+        manifests: list[tuple[str, Mapping[str, Any]]] = []
+        for path in sorted(workspace.glob("skills/*/skill.yaml")):
+            try:
+                value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if isinstance(value, Mapping):
+                manifests.append((path.relative_to(workspace).as_posix(), value))
+
+        for requirement in requirements:
+            contract = str(requirement.get("contract") or "").strip()
+            capability = str(requirement.get("capability") or "").strip()
+            expected_operations = {
+                str(item).strip()
+                for item in requirement.get("operations") or []
+                if str(item).strip()
+            }
+            matches: list[tuple[str, Mapping[str, Any]]] = []
+            for relative, manifest in manifests:
+                for declaration in manifest.get("provider_contracts") or []:
+                    if not isinstance(declaration, Mapping):
+                        continue
+                    if str(declaration.get("contract") or "").strip() != contract:
+                        continue
+                    if capability and str(declaration.get("capability") or "").strip() != capability:
+                        continue
+                    matches.append((relative, declaration))
+            label = str(requirement.get("id") or contract or capability or "provider contract")
+            if not matches:
+                errors.append(f"implementation brief provider requirement {label} has no matching skill provider_contracts declaration")
+                continue
+            provided = {
+                str(operation).strip()
+                for _, declaration in matches
+                for operation in declaration.get("operations") or []
+                if str(operation).strip()
+            }
+            missing = sorted(expected_operations - provided)
+            if missing:
+                errors.append(
+                    f"implementation brief provider requirement {label} is missing operations: {', '.join(missing)}"
+                )
+                continue
+            checks.append(
+                {
+                    "kind": "implementation_brief.provider_contract",
+                    "contract": contract,
+                    "capability": capability or None,
+                    "paths": sorted({relative for relative, _ in matches}),
+                    "ok": True,
+                }
+            )
 
     @staticmethod
     def _validate_checkpoint_owned_manifest_metadata(

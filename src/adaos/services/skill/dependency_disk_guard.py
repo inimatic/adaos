@@ -28,6 +28,18 @@ _HEAVY_DEP_NAMES = {
     "transformers",
 }
 
+_HEAVY_IMPORT_DEPENDENCIES = {
+    "cv2": "opencv-python",
+    "easyocr": "easyocr",
+    "faiss": "faiss-cpu",
+    "sentence_transformers": "sentence-transformers",
+    "tensorflow": "tensorflow",
+    "torch": "torch",
+    "torchaudio": "torchaudio",
+    "torchvision": "torchvision",
+    "transformers": "transformers",
+}
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = str(os.getenv(name) or "").strip().lower()
@@ -102,6 +114,19 @@ def heavy_dependency_names(args: Iterable[str]) -> list[str]:
 
 def dependency_args_contain_heavy_packages(args: Iterable[str]) -> bool:
     return bool(heavy_dependency_names(args))
+
+
+def heavy_import_dependency_names(import_roots: Iterable[str]) -> list[str]:
+    """Map imported top-level modules to their declared heavy package names."""
+
+    return sorted(
+        {
+            dependency
+            for raw in import_roots
+            for dependency in [_HEAVY_IMPORT_DEPENDENCIES.get(str(raw or "").strip().split(".", 1)[0])]
+            if dependency
+        }
+    )
 
 
 def dependency_disk_budget_bytes(args: Iterable[str], *, has_requirements_file: bool = False) -> int:
