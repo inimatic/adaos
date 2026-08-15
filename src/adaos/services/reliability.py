@@ -464,6 +464,9 @@ def _new_event_loop_watchdog_runtime() -> dict[str, Any]:
         "last_stall_at": None,
         "last_stall_ms": None,
         "max_stall_ms": 0.0,
+        "current_stall": None,
+        "last_completed_stall": None,
+        "recent_stalls": [],
         "status": "unknown",
     }
 
@@ -1554,6 +1557,94 @@ def record_runtime_event_loop_watchdog_probe(
                 state["last_stall_ms"] = normalized_elapsed_ms
                 state["max_stall_ms"] = max(float(state.get("max_stall_ms") or 0.0), normalized_elapsed_ms)
             state["status"] = "watching" if state.get("running") else "stopped"
+        return dict(state)
+
+
+def record_runtime_event_loop_watchdog_stall_evidence(
+    *,
+    phase: str,
+    elapsed_ms: float,
+    stack_frames: list[dict[str, Any]] | None = None,
+    skill_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    now = time.time()
+    normalized_phase = str(phase or "sample").strip().lower()
+    normalized_elapsed_ms = round(max(0.0, float(elapsed_ms)), 3)
+    frames = [dict(item) for item in (stack_frames or []) if isinstance(item, dict)][-40:]
+    candidates = [dict(item) for item in (skill_candidates or []) if isinstance(item, dict)][:25]
+    with _LOCK:
+        state = _EVENT_LOOP_WATCHDOG_RUNTIME
+        current = dict(state.get("current_stall") or {})
+        if not frames and isinstance(current.get("last_stack"), list):
+            frames = [dict(item) for item in current.get("last_stack") or [] if isinstance(item, dict)][-40:]
+        top_frame = dict(frames[-1]) if frames else {}
+        if normalized_phase == "detected" or not current:
+            current = {
+                "detected_at": now,
+                "last_sample_at": now,
+                "elapsed_ms": normalized_elapsed_ms,
+                "initial_stack": frames,
+                "last_stack": frames,
+                "skill_candidates": candidates,
+                "samples": [],
+            }
+        current["last_sample_at"] = now
+        current["elapsed_ms"] = normalized_elapsed_ms
+        if frames:
+            current["last_stack"] = frames
+        known_candidates = {
+            (
+                str(item.get("skill") or ""),
+                str(item.get("topic") or ""),
+                str(item.get("handler") or ""),
+            ): dict(item)
+            for item in current.get("skill_candidates") or []
+            if isinstance(item, dict)
+        }
+        for item in candidates:
+            key = (
+                str(item.get("skill") or ""),
+                str(item.get("topic") or ""),
+                str(item.get("handler") or ""),
+            )
+            known_candidates[key] = item
+        current["skill_candidates"] = list(known_candidates.values())[:25]
+        samples = [dict(item) for item in current.get("samples") or [] if isinstance(item, dict)]
+        sample = {
+            "captured_at": now,
+            "elapsed_ms": normalized_elapsed_ms,
+            "top_frame": top_frame,
+        }
+        if not samples or samples[-1].get("top_frame") != top_frame or normalized_phase == "completed":
+            samples.append(sample)
+        current["samples"] = samples[-16:]
+
+        if normalized_phase in {"completed", "aborted"}:
+            current["completed_at"] = now
+            current["duration_ms"] = normalized_elapsed_ms
+            current["aborted"] = normalized_phase == "aborted"
+            state["last_completed_stall"] = dict(current)
+            recent = [dict(item) for item in state.get("recent_stalls") or [] if isinstance(item, dict)]
+            recent.append(
+                {
+                    "detected_at": current.get("detected_at"),
+                    "completed_at": now,
+                    "duration_ms": normalized_elapsed_ms,
+                    "aborted": normalized_phase == "aborted",
+                    "initial_top_frame": (
+                        dict(current.get("initial_stack")[-1])
+                        if isinstance(current.get("initial_stack"), list) and current.get("initial_stack")
+                        else {}
+                    ),
+                    "last_top_frame": top_frame,
+                    "skill_candidates": list(current.get("skill_candidates") or []),
+                    "sample_total": len(samples),
+                }
+            )
+            state["recent_stalls"] = recent[-8:]
+            state["current_stall"] = None
+        else:
+            state["current_stall"] = current
         return dict(state)
 
 
@@ -7026,6 +7117,19 @@ def _skill_subscription_execution_runtime_snapshot() -> dict[str, Any]:
         }
 
 
+def _skill_env_io_guard_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.sdk.data.skill_env import skill_env_io_guard_snapshot
+
+        return skill_env_io_guard_snapshot()
+    except Exception as exc:
+        return {
+            "schema": "adaos.skill_env_io_guard.v1",
+            "available": False,
+            "error": type(exc).__name__,
+        }
+
+
 def _probe_supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -8172,6 +8276,7 @@ def reliability_snapshot(
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
     skill_runtime_migration = skill_runtime_migration_runtime_snapshot()
     skill_subscription_execution = _skill_subscription_execution_runtime_snapshot()
+    skill_env_io_guard = _skill_env_io_guard_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
@@ -8220,6 +8325,7 @@ def reliability_snapshot(
             "eventbus_backlog": eventbus_backlog,
             "skill_runtime_migration": skill_runtime_migration,
             "skill_subscription_execution": skill_subscription_execution,
+            "skill_env_io_guard": skill_env_io_guard,
             "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,

@@ -167,7 +167,13 @@ def _bounded_event_queue_limit() -> int:
     return max(1, min(value, 100000))
 
 
-async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: Event) -> None:
+async def _run_coro_with_timing(
+    coro: Awaitable[Any],
+    handler: Handler,
+    event: Event,
+    *,
+    queue_wait_s: float = 0.0,
+) -> float:
     """
     Wrapper for async handlers that records execution time and logs slow/crashing
     handlers for debugging high CPU usage in the hub.
@@ -185,6 +191,7 @@ async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: E
             exc_info=True,
         )
         _record_handler_crash_incident(handler_label=handler_label, event_type=str(event_type), exc=exc)
+        return max(0.0, time.perf_counter() - started)
     else:
         duration = time.perf_counter() - started
         threshold = _slow_handler_threshold_s("async", 0.25)
@@ -192,18 +199,14 @@ async def _run_coro_with_timing(coro: Awaitable[Any], handler: Handler, event: E
             handler_label = _handler_label(handler)
             event_type = getattr(event, "type", "<unknown>")
             _log.warning(
-                "slow async event handler handler=%s type=%s duration=%.3fs",
+                "async event handler wall time exceeded handler=%s type=%s wall=%.3fs "
+                "queue_wait=%.3fs blocker_attribution=unconfirmed",
                 handler_label,
                 event_type,
                 duration,
+                max(0.0, float(queue_wait_s)),
             )
-            _record_slow_handler_incident(
-                handler_label=handler_label,
-                event_type=str(event_type),
-                duration_s=duration,
-                kind="async",
-                threshold_s=threshold,
-            )
+        return max(0.0, duration)
 
 
 class LocalEventBus(EventBus):
@@ -237,7 +240,10 @@ class LocalEventBus(EventBus):
         self._bounded_supersede_by_handler_topics = _bounded_supersede_by_handler_topics()
         self._bounded_concurrency = _bounded_event_concurrency()
         self._bounded_queue_limit = _bounded_event_queue_limit()
-        self._bounded_queues: DefaultDict[str, deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]]] = defaultdict(deque)
+        self._bounded_queues: DefaultDict[
+            str,
+            deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]],
+        ] = defaultdict(deque)
         self._bounded_worker_tasks: set[asyncio.Task[Any]] = set()
         self._bounded_active_workers: DefaultDict[str, int] = defaultdict(int)
         self._bounded_active_meta: dict[asyncio.Task[Any], dict[str, Any]] = {}
@@ -249,6 +255,7 @@ class LocalEventBus(EventBus):
         self._bounded_superseded_by_topic: DefaultDict[str, int] = defaultdict(int)
         self._bounded_superseded_by_type: DefaultDict[str, int] = defaultdict(int)
         self._bounded_queue_peak = 0
+        self._bounded_handler_timing: dict[str, dict[str, Any]] = {}
         self._webio_stream_control_stats: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
 
     def _bounded_topic_key(self, event_type: str) -> str | None:
@@ -430,8 +437,10 @@ class LocalEventBus(EventBus):
         queue = self._bounded_queues.get(topic_key)
         if not queue:
             return None
-        kept: deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = deque()
-        removed: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None] | None = None
+        kept: deque[
+            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
+        ] = deque()
+        removed: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float] | None = None
         while queue:
             item = queue.popleft()
             if removed is None and item[5] == supersede_key:
@@ -454,7 +463,7 @@ class LocalEventBus(EventBus):
 
     def _bounded_decrement_queued_locked(
         self,
-        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None],
+        item: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float],
     ) -> str:
         removed_type = str(item[3] or "")
         self._bounded_queued_by_type[removed_type] = max(0, int(self._bounded_queued_by_type.get(removed_type, 0)) - 1)
@@ -481,8 +490,12 @@ class LocalEventBus(EventBus):
         preserve_distinct_bounded_keys = (
             event_type in _WEBIO_STREAM_CONTROL_EVENTS or event_type == _IO_OUT_STREAM_PUBLISH_EVENT
         ) and supersede_key is not None
-        kept: deque[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = deque()
-        removed: list[tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None]] = []
+        kept: deque[
+            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
+        ] = deque()
+        removed: list[
+            tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float]
+        ] = []
         while queue:
             item = queue.popleft()
             if item[3] == event_type and item[4] == handler_name:
@@ -551,6 +564,7 @@ class LocalEventBus(EventBus):
                     "webspace_id": str(meta.get("webspace_id") or ""),
                     "receiver": str(meta.get("receiver") or ""),
                     "node_id": str(meta.get("node_id") or ""),
+                    "queue_wait_s": round(max(0.0, float(meta.get("queue_wait_s") or 0.0)), 6),
                     "age_s": round(max(0.0, now - started), 3),
                 }
             )
@@ -596,6 +610,14 @@ class LocalEventBus(EventBus):
                 str(item.get("receiver") or ""),
             ),
         )[:10]
+        top_bounded_handler_timing = sorted(
+            (dict(item) for item in self._bounded_handler_timing.values()),
+            key=lambda item: (
+                -float(item.get("max_wall_s") or 0.0),
+                -float(item.get("max_queue_wait_s") or 0.0),
+                str(item.get("handler") or ""),
+            ),
+        )[:10]
         return {
             "pending_tasks": len(self._pending_tasks),
             "pending_peak": int(self._pending_peak),
@@ -618,6 +640,7 @@ class LocalEventBus(EventBus):
             "top_bounded_drops": top_bounded_drops,
             "top_bounded_superseded_topics": top_bounded_superseded_topics,
             "top_bounded_superseded_types": top_bounded_superseded_types,
+            "top_bounded_handler_timing": top_bounded_handler_timing,
             "top_webio_stream_controls": top_webio_stream_controls,
         }
 
@@ -762,13 +785,15 @@ class LocalEventBus(EventBus):
     async def _bounded_worker(self, topic_key: str) -> None:
         try:
             while True:
-                queued: tuple[Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None] | None = None
+                queued: tuple[
+                    Awaitable[Any], Handler, Event, str, str, tuple[Any, ...] | None, float
+                ] | None = None
                 with self._lock:
                     queue = self._bounded_queues.get(topic_key)
                     if queue:
                         queued = queue.popleft()
                     if queued is not None:
-                        _coro, _handler, _event, event_type, handler_name, _supersede_key = queued
+                        _coro, _handler, _event, event_type, handler_name, _supersede_key, _queued_at = queued
                         if event_type in self._bounded_queued_by_type:
                             self._bounded_queued_by_type[event_type] = max(0, int(self._bounded_queued_by_type[event_type]) - 1)
                             if self._bounded_queued_by_type[event_type] <= 0:
@@ -779,7 +804,9 @@ class LocalEventBus(EventBus):
                                 self._bounded_queued_by_handler.pop(handler_name, None)
                     if queued is None:
                         break
-                coro, handler, event, _event_type, _handler_name, _supersede_key = queued
+                coro, handler, event, _event_type, _handler_name, _supersede_key, _queued_at = queued
+                started_at = time.monotonic()
+                queue_wait_s = max(0.0, started_at - float(_queued_at or started_at))
                 task = asyncio.current_task()
                 if task is not None:
                     with self._lock:
@@ -793,10 +820,34 @@ class LocalEventBus(EventBus):
                                 self._event_field(event, "receiver", "stream_id", "slot", "projection", "id") or ""
                             ),
                             "node_id": str(self._event_field(event, "target_node_id", "node_id") or ""),
-                            "started": time.monotonic(),
+                            "queued_at": float(_queued_at or started_at),
+                            "queue_wait_s": queue_wait_s,
+                            "started": started_at,
                         }
                 try:
-                    await _run_coro_with_timing(coro, handler, event)
+                    wall_s = await _run_coro_with_timing(
+                        coro,
+                        handler,
+                        event,
+                        queue_wait_s=queue_wait_s,
+                    )
+                    with self._lock:
+                        timing = dict(self._bounded_handler_timing.get(_handler_name) or {})
+                        timing.update(
+                            {
+                                "handler": _handler_name,
+                                "event_type": _event_type,
+                                "completed_total": int(timing.get("completed_total") or 0) + 1,
+                                "last_queue_wait_s": round(queue_wait_s, 6),
+                                "max_queue_wait_s": round(
+                                    max(float(timing.get("max_queue_wait_s") or 0.0), queue_wait_s), 6
+                                ),
+                                "last_wall_s": round(wall_s, 6),
+                                "max_wall_s": round(max(float(timing.get("max_wall_s") or 0.0), wall_s), 6),
+                                "last_completed_at": time.time(),
+                            }
+                        )
+                        self._bounded_handler_timing[_handler_name] = timing
                 finally:
                     if task is not None:
                         with self._lock:
@@ -998,7 +1049,9 @@ class LocalEventBus(EventBus):
                                     )
                                     dropped_total = int(self._bounded_dropped_by_topic[topic_key] or 0)
                                 else:
-                                    queue.append((res, h, event, event_type, handler_name, supersede_key))
+                                    queue.append(
+                                        (res, h, event, event_type, handler_name, supersede_key, time.monotonic())
+                                    )
                                     self._bounded_queued_by_type[event_type] += 1
                                     self._bounded_queued_by_handler[handler_name] += 1
                                     self._record_webio_stream_control_locked(

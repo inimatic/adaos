@@ -66,6 +66,7 @@ def _stats_row(key: str, *, skill: str, topic: str, handler: str) -> dict[str, A
             "overload_total": 0,
             "blocking_total": 0,
             "wall_budget_total": 0,
+            "wall_elapsed_total": 0,
             "event_loop_stall_total": 0,
             "circuit_open_total": 0,
             "circuit_rejected_total": 0,
@@ -428,17 +429,13 @@ async def run_async_subscription(
             "thread_id": threading.get_ident(),
             "thread_name": threading.current_thread().name,
             "pending_at_submit": pending + 1,
-            "watchdog_reported": False,
+            "blocker_attribution": "watchdog_stack_match_required",
         }
         stats = _STATS.get(key)
         if stats is not None:
             stats["last_started_at"] = started_at
 
     threshold_s = _env_float("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", 1.0, minimum=0.05, maximum=300.0)
-    watchdog = asyncio.create_task(
-        _watch_blocking_handler(token, threshold_s),
-        name=f"skill-async-subscription-watchdog:{skill}:{topic}",
-    )
     error: BaseException | None = None
     try:
         result = callback()
@@ -452,8 +449,7 @@ async def run_async_subscription(
         finished_at = time.time()
         duration_s = max(0.0, finished_at - started_at)
         with _LOCK:
-            active = _ACTIVE.pop(token, None) or {}
-            watchdog_reported = bool(active.get("watchdog_reported"))
+            _ACTIVE.pop(token, None)
             _PENDING_BY_HANDLER[key] = max(0, int(_PENDING_BY_HANDLER.get(key) or 0) - 1)
             if _PENDING_BY_HANDLER[key] <= 0:
                 _PENDING_BY_HANDLER.pop(key, None)
@@ -463,31 +459,13 @@ async def run_async_subscription(
                 stats["failed_total"] = int(stats.get("failed_total") or 0) + (1 if error is not None else 0)
                 stats["last_duration_s"] = round(duration_s, 6)
                 stats["max_duration_s"] = round(max(float(stats.get("max_duration_s") or 0.0), duration_s), 6)
+                stats["last_wall_s"] = round(duration_s, 6)
+                stats["max_wall_s"] = round(max(float(stats.get("max_wall_s") or 0.0), duration_s), 6)
                 stats["last_finished_at"] = finished_at
                 stats["last_error"] = type(error).__name__ if error is not None else None
-                if duration_s >= threshold_s and not watchdog_reported:
+                if duration_s >= threshold_s:
                     stats["wall_budget_total"] = int(stats.get("wall_budget_total") or 0) + 1
-        watchdog.cancel()
-        if duration_s >= threshold_s and not watchdog_reported:
-            _LOG.warning(
-                "async skill subscription exceeded wall budget skill=%s topic=%s handler=%s "
-                "duration=%.3fs threshold=%.3fs",
-                skill,
-                topic,
-                handler,
-                duration_s,
-                threshold_s,
-            )
-            await asyncio.to_thread(
-                _record_pressure,
-                skill=skill,
-                topic=topic,
-                handler=handler,
-                signal="async_wall_budget_exceeded",
-                duration_s=duration_s,
-                pending=pending + 1,
-                threshold_s=threshold_s,
-            )
+                    stats["wall_elapsed_total"] = int(stats.get("wall_elapsed_total") or 0) + 1
 
 
 def _stack_matches_skill(skill: str, stack_frames: list[dict[str, Any]]) -> bool:
@@ -560,6 +538,7 @@ def correlate_runtime_event_loop_stall(
             stats["event_loop_stall_total"] = int(stats.get("event_loop_stall_total") or 0) + 1
             stats["last_event_loop_stall_ms"] = round(max(0.0, float(stall_ms)), 3)
             stats["last_event_loop_stall_at"] = now
+            stats["last_blocker_attribution"] = "watchdog_stack_match"
             circuit = _trip_circuit_locked(
                 key,
                 skill=skill,

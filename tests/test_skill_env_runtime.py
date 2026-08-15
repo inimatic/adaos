@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import adaos.sdk.data.skill_env as skill_env_module
 from adaos.sdk.data.skill_memory import (
     async_get as skill_memory_async_get,
     async_set as skill_memory_async_set,
@@ -438,6 +439,74 @@ def test_async_skill_memory_keeps_context_and_moves_io_off_loop(tmp_path: Path, 
             ctx.skill_ctx.set(previous.name, previous.path)
 
     assert value == {"ready": True}
+
+
+def test_sync_skill_env_io_is_rejected_on_event_loop(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
+    env_path = tmp_path / "skill_env.json"
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
+    skill_env_module.reset_skill_env_io_guard_runtime()
+
+    async def _run() -> None:
+        operations = (
+            (lambda: skill_env_module.skill_env_path(), "skill_env_path"),
+            (lambda: skill_env_module.read_env(), "read_env"),
+            (lambda: skill_env_module.write_env({"value": 1}), "write_env"),
+            (lambda: skill_env_module.set_env("value", 1), "set_env"),
+            (lambda: skill_env_module.delete_env("value"), "delete_env"),
+        )
+        for operation, name in operations:
+            with pytest.raises(RuntimeError, match="cannot run on an asyncio event loop"):
+                operation()
+            assert skill_env_module.skill_env_io_guard_snapshot()["last_operation"] == name
+
+    try:
+        asyncio.run(_run())
+        snapshot = skill_env_module.skill_env_io_guard_snapshot()
+        assert snapshot["rejected_total"] == 5
+        assert snapshot["rejected_by_operation"] == {
+            "delete_env": 1,
+            "read_env": 1,
+            "set_env": 1,
+            "skill_env_path": 1,
+            "write_env": 1,
+        }
+        assert not env_path.exists()
+    finally:
+        skill_env_module.reset_skill_env_io_guard_runtime()
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+
+def test_async_skill_env_operations_remain_supported(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
+    env_path = tmp_path / "skill_env.json"
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
+    skill_env_module.reset_skill_env_io_guard_runtime()
+
+    async def _run() -> dict:
+        await skill_env_module.async_write_env({"seed": 1})
+        await skill_env_module.async_set_env("value", 2)
+        value = await skill_env_module.async_get_env("value")
+        await skill_env_module.async_delete_env("seed")
+        assert value == 2
+        return await skill_env_module.async_read_env()
+
+    try:
+        assert asyncio.run(_run()) == {"value": 2}
+        assert skill_env_module.skill_env_io_guard_snapshot()["rejected_total"] == 0
+    finally:
+        skill_env_module.reset_skill_env_io_guard_runtime()
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
 
 
 def test_skill_memory_concurrent_writes_share_atomic_store(tmp_path: Path, monkeypatch) -> None:

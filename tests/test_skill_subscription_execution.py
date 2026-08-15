@@ -28,7 +28,7 @@ def test_sync_subscription_runs_on_dedicated_worker() -> None:
     assert snapshot["top_handlers"][0]["completed_total"] == 1
 
 
-def test_async_subscription_reports_active_handler_and_owner_loop_budget(monkeypatch) -> None:
+def test_async_subscription_long_await_is_not_attributed_as_blocking(monkeypatch) -> None:
     subscription_execution.reset_subscription_execution_runtime()
     incident_registry.reset_incident_registry()
     monkeypatch.setenv("ADAOS_SKILL_SUBSCRIPTION_BLOCKING_WARN_S", "0.05")
@@ -63,7 +63,10 @@ def test_async_subscription_reports_active_handler_and_owner_loop_budget(monkeyp
         assert active["active_total"] == 1
         assert active["active"][0]["skill"] == "async_skill"
         assert active["active"][0]["execution_mode"] == "async_owner_loop"
-        assert incidents["items"][0]["domain"] == "skill:async_skill"
+        assert incidents["items"] == []
+        completed = subscription_execution.subscription_execution_snapshot()["top_handlers"][0]
+        assert completed["wall_elapsed_total"] == 1
+        assert completed["event_loop_stall_total"] == 0
     finally:
         incident_registry.reset_incident_registry()
 

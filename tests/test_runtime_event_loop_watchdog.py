@@ -171,6 +171,41 @@ def test_watchdog_reliability_signal_tracks_stalls() -> None:
     assert snapshot["max_stall_ms"] == 2104.25
 
 
+def test_watchdog_reliability_preserves_stall_stack_transitions() -> None:
+    reliability.reset_reliability_runtime_state()
+    initial = [{"filename": "skill_env.py", "lineno": 200, "function": "write_env"}]
+    final = [{"filename": "sqlite.py", "lineno": 500, "function": "durable_state_write"}]
+    candidate = [{"skill": "demo_skill", "topic": "state.changed", "handler": "handlers.on_state"}]
+
+    reliability.record_runtime_event_loop_watchdog_stall_evidence(
+        phase="detected",
+        elapsed_ms=250.0,
+        stack_frames=initial,
+    )
+    reliability.record_runtime_event_loop_watchdog_stall_evidence(
+        phase="sample",
+        elapsed_ms=750.0,
+        stack_frames=final,
+        skill_candidates=candidate,
+    )
+    reliability.record_runtime_event_loop_watchdog_stall_evidence(
+        phase="completed",
+        elapsed_ms=1250.0,
+        stack_frames=final,
+        skill_candidates=candidate,
+    )
+
+    snapshot = reliability.runtime_event_loop_watchdog_snapshot()
+    completed = snapshot["last_completed_stall"]
+    assert snapshot["current_stall"] is None
+    assert completed["duration_ms"] == 1250.0
+    assert completed["initial_stack"][-1]["function"] == "write_env"
+    assert completed["last_stack"][-1]["function"] == "durable_state_write"
+    assert completed["skill_candidates"] == candidate
+    assert len(completed["samples"]) == 3
+    assert snapshot["recent_stalls"][-1]["sample_total"] == 3
+
+
 def test_stall_incident_completion_updates_duration_without_double_count(monkeypatch) -> None:
     incident_registry.reset_incident_registry()
     monkeypatch.setattr(incident_registry, "process_activity_history_snapshot", lambda limit=8: {})

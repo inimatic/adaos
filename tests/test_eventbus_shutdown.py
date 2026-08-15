@@ -285,6 +285,47 @@ async def test_local_event_bus_reports_active_bounded_handler():
 
 
 @pytest.mark.asyncio
+async def test_bounded_handler_timing_separates_queue_wait_from_wall_time(monkeypatch):
+    monkeypatch.setenv("ADAOS_EVENTBUS_BOUNDED_CONCURRENCY", "1")
+    bus = LocalEventBus()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first_handler(_event: Event):
+        first_started.set()
+        await release_first.wait()
+
+    async def second_handler(_event: Event):
+        return None
+
+    bus.subscribe("webio.stream.snapshot.requested", first_handler)
+    bus.subscribe("webio.stream.snapshot.requested", second_handler)
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            payload={"webspace_id": "desktop", "receiver": "timing.test"},
+            source="test",
+            ts=0.0,
+        )
+    )
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.sleep(0.08)
+    release_first.set()
+    assert await bus.wait_for_idle(timeout=1.0)
+
+    timing = {
+        item["handler"]: item
+        for item in bus.backlog_snapshot()["top_bounded_handler_timing"]
+    }
+    first = timing["test_eventbus_shutdown.first_handler"]
+    second = timing["test_eventbus_shutdown.second_handler"]
+    assert first["last_queue_wait_s"] < 0.03
+    assert first["last_wall_s"] >= 0.06
+    assert second["last_queue_wait_s"] >= 0.06
+    assert second["last_wall_s"] < 0.03
+
+
+@pytest.mark.asyncio
 async def test_local_event_bus_preserves_each_webio_stream_control_handler(monkeypatch):
     monkeypatch.delenv("ADAOS_EVENTBUS_BOUNDED_TOPICS", raising=False)
     monkeypatch.delenv("ADAOS_EVENTBUS_SUPERSEDE_BY_HANDLER_TOPICS", raising=False)

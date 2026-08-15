@@ -15,6 +15,7 @@ from adaos.services.incident_registry import (
 )
 from adaos.services.reliability import (
     record_runtime_event_loop_watchdog_probe,
+    record_runtime_event_loop_watchdog_stall_evidence,
     set_runtime_event_loop_watchdog_state,
 )
 
@@ -105,6 +106,7 @@ class RuntimeEventLoopWatchdog:
             threshold_ms=self._threshold_sec * 1000.0,
         )
         last_report_at = 0.0
+        active_stall_started: float | None = None
         try:
             while not self._stop.wait(self._interval_sec):
                 acknowledged = threading.Event()
@@ -121,9 +123,11 @@ class RuntimeEventLoopWatchdog:
                     continue
 
                 observed_at = time.monotonic()
+                active_stall_started = probe_started
                 stall_ms = (observed_at - probe_started) * 1000.0
                 record_runtime_event_loop_watchdog_probe(elapsed_ms=stall_ms, stalled=True)
                 frames = _stack_frames(self._loop_thread_id)
+                last_frames = frames
                 skill_stall_candidates: list[dict[str, str]] = []
                 try:
                     from adaos.services.skill.subscription_execution import (
@@ -133,6 +137,20 @@ class RuntimeEventLoopWatchdog:
                     skill_stall_candidates = capture_active_skill_handlers_for_stack(frames)
                 except Exception:
                     _LOG.exception("event-loop stall skill attribution capture failed")
+                candidate_by_key = {
+                    (
+                        str(item.get("skill") or ""),
+                        str(item.get("topic") or ""),
+                        str(item.get("handler") or ""),
+                    ): dict(item)
+                    for item in skill_stall_candidates
+                }
+                record_runtime_event_loop_watchdog_stall_evidence(
+                    phase="detected",
+                    elapsed_ms=stall_ms,
+                    stack_frames=frames,
+                    skill_candidates=skill_stall_candidates,
+                )
                 process_sample: dict[str, Any] = {}
                 report_incident = observed_at - last_report_at >= self._report_interval_sec
                 if report_incident:
@@ -164,7 +182,30 @@ class RuntimeEventLoopWatchdog:
                     )
 
                 while not self._stop.is_set() and not acknowledged.wait(self._interval_sec):
-                    continue
+                    sampled_stall_ms = (time.monotonic() - probe_started) * 1000.0
+                    sampled_frames = _stack_frames(self._loop_thread_id)
+                    if sampled_frames:
+                        last_frames = sampled_frames
+                    try:
+                        from adaos.services.skill.subscription_execution import (
+                            capture_active_skill_handlers_for_stack,
+                        )
+
+                        for item in capture_active_skill_handlers_for_stack(sampled_frames):
+                            key = (
+                                str(item.get("skill") or ""),
+                                str(item.get("topic") or ""),
+                                str(item.get("handler") or ""),
+                            )
+                            candidate_by_key[key] = dict(item)
+                    except Exception:
+                        _LOG.exception("event-loop stall skill attribution refresh failed")
+                    record_runtime_event_loop_watchdog_stall_evidence(
+                        phase="sample",
+                        elapsed_ms=sampled_stall_ms,
+                        stack_frames=last_frames,
+                        skill_candidates=list(candidate_by_key.values()),
+                    )
                 if acknowledged.is_set():
                     completed_stall_ms = (time.monotonic() - probe_started) * 1000.0
                     record_runtime_event_loop_watchdog_probe(
@@ -172,26 +213,46 @@ class RuntimeEventLoopWatchdog:
                         stalled=False,
                         completed_stall=True,
                     )
+                    record_runtime_event_loop_watchdog_stall_evidence(
+                        phase="completed",
+                        elapsed_ms=completed_stall_ms,
+                        stack_frames=last_frames,
+                        skill_candidates=list(candidate_by_key.values()),
+                    )
                     try:
                         from adaos.services.skill.subscription_execution import (
                             correlate_runtime_event_loop_stall,
                         )
 
                         correlate_runtime_event_loop_stall(
-                            stack_frames=frames,
+                            stack_frames=last_frames,
                             stall_ms=completed_stall_ms,
                             threshold_ms=self._threshold_sec * 1000.0,
-                            candidates=skill_stall_candidates,
+                            candidates=list(candidate_by_key.values()),
                         )
                     except Exception:
                         _LOG.exception("event-loop stall skill correlation failed")
-                    if frames and report_incident:
+                    initial_top = frames[-1] if frames else {}
+                    final_top = last_frames[-1] if last_frames else {}
+                    _LOG.warning(
+                        "runtime event loop recovered duration_ms=%.1f initial_frame=%s:%s:%s "
+                        "final_frame=%s:%s:%s skill_candidates=%s",
+                        completed_stall_ms,
+                        initial_top.get("filename") or "missing",
+                        initial_top.get("lineno") or 0,
+                        initial_top.get("function") or "unknown",
+                        final_top.get("filename") or "missing",
+                        final_top.get("lineno") or 0,
+                        final_top.get("function") or "unknown",
+                        list(candidate_by_key.values()),
+                    )
+                    if last_frames and report_incident:
                         try:
                             record_runtime_event_loop_stall(
                                 stall_ms=completed_stall_ms,
                                 threshold_ms=self._threshold_sec * 1000.0,
                                 interval_sec=self._interval_sec,
-                                stack_frames=frames,
+                                stack_frames=last_frames,
                                 loop_thread_id=self._loop_thread_id,
                                 watchdog_thread_id=watchdog_thread_id,
                                 process_sample=process_sample,
@@ -199,7 +260,13 @@ class RuntimeEventLoopWatchdog:
                             )
                         except Exception:
                             _LOG.exception("event-loop watchdog incident completion recording failed")
+                    active_stall_started = None
         finally:
+            if active_stall_started is not None:
+                record_runtime_event_loop_watchdog_stall_evidence(
+                    phase="aborted",
+                    elapsed_ms=(time.monotonic() - active_stall_started) * 1000.0,
+                )
             set_runtime_event_loop_watchdog_state(
                 running=False,
                 watchdog_thread_id=watchdog_thread_id,

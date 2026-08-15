@@ -25,11 +25,77 @@ __all__ = [
     "async_delete_env",
     "async_read_env",
     "async_write_env",
+    "skill_env_io_guard_snapshot",
+    "reset_skill_env_io_guard_runtime",
 ]
 
 
 _PATH_LOCKS: dict[str, threading.RLock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
+_IO_GUARD_LOCK = threading.Lock()
+_IO_GUARD_RUNTIME: dict[str, Any] = {
+    "schema": "adaos.skill_env_io_guard.v1",
+    "rejected_total": 0,
+    "rejected_by_operation": {},
+    "last_rejected_at": None,
+    "last_operation": None,
+    "last_skill": None,
+    "last_thread_id": None,
+}
+
+
+def _current_skill_name() -> str | None:
+    _ctx, current = _current_ctx_and_skill()
+    token = str(getattr(current, "name", "") or "").strip() if current is not None else ""
+    return token or None
+
+
+def _reject_blocking_io_on_event_loop(operation: str, *, async_alternative: str) -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    now = time.time()
+    skill = _current_skill_name()
+    with _IO_GUARD_LOCK:
+        by_operation = dict(_IO_GUARD_RUNTIME.get("rejected_by_operation") or {})
+        by_operation[operation] = int(by_operation.get(operation) or 0) + 1
+        _IO_GUARD_RUNTIME.update(
+            {
+                "rejected_total": int(_IO_GUARD_RUNTIME.get("rejected_total") or 0) + 1,
+                "rejected_by_operation": by_operation,
+                "last_rejected_at": now,
+                "last_operation": operation,
+                "last_skill": skill,
+                "last_thread_id": threading.get_ident(),
+            }
+        )
+    raise RuntimeError(
+        f"{operation} performs blocking skill-env file I/O and cannot run on an asyncio event loop; "
+        f"use {async_alternative} instead"
+    )
+
+
+def skill_env_io_guard_snapshot() -> dict[str, Any]:
+    with _IO_GUARD_LOCK:
+        snapshot = dict(_IO_GUARD_RUNTIME)
+        snapshot["rejected_by_operation"] = dict(_IO_GUARD_RUNTIME.get("rejected_by_operation") or {})
+    return snapshot
+
+
+def reset_skill_env_io_guard_runtime() -> None:
+    with _IO_GUARD_LOCK:
+        _IO_GUARD_RUNTIME.update(
+            {
+                "rejected_total": 0,
+                "rejected_by_operation": {},
+                "last_rejected_at": None,
+                "last_operation": None,
+                "last_skill": None,
+                "last_thread_id": None,
+            }
+        )
 
 
 def _path_lock_key(path: Path) -> str:
@@ -173,6 +239,7 @@ def _runtime_env_path_from_ctx() -> Path | None:
 
 
 def skill_env_path() -> Path:
+    _reject_blocking_io_on_event_loop("skill_env_path", async_alternative="an async skill-env operation")
     path = _runtime_env_path_from_ctx()
     if path is None:
         override = os.getenv("ADAOS_SKILL_ENV_PATH") or os.getenv("ADAOS_SKILL_MEMORY_PATH")
@@ -249,6 +316,7 @@ def _write_json_object_unlocked(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def read_env() -> dict[str, Any]:
+    _reject_blocking_io_on_event_loop("read_env", async_alternative="async_read_env()")
     target = skill_env_path()
     with _path_lock(target):
         merged = _read_json_object(target) if target.exists() else {}
@@ -267,6 +335,7 @@ def read_env() -> dict[str, Any]:
 
 
 def write_env(payload: Mapping[str, Any]) -> None:
+    _reject_blocking_io_on_event_loop("write_env", async_alternative="async_write_env()")
     target = skill_env_path()
     with _path_lock(target):
         _write_json_object_unlocked(target, payload)
@@ -277,6 +346,7 @@ def get_env(key: str, default: Any | None = None) -> Any:
 
 
 def set_env(key: str, value: Any) -> None:
+    _reject_blocking_io_on_event_loop("set_env", async_alternative="async_set_env()")
     target = skill_env_path()
     with _path_lock(target):
         payload = read_env()
@@ -285,6 +355,7 @@ def set_env(key: str, value: Any) -> None:
 
 
 def delete_env(key: str) -> None:
+    _reject_blocking_io_on_event_loop("delete_env", async_alternative="async_delete_env()")
     target = skill_env_path()
     with _path_lock(target):
         payload = read_env()
