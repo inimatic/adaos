@@ -717,6 +717,31 @@ def test_admin_update_start_refuses_runtime_fallback_when_supervisor_unavailable
     assert calls == ["http://127.0.0.1:8776/api/supervisor/update/start"]
 
 
+def test_admin_update_start_refuses_detached_runtime_without_restart_authority(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    monkeypatch.setattr(api_server, "_try_forward_update_start_to_supervisor", lambda _body: None)
+
+    async def _write_status(_payload):
+        raise AssertionError("detached runtime must not write an update status or shutdown plan")
+
+    monkeypatch.setattr(api_server, "write_core_update_status_async", _write_status)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_update_start(
+                api_server.CoreUpdateStartRequest(
+                    target_rev="rev2026",
+                    target_version="abc123",
+                    reason="test.detached",
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "update_restart_authority_unavailable"
+    assert exc_info.value.detail["action"] == "update.start"
+
+
 def test_admin_update_rollback_forwards_to_supervisor_when_autostart_managed(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HOST", "127.0.0.1")
@@ -746,6 +771,27 @@ def test_admin_update_rollback_forwards_to_supervisor_when_autostart_managed(mon
 
     assert payload["_served_by"] == "supervisor"
     assert calls == [("http://127.0.0.1:8776/api/supervisor/update/rollback", "test.rollback.supervisor")]
+
+
+def test_admin_update_rollback_refuses_detached_runtime_without_restart_authority(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    monkeypatch.setattr(api_server, "_try_forward_update_rollback_to_supervisor", lambda _body: None)
+
+    async def _write_status(_payload):
+        raise AssertionError("detached runtime must not write a rollback status or shutdown plan")
+
+    monkeypatch.setattr(api_server, "write_core_update_status_async", _write_status)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_server.admin_update_rollback(
+                api_server.CoreUpdateRollbackRequest(reason="test.rollback.detached")
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["error"] == "update_restart_authority_unavailable"
+    assert exc_info.value.detail["action"] == "update.rollback"
 
 
 def test_admin_update_status_includes_runtime_identity(monkeypatch) -> None:

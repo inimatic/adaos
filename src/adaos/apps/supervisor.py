@@ -165,6 +165,7 @@ def _update_reconciliation_operations() -> UpdateReconciliationOperations:
         finalize_runtime_boot_status_from_supervisor=_finalize_runtime_boot_status_from_supervisor,
         is_root_restart_completed_status=_is_root_restart_completed_status,
         is_root_restart_pending_attempt=_is_root_restart_pending_attempt,
+        is_root_promotion_pending_status=_is_root_promotion_pending_status,
         is_terminal_update_status=_is_terminal_update_status,
         read_core_update_status=read_core_update_status,
         read_update_attempt=_read_update_attempt,
@@ -7246,6 +7247,8 @@ class SupervisorManager:
         return payload
 
     def supervisor_update_status(self) -> dict[str, Any]:
+        if self._update_state_machine.task_running():
+            return self._local_supervisor_update_status_payload(runtime_api_timeout=0.1)
         headers = {"Accept": "application/json"}
         if self.token:
             headers["X-AdaOS-Token"] = self.token

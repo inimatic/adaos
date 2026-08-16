@@ -42,7 +42,9 @@ Notes:
   slots, and sets `ADAOS_SUPERVISOR_ENABLED=1`.
 - Development runtimes with `ENV_TYPE=dev` do not follow hub/root core-update
   signals by default. Set `ADAOS_DEV_ALLOW_CORE_UPDATE=1` only when deliberately
-  testing the update machinery.
+  testing the update machinery. The runtime still requires a reachable slot
+  supervisor as restart authority; detached `adaos api serve` processes reject
+  update start requests before writing a shutdown plan.
 - Leave `HUB_NATS_WS_PROXY` unset or set to `auto` for normal Windows and Linux
   hub-to-root NATS-over-WS routing. Use `HUB_NATS_WS_PROXY=none` only for
   direct-route diagnostics.

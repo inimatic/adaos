@@ -662,6 +662,23 @@ def _ensure_runtime_admin_mutation_allowed(action: str) -> None:
     )
 
 
+def _ensure_runtime_update_restart_authority(action: str) -> None:
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "ok": False,
+            "error": "update_restart_authority_unavailable",
+            "action": str(action or "update.start").strip() or "update.start",
+            "message": (
+                "runtime refused local update fallback because no supervisor restart authority is configured; "
+                "start AdaOS in supervisor-managed mode before retrying"
+            ),
+            "runtime": _runtime_identity_public_payload(),
+            "supervisor_bases": _runtime_admin_supervisor_bases(),
+        },
+    )
+
+
 async def _wait_bus_idle(timeout: float) -> bool:
     try:
         waiter = getattr(_get_ctx().bus, "wait_for_idle", None)
@@ -2079,6 +2096,7 @@ async def admin_update_start(body: CoreUpdateStartRequest):
     supervisor_payload = await asyncio.to_thread(_try_forward_update_start_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
+    _ensure_runtime_update_restart_authority("update.start")
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}
@@ -2170,6 +2188,7 @@ async def admin_update_rollback(body: CoreUpdateRollbackRequest):
     supervisor_payload = await asyncio.to_thread(_try_forward_update_rollback_to_supervisor, body)
     if supervisor_payload is not None:
         return supervisor_payload
+    _ensure_runtime_update_restart_authority("update.rollback")
     existing = getattr(app.state, "core_update_task", None)
     if existing is not None and not existing.done():
         return {"ok": True, "accepted": False, "status": await _read_core_update_status_async()}

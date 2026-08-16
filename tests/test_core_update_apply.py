@@ -1019,6 +1019,8 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     import adaos.apps.core_update_apply as mod
 
     captured: dict[str, object] = {}
+    global_base = tmp_path / "global-base"
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(global_base))
 
     def _fake_prepare_checkout_repo(**kwargs):
         captured.update(kwargs)
@@ -1063,6 +1065,8 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     assert manifest["slot"] == "A"
     assert captured["repo_url"] == ""
     assert cleanup_calls == [(str(slot_dir.parent.resolve()), 300.0)]
+    assert json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))["slot"] == "A"
+    assert not (global_base / "state" / "core_slots" / "slots" / "A" / "manifest.json").exists()
 
 
 def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: Path) -> None:
@@ -1071,6 +1075,8 @@ def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: 
     stale_sha = "d7d79d5d08eb12446a4f7bf6069246368df6d4d0"
     head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
     captured: dict[str, object] = {}
+    global_base = tmp_path / "global-base"
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(global_base))
 
     def _fake_prepare_checkout_repo(**kwargs):
         captured.update(kwargs)
@@ -1103,9 +1109,10 @@ def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: 
     monkeypatch.setattr(mod, "_detect_bootstrap_promotion_requirement", lambda *_args, **_kwargs: {"required": False, "changed_paths": []})
     monkeypatch.setattr(mod, "_cleanup_stale_temp_slot_dirs", lambda *_args, **_kwargs: {"ok": True, "removed_total": 0})
 
+    slot_dir = tmp_path / "slots" / "B"
     manifest = mod.prepare_slot(
         slot="B",
-        slot_dir_path=str(tmp_path / "slots" / "B"),
+        slot_dir_path=str(slot_dir),
         base_dir=str(tmp_path / "base"),
         repo_root=str(tmp_path / "repo-root"),
         source_repo_root=str(tmp_path / "source"),
@@ -1121,6 +1128,9 @@ def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: 
     assert manifest["resolved_target_version"] == head_sha
     assert manifest["target_resolution"] == "remote_branch_head"
     assert manifest["git_commit"] == head_sha
+    persisted = json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert persisted["git_commit"] == head_sha
+    assert not (global_base / "state" / "core_slots" / "slots" / "B" / "manifest.json").exists()
 
 
 def test_detect_bootstrap_promotion_requirement_reports_changed_paths(tmp_path: Path) -> None:

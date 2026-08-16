@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Sequence
 
 from adaos.services.bootstrap_update import BOOTSTRAP_CRITICAL_PATHS
-from adaos.services.core_slots import write_slot_manifest
 from adaos.services.env_policy import env_float
 
 
@@ -1048,6 +1047,20 @@ def _clear_failed_checkout(checkout_dir: Path, *, stage: str) -> None:
         raise RuntimeError(f"cannot recover checkout after {stage}: cleanup left destination present: {checkout_dir}")
 
 
+def _write_prepared_slot_manifest(slot: str, slot_dir_path: Path, payload: dict[str, object]) -> dict[str, object]:
+    manifest = dict(payload)
+    manifest["slot"] = str(slot).strip().upper()
+    path = Path(slot_dir_path).expanduser().resolve() / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        staged.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return manifest
+
+
 def _clone_local_repo(source_repo_root: Path, target_rev: str, target_version: str, checkout_dir: Path) -> None:
     git = shutil.which("git")
     git_dir = source_repo_root / ".git"
@@ -1573,8 +1586,7 @@ def prepare_slot(
             pressure_only=False,
             tmp_min_age_seconds=3600.0,
         )
-        write_slot_manifest(slot_name, manifest)
-        return manifest
+        return _write_prepared_slot_manifest(slot_name, slot_dir, manifest)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

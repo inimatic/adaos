@@ -80,8 +80,8 @@ def test_timeout_reconciliation_cannot_overwrite_advanced_transition(monkeypatch
     monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
     write_status(
         {
-            "state": "validated",
-            "phase": "root_promotion_pending",
+            "state": "restarting",
+            "phase": "shutdown",
             "action": "update",
             "target_version": "target-build",
             "updated_at": 10.0,
@@ -660,6 +660,7 @@ def test_root_restart_finalize_records_receiving_supervisor_generation(monkeypat
 
 def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
     monkeypatch.setattr(supervisor.time, "time", lambda: 500.0)
     supervisor._write_update_attempt(
         {
@@ -667,9 +668,9 @@ def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch
             "action": "update",
             "target_rev": "rev2026",
             "target_version": "b5cbb1d5",
-            "requested_at": 450.0,
-            "transitioned_at": 460.0,
-            "updated_at": 460.0,
+            "requested_at": 100.0,
+            "transitioned_at": 110.0,
+            "updated_at": 110.0,
         }
     )
 
@@ -682,7 +683,7 @@ def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch
                 "target_rev": "rev2026",
                 "target_version": "b5cbb1d5",
                 "target_slot": "A",
-                "updated_at": 499.0,
+                "updated_at": 110.0,
             },
             "_served_by": "runtime",
         }
@@ -2164,6 +2165,11 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
         return {"ok": True, "forced": False}
 
     async def _candidate_prewarm(*, target_slot: str | None):
+        prewarm_status = read_status()
+        assert prewarm_status["state"] == "preparing"
+        assert prewarm_status["phase"] == "prewarm"
+        assert prewarm_status["candidate_prewarm_state"] == "starting"
+        assert prewarm_status["target_slot"] == "B"
         candidate_calls.append(("prewarm", target_slot))
         return {
             "attempted": True,
@@ -2227,6 +2233,31 @@ def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monke
     assert cutover_order == ["retire", "promote"]
     assert status["active_retirement"]["invariant"] == "active_stopped_before_candidate_promotion"
     assert desired_running_states[-1] is True
+
+
+def test_supervisor_update_status_uses_local_authority_while_update_task_runs(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[float] = []
+
+    monkeypatch.setattr(manager._update_state_machine, "task_running", lambda: True)
+
+    def _local_status(*, runtime_api_timeout: float = 0.75):
+        calls.append(runtime_api_timeout)
+        return {"ok": True, "status": {"state": "preparing"}, "_served_by": "supervisor_fallback"}
+
+    monkeypatch.setattr(manager, "_local_supervisor_update_status_payload", _local_status)
+    monkeypatch.setattr(
+        supervisor.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("active update status must not round-trip through the runtime"),
+    )
+
+    payload = manager.supervisor_update_status()
+
+    assert payload["status"]["state"] == "preparing"
+    assert payload["_served_by"] == "supervisor_fallback"
+    assert calls == [0.1]
 
 
 def test_candidate_prewarm_stops_memory_blocked_candidate(monkeypatch, tmp_path) -> None:

@@ -63,6 +63,46 @@ def test_default_autostart_spec_uses_runner(tmp_path: Path) -> None:
     assert spec.env["ADAOS_TOKEN"] == "t1"
 
 
+def test_default_autostart_spec_passes_explicit_dev_update_permission(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ADAOS_DEV_ALLOW_CORE_UPDATE", "1")
+    monkeypatch.setenv("ADAOS_UNRELATED_RUNTIME_FLAG", "must-not-pass")
+
+    spec = default_spec(_FakeCtx(tmp_path), host="127.0.0.1", port=8779, token="t1")
+
+    assert spec.env["ADAOS_DEV_ALLOW_CORE_UPDATE"] == "1"
+    assert "ADAOS_UNRELATED_RUNTIME_FLAG" not in spec.env
+
+
+def test_windows_status_distinguishes_running_task_from_enabled_state(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        autostart,
+        "_run",
+        lambda _argv: SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "Status: Running\n"
+                "Scheduled Task State: Enabled\n"
+                'Task To Run: powershell.exe -File "C:\\\\adaos-autostart.ps1"\n'
+            ),
+        ),
+    )
+    monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda _host, _port: ("127.0.0.1", 8778))
+    monkeypatch.setattr(autostart, "_attach_server_owner", lambda _payload: None)
+
+    payload = status(_FakeCtx(tmp_path))
+
+    assert payload["enabled"] is True
+    assert payload["active"] is True
+    assert payload["listening"] is True
+    assert payload["url"] == "http://127.0.0.1:8778"
+    assert payload["configured_url"] == "http://127.0.0.1:8777"
+    assert payload["task_state"] == "running"
+    assert payload["scheduled_task_state"] == "enabled"
+
+
 def test_default_autostart_spec_deduplicates_root_and_rejects_slot_pythonpath(
     monkeypatch,
     tmp_path: Path,

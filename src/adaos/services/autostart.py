@@ -51,6 +51,7 @@ _LINUX_CLI_SHIM_ENV_KEYS = {
     "PYTHONPATH",
 }
 _AUTOSTART_PASSTHROUGH_ENV_KEYS = (
+    "ADAOS_DEV_ALLOW_CORE_UPDATE",
     "ADAOS_REALTIME_ENABLE",
     "HUB_REALTIME_ENABLE",
     "ADAOS_REALTIME_ROUTE_PROXY_ENABLE",
@@ -2045,9 +2046,10 @@ def status(ctx: AgentContext) -> dict:
         registered_wrapper = Path(registered_wrapper_raw).expanduser().resolve() if registered_wrapper_raw else None
         wrapper = registered_wrapper or expected_wrapper
         wrapper_env = _parse_wrapper_env(wrapper) if wrapper.exists() else {}
-        state_raw = (task_info.get("scheduled task state") or task_info.get("status") or "").strip().lower()
-        enabled = proc.returncode == 0 and state_raw not in {"disabled"}
-        active = proc.returncode == 0 and state_raw in {"running"}
+        scheduled_state_raw = str(task_info.get("scheduled task state") or "").strip().lower()
+        run_state_raw = str(task_info.get("status") or "").strip().lower()
+        enabled = proc.returncode == 0 and scheduled_state_raw not in {"disabled"}
+        active = proc.returncode == 0 and run_state_raw in {"running"}
         host_port = _parse_wrapper_host_port(wrapper) if wrapper.exists() else None
         configured_host, configured_port = host_port or (DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT)
         live_host_port = _discover_live_control_bind(configured_host, configured_port) if active else None
@@ -2091,8 +2093,10 @@ def status(ctx: AgentContext) -> dict:
         if registered_wrapper is not None:
             payload["registered_wrapper"] = str(registered_wrapper)
             payload["wrapper_matches_expected"] = registered_wrapper == expected_wrapper
-        if state_raw:
-            payload["task_state"] = state_raw
+        if run_state_raw or scheduled_state_raw:
+            payload["task_state"] = run_state_raw or scheduled_state_raw
+        if scheduled_state_raw:
+            payload["scheduled_task_state"] = scheduled_state_raw
         _attach_server_owner(payload)
         return payload
 

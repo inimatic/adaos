@@ -279,6 +279,32 @@ class SupervisorUpdateExecution:
             install_installer = str(prepare_result.get("install_installer") or "").strip() or None
             venv_seed_source = str(prepare_result.get("venv_seed_source") or "").strip() or None
             venv_seeded = bool(prepare_result.get("venv_seeded"))
+            operations.write_core_update_status(
+                {
+                    "state": "preparing",
+                    "phase": "prewarm",
+                    "action": action,
+                    "target_rev": target_rev,
+                    "target_version": target_version,
+                    "requested_target_version": requested_target_version,
+                    "reason": reason,
+                    "target_slot": target_slot,
+                    "prepared_at": float(prepare_result.get("finished_at") or time.time()),
+                    "prepare_elapsed_s": prepare_elapsed_s,
+                    "install_elapsed_s": install_elapsed_s,
+                    "install_installer": install_installer,
+                    "venv_seed_source": venv_seed_source,
+                    "venv_seeded": venv_seeded,
+                    "candidate_prewarm_state": "starting",
+                    "candidate_prewarm_started_at": time.time(),
+                    "message": (
+                        f"slot {target_slot} prepared; starting passive candidate prewarm"
+                        if target_slot
+                        else "inactive slot prepared; starting passive candidate prewarm"
+                    ),
+                    "manifest": manifest,
+                }
+            )
             try:
                 candidate_prewarm = await manager._candidate_prewarm(target_slot=target_slot)
             except Exception as exc:

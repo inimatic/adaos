@@ -19,6 +19,7 @@ class UpdateReconciliationOperations:
     finalize_runtime_boot_status_from_supervisor: Any
     is_root_restart_completed_status: Any
     is_root_restart_pending_attempt: Any
+    is_root_promotion_pending_status: Any
     is_terminal_update_status: Any
     read_core_update_status: Any
     read_update_attempt: Any
@@ -147,6 +148,10 @@ class UpdateReconciliationService:
                 payload["status"] = operations.read_core_update_status()
                 payload["attempt"] = failed_attempt
                 payload["_served_by"] = "supervisor_timeout_recovery"
+            return payload
+
+        if operations.is_root_promotion_pending_status(status):
+            payload["attempt"] = attempt
             return payload
 
         if str(attempt.get("state") or "").strip().lower() != "active":
