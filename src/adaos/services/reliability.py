@@ -4915,6 +4915,7 @@ def sidecar_runtime_snapshot(
     classify_transport_fn = getattr(_realtime_sidecar_mod, "classify_realtime_sidecar_transport", None)
     route_tunnel_contract_fn = getattr(_realtime_sidecar_mod, "realtime_sidecar_route_tunnel_contract", None)
     enablement_policy_fn = getattr(_realtime_sidecar_mod, "realtime_sidecar_enablement_policy", None)
+    diag_cache_fn = getattr(_realtime_sidecar_mod, "realtime_sidecar_diag_cache_snapshot", None)
 
     enablement: dict[str, Any]
     if callable(enablement_policy_fn):
@@ -4942,8 +4943,29 @@ def sidecar_runtime_snapshot(
         }
     else:
         enabled = bool(enablement.get("enabled"))
-    diag_path = realtime_sidecar_diag_path()
-    record = _read_last_jsonl_record(diag_path)
+    diag_cache: dict[str, Any] = {}
+    if callable(diag_cache_fn):
+        try:
+            raw_diag_cache = diag_cache_fn(max_age_s=1.0)
+        except Exception as exc:
+            diag_cache = {
+                "state": "error",
+                "last_error": f"{type(exc).__name__}: {exc}",
+            }
+        else:
+            diag_cache = dict(raw_diag_cache) if isinstance(raw_diag_cache, dict) else {}
+        cached_record = diag_cache.get("record")
+        record = dict(cached_record) if isinstance(cached_record, dict) else None
+        diag_path_text = str(
+            diag_cache.get("path")
+            or os.getenv("ADAOS_REALTIME_DIAG_FILE", ".adaos/diagnostics/realtime_sidecar.jsonl")
+            or ".adaos/diagnostics/realtime_sidecar.jsonl"
+        )
+    else:
+        diag_path = realtime_sidecar_diag_path()
+        record = _read_last_jsonl_record(diag_path)
+        diag_path_text = str(diag_path)
+        diag_cache = {"state": "legacy_sync", "path": diag_path_text}
     now_ts = time.time()
     readiness_tree = readiness_tree if isinstance(readiness_tree, dict) else {}
     hub_root_protocol = hub_root_protocol if isinstance(hub_root_protocol, dict) else {}
@@ -4979,7 +5001,8 @@ def sidecar_runtime_snapshot(
     media_ready = "not_owned"
     transport_provenance: dict[str, Any] = {
         "local_url": realtime_sidecar_local_url(),
-        "diag_path": str(diag_path),
+        "diag_path": diag_path_text,
+        "diag_cache": {key: value for key, value in diag_cache.items() if key != "record"},
         "requested_transport": transport_strategy.get("requested_transport"),
         "effective_transport": transport_strategy.get("effective_transport"),
         "selected_server": transport_strategy.get("selected_server"),
@@ -5129,7 +5152,7 @@ def sidecar_runtime_snapshot(
             "session_state": session_state,
             "status_reason": status_reason,
             "local_url": realtime_sidecar_local_url(),
-            "diag_path": str(diag_path),
+            "diag_path": diag_path_text,
             "diag_age_s": diag_age_s,
             "diag_fresh": diag_fresh,
             "local_listener_state": local_listener_state,
@@ -5170,7 +5193,7 @@ def sidecar_runtime_snapshot(
         "session_state": session_state,
         "status_reason": status_reason,
         "local_url": realtime_sidecar_local_url(),
-        "diag_path": str(diag_path),
+        "diag_path": diag_path_text,
         "diag_age_s": None,
         "diag_fresh": diag_fresh,
         "local_listener_state": local_listener_state,

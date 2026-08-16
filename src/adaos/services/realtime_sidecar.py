@@ -12,9 +12,11 @@ import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,6 +104,24 @@ _ROUTE_TUNNEL_DIAG_CACHE: dict[str, Any] = {
     "record_ts": 0.0,
     "contract": {},
 }
+_REALTIME_SIDECAR_DIAG_CACHE: dict[str, Any] = {
+    "generation": 0,
+    "record": None,
+    "path": None,
+    "refreshed_at": 0.0,
+    "refreshing": False,
+    "request_total": 0,
+    "cache_hit_total": 0,
+    "cache_miss_total": 0,
+    "refresh_total": 0,
+    "refresh_failure_total": 0,
+    "last_error": None,
+    "last_error_at": 0.0,
+}
+_REALTIME_SIDECAR_DIAG_CACHE_LOCK = threading.Lock()
+_REALTIME_SIDECAR_DIAG_EXECUTOR_LOCK = threading.Lock()
+_REALTIME_SIDECAR_DIAG_EXECUTOR: ThreadPoolExecutor | None = None
+_REALTIME_SIDECAR_DIAG_FUTURE: Future[tuple[str, dict[str, Any] | None]] | None = None
 _MEDIA_PROXY_RUNTIME_STATE: dict[str, Any] = {
     "listener_ready": False,
     "listener_host": None,
@@ -1055,6 +1075,200 @@ def realtime_sidecar_diag_path() -> Path:
     return path
 
 
+def _realtime_sidecar_diag_executor() -> ThreadPoolExecutor:
+    global _REALTIME_SIDECAR_DIAG_EXECUTOR
+    with _REALTIME_SIDECAR_DIAG_EXECUTOR_LOCK:
+        if _REALTIME_SIDECAR_DIAG_EXECUTOR is None:
+            _REALTIME_SIDECAR_DIAG_EXECUTOR = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="adaos-sidecar-diag",
+            )
+        return _REALTIME_SIDECAR_DIAG_EXECUTOR
+
+
+def _load_realtime_sidecar_diag_record(*, max_bytes: int = 128 * 1024) -> tuple[str, dict[str, Any] | None]:
+    path = realtime_sidecar_diag_path()
+    if not path.exists() or not path.is_file():
+        return str(path), None
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - max_bytes), os.SEEK_SET)
+        lines = fh.read().splitlines()
+    for raw_line in reversed(lines):
+        try:
+            candidate = json.loads(raw_line.decode("utf-8", errors="replace"))
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            return str(path), candidate
+    return str(path), None
+
+
+def _complete_realtime_sidecar_diag_refresh(
+    generation: int,
+    *,
+    result: tuple[str, dict[str, Any] | None] | None = None,
+    error: Exception | None = None,
+) -> None:
+    global _REALTIME_SIDECAR_DIAG_FUTURE
+    now_mono = time.monotonic()
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        if generation != int(_REALTIME_SIDECAR_DIAG_CACHE.get("generation") or 0):
+            return
+        _REALTIME_SIDECAR_DIAG_CACHE["refreshing"] = False
+        _REALTIME_SIDECAR_DIAG_FUTURE = None
+        if error is not None:
+            _REALTIME_SIDECAR_DIAG_CACHE["refresh_failure_total"] = (
+                int(_REALTIME_SIDECAR_DIAG_CACHE.get("refresh_failure_total") or 0) + 1
+            )
+            _REALTIME_SIDECAR_DIAG_CACHE["last_error"] = f"{type(error).__name__}: {error}"
+            _REALTIME_SIDECAR_DIAG_CACHE["last_error_at"] = time.time()
+            return
+        path, record = result or ("", None)
+        _REALTIME_SIDECAR_DIAG_CACHE["path"] = path or None
+        _REALTIME_SIDECAR_DIAG_CACHE["record"] = dict(record) if isinstance(record, dict) else None
+        _REALTIME_SIDECAR_DIAG_CACHE["refreshed_at"] = now_mono
+        _REALTIME_SIDECAR_DIAG_CACHE["last_error"] = None
+        _REALTIME_SIDECAR_DIAG_CACHE["last_error_at"] = 0.0
+
+
+def _finish_realtime_sidecar_diag_future(
+    generation: int,
+    future: Future[tuple[str, dict[str, Any] | None]],
+) -> None:
+    try:
+        result = future.result()
+    except Exception as exc:
+        _complete_realtime_sidecar_diag_refresh(generation, error=exc)
+    else:
+        _complete_realtime_sidecar_diag_refresh(generation, result=result)
+
+
+def _schedule_realtime_sidecar_diag_refresh() -> None:
+    global _REALTIME_SIDECAR_DIAG_FUTURE
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        if bool(_REALTIME_SIDECAR_DIAG_CACHE.get("refreshing")):
+            return
+        generation = int(_REALTIME_SIDECAR_DIAG_CACHE.get("generation") or 0)
+        _REALTIME_SIDECAR_DIAG_CACHE["refreshing"] = True
+        _REALTIME_SIDECAR_DIAG_CACHE["refresh_total"] = (
+            int(_REALTIME_SIDECAR_DIAG_CACHE.get("refresh_total") or 0) + 1
+        )
+    try:
+        future = _realtime_sidecar_diag_executor().submit(_load_realtime_sidecar_diag_record)
+    except Exception as exc:
+        _complete_realtime_sidecar_diag_refresh(generation, error=exc)
+        return
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        if generation != int(_REALTIME_SIDECAR_DIAG_CACHE.get("generation") or 0):
+            future.cancel()
+            return
+        _REALTIME_SIDECAR_DIAG_FUTURE = future
+    future.add_done_callback(lambda completed: _finish_realtime_sidecar_diag_future(generation, completed))
+
+
+def _refresh_realtime_sidecar_diag_cache_sync() -> None:
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        if bool(_REALTIME_SIDECAR_DIAG_CACHE.get("refreshing")):
+            return
+        generation = int(_REALTIME_SIDECAR_DIAG_CACHE.get("generation") or 0)
+        _REALTIME_SIDECAR_DIAG_CACHE["refreshing"] = True
+        _REALTIME_SIDECAR_DIAG_CACHE["refresh_total"] = (
+            int(_REALTIME_SIDECAR_DIAG_CACHE.get("refresh_total") or 0) + 1
+        )
+    try:
+        result = _load_realtime_sidecar_diag_record()
+    except Exception as exc:
+        _complete_realtime_sidecar_diag_refresh(generation, error=exc)
+    else:
+        _complete_realtime_sidecar_diag_refresh(generation, result=result)
+
+
+def _reset_realtime_sidecar_diag_cache() -> None:
+    global _REALTIME_SIDECAR_DIAG_FUTURE
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        generation = int(_REALTIME_SIDECAR_DIAG_CACHE.get("generation") or 0) + 1
+        _REALTIME_SIDECAR_DIAG_CACHE.update(
+            {
+                "generation": generation,
+                "record": None,
+                "path": None,
+                "refreshed_at": 0.0,
+                "refreshing": False,
+                "request_total": 0,
+                "cache_hit_total": 0,
+                "cache_miss_total": 0,
+                "refresh_total": 0,
+                "refresh_failure_total": 0,
+                "last_error": None,
+                "last_error_at": 0.0,
+            }
+        )
+        future = _REALTIME_SIDECAR_DIAG_FUTURE
+        _REALTIME_SIDECAR_DIAG_FUTURE = None
+    if future is not None:
+        future.cancel()
+
+
+def realtime_sidecar_diag_cache_snapshot(*, max_age_s: float = 1.0) -> dict[str, Any]:
+    """Return cached diagnostics without filesystem I/O on an asyncio owner loop."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = False
+    else:
+        running_loop = True
+
+    max_age = max(0.1, float(max_age_s))
+    now_mono = time.monotonic()
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        refreshed_at = float(_REALTIME_SIDECAR_DIAG_CACHE.get("refreshed_at") or 0.0)
+        stale = refreshed_at <= 0.0 or (now_mono - refreshed_at) > max_age
+        _REALTIME_SIDECAR_DIAG_CACHE["request_total"] = (
+            int(_REALTIME_SIDECAR_DIAG_CACHE.get("request_total") or 0) + 1
+        )
+        counter = "cache_miss_total" if stale else "cache_hit_total"
+        _REALTIME_SIDECAR_DIAG_CACHE[counter] = int(_REALTIME_SIDECAR_DIAG_CACHE.get(counter) or 0) + 1
+
+    if running_loop and stale:
+        _schedule_realtime_sidecar_diag_refresh()
+    elif not running_loop and stale:
+        _refresh_realtime_sidecar_diag_cache_sync()
+
+    now_mono = time.monotonic()
+    with _REALTIME_SIDECAR_DIAG_CACHE_LOCK:
+        refreshed_at = float(_REALTIME_SIDECAR_DIAG_CACHE.get("refreshed_at") or 0.0)
+        age_s = round(max(0.0, now_mono - refreshed_at), 3) if refreshed_at > 0.0 else None
+        stale = age_s is None or age_s > max_age
+        refreshing = bool(_REALTIME_SIDECAR_DIAG_CACHE.get("refreshing"))
+        record = _REALTIME_SIDECAR_DIAG_CACHE.get("record")
+        if refreshing and not isinstance(record, dict):
+            state = "refreshing"
+        elif isinstance(record, dict):
+            state = "stale" if stale else "ready"
+        elif _REALTIME_SIDECAR_DIAG_CACHE.get("last_error"):
+            state = "error"
+        else:
+            state = "empty"
+        return {
+            "state": state,
+            "record": dict(record) if isinstance(record, dict) else None,
+            "path": _REALTIME_SIDECAR_DIAG_CACHE.get("path"),
+            "age_s": age_s,
+            "stale": stale,
+            "refreshing": refreshing,
+            "request_total": int(_REALTIME_SIDECAR_DIAG_CACHE.get("request_total") or 0),
+            "cache_hit_total": int(_REALTIME_SIDECAR_DIAG_CACHE.get("cache_hit_total") or 0),
+            "cache_miss_total": int(_REALTIME_SIDECAR_DIAG_CACHE.get("cache_miss_total") or 0),
+            "refresh_total": int(_REALTIME_SIDECAR_DIAG_CACHE.get("refresh_total") or 0),
+            "refresh_failure_total": int(_REALTIME_SIDECAR_DIAG_CACHE.get("refresh_failure_total") or 0),
+            "last_error": _REALTIME_SIDECAR_DIAG_CACHE.get("last_error"),
+            "last_error_at": float(_REALTIME_SIDECAR_DIAG_CACHE.get("last_error_at") or 0.0),
+        }
+
+
 def _route_tunnel_runtime_state_from_supervisor_diag(kind: str) -> dict[str, Any]:
     """Read supervisor-owned listener evidence from the sidecar process.
 
@@ -1073,23 +1287,9 @@ def _route_tunnel_runtime_state_from_supervisor_diag(kind: str) -> dict[str, Any
     now_mono = time.monotonic()
     checked_at = float(_ROUTE_TUNNEL_DIAG_CACHE.get("checked_at") or 0.0)
     if now_mono - checked_at >= 1.0:
-        record: dict[str, Any] = {}
-        try:
-            path = realtime_sidecar_diag_path()
-            with path.open("rb") as fh:
-                fh.seek(0, os.SEEK_END)
-                size = fh.tell()
-                fh.seek(max(0, size - 128 * 1024), os.SEEK_SET)
-                for raw_line in reversed(fh.read().splitlines()):
-                    try:
-                        candidate = json.loads(raw_line.decode("utf-8", errors="replace"))
-                    except Exception:
-                        continue
-                    if isinstance(candidate, dict):
-                        record = candidate
-                        break
-        except Exception:
-            record = {}
+        diag_cache = realtime_sidecar_diag_cache_snapshot(max_age_s=1.0)
+        cached_record = diag_cache.get("record")
+        record = dict(cached_record) if isinstance(cached_record, dict) else {}
         _ROUTE_TUNNEL_DIAG_CACHE["checked_at"] = now_mono
         _ROUTE_TUNNEL_DIAG_CACHE["record_ts"] = float(record.get("ts") or 0.0) if record else 0.0
         contract = record.get("route_tunnel_contract") if isinstance(record.get("route_tunnel_contract"), dict) else {}

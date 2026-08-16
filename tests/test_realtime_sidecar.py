@@ -999,6 +999,7 @@ def test_realtime_sidecar_route_tunnel_ws_bases_use_fresh_supervisor_owned_diag(
         encoding="utf-8",
     )
     monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_diag_path", lambda: diag_path)
+    realtime_sidecar_mod._reset_realtime_sidecar_diag_cache()
     realtime_sidecar_mod._ROUTE_TUNNEL_DIAG_CACHE.update({"checked_at": 0.0, "record_ts": 0.0, "contract": {}})
 
     assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/ws") == ["ws://127.0.0.1:17423"]
@@ -1032,9 +1033,46 @@ def test_realtime_sidecar_route_tunnel_ws_bases_reject_stale_supervisor_diag(
         encoding="utf-8",
     )
     monkeypatch.setattr(realtime_sidecar_mod, "realtime_sidecar_diag_path", lambda: diag_path)
+    realtime_sidecar_mod._reset_realtime_sidecar_diag_cache()
     realtime_sidecar_mod._ROUTE_TUNNEL_DIAG_CACHE.update({"checked_at": 0.0, "record_ts": 0.0, "contract": {}})
 
     assert realtime_sidecar_mod.realtime_sidecar_route_tunnel_ws_bases(path="/ws") == []
+
+
+def test_realtime_sidecar_diag_cache_does_not_block_asyncio_owner_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    diag_path = tmp_path / "realtime_sidecar.jsonl"
+
+    def _slow_load(*, max_bytes: int = 128 * 1024):
+        del max_bytes
+        time.sleep(0.2)
+        return str(diag_path), {"ts": time.time(), "status": "ready"}
+
+    monkeypatch.setattr(realtime_sidecar_mod, "_load_realtime_sidecar_diag_record", _slow_load)
+    realtime_sidecar_mod._reset_realtime_sidecar_diag_cache()
+
+    async def _run() -> None:
+        started = time.monotonic()
+        first = realtime_sidecar_mod.realtime_sidecar_diag_cache_snapshot(max_age_s=1.0)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.1
+        assert first["state"] == "refreshing"
+        assert first["refreshing"] is True
+
+        deadline = time.monotonic() + 1.0
+        current = first
+        while current["refreshing"] and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+            current = realtime_sidecar_mod.realtime_sidecar_diag_cache_snapshot(max_age_s=1.0)
+
+        assert current["state"] == "ready"
+        assert current["record"]["status"] == "ready"
+        assert current["refresh_total"] == 1
+
+    asyncio.run(_run())
 
 
 def test_realtime_sidecar_route_proxy_relays_local_websocket_payload(

@@ -116,21 +116,12 @@ def _node_status_sidecar_runtime(role: str | None) -> dict[str, Any]:
         return {}
 
 
-def current_node_status_payload() -> dict[str, Any]:
+def current_node_identity_status_payload() -> dict[str, Any]:
+    """Build the node identity without entering diagnostic I/O paths."""
+
     conf = load_config()
     route_mode, connected = route_info(conf.role)
     lifecycle = runtime_lifecycle_snapshot()
-    runtime_environment = runtime_environment_payload()
-    base_dir = current_base_dir()
-    supervisor_runtime = _node_status_supervisor_runtime(base_dir)
-    sidecar_runtime = _node_status_sidecar_runtime(conf.role)
-    if sidecar_runtime:
-        runtime_state = supervisor_runtime.get("runtime")
-        runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
-        runtime_state["sidecar"] = sidecar_runtime
-        runtime_state["sidecar_source"] = "reliability.sidecar_runtime_snapshot"
-        supervisor_runtime["runtime"] = runtime_state
-    core_update_status = supervisor_runtime.get("status")
     return {
         "node_id": conf.node_id,
         "subnet_id": conf.subnet_id,
@@ -143,6 +134,24 @@ def current_node_status_payload() -> dict[str, Any]:
         "route_mode": route_mode,
         "connected_to_subnet": connected,
         "connected_to_hub": connected,
+    }
+
+
+def current_node_status_payload() -> dict[str, Any]:
+    identity = current_node_identity_status_payload()
+    runtime_environment = runtime_environment_payload()
+    base_dir = current_base_dir()
+    supervisor_runtime = _node_status_supervisor_runtime(base_dir)
+    sidecar_runtime = _node_status_sidecar_runtime(str(identity.get("role") or "") or None)
+    if sidecar_runtime:
+        runtime_state = supervisor_runtime.get("runtime")
+        runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
+        runtime_state["sidecar"] = sidecar_runtime
+        runtime_state["sidecar_source"] = "reliability.sidecar_runtime_snapshot"
+        supervisor_runtime["runtime"] = runtime_state
+    core_update_status = supervisor_runtime.get("status")
+    return {
+        **identity,
         "runtime": {
             "environment": runtime_environment,
             "supervisor_available": bool(supervisor_runtime.get("available")),
@@ -352,7 +361,7 @@ def _append_unique(objects: list[Any], item: Any, seen: set[str]) -> None:
 def current_node_object():
     tenant_id, owner_id = _control_plane_scope_refs()
     return apply_governance_defaults(
-        canonical_object_from_node_status(current_node_status_payload()),
+        canonical_object_from_node_status(current_node_identity_status_payload()),
         tenant_id=tenant_id,
         owner_id=owner_id,
     )
@@ -721,6 +730,7 @@ __all__ = [
     "current_inventory_projection",
     "current_neighborhood_projection",
     "current_node_object",
+    "current_node_identity_status_payload",
     "current_node_status_push_payload",
     "compact_node_status_transport_payload",
     "current_node_status_payload",

@@ -35,6 +35,41 @@ from adaos.apps.api import node_api
 from adaos.services.system_model import service as system_model_service
 
 
+def test_current_node_object_does_not_enter_diagnostic_io(monkeypatch) -> None:
+    monkeypatch.setattr(
+        system_model_service,
+        "load_config",
+        lambda: types.SimpleNamespace(
+            node_id="hub-identity",
+            subnet_id="subnet-identity",
+            role="hub",
+            node_names=["homepoint"],
+            primary_node_name="homepoint",
+            owner_id="owner-identity",
+        ),
+    )
+    monkeypatch.setattr(system_model_service, "route_info", lambda _role: ("hub", None))
+    monkeypatch.setattr(
+        system_model_service,
+        "runtime_lifecycle_snapshot",
+        lambda: {"node_state": "ready", "draining": False},
+    )
+    monkeypatch.setattr(system_model_service, "is_ready", lambda: True)
+
+    def _unexpected_diagnostic_io(*_args, **_kwargs):
+        raise AssertionError("canonical node identity must not load runtime diagnostics")
+
+    monkeypatch.setattr(system_model_service, "runtime_environment_payload", _unexpected_diagnostic_io)
+    monkeypatch.setattr(system_model_service, "current_base_dir", _unexpected_diagnostic_io)
+    monkeypatch.setattr(system_model_service, "_node_status_supervisor_runtime", _unexpected_diagnostic_io)
+    monkeypatch.setattr(system_model_service, "_node_status_sidecar_runtime", _unexpected_diagnostic_io)
+
+    node = system_model_service.current_node_object()
+
+    assert node.id == "hub:hub-identity"
+    assert node.status == "online"
+
+
 def test_ping_exposes_runtime_identity_for_candidate(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "candidate")
     monkeypatch.setenv("ADAOS_RUNTIME_INSTANCE_ID", "rt-b-c-12345678")
