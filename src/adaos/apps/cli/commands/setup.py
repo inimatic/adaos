@@ -310,6 +310,11 @@ def install(
 def update(
     pull: bool = typer.Option(True, "--pull/--no-pull", help="pull latest scenario/skill sources from git"),
     sync_yjs: bool = typer.Option(True, "--sync-yjs/--no-sync-yjs", help="re-project installed scenarios into Yjs webspace"),
+    workspace_only: bool = typer.Option(
+        False,
+        "--workspace-only",
+        help="update sparse workspace and registry without refreshing skill runtimes or Yjs projections",
+    ),
     migrate_runtime: bool = typer.Option(
         True,
         "--migrate-runtime/--no-migrate-runtime",
@@ -323,7 +328,14 @@ def update(
     target_webspace = webspace_id or default_webspace_id()
     scenario_mgr = _scenario_mgr()
     skill_mgr = _skill_mgr()
-    out: dict = {"pulled": {}, "runtime_updated": [], "yjs_synced": [], "warnings": []}
+    out: dict = {
+        "pulled": {},
+        "runtime_updated": [],
+        "runtime_refresh_skipped": bool(workspace_only),
+        "yjs_synced": [],
+        "yjs_sync_skipped": bool(workspace_only),
+        "warnings": [],
+    }
     effective_scenario_names: list[str] = []
 
     if pull:
@@ -358,58 +370,59 @@ def update(
             out["pulled"]["skills"] = False
             out["pulled"]["scenarios"] = False
 
-    # Refresh runtime slots (keeps slot/version, syncs files + tools).
-    try:
-        skill_rows = SqliteSkillRegistry(ctx.sql).list()
-    except Exception:
-        skill_rows = []
-    for row in skill_rows:
-        name = getattr(row, "name", None) or getattr(row, "id", None)
-        if not name or not bool(getattr(row, "installed", True)):
-            continue
+    if not workspace_only:
+        # Refresh runtime slots (keeps slot/version, syncs files + tools).
         try:
+            skill_rows = SqliteSkillRegistry(ctx.sql).list()
+        except Exception:
+            skill_rows = []
+        for row in skill_rows:
+            name = getattr(row, "name", None) or getattr(row, "id", None)
+            if not name or not bool(getattr(row, "installed", True)):
+                continue
             try:
-                source_meta = ctx.skills_repo.get(str(name))
-            except Exception:
-                source_meta = None
-            source_version = str(getattr(source_meta, "version", None) or "").strip()
-            entry = {
-                "skill": str(name),
-                "ok": True,
-                **refresh_skill_runtime(
-                    skill_mgr,
-                    str(name),
-                    webspace_id=target_webspace,
-                    source_version=source_version,
-                    migrate_runtime=migrate_runtime,
-                    ensure_installed=migrate_runtime,
-                ),
-            }
-            out["runtime_updated"].append(entry)
-        except Exception as exc:
-            entry = {"skill": str(name), "ok": False, "error": str(exc)}
-            if migrate_runtime and "no versions installed" in str(exc).lower():
                 try:
-                    skill_mgr.install(str(name), validate=False)
-                    runtime = skill_mgr.prepare_runtime(str(name), run_tests=False)
-                    version = getattr(runtime, "version", None)
-                    slot = getattr(runtime, "slot", None)
-                    skill_mgr.activate_for_space(
+                    source_meta = ctx.skills_repo.get(str(name))
+                except Exception:
+                    source_meta = None
+                source_version = str(getattr(source_meta, "version", None) or "").strip()
+                entry = {
+                    "skill": str(name),
+                    "ok": True,
+                    **refresh_skill_runtime(
+                        skill_mgr,
                         str(name),
-                        version=version,
-                        slot=slot,
-                        space="default",
                         webspace_id=target_webspace,
-                    )
-                    entry["runtime_migrated"] = True
-                    entry["migrated_version"] = version
-                    entry["migrated_slot"] = slot
-                except Exception as mig_exc:
-                    entry["runtime_migrated"] = False
-                    entry["migration_error"] = str(mig_exc)
-            out["runtime_updated"].append(entry)
+                        source_version=source_version,
+                        migrate_runtime=migrate_runtime,
+                        ensure_installed=migrate_runtime,
+                    ),
+                }
+                out["runtime_updated"].append(entry)
+            except Exception as exc:
+                entry = {"skill": str(name), "ok": False, "error": str(exc)}
+                if migrate_runtime and "no versions installed" in str(exc).lower():
+                    try:
+                        skill_mgr.install(str(name), validate=False)
+                        runtime = skill_mgr.prepare_runtime(str(name), run_tests=False)
+                        version = getattr(runtime, "version", None)
+                        slot = getattr(runtime, "slot", None)
+                        skill_mgr.activate_for_space(
+                            str(name),
+                            version=version,
+                            slot=slot,
+                            space="default",
+                            webspace_id=target_webspace,
+                        )
+                        entry["runtime_migrated"] = True
+                        entry["migrated_version"] = version
+                        entry["migrated_slot"] = slot
+                    except Exception as mig_exc:
+                        entry["runtime_migrated"] = False
+                        entry["migration_error"] = str(mig_exc)
+                out["runtime_updated"].append(entry)
 
-    if sync_yjs:
+    if sync_yjs and not workspace_only:
         try:
             scenario_rows = SqliteScenarioRegistry(ctx.sql).list()
         except Exception:
