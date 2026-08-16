@@ -95,6 +95,12 @@ def named_entity_projection_diagnostics_snapshot() -> dict[str, Any]:
     with _DIAGNOSTICS_LOCK:
         snapshot = dict(_DIAGNOSTICS)
         snapshot["last_timings_ms"] = dict(_DIAGNOSTICS.get("last_timings_ms") or {})
+    try:
+        from adaos.services.nlu_lookup_tables import desktop_lookup_cache_diagnostics_snapshot
+
+        snapshot["lookup_cache"] = desktop_lookup_cache_diagnostics_snapshot()
+    except Exception:
+        snapshot["lookup_cache"] = {"available": False}
     return snapshot
 
 
@@ -795,6 +801,13 @@ async def on_sys_ready(evt: Any) -> None:
 async def on_entity_registry_changed(evt: Any) -> None:
     try:
         payload = _payload(evt)
+        dirty_sources = _registry_invalidation_sources(_topic(evt), payload)
+        if "lookups" in dirty_sources:
+            from adaos.services.nlu_lookup_tables import invalidate_desktop_lookup_baseline_cache
+
+            invalidate_desktop_lookup_baseline_cache(
+                reason=_topic(evt) or "entity.registry.changed",
+            )
         webspace_ids = [_resolve_webspace_id(payload)]
         if _topic(evt) == "subnet.alias.changed":
             default_webspace = default_webspace_id()
@@ -806,11 +819,35 @@ async def on_entity_registry_changed(evt: Any) -> None:
                 reason=_topic(evt) or "entity.registry.changed",
                 refresh=True,
                 wait=False,
-                dirty_sources=_registry_invalidation_sources(_topic(evt), payload),
+                dirty_sources=dirty_sources,
                 fingerprint_hints=_registry_fingerprint_hints(payload),
             )
     except Exception:
         _log.debug("failed to project named entity registry", exc_info=True)
+
+
+@subscribe("skills.activated")
+@subscribe("skills.updated")
+@subscribe("skills.rolledback")
+@subscribe("skill.uninstalled")
+@subscribe("scenarios.synced")
+@subscribe("scenario.installed")
+@subscribe("scenario.removed")
+async def on_lookup_catalog_changed(evt: Any) -> None:
+    try:
+        from adaos.services.nlu_lookup_tables import invalidate_desktop_lookup_baseline_cache
+
+        topic = _topic(evt) or "catalog_changed"
+        invalidate_desktop_lookup_baseline_cache(reason=topic)
+        await request_named_entity_projection(
+            webspace_id=_resolve_webspace_id(_payload(evt)),
+            reason=topic,
+            refresh=True,
+            wait=False,
+            dirty_sources=("lookups",),
+        )
+    except Exception:
+        _log.debug("failed to refresh named entity lookup catalog", exc_info=True)
 
 
 __all__ = [
@@ -819,6 +856,7 @@ __all__ = [
     "named_entity_projection_reconciler_snapshot",
     "notify_named_entity_room_ready",
     "on_entity_registry_changed",
+    "on_lookup_catalog_changed",
     "on_sys_ready",
     "project_named_entity_registry",
     "request_named_entity_projection",

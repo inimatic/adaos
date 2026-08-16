@@ -30,6 +30,16 @@ DEFAULT_DESKTOP_APP_IDS = ("nlu_teacher_app",)
 
 _BASELINE_BUCKET_CACHE_LOCK = threading.RLock()
 _BASELINE_BUCKET_CACHE: dict[str, tuple[float, tuple[Any, ...], dict[str, dict[str, dict[str, Any]]]]] = {}
+_BASELINE_BUCKET_CACHE_DIAGNOSTICS: dict[str, Any] = {
+    "schema": "adaos.nlu_lookup_baseline_cache.v1",
+    "hit_total": 0,
+    "miss_total": 0,
+    "build_total": 0,
+    "invalidation_total": 0,
+    "last_build_ms": None,
+    "last_invalidation_reason": None,
+    "last_invalidation_at": None,
+}
 _SOURCE_DOCUMENT_CACHE_LOCK = threading.RLock()
 _SOURCE_DOCUMENT_CACHE: dict[tuple[str, str], tuple[tuple[Any, ...], Any]] = {}
 _SOURCE_DOCUMENT_CACHE_MAX = 4096
@@ -37,14 +47,19 @@ _SOURCE_DOCUMENT_CACHE_MAX = 4096
 
 def _baseline_bucket_cache_ttl_s() -> float:
     try:
-        return max(0.0, float(os.getenv("ADAOS_NLU_LOOKUP_BASELINE_CACHE_TTL_S", "30") or "30"))
+        return max(0.0, float(os.getenv("ADAOS_NLU_LOOKUP_BASELINE_CACHE_TTL_S", "300") or "300"))
     except Exception:
-        return 30.0
+        return 300.0
 
 
 def _hash_payload(payload: Any) -> str:
     data = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
+
+
+def _load_yaml_document(text: str) -> Any:
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    return yaml.load(text, Loader=loader)
 
 
 def _path_from_ctx(ctx: AgentContext, name: str) -> Path | None:
@@ -103,7 +118,7 @@ def _read_cached_source_document(path: Path, *, source_type: str) -> Any:
             if source_type == "json":
                 document = json.loads(text)
             else:
-                document = yaml.safe_load(text) or {}
+                document = _load_yaml_document(text) or {}
         except Exception:
             _log.debug("failed to read NLU lookup source %s", path, exc_info=True)
             document = None
@@ -462,21 +477,63 @@ def _baseline_bucket_cache_stamp(ctx: AgentContext) -> tuple[Any, ...]:
 def _collect_cached_baseline_buckets(ctx: AgentContext) -> dict[str, dict[str, dict[str, Any]]]:
     ttl_s = _baseline_bucket_cache_ttl_s()
     cache_key = "baseline"
-    stamp = _baseline_bucket_cache_stamp(ctx)
     now = time.monotonic()
     if ttl_s > 0:
         with _BASELINE_BUCKET_CACHE_LOCK:
             cached = _BASELINE_BUCKET_CACHE.get(cache_key)
-            if cached is not None and cached[0] > now and cached[1] == stamp:
+            if cached is not None and cached[0] > now:
+                _BASELINE_BUCKET_CACHE_DIAGNOSTICS["hit_total"] = int(
+                    _BASELINE_BUCKET_CACHE_DIAGNOSTICS.get("hit_total") or 0
+                ) + 1
                 return deepcopy(cached[2])
+            _BASELINE_BUCKET_CACHE_DIAGNOSTICS["miss_total"] = int(
+                _BASELINE_BUCKET_CACHE_DIAGNOSTICS.get("miss_total") or 0
+            ) + 1
+    stamp = _baseline_bucket_cache_stamp(ctx)
+    build_started = time.perf_counter()
     buckets = _empty_buckets()
     _collect_workspace_manifests(buckets, ctx)
     _collect_builtin_desktop_defaults(buckets)
-    _collect_node_refs(buckets, ctx)
-    if ttl_s > 0:
-        with _BASELINE_BUCKET_CACHE_LOCK:
+    with _BASELINE_BUCKET_CACHE_LOCK:
+        _BASELINE_BUCKET_CACHE_DIAGNOSTICS["build_total"] = int(
+            _BASELINE_BUCKET_CACHE_DIAGNOSTICS.get("build_total") or 0
+        ) + 1
+        _BASELINE_BUCKET_CACHE_DIAGNOSTICS["last_build_ms"] = round(
+            max(0.0, time.perf_counter() - build_started) * 1000.0,
+            3,
+        )
+        if ttl_s > 0:
             _BASELINE_BUCKET_CACHE[cache_key] = (now + ttl_s, stamp, deepcopy(buckets))
     return buckets
+
+
+def invalidate_desktop_lookup_baseline_cache(*, reason: str = "registry_changed") -> None:
+    with _BASELINE_BUCKET_CACHE_LOCK:
+        _BASELINE_BUCKET_CACHE.clear()
+        _BASELINE_BUCKET_CACHE_DIAGNOSTICS["invalidation_total"] = int(
+            _BASELINE_BUCKET_CACHE_DIAGNOSTICS.get("invalidation_total") or 0
+        ) + 1
+        _BASELINE_BUCKET_CACHE_DIAGNOSTICS["last_invalidation_reason"] = (
+            str(reason or "registry_changed").strip() or "registry_changed"
+        )
+        _BASELINE_BUCKET_CACHE_DIAGNOSTICS["last_invalidation_at"] = time.time()
+
+
+def desktop_lookup_cache_diagnostics_snapshot() -> dict[str, Any]:
+    with _BASELINE_BUCKET_CACHE_LOCK:
+        snapshot = dict(_BASELINE_BUCKET_CACHE_DIAGNOSTICS)
+        cached = _BASELINE_BUCKET_CACHE.get("baseline")
+    snapshot["cached"] = cached is not None
+    snapshot["expires_in_s"] = (
+        round(max(0.0, float(cached[0]) - time.monotonic()), 3)
+        if cached is not None
+        else None
+    )
+    snapshot["yaml_loader"] = (
+        "CSafeLoader" if getattr(yaml, "CSafeLoader", None) is not None else "SafeLoader"
+    )
+    snapshot["cache_scope"] = "workspace_manifests_and_builtin_defaults"
+    return snapshot
 
 
 def _collect_node_refs(buckets: dict[str, dict[str, dict[str, Any]]], ctx: AgentContext) -> None:
@@ -535,6 +592,7 @@ def _empty_buckets() -> dict[str, dict[str, dict[str, Any]]]:
 
 def _collect_baseline_buckets(ctx: AgentContext, *, webspace_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     buckets = _collect_cached_baseline_buckets(ctx)
+    _collect_node_refs(buckets, ctx)
     _add(buckets, "webspace_id", webspace_id, source="request.webspace_id")
     return buckets
 

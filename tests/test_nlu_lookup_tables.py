@@ -15,15 +15,15 @@ def test_lookup_source_yaml_cache_is_stamp_aware_and_single_flight(tmp_path: Pat
     path.write_text("name: first\n", encoding="utf-8")
     lookups._SOURCE_DOCUMENT_CACHE.clear()
     calls = 0
-    original_safe_load = lookups.yaml.safe_load
+    original_load = lookups._load_yaml_document
 
-    def _slow_safe_load(value):
+    def _slow_load(value):
         nonlocal calls
         calls += 1
         time.sleep(0.01)
-        return original_safe_load(value)
+        return original_load(value)
 
-    monkeypatch.setattr(lookups.yaml, "safe_load", _slow_safe_load)
+    monkeypatch.setattr(lookups, "_load_yaml_document", _slow_load)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda _index: lookups._read_yaml(path), range(8)))
@@ -35,6 +35,21 @@ def test_lookup_source_yaml_cache_is_stamp_aware_and_single_flight(tmp_path: Pat
 
     assert lookups._read_yaml(path) == {"name": "second"}
     assert calls == 2
+
+
+def test_lookup_yaml_loader_prefers_c_safe_loader(monkeypatch) -> None:
+    import adaos.services.nlu_lookup_tables as lookups
+
+    observed = {}
+
+    def _load(value, *, Loader):
+        observed["loader"] = Loader
+        return {"value": value}
+
+    monkeypatch.setattr(lookups.yaml, "load", _load)
+
+    assert lookups._load_yaml_document("test") == {"value": "test"}
+    assert observed["loader"] is getattr(lookups.yaml, "CSafeLoader", lookups.yaml.SafeLoader)
 
 
 def test_desktop_lookup_tables_collect_workspace_ids() -> None:
@@ -97,6 +112,45 @@ def test_desktop_lookup_tables_reuses_baseline_cache_across_webspaces(monkeypatc
     assert lookups.lookup_values(second, "webspace_id") == ["dev1"]
     assert calls == first_calls
     assert first_calls["json"] > 0
+
+
+def test_desktop_lookup_tables_fast_cache_skips_stamp_until_invalidated(monkeypatch) -> None:
+    from adaos.services.agent_context import get_ctx
+    import adaos.services.nlu_lookup_tables as lookups
+
+    lookups._BASELINE_BUCKET_CACHE.clear()
+    stamp_calls = 0
+    node_calls = 0
+    original_stamp = lookups._baseline_bucket_cache_stamp
+    original_nodes = lookups._collect_node_refs
+
+    def _count_stamp(ctx):
+        nonlocal stamp_calls
+        stamp_calls += 1
+        return original_stamp(ctx)
+
+    def _count_nodes(buckets, ctx):
+        nonlocal node_calls
+        node_calls += 1
+        return original_nodes(buckets, ctx)
+
+    monkeypatch.setattr(lookups, "_baseline_bucket_cache_stamp", _count_stamp)
+    monkeypatch.setattr(lookups, "_collect_node_refs", _count_nodes)
+
+    lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="desktop")
+    lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="desktop-dev")
+    assert stamp_calls == 1
+    assert node_calls == 2
+
+    lookups.invalidate_desktop_lookup_baseline_cache(reason="skills.activated")
+    lookups.collect_desktop_lookup_tables(get_ctx(), webspace_id="desktop")
+
+    diagnostics = lookups.desktop_lookup_cache_diagnostics_snapshot()
+    assert stamp_calls == 2
+    assert diagnostics["cached"] is True
+    assert diagnostics["cache_scope"] == "workspace_manifests_and_builtin_defaults"
+    assert diagnostics["invalidation_total"] >= 1
+    assert diagnostics["last_invalidation_reason"] == "skills.activated"
 
 
 @pytest.mark.anyio
