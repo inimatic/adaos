@@ -7112,6 +7112,24 @@ def skill_runtime_migration_runtime_snapshot() -> dict[str, Any]:
     }
 
 
+def _skill_handler_source_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.services.skills_loader_importlib import skill_handler_source_snapshot
+
+        return skill_handler_source_snapshot()
+    except Exception:
+        return {
+            "schema": "adaos.skill_handler_sources.v1",
+            "available": False,
+            "ok": False,
+            "loaded_total": 0,
+            "drift_total": 0,
+            "source_drift_total": 0,
+            "selection_drift_total": 0,
+            "items": [],
+        }
+
+
 def skill_runtime_migration_update_gate_snapshot() -> dict[str, Any]:
     """Return only fields required by the supervisor promotion decision."""
 
@@ -8470,6 +8488,7 @@ def reliability_snapshot(
     yjs_projection_guard = _yjs_projection_guard_runtime_snapshot(sync_runtime)
     eventbus_backlog = _eventbus_backlog_runtime_snapshot()
     skill_runtime_migration = skill_runtime_migration_runtime_snapshot()
+    skill_handler_sources = _skill_handler_source_runtime_snapshot()
     skill_subscription_execution = _skill_subscription_execution_runtime_snapshot()
     skill_env_io_guard = _skill_env_io_guard_runtime_snapshot()
     workspace_persistence = _workspace_persistence_runtime_snapshot()
@@ -8521,6 +8540,7 @@ def reliability_snapshot(
             "yjs_projection_guard": yjs_projection_guard,
             "eventbus_backlog": eventbus_backlog,
             "skill_runtime_migration": skill_runtime_migration,
+            "skill_handler_sources": skill_handler_sources,
             "skill_subscription_execution": skill_subscription_execution,
             "skill_env_io_guard": skill_env_io_guard,
             "workspace_persistence": workspace_persistence,

@@ -241,20 +241,38 @@ def test_refresh_skill_runtime_recovers_transient_migration_deactivation() -> No
     ]
 
 
-def test_refresh_skill_runtime_keeps_same_version_hot_refresh_behavior() -> None:
+def test_refresh_skill_runtime_isolates_same_version_source_revision() -> None:
     calls: list[str] = []
 
+    class _Runtime:
+        version = "1.0.0"
+        slot = "B"
+        data_migration = {}
+
     class _Manager:
+        def __init__(self) -> None:
+            self._status_calls = 0
+
         def runtime_status(self, name: str) -> dict[str, Any]:
-            calls.append(f"runtime_status:{name}")
-            return {"version": "1.0.0", "active_slot": "A", "deactivated": False}
+            self._status_calls += 1
+            calls.append(f"runtime_status:{name}:{self._status_calls}")
+            return {
+                "version": "1.0.0",
+                "active_slot": "A" if self._status_calls == 1 else "B",
+                "deactivated": False,
+            }
 
         def runtime_update(self, name: str, space: str = "workspace") -> dict[str, Any]:
             calls.append(f"runtime_update:{name}:{space}")
-            return {"ok": True, "changed_files": ["handlers/main.py"]}
+            raise AssertionError("same-version refresh must not mutate the active slot")
 
-        def prepare_runtime(self, *_args, **_kwargs):
-            raise AssertionError("same-version hot refresh must not prepare a new slot")
+        def prepare_runtime(self, name: str, *, run_tests: bool = False):
+            calls.append(f"prepare_runtime:{name}:{int(run_tests)}")
+            return _Runtime()
+
+        def activate_for_space(self, name: str, *, version=None, slot=None, space="default", webspace_id=None):
+            calls.append(f"activate_for_space:{name}:{version}:{slot}:{space}:{webspace_id}")
+            return slot
 
     payload = refresh_skill_runtime(
         _Manager(),
@@ -265,11 +283,46 @@ def test_refresh_skill_runtime_keeps_same_version_hot_refresh_behavior() -> None
     )
 
     assert payload["ok"] is True
-    assert payload["isolated_candidate"] is False
-    assert payload["runtime_updated"] is True
-    assert payload["runtime_migrated"] is False
+    assert payload["isolated_candidate"] is True
+    assert payload["runtime_updated"] is False
+    assert payload["runtime_migrated"] is True
+    assert payload["prepared_slot"] == "B"
+    assert payload["activated_slot"] == "B"
+    assert payload["lifecycle_stages"][0]["reason"] == "slot_candidate_isolated"
     assert calls == [
-        "runtime_status:demo_skill",
-        "runtime_update:demo_skill:workspace",
-        "runtime_status:demo_skill",
+        "runtime_status:demo_skill:1",
+        "prepare_runtime:demo_skill:0",
+        "activate_for_space:demo_skill:1.0.0:B:default:desktop",
+        "runtime_status:demo_skill:2",
     ]
+
+
+def test_refresh_skill_runtime_without_migration_keeps_active_slot_immutable() -> None:
+    calls: list[str] = []
+
+    class _Manager:
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            calls.append(f"runtime_status:{name}")
+            return {"version": "1.0.0", "active_slot": "A", "deactivated": False}
+
+        def runtime_update(self, *_args, **_kwargs):
+            raise AssertionError("migration-disabled refresh must not mutate the active slot")
+
+        def prepare_runtime(self, *_args, **_kwargs):
+            raise AssertionError("migration-disabled refresh must not prepare a slot")
+
+    payload = refresh_skill_runtime(
+        _Manager(),
+        "demo_skill",
+        webspace_id="desktop",
+        source_version="1.0.0",
+        migrate_runtime=False,
+    )
+
+    assert payload["ok"] is True
+    assert payload["runtime_updated"] is False
+    assert payload["runtime_migrated"] is False
+    assert payload["runtime_refresh_skipped"] is True
+    assert payload["runtime_refresh_skip_reason"] == "runtime_migration_disabled"
+    assert payload["active_slot_after"] == "A"
+    assert calls == ["runtime_status:demo_skill", "runtime_status:demo_skill"]

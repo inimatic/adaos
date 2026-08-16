@@ -62,9 +62,9 @@ Current MVP priority:
   classification, and member catalog snapshot sync
 - `[deferred]` expand marketplace UX beyond the install/update surfaces needed
   to prove the MVP lifecycle
-- `[deferred]` restrict source-copy `runtime_update` to dev/debug-only use;
-  current development still depends on this fast path, so enforcement resumes
-  only when slot/package iteration can replace it without slowing routine work
+- `[should]` keep production runtime refresh slot-bound, including same-version
+  source revisions, and restrict source-copy `runtime_update` to explicit
+  dev/debug use; complete the atomic activation and live-reload stand proof
 
 ## What Already Exists
 

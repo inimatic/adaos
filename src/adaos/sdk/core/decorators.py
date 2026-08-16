@@ -102,10 +102,17 @@ def _topic_matches_any(topic: str, patterns: str) -> bool:
         return False
 
 
-def _run_sync_subscription_in_thread(topic: str) -> bool:
-    """Keep synchronous skill handlers off the main event loop by default."""
+def _run_sync_subscription_in_thread(topic: str, *, skill_name: str | None = None) -> bool:
+    """Keep synchronous skill handlers off the main event loop.
+
+    Topic-level loop exemptions are reserved for core-owned handlers. Skill
+    implementations can evolve independently and may start doing blocking I/O,
+    so they must always retain the executor boundary.
+    """
 
     try:
+        if str(skill_name or "").strip():
+            return True
         if str(os.getenv("ADAOS_SYNC_SUBSCRIPTION_TO_THREAD", "1") or "1").strip().lower() in {
             "0",
             "false",
@@ -776,7 +783,7 @@ async def register_subscriptions(
                                 return _fn(evt)
                         return _fn(evt)
 
-                    if _run_sync_subscription_in_thread(_topic):
+                    if _run_sync_subscription_in_thread(_topic, skill_name=_skill):
                         safe_evt = _thread_safe_subscription_event(evt)
 
                         def _call_thread_safe_sync_handler():

@@ -398,6 +398,76 @@ def test_importlib_loader_can_force_reload_handler_module(tmp_path: Path) -> Non
             delattr(builtins, "_adaos_reload_import_counter")
 
 
+def test_handler_source_snapshot_detects_disk_drift_and_reload(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "observable_skill"
+    handler = skill_dir / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+
+    loader = ImportlibSkillsLoader()
+    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    sys.modules.pop(mod_name, None)
+    skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
+    try:
+        loader._load_handler(handler)
+        loaded = skills_loader_module.skill_handler_source_snapshot()
+        item = next(item for item in loaded["items"] if item["module"] == mod_name)
+        assert item["source_drift"] is False
+
+        handler.write_text("VALUE = 2\n", encoding="utf-8")
+        drifted = skills_loader_module.skill_handler_source_snapshot()
+        item = next(item for item in drifted["items"] if item["module"] == mod_name)
+        assert item["source_drift"] is True
+        assert item["drift"] is True
+        assert item["current_digest"] != item["loaded_digest"]
+
+        loader._load_handler(handler, reload=True)
+        reloaded = skills_loader_module.skill_handler_source_snapshot()
+        item = next(item for item in reloaded["items"] if item["module"] == mod_name)
+        assert item["source_drift"] is False
+        assert item["drift"] is False
+    finally:
+        sys.modules.pop(mod_name, None)
+        skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
+
+
+def test_handler_source_snapshot_periodically_rehashes_unchanged_stat(monkeypatch, tmp_path: Path) -> None:
+    handler = tmp_path / "periodic_skill" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    handler.write_text("VALUE = 1\n", encoding="utf-8")
+
+    loader = ImportlibSkillsLoader()
+    mod_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    sys.modules.pop(mod_name, None)
+    skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
+    monkeypatch.setenv("ADAOS_SKILL_HANDLER_DIGEST_REVERIFY_S", "1")
+    try:
+        loader._load_handler(handler)
+        handler.write_text("VALUE = 2\n", encoding="utf-8")
+        stat = handler.stat()
+        record = skills_loader_module._LOADED_HANDLER_SOURCES[mod_name]
+        record.update(
+            {
+                "_observed_size": int(stat.st_size),
+                "_observed_mtime_ns": int(stat.st_mtime_ns),
+                "_observed_ctime_ns": int(stat.st_ctime_ns),
+                "_observed_inode": int(stat.st_ino),
+                "_digest_verified_at": 0.0,
+            }
+        )
+
+        snapshot = skills_loader_module.skill_handler_source_snapshot()
+        item = next(item for item in snapshot["items"] if item["module"] == mod_name)
+
+        assert snapshot["digest_reverify_interval_s"] == 1.0
+        assert item["source_drift"] is True
+        assert item["current_digest"] != item["loaded_digest"]
+        assert item["digest_verified_at"] is not None
+    finally:
+        sys.modules.pop(mod_name, None)
+        skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
+
+
 def test_runtime_source_sync_is_explicit_and_never_runs_in_candidate(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
     loader = ImportlibSkillsLoader()

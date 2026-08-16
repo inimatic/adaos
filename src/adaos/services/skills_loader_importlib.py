@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import logging
@@ -22,6 +23,175 @@ import yaml
 
 _LOG = logging.getLogger("adaos.services.skills_loader")
 _HANDLER_IMPORT_LOCK = threading.RLock()
+_LOADED_HANDLER_SOURCES: dict[str, dict[str, Any]] = {}
+
+
+def _source_digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_digest_reverify_interval_s() -> float:
+    try:
+        value = float(os.getenv("ADAOS_SKILL_HANDLER_DIGEST_REVERIFY_S", "30") or "30")
+    except (TypeError, ValueError):
+        value = 30.0
+    return max(1.0, min(3600.0, value))
+
+
+def _runtime_selection_from_handler(path: Path) -> dict[str, str]:
+    parts = path.resolve().parts
+    try:
+        runtime_idx = parts.index(".runtime")
+    except ValueError:
+        return {}
+    if len(parts) <= runtime_idx + 5 or parts[runtime_idx + 3] != "slots":
+        return {}
+    skills_root = Path(*parts[:runtime_idx])
+    skill_name = str(parts[runtime_idx + 1])
+    loaded_bucket = str(parts[runtime_idx + 2])
+    loaded_slot = str(parts[runtime_idx + 4]).upper()
+    try:
+        env = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=skill_name)
+        selected_version = str(env.resolve_active_version() or "").strip()
+        selected_bucket = env.runtime_bucket(selected_version) if selected_version else ""
+        selected_slot = env.read_active_slot(selected_version) if selected_version else ""
+    except Exception:
+        selected_version = ""
+        selected_bucket = ""
+        selected_slot = ""
+    return {
+        "skill": skill_name,
+        "loaded_bucket": loaded_bucket,
+        "loaded_slot": loaded_slot,
+        "selected_version": selected_version,
+        "selected_bucket": selected_bucket,
+        "selected_slot": str(selected_slot or "").upper(),
+    }
+
+
+def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    loaded_at = time.time()
+    loaded_digest = _source_digest(resolved)
+    record: dict[str, Any] = {
+        "module": str(module_name),
+        "path": str(resolved),
+        "loaded_at": loaded_at,
+        "loaded_size": int(stat.st_size),
+        "loaded_mtime_ns": int(stat.st_mtime_ns),
+        "loaded_ctime_ns": int(stat.st_ctime_ns),
+        "loaded_inode": int(stat.st_ino),
+        "loaded_digest": loaded_digest,
+        "_observed_size": int(stat.st_size),
+        "_observed_mtime_ns": int(stat.st_mtime_ns),
+        "_observed_ctime_ns": int(stat.st_ctime_ns),
+        "_observed_inode": int(stat.st_ino),
+        "_verified_digest": loaded_digest,
+        "_digest_verified_at": loaded_at,
+    }
+    record.update(_runtime_selection_from_handler(resolved))
+    _LOADED_HANDLER_SOURCES[str(module_name)] = record
+    return record
+
+
+def skill_handler_source_snapshot() -> dict[str, Any]:
+    """Compare imported handler bytes and runtime selection with current disk state."""
+
+    captured_at = time.time()
+    reverify_interval_s = _source_digest_reverify_interval_s()
+    with _HANDLER_IMPORT_LOCK:
+        records = [dict(item) for item in _LOADED_HANDLER_SOURCES.values()]
+    items: list[dict[str, Any]] = []
+    for record in records:
+        path = Path(str(record.get("path") or ""))
+        current_exists = path.is_file()
+        current_size: int | None = None
+        current_mtime_ns: int | None = None
+        current_ctime_ns: int | None = None
+        current_inode: int | None = None
+        source_drift = not current_exists
+        current_digest = ""
+        raw_verified_at = record.get("_digest_verified_at")
+        if raw_verified_at is None:
+            raw_verified_at = record.get("loaded_at")
+        digest_verified_at = float(raw_verified_at or 0.0)
+        if current_exists:
+            try:
+                stat = path.stat()
+                current_size = int(stat.st_size)
+                current_mtime_ns = int(stat.st_mtime_ns)
+                current_ctime_ns = int(stat.st_ctime_ns)
+                current_inode = int(stat.st_ino)
+                fingerprint_changed = (
+                    current_size != int(record.get("_observed_size") or -1)
+                    or current_mtime_ns != int(record.get("_observed_mtime_ns") or -1)
+                    or current_ctime_ns != int(record.get("_observed_ctime_ns") or -1)
+                    or current_inode != int(record.get("_observed_inode") or -1)
+                )
+                verification_due = captured_at - digest_verified_at >= reverify_interval_s
+                if fingerprint_changed or verification_due:
+                    current_digest = _source_digest(path)
+                    digest_verified_at = captured_at
+                    with _HANDLER_IMPORT_LOCK:
+                        live_record = _LOADED_HANDLER_SOURCES.get(str(record.get("module") or ""))
+                        if live_record is not None and live_record.get("loaded_at") == record.get("loaded_at"):
+                            live_record.update(
+                                {
+                                    "_observed_size": current_size,
+                                    "_observed_mtime_ns": current_mtime_ns,
+                                    "_observed_ctime_ns": current_ctime_ns,
+                                    "_observed_inode": current_inode,
+                                    "_verified_digest": current_digest,
+                                    "_digest_verified_at": digest_verified_at,
+                                }
+                            )
+                else:
+                    current_digest = str(record.get("_verified_digest") or record.get("loaded_digest") or "")
+                source_drift = current_digest != str(record.get("loaded_digest") or "")
+            except OSError:
+                current_exists = False
+                source_drift = True
+        selection = _runtime_selection_from_handler(path) if current_exists else {}
+        loaded_bucket = str(record.get("loaded_bucket") or "")
+        loaded_slot = str(record.get("loaded_slot") or "")
+        selected_bucket = str(selection.get("selected_bucket") or record.get("selected_bucket") or "")
+        selected_slot = str(selection.get("selected_slot") or record.get("selected_slot") or "")
+        selection_drift = bool(
+            loaded_slot
+            and selected_slot
+            and (loaded_bucket != selected_bucket or loaded_slot != selected_slot)
+        )
+        public_record = {key: value for key, value in record.items() if not key.startswith("_")}
+        item = {
+            **public_record,
+            **selection,
+            "current_exists": current_exists,
+            "current_size": current_size,
+            "current_mtime_ns": current_mtime_ns,
+            "current_ctime_ns": current_ctime_ns,
+            "current_inode": current_inode,
+            "current_digest": current_digest or None,
+            "digest_verified_at": digest_verified_at or None,
+            "source_drift": source_drift,
+            "selection_drift": selection_drift,
+            "drift": bool(source_drift or selection_drift),
+        }
+        items.append(item)
+    items.sort(key=lambda item: (not bool(item.get("drift")), str(item.get("skill") or item.get("module") or "")))
+    drift_items = [item for item in items if item.get("drift")]
+    return {
+        "schema": "adaos.skill_handler_sources.v1",
+        "available": True,
+        "ok": not drift_items,
+        "captured_at": captured_at,
+        "digest_reverify_interval_s": reverify_interval_s,
+        "loaded_total": len(items),
+        "drift_total": len(drift_items),
+        "source_drift_total": sum(1 for item in items if item.get("source_drift")),
+        "selection_drift_total": sum(1 for item in items if item.get("selection_drift")),
+        "items": items,
+    }
 
 
 class ImportlibSkillsLoader(SkillsLoaderPort):
@@ -211,7 +381,15 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             except Exception:
                 sys.modules.pop(mod_name, None)
                 raise
-            _LOG.info("imported skill handler module=%s path=%s", mod_name, handler)
+            source = _record_loaded_handler_source(mod_name, handler)
+            _LOG.info(
+                "imported skill handler module=%s path=%s source_digest=%s loaded_slot=%s selected_slot=%s",
+                mod_name,
+                handler,
+                source.get("loaded_digest"),
+                source.get("loaded_slot") or "-",
+                source.get("selected_slot") or "-",
+            )
 
     def _try_load_handler(self, handler: Path, *, skill_name: str | None, source: str) -> bool:
         try:

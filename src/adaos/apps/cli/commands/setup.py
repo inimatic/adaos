@@ -104,6 +104,56 @@ def _sync_workspace_sparse_to_registry(ctx) -> dict:
     return _workspace_sync_sparse_to_registry(ctx)
 
 
+def _notify_live_skill_runtime_activated(skill_name: str, *, webspace_id: str) -> dict:
+    """Reload an activated slot in the owning runtime process when it exists."""
+
+    try:
+        base_url = resolve_control_base_url(prefer_local=True).rstrip("/")
+        token = resolve_control_token(base_url=base_url)
+        status_code, _payload = probe_control_api(base_url=base_url, token=token, timeout_s=0.5)
+        if status_code is None:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "runtime_not_running",
+                "restart_required": False,
+            }
+        if status_code != 200:
+            return {
+                "ok": False,
+                "reason": f"runtime_probe_http_{status_code}",
+                "restart_required": True,
+            }
+        response = requests.post(
+            base_url + "/api/skills/runtime/notify-activated",
+            headers={"X-AdaOS-Token": token},
+            json={
+                "name": str(skill_name),
+                "space": "default",
+                "webspace_id": str(webspace_id),
+                "defer_webspace_rebuild": True,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        handler_reload = payload.get("handler_reload") if isinstance(payload, dict) else None
+        reload_ok = not isinstance(handler_reload, dict) or bool(handler_reload.get("ok", True))
+        notify_ok = bool(isinstance(payload, dict) and payload.get("ok", True) and reload_ok)
+        return {
+            "ok": notify_ok,
+            "restart_required": not notify_ok,
+            "response": payload if isinstance(payload, dict) else {},
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reason": "live_reload_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "restart_required": True,
+        }
+
+
 def _bootstrap_neural_nlu_after_install(installed: dict, *, enabled: bool) -> None:
     if not enabled:
         os.environ["ADAOS_NLU_NEURAL"] = "0"
@@ -386,18 +436,30 @@ def update(
                 except Exception:
                     source_meta = None
                 source_version = str(getattr(source_meta, "version", None) or "").strip()
+                refresh = refresh_skill_runtime(
+                    skill_mgr,
+                    str(name),
+                    webspace_id=target_webspace,
+                    source_version=source_version,
+                    migrate_runtime=migrate_runtime,
+                    ensure_installed=migrate_runtime,
+                )
                 entry = {
                     "skill": str(name),
                     "ok": True,
-                    **refresh_skill_runtime(
-                        skill_mgr,
+                    **refresh,
+                }
+                if bool(refresh.get("runtime_migrated")):
+                    live_reload = _notify_live_skill_runtime_activated(
                         str(name),
                         webspace_id=target_webspace,
-                        source_version=source_version,
-                        migrate_runtime=migrate_runtime,
-                        ensure_installed=migrate_runtime,
-                    ),
-                }
+                    )
+                    entry["live_reload"] = live_reload
+                    if bool(live_reload.get("restart_required")):
+                        entry["restart_required"] = True
+                        out["warnings"].append(
+                            f"{name}: runtime slot activated but live handler reload failed; restart required"
+                        )
                 out["runtime_updated"].append(entry)
             except Exception as exc:
                 entry = {"skill": str(name), "ok": False, "error": str(exc)}

@@ -176,29 +176,37 @@ def refresh_skill_runtime(
         payload["deactivation"] = deactivation_before
     if retry_deactivated_prepare:
         payload["deactivation_retry"] = True
-    isolated_candidate = bool(migrate_runtime and expected_version and expected_version != runtime_version_before)
+    # Workspace source can change without a semantic-version bump during local
+    # development. Treat every requested production refresh as an A/B
+    # candidate so a loaded module is never changed underneath the process.
+    isolated_candidate = bool(migrate_runtime and expected_version)
     payload["isolated_candidate"] = isolated_candidate
     if isolated_candidate:
-        # runtime_update copies Workspace sources into the active slot. A
-        # versioned A/B candidate must remain physically isolated until its
-        # prepare/tests/activation sequence completes.
+        # runtime_update copies Workspace sources into the active slot. Every
+        # production candidate must remain physically isolated until its
+        # prepare/tests/activation sequence completes, including same-version
+        # source revisions.
         runtime_result: dict[str, Any] = {}
-        _record_stage(payload, "runtime_update", ok=True, skipped=True, reason="versioned_candidate_isolated")
+        isolation_reason = (
+            "versioned_candidate_isolated"
+            if expected_version != runtime_version_before
+            else "slot_candidate_isolated"
+        )
+        _record_stage(payload, "runtime_update", ok=True, skipped=True, reason=isolation_reason)
     else:
-        try:
-            runtime_result = mgr.runtime_update(skill_name, space="workspace")
-            payload["runtime_updated"] = True
-            payload["runtime_update_result"] = runtime_result
-            _record_stage(payload, "runtime_update", ok=True)
-        except Exception as exc:
-            payload["runtime_update_error"] = str(exc)
-            _record_stage(payload, "runtime_update", ok=False, error=str(exc), fatal=False)
-            runtime_result = {}
-    should_prepare = False
-    if source_version is not None:
-        should_prepare = bool(str(source_version or "").strip() and str(source_version or "").strip() != runtime_version_before)
-    if isinstance(runtime_result, dict) and not bool(runtime_result.get("ok", True)):
-        should_prepare = True
+        runtime_result = {}
+        payload["runtime_refresh_skipped"] = True
+        payload["runtime_refresh_skip_reason"] = (
+            "source_version_missing" if migrate_runtime else "runtime_migration_disabled"
+        )
+        _record_stage(
+            payload,
+            "runtime_update",
+            ok=True,
+            skipped=True,
+            reason=payload["runtime_refresh_skip_reason"],
+        )
+    should_prepare = bool(isolated_candidate)
     if recover_transient_deactivation:
         should_prepare = True
     if retry_deactivated_prepare:

@@ -62,6 +62,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `MRI-002` | open | Make workspace skill publication verifiable from source edit through targeted tests, push/version evidence, and compatible root/client checks. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `RCMS-001` | open | Make git requirements explicit by role and deployment mode, including member no-git archive materialization and operator diagnostics. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `RCMS-002` | in progress | Finish stale-catalog classification, explicit workspace fallback, row-level diagnostics, and scenario source/runtime actions. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
+| `RCMS-003` / `SKILL-RUNTIME-ATOMIC-001` | ready for stand | Production refresh now preserves the active slot, stages same-version revisions in the inactive slot, asks the owner runtime to reload activated handlers, and exposes loaded-source and selected-slot drift. On `.30`, reproduce a same-version Weather update and prove the active digest remains unchanged during prepare, activation switches the slot atomically, `handler_reload.ok` is true, drift totals remain zero, and the selected city survives snapshot and reconnect. Then force one reload failure and verify the operation reports `restart_required` instead of silently claiming completion. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `RCMS-005` | open | Keep production CLI/control actions slot-bound and development commands explicitly rooted in `.adaos/dev`. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 | `HMG-007` | open | Preserve correlation/generation IDs and reject guard behavior that hides overload rather than reducing it. | [Runtime Guarding](architecture/runtime-guarding.md) |
 | `ROOT-MCP-TARGET` / `F3M-006A` / `F3M-006C` | open | Keep selectors out of managed target IDs and separate direct remote MCP health from bearer validity with deployed-session evidence. | [Root MCP Roadmap](architecture/root-mcp-roadmap.md) |
@@ -94,7 +95,6 @@ The local Wave 0-1 gate is closed. The active sequence is:
 
 | ID | Resume condition | Owner |
 | --- | --- | --- |
-| `RCMS-003` | Resume when routine development no longer depends on source-copy `runtime_update` for fast iteration and the slot/package update path is fast enough to enforce a production-only atomic boundary without slowing current work. | [Registry/Operations](architecture/registry-marketplace-operations-roadmap.md) |
 | `DIRECT-YJS-DENY-BY-DEFAULT` | Resume after M1 warnings and M3 migrations provide a measured exception inventory. | [Semantic State Plane](architecture/semantic-state-plane.md) |
 | `CROSS-SKILL-PROJECTION-CLEANUP` | Resume after the three M3 pilot skills pass stand acceptance. | [Projection Subscription Roadmap](architecture/projection-subscription-roadmap.md) |
 | `SIDECAR-YJS-AUTHORITY` | Resume after current transport handoff and MVP SyncChannel recovery are accepted. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
