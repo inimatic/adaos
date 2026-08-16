@@ -8170,10 +8170,10 @@ async def _ensure_room_effective_materialized(
         from adaos.services.scenario.webspace_runtime import WebspaceScenarioRuntime  # pylint: disable=import-outside-toplevel
 
         runtime = WebspaceScenarioRuntime()
-        await runtime.resolve_materialized_payload_from_doc_async(
-            ydoc,
+        await runtime.resolve_materialized_payload_async(
             webspace_id,
             scenario_id=expected_scenario,
+            isolate_process=True,
         )
         payload = getattr(runtime, "_last_materialized_payload", None)
         if not isinstance(payload, Mapping) or not payload:

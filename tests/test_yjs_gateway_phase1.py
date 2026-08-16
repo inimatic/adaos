@@ -3048,8 +3048,8 @@ def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatc
 
     seen_current: list[str] = []
 
-    async def _fake_resolve(self, target_ydoc, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
-        current = str(scenario_id or target_ydoc.get_map("ui").get("current_scenario") or "")
+    async def _fake_resolve(self, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
+        current = str(scenario_id or "")
         seen_current.append(current)
         self._last_materialized_payload = {
             "scenario_id": current,
@@ -3070,7 +3070,7 @@ def test_room_bootstrap_seed_override_beats_stale_authoritative_lease(monkeypatc
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "resolve_materialized_payload_from_doc_async",
+        "resolve_materialized_payload_async",
         _fake_resolve,
     )
 
@@ -3155,7 +3155,7 @@ def test_room_bootstrap_reuses_matching_persisted_effective_state(monkeypatch) -
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "resolve_materialized_payload_from_doc_async",
+        "resolve_materialized_payload_async",
         _unexpected_resolve,
     )
 
@@ -3255,8 +3255,8 @@ def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(mo
 
     seen_current: list[str] = []
 
-    async def _fake_resolve(self, target_ydoc, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
-        current = str(scenario_id or target_ydoc.get_map("ui").get("current_scenario") or "")
+    async def _fake_resolve(self, _webspace_id, *, scenario_id=None, **_kwargs) -> None:
+        current = str(scenario_id or "")
         seen_current.append(current)
         self._last_materialized_payload = {
             "scenario_id": current,
@@ -3277,7 +3277,7 @@ def test_room_bootstrap_rebuilds_ready_effective_branches_after_seed_override(mo
 
     monkeypatch.setattr(
         webspace_runtime_module.WebspaceScenarioRuntime,
-        "resolve_materialized_payload_from_doc_async",
+        "resolve_materialized_payload_async",
         _fake_resolve,
     )
 
