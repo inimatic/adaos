@@ -85,6 +85,12 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
                 if not transient or attempt == 7:
                     raise
                 time.sleep(min(0.005 * (2**attempt), 0.1))
+        if os.name != "nt":
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -625,9 +631,35 @@ def _remove_path(path: Path) -> None:
 def _copy_path(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(
+            source,
+            target,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".pytest_cache"),
+        )
     else:
         shutil.copy2(source, target)
+
+
+def _promotion_stage_path(target: Path, *, token: str) -> Path:
+    return target.with_name(f".{target.name}.adaos-stage-{token}")
+
+
+def _replace_promotion_path(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in range(8):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            transient = isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {
+                5,
+                32,
+                33,
+            }
+            if not transient or attempt == 7:
+                raise
+            time.sleep(min(0.01 * (2**attempt), 0.25))
 
 
 def _preflight_copy_file(source: str, target: str) -> str:
@@ -831,11 +863,9 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
     backup_dir.mkdir(parents=True, exist_ok=True)
     promoted_paths: list[str] = []
     removed_paths: list[str] = []
-    for rel_path in normalized_paths:
-        target_path = _promotion_path(root_dir, rel_path)
-        backup_path = _promotion_path(backup_dir, rel_path)
-        if target_path.exists():
-            _copy_path(target_path, backup_path)
+    stage_token = f"{os.getpid()}-{time.time_ns()}"
+    staged_paths: dict[str, Path] = {}
+    mutated_paths: list[str] = []
     payload = {
         "ok": False,
         "slot": slot_name,
@@ -847,26 +877,56 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
         "backup_metadata_path": str(_root_promotion_metadata_path(backup_dir)),
         "promoted_paths": [],
         "removed_paths": [],
-        "transaction_state": "backed_up",
+        "transaction_state": "staging",
+        "backup_mode": "atomic_rename",
         "preflight": preflight,
         "restart_required": True,
     }
     _write_json(_root_promotion_metadata_path(backup_dir), payload)
+    staging_started_at = time.monotonic()
+    try:
+        for rel_path in normalized_paths:
+            source_path = _promotion_path(source_repo_dir, rel_path)
+            if not source_path.exists():
+                continue
+            target_path = _promotion_path(root_dir, rel_path)
+            stage_path = _promotion_stage_path(target_path, token=stage_token)
+            _remove_path(stage_path)
+            staged_paths[rel_path] = stage_path
+            _copy_path(source_path, stage_path)
+    except Exception as exc:
+        payload["transaction_state"] = "staging_failed"
+        payload["error"] = str(exc)
+        _write_promotion_metadata_best_effort(backup_dir, payload)
+        for stage_path in staged_paths.values():
+            _remove_path(stage_path)
+        raise RuntimeError(f"root promotion staging failed before cutover: {exc}") from exc
+    payload["transaction_state"] = "staged"
+    payload["staging_elapsed_s"] = round(time.monotonic() - staging_started_at, 3)
+    payload["staged_paths"] = sorted(staged_paths)
+    _write_json(_root_promotion_metadata_path(backup_dir), payload)
+    cutover_started_at = time.monotonic()
     try:
         for rel_path in normalized_paths:
             source_path = _promotion_path(source_repo_dir, rel_path)
             target_path = _promotion_path(root_dir, rel_path)
+            backup_path = _promotion_path(backup_dir, rel_path)
+            if target_path.exists():
+                _replace_promotion_path(target_path, backup_path)
+                mutated_paths.append(rel_path)
             if source_path.exists():
-                _remove_path(target_path)
-                _copy_path(source_path, target_path)
+                stage_path = staged_paths[rel_path]
+                _replace_promotion_path(stage_path, target_path)
+                if rel_path not in mutated_paths:
+                    mutated_paths.append(rel_path)
                 promoted_paths.append(rel_path)
             else:
-                _remove_path(target_path)
                 removed_paths.append(rel_path)
         payload["ok"] = True
         payload["transaction_state"] = "committed"
         payload["promoted_paths"] = promoted_paths
         payload["removed_paths"] = removed_paths
+        payload["cutover_elapsed_ms"] = round((time.monotonic() - cutover_started_at) * 1000.0, 3)
         _write_json(_root_promotion_metadata_path(backup_dir), payload)
     except Exception as exc:
         payload["ok"] = False
@@ -874,7 +934,19 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
         payload["error"] = str(exc)
         _write_promotion_metadata_best_effort(backup_dir, payload)
         try:
-            rollback = restore_root_from_backup(backup_dir=backup_dir, target_root=root_dir)
+            restored_paths: list[str] = []
+            for rel_path in reversed(mutated_paths):
+                target_path = _promotion_path(root_dir, rel_path)
+                backup_path = _promotion_path(backup_dir, rel_path)
+                _remove_path(target_path)
+                if backup_path.exists():
+                    _replace_promotion_path(backup_path, target_path)
+                restored_paths.append(rel_path)
+            rollback = {
+                "ok": True,
+                "restored_paths": list(reversed(restored_paths)),
+                "mode": "atomic_rename",
+            }
         except Exception as rollback_exc:
             payload["transaction_state"] = "rollback_failed"
             payload["rollback_error"] = str(rollback_exc)
@@ -886,6 +958,9 @@ def promote_root_from_slot(*, slot: str | None = None) -> dict[str, Any]:
         payload["rollback"] = rollback
         _write_promotion_metadata_best_effort(backup_dir, payload)
         raise RuntimeError(f"root promotion failed and was rolled back: {exc}") from exc
+    finally:
+        for stage_path in staged_paths.values():
+            _remove_path(stage_path)
     return payload
 
 

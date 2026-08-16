@@ -145,6 +145,8 @@ _PROCESS_SUPERVISOR = ProcessSupervisor(psutil)
 _UPDATE_STATE_MACHINE = UpdateStateMachine()
 _UPDATE_ATTEMPTS = UpdateAttemptStore()
 _UPDATE_RECONCILIATION = UpdateReconciliationService()
+_UPDATE_TRANSITION_LOCKS: dict[str, threading.Lock] = {}
+_UPDATE_TRANSITION_LOCKS_GUARD = threading.Lock()
 _MEMORY_PROFILING = MemoryProfilingService()
 _RUNTIME_CONFIG = SupervisorRuntimeConfig()
 _WATCHDOG_STATUS = WatchdogStatusCompactor()
@@ -180,6 +182,7 @@ def _update_reconciliation_operations() -> UpdateReconciliationOperations:
         runtime_ready_for_boot_status_finalize=_runtime_ready_for_boot_status_finalize,
         status_updated_at=_status_updated_at,
         terminal_status_belongs_to_attempt=_terminal_status_belongs_to_attempt,
+        transition_snapshot_current=_update_transition_snapshot_current,
         update_attempt_contract_version=UPDATE_ATTEMPT_CONTRACT_VERSION,
         update_status_timeout_sec=_update_status_timeout_sec,
         update_transition_timed_out=_update_transition_timed_out,
@@ -237,6 +240,77 @@ def _supervisor_member_hub_watchdog_log_path() -> Path:
 
 def _supervisor_update_attempt_path() -> Path:
     return (_supervisor_state_dir() / "update_attempt.json").resolve()
+
+
+def _update_transition_lock_path() -> Path:
+    return (_supervisor_state_dir() / "update_transition.lock").resolve()
+
+
+def _update_transition_thread_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _UPDATE_TRANSITION_LOCKS_GUARD:
+        lock = _UPDATE_TRANSITION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _UPDATE_TRANSITION_LOCKS[key] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _try_update_transition_guard(*, operation: str):
+    """Serialize destructive update transitions without blocking status reads."""
+    path = _update_transition_lock_path()
+    thread_lock = _update_transition_thread_lock(path)
+    if not thread_lock.acquire(blocking=False):
+        yield False
+        return
+    handle = None
+    locked = False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+b")
+        if path.stat().st_size == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                locked = True
+            except OSError:
+                locked = False
+        else:
+            try:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except (ImportError, OSError):
+                locked = False
+        if not locked:
+            yield False
+            return
+        _LOG.debug("acquired update transition guard operation=%s path=%s", operation, path)
+        yield True
+    finally:
+        if handle is not None:
+            if locked:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except (ImportError, OSError):
+                    pass
+            handle.close()
+        thread_lock.release()
 
 
 def _supervisor_prepare_leases_dir() -> Path:
@@ -350,7 +424,33 @@ def _memory_critical_restart_cooldown_sec() -> float:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(8):
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as exc:
+                transient = isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {
+                    5,
+                    32,
+                    33,
+                }
+                if not transient or attempt == 7:
+                    raise
+                time.sleep(min(0.005 * (2**attempt), 0.1))
+        if os.name != "nt":
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -715,6 +815,20 @@ def _status_updated_at(payload: dict[str, Any]) -> float:
 
 def _attempt_transition_at(payload: dict[str, Any]) -> float:
     return _UPDATE_ATTEMPTS.transition_at(payload)
+
+
+def _update_transition_snapshot_current(
+    *,
+    status: dict[str, Any],
+    attempt: dict[str, Any],
+) -> bool:
+    current_status = read_core_update_status()
+    current_attempt = _read_update_attempt() or {}
+    status_keys = ("state", "phase", "action", "target_version", "updated_at")
+    attempt_keys = ("state", "action", "target_version", "updated_at", "transitioned_at")
+    return all(current_status.get(key) == status.get(key) for key in status_keys) and all(
+        current_attempt.get(key) == attempt.get(key) for key in attempt_keys
+    )
 
 
 def _update_transition_timed_out(*, status_age: float, transition_age: float, timeout_sec: float) -> bool:
@@ -1491,10 +1605,22 @@ def _finalize_runtime_boot_status_from_supervisor() -> dict[str, Any] | None:
 
 
 def _reconcile_update_status(payload: dict[str, Any]) -> dict[str, Any]:
-    return _UPDATE_RECONCILIATION.reconcile(
-        _update_reconciliation_operations(),
-        payload,
-    )
+    with _try_update_transition_guard(operation="update.reconcile") as acquired:
+        if not acquired:
+            deferred = dict(payload)
+            deferred["status"] = read_core_update_status()
+            deferred["attempt"] = _read_update_attempt() or {}
+            deferred["reconciliation"] = {
+                "deferred": True,
+                "retryable": True,
+                "reason": "update_transition_guard_busy",
+            }
+            deferred["_served_by"] = "supervisor_transition_busy"
+            return deferred
+        return _UPDATE_RECONCILIATION.reconcile(
+            _update_reconciliation_operations(),
+            payload,
+        )
 
 
 def _compact_public_runtime_self_heal(value: dict[str, Any] | None) -> dict[str, Any]:
@@ -3664,25 +3790,18 @@ class SupervisorManager:
             if isinstance(root_promotion.get("wrapper_refresh"), dict)
             else None
         )
-        restart = self._schedule_service_restart(
-            reason=reason,
-            candidate_wrapper_refresh=candidate_wrapper_refresh,
-        )
         now = time.time()
         status_payload = dict(status)
         status_payload["state"] = "succeeded"
         status_payload["phase"] = "root_promoted"
         status_payload["root_promotion_required"] = False
-        status_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        status_payload["restart_mode"] = "scheduling"
         status_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
         status_payload["restart_requested_by_pid"] = os.getpid()
         status_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
+        status_payload["restart_requested_at"] = now
+        status_payload["message"] = "root promotion completed; arming autostart service restart"
         status_payload["updated_at"] = now
-        if restart.get("requested"):
-            status_payload["message"] = "root promotion completed; restarting autostart service to activate updated supervisor"
-            status_payload["restart_requested_at"] = now
-        else:
-            status_payload["message"] = "root promotion completed; autostart service restart is still required"
         status = write_core_update_status(status_payload)
 
         attempt_payload = dict(attempt)
@@ -3691,17 +3810,41 @@ class SupervisorManager:
         attempt_payload["accepted"] = True
         attempt_payload["awaiting_restart"] = True
         attempt_payload["restart_required"] = True
-        attempt_payload["restart_mode"] = str(restart.get("mode") or "manual")
+        attempt_payload["restart_mode"] = "scheduling"
         attempt_payload["restart_requested_by_instance_id"] = _SUPERVISOR_INSTANCE_ID
         attempt_payload["restart_requested_by_pid"] = os.getpid()
         attempt_payload["restart_requested_by_started_at"] = _SUPERVISOR_INSTANCE_STARTED_AT
+        attempt_payload["restart_requested_at"] = now
         attempt_payload["requested_at"] = _epoch(attempt_payload.get("requested_at")) or now
         attempt_payload["transitioned_at"] = _epoch(attempt_payload.get("transitioned_at")) or now
         attempt_payload["updated_at"] = now
         attempt_payload["completion_reason"] = ""
         attempt_payload["last_status"] = status
+        attempt = _write_update_attempt(attempt_payload)
+
+        # The durable root-promoted/awaiting markers above must exist before the
+        # restart worker can signal this process. The worker delay is deliberately
+        # short and can otherwise win under storage pressure.
+        restart = self._schedule_service_restart(
+            reason=reason,
+            candidate_wrapper_refresh=candidate_wrapper_refresh,
+        )
+        restart_mode = str(restart.get("mode") or "manual")
+        finalized_at = time.time()
+        status_payload = dict(status)
+        status_payload["restart_mode"] = restart_mode
+        status_payload["updated_at"] = finalized_at
+        attempt_payload = dict(attempt)
+        attempt_payload["restart_mode"] = restart_mode
+        attempt_payload["updated_at"] = finalized_at
         if restart.get("requested"):
-            attempt_payload["restart_requested_at"] = now
+            status_payload["message"] = "root promotion completed; restarting autostart service to activate updated supervisor"
+        else:
+            status_payload["message"] = "root promotion completed; autostart service restart is still required"
+            status_payload["restart_requested_at"] = None
+            attempt_payload["restart_requested_at"] = None
+        status = write_core_update_status(status_payload)
+        attempt_payload["last_status"] = status
         attempt = _write_update_attempt(attempt_payload)
         return {
             "ok": True,
@@ -7836,6 +7979,21 @@ class SupervisorManager:
         )
 
     async def promote_root(self, *, reason: str) -> dict[str, Any]:
+        with _try_update_transition_guard(operation="update.root_promotion") as acquired:
+            if not acquired:
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "deferred": True,
+                    "retryable": True,
+                    "reason": "update_transition_guard_busy",
+                    "status": read_core_update_status(),
+                    "attempt": _read_update_attempt() or {},
+                    "_served_by": "supervisor_transition_busy",
+                }
+            return await self._promote_root_guarded(reason=reason)
+
+    async def _promote_root_guarded(self, *, reason: str) -> dict[str, Any]:
         current_status = read_core_update_status()
         current_attempt = _read_update_attempt() or {}
         state = str(current_status.get("state") or "").strip().lower()
@@ -7884,19 +8042,81 @@ class SupervisorManager:
             _complete_update_attempt(state="completed", status=status, reason=reason)
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
         promotion_slot = str((manifest or {}).get("slot") or active_slot() or "")
-        promotion = await asyncio.to_thread(
-            _promote_root_with_validated_candidate,
-            slot=promotion_slot,
-            manifest=manifest or {},
-            runtime_host=self.runtime_host,
-            runtime_port=self.runtime_port,
+        promotion_started_at = time.time()
+        promoting_status = dict(current_status)
+        promoting_status.update(
+            {
+                "state": "applying",
+                "phase": "root_promotion",
+                "message": "staging root bootstrap package for atomic promotion",
+                "target_slot": promotion_slot,
+                "manifest": manifest,
+                "root_promotion_required": True,
+                "bootstrap_update": bootstrap_update,
+                "promotion_reason": reason,
+                "root_promotion_started_at": promotion_started_at,
+                "root_promotion_supervisor_instance_id": _SUPERVISOR_INSTANCE_ID,
+                "root_promotion_supervisor_pid": os.getpid(),
+                "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
+                "updated_at": promotion_started_at,
+            }
         )
-        status = write_core_update_status(
+        promoting_status = write_core_update_status(promoting_status)
+        promoting_attempt = dict(current_attempt)
+        promoting_attempt.update(
+            {
+                "state": "active",
+                "action": str(current_attempt.get("action") or current_status.get("action") or "update"),
+                "accepted": True,
+                "awaiting_restart": False,
+                "restart_required": False,
+                "requested_at": _epoch(current_attempt.get("requested_at")) or promotion_started_at,
+                "transitioned_at": promotion_started_at,
+                "updated_at": promotion_started_at,
+                "completion_reason": "",
+                "last_status": promoting_status,
+            }
+        )
+        _write_update_attempt(promoting_attempt)
+        promotion_task = asyncio.create_task(
+            asyncio.to_thread(
+                _promote_root_with_validated_candidate,
+                slot=promotion_slot,
+                manifest=manifest or {},
+                runtime_host=self.runtime_host,
+                runtime_port=self.runtime_port,
+            ),
+            name="adaos-supervisor-root-promotion",
+        )
+        try:
+            promotion = await asyncio.shield(promotion_task)
+        except asyncio.CancelledError:
+            await promotion_task
+            raise
+        except Exception as exc:
+            failed_at = time.time()
+            failed_status = dict(promoting_status)
+            failed_status.update(
+                {
+                    "state": "failed",
+                    "phase": "root_promotion",
+                    "message": f"root bootstrap promotion failed: {exc}",
+                    "root_promotion_required": True,
+                    "root_promotion_failed_at": failed_at,
+                    "finished_at": failed_at,
+                    "updated_at": failed_at,
+                }
+            )
+            failed_status = write_core_update_status(failed_status)
+            _complete_update_attempt(state="failed", status=failed_status, reason="root promotion failed")
+            raise
+        status_payload = dict(promoting_status)
+        status_payload.update(
             {
                 "state": "succeeded",
                 "phase": "root_promoted",
                 "message": "root bootstrap files promoted from validated slot; restart adaos.service to activate",
-                "target_slot": str((manifest or {}).get("slot") or active_slot() or ""),
+                "target_slot": promotion_slot,
                 "manifest": manifest,
                 "root_promotion_required": False,
                 "bootstrap_update": bootstrap_update,
@@ -7906,8 +8126,10 @@ class SupervisorManager:
                 "root_promotion_supervisor_pid": os.getpid(),
                 "root_promotion_supervisor_started_at": _SUPERVISOR_INSTANCE_STARTED_AT,
                 "finished_at": time.time(),
+                "updated_at": time.time(),
             }
         )
+        status = write_core_update_status(status_payload)
         previous_attempt = _read_update_attempt() or {}
         now = time.time()
         awaiting_attempt = dict(previous_attempt)

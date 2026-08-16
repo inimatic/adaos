@@ -783,7 +783,9 @@ def test_resolved_root_promotion_detects_stale_pyproject_version(monkeypatch, tm
 
 
 def test_promote_root_from_slot_replaces_bootstrap_package_atomically(monkeypatch, tmp_path) -> None:
-    from adaos.services.core_update import promote_root_from_slot
+    import adaos.services.core_update as core_update
+
+    promote_root_from_slot = core_update.promote_root_from_slot
 
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     root_dir = tmp_path / "root"
@@ -799,7 +801,21 @@ def test_promote_root_from_slot_replaces_bootstrap_package_atomically(monkeypatc
         "current\n",
         encoding="utf-8",
     )
+    (slot_repo / "src" / "adaos" / "services" / "__pycache__").mkdir(parents=True)
+    (slot_repo / "src" / "adaos" / "services" / "__pycache__" / "stale.pyc").write_bytes(b"stale")
     monkeypatch.setattr("adaos.services.core_update._repo_root", lambda: root_dir)
+
+    original_copy = core_update._copy_path
+    staged_while_old_root_was_intact: list[bool] = []
+
+    def _observe_staging(source: Path, target: Path) -> None:
+        if source.resolve() == (slot_repo / "src" / "adaos").resolve() and ".adaos-stage-" in target.name:
+            staged_while_old_root_was_intact.append(
+                (root_dir / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "old\n"
+            )
+        original_copy(source, target)
+
+    monkeypatch.setattr(core_update, "_copy_path", _observe_staging)
 
     write_slot_manifest(
         "B",
@@ -820,6 +836,8 @@ def test_promote_root_from_slot_replaces_bootstrap_package_atomically(monkeypatc
     assert payload["required"] is True
     assert payload["restart_required"] is True
     assert payload["transaction_state"] == "committed"
+    assert payload["backup_mode"] == "atomic_rename"
+    assert payload["cutover_elapsed_ms"] >= 0
     assert payload["preflight"]["ok"] is True
     assert payload["changed_paths"] == ["src/adaos"]
     assert (root_dir / "src" / "adaos" / "apps" / "supervisor.py").read_text(encoding="utf-8") == "new\n"
@@ -827,6 +845,8 @@ def test_promote_root_from_slot_replaces_bootstrap_package_atomically(monkeypatc
         root_dir / "src" / "adaos" / "services" / "skill" / "declarations.py"
     ).read_text(encoding="utf-8") == "current\n"
     assert not (root_dir / "src" / "adaos" / "services" / "legacy.py").exists()
+    assert staged_while_old_root_was_intact == [True]
+    assert not (root_dir / "src" / "adaos" / "services" / "__pycache__").exists()
     backup_file = Path(payload["backup_dir"]) / "src" / "adaos" / "apps" / "supervisor.py"
     assert backup_file.read_text(encoding="utf-8") == "old\n"
     backup_legacy = Path(payload["backup_dir"]) / "src" / "adaos" / "services" / "legacy.py"
@@ -923,16 +943,15 @@ def test_promote_root_from_slot_rolls_back_partial_apply(monkeypatch, tmp_path) 
         },
     )
     activate_slot("B")
-    original_copy = core_update._copy_path
-    failing_source = (slot_repo / relative_paths[1]).resolve()
+    original_replace = core_update._replace_promotion_path
     failing_target = (root_dir / relative_paths[1]).resolve()
 
-    def _copy_with_apply_failure(source: Path, target: Path) -> None:
-        if source.resolve() == failing_source and target.resolve() == failing_target:
+    def _replace_with_apply_failure(source: Path, target: Path) -> None:
+        if ".adaos-stage-" in source.name and target.resolve() == failing_target:
             raise OSError("simulated apply failure")
-        original_copy(source, target)
+        original_replace(source, target)
 
-    monkeypatch.setattr(core_update, "_copy_path", _copy_with_apply_failure)
+    monkeypatch.setattr(core_update, "_replace_promotion_path", _replace_with_apply_failure)
 
     with pytest.raises(RuntimeError, match="was rolled back"):
         core_update.promote_root_from_slot()

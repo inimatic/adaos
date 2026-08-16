@@ -32,6 +32,7 @@ class UpdateReconciliationOperations:
     runtime_ready_for_boot_status_finalize: Any
     status_updated_at: Any
     terminal_status_belongs_to_attempt: Any
+    transition_snapshot_current: Any
     update_attempt_contract_version: Any
     update_status_timeout_sec: Any
     update_transition_timed_out: Any
@@ -179,6 +180,17 @@ class UpdateReconciliationService:
         ):
             return payload
 
+        if not operations.transition_snapshot_current(status=status, attempt=attempt):
+            payload["status"] = operations.read_core_update_status()
+            payload["attempt"] = operations.read_update_attempt() or payload["attempt"]
+            payload["reconciliation"] = {
+                "deferred": True,
+                "retryable": True,
+                "reason": "transition_snapshot_advanced",
+            }
+            payload["_served_by"] = "supervisor_stale_timeout_ignored"
+            return payload
+
         action = str(status.get("action") or attempt.get("action") or "update")
         prepare_lease_revocation = operations.revoke_prepare_lease(
             status=status,
@@ -222,6 +234,18 @@ class UpdateReconciliationService:
                 failed_payload["skill_runtime_rollback"] = skill_runtime_rollback
                 if restored and not bool(skill_runtime_rollback.get("ok")):
                     failed_payload["message"] += " | some skill runtime rollbacks failed"
+        if not operations.transition_snapshot_current(status=status, attempt=attempt):
+            payload["status"] = operations.read_core_update_status()
+            payload["attempt"] = operations.read_update_attempt() or payload["attempt"]
+            payload["reconciliation"] = {
+                "deferred": True,
+                "retryable": False,
+                "reason": "transition_advanced_during_timeout_recovery",
+                "rollback": failed_payload.get("rollback"),
+                "skill_runtime_rollback": failed_payload.get("skill_runtime_rollback"),
+            }
+            payload["_served_by"] = "supervisor_stale_timeout_write_suppressed"
+            return payload
         failed_status = operations.write_core_update_status(failed_payload)
         with contextlib.suppress(Exception):
             operations.clear_core_update_plan()

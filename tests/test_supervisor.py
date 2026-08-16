@@ -74,6 +74,77 @@ def test_reconcile_update_status_marks_stale_attempt_failed(monkeypatch, tmp_pat
     assert attempt["last_status"]["state"] == "failed"
 
 
+def test_timeout_reconciliation_cannot_overwrite_advanced_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
+    monkeypatch.setattr(supervisor.time, "time", lambda: 240.0)
+    write_status(
+        {
+            "state": "validated",
+            "phase": "root_promotion_pending",
+            "action": "update",
+            "target_version": "target-build",
+            "updated_at": 10.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_version": "target-build",
+            "requested_at": 1.0,
+            "transitioned_at": 10.0,
+            "updated_at": 10.0,
+        }
+    )
+
+    def _advance_during_rollback() -> str:
+        write_status(
+            {
+                "state": "succeeded",
+                "phase": "root_promoted",
+                "action": "update",
+                "target_version": "target-build",
+                "updated_at": 230.0,
+            }
+        )
+        return "B"
+
+    monkeypatch.setattr(supervisor, "rollback_to_previous_slot", _advance_during_rollback)
+    monkeypatch.setattr(supervisor, "rollback_installed_skill_runtimes", lambda: {})
+
+    payload = supervisor._reconcile_update_status(
+        {"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"}
+    )
+
+    assert payload["_served_by"] == "supervisor_stale_timeout_write_suppressed"
+    assert payload["reconciliation"]["reason"] == "transition_advanced_during_timeout_recovery"
+    assert payload["status"]["state"] == "succeeded"
+    assert read_status()["phase"] == "root_promoted"
+
+
+def test_reconciliation_defers_while_transition_guard_is_held(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_status({"state": "applying", "phase": "root_promotion", "updated_at": 10.0})
+    supervisor._write_update_attempt(
+        {"state": "active", "action": "update", "transitioned_at": 10.0, "updated_at": 10.0}
+    )
+
+    with supervisor._try_update_transition_guard(operation="test.root_promotion") as acquired:
+        assert acquired is True
+        payload = supervisor._reconcile_update_status(
+            {"ok": True, "status": read_status(), "_served_by": "supervisor_fallback"}
+        )
+
+    assert payload["_served_by"] == "supervisor_transition_busy"
+    assert payload["reconciliation"] == {
+        "deferred": True,
+        "retryable": True,
+        "reason": "update_transition_guard_busy",
+    }
+    assert read_status()["state"] == "applying"
+
+
 def test_timeout_rollback_defers_slot_cleanup_until_runtime_stop_is_confirmed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
@@ -6233,6 +6304,12 @@ def test_supervisor_root_promotion_does_not_block_event_loop(monkeypatch, tmp_pa
         await asyncio.sleep(0.03)
         assert asyncio.get_running_loop().time() - started < 0.12
         assert not task.done()
+        assert read_status()["state"] == "applying"
+        assert read_status()["phase"] == "root_promotion"
+        attempt = supervisor._read_update_attempt()
+        assert isinstance(attempt, dict)
+        assert attempt["state"] == "active"
+        assert attempt["last_status"]["phase"] == "root_promotion"
         return await task
 
     payload = asyncio.run(_exercise())
@@ -6498,6 +6575,60 @@ def test_supervisor_complete_update_promotes_root_and_requests_self_restart(monk
     assert attempt["root_promotion_supervisor_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
     assert attempt["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
     assert payload["status"]["restart_requested_by_instance_id"] == supervisor._SUPERVISOR_INSTANCE_ID
+
+
+def test_complete_update_persists_restart_markers_before_arming_restart(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(
+        manager,
+        "status",
+        lambda: {
+            "active_slot": "B",
+            "runtime_state": "ready",
+            "runtime_url": "http://127.0.0.1:8778",
+            "runtime_port": 8778,
+        },
+    )
+
+    def _interrupt_restart(**_kwargs):
+        raise SystemExit("simulated immediate supervisor termination")
+
+    monkeypatch.setattr(manager, "_schedule_service_restart", _interrupt_restart)
+    write_status(
+        {
+            "state": "succeeded",
+            "phase": "root_promoted",
+            "action": "update",
+            "target_slot": "B",
+            "target_version": "target-build",
+            "root_promotion_required": False,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "awaiting_root_restart",
+            "action": "update",
+            "target_version": "target-build",
+            "awaiting_restart": True,
+            "restart_required": True,
+            "updated_at": 10.0,
+        }
+    )
+
+    with pytest.raises(SystemExit, match="simulated immediate supervisor termination"):
+        asyncio.run(manager.complete_update(reason="test.interrupted_restart"))
+
+    status = read_status()
+    attempt = supervisor._read_update_attempt()
+    assert status["state"] == "succeeded"
+    assert status["phase"] == "root_promoted"
+    assert status["restart_mode"] == "scheduling"
+    assert status["restart_requested_at"] > 0
+    assert isinstance(attempt, dict)
+    assert attempt["state"] == "awaiting_root_restart"
+    assert attempt["restart_mode"] == "scheduling"
+    assert attempt["restart_requested_at"] > 0
 
 
 def test_supervisor_complete_update_defers_root_promotion_during_skill_migration(monkeypatch, tmp_path) -> None:
