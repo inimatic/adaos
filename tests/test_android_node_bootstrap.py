@@ -44,6 +44,30 @@ PORTABLE_RASA_PATH = (
     / "nlu"
     / "portable_rasa.py"
 )
+WEATHER_WEBUI_BUNDLE_PATH = BOOTSTRAP_PATH.parent / "bundle" / "weather_skill.webui.json"
+
+
+def test_android_weather_bundle_allows_resilient_fallback_budget() -> None:
+    contract = json.loads(WEATHER_WEBUI_BUNDLE_PATH.read_text(encoding="utf-8"))
+    observe_timeouts: list[int] = []
+
+    def _collect(value) -> None:
+        if isinstance(value, dict):
+            if value.get("target") == "skill.event.publish":
+                feedback = value.get("feedback") if isinstance(value.get("feedback"), dict) else {}
+                observe = feedback.get("observe") if isinstance(feedback.get("observe"), dict) else {}
+                if observe.get("path") == "data/weather/current":
+                    observe_timeouts.append(int(observe.get("timeout_ms") or 0))
+            for child in value.values():
+                _collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                _collect(child)
+
+    _collect(contract)
+
+    assert observe_timeouts
+    assert set(observe_timeouts) == {20000}
 
 
 def _post_json(url: str, payload: dict) -> tuple[int, dict]:
