@@ -257,6 +257,21 @@ def _record_resource_kind(record: Mapping[str, Any]) -> str:
     return "folder" if mime_type == "inode/directory" else "file"
 
 
+def public_file_response_metadata(record: Mapping[str, Any], target: Path) -> tuple[str, str]:
+    filename = target.name or str(record.get("filename") or record.get("name") or "download")
+    record_mime = str(record.get("mime_type") or record.get("mime") or "").strip()
+    record_filename = str(record.get("filename") or record.get("name") or "").strip()
+    if (
+        _record_resource_kind(record) == "file"
+        and record_filename
+        and filename == record_filename
+        and record_mime
+        and record_mime.lower() != "inode/directory"
+    ):
+        return filename, record_mime
+    return filename, _guess_mime(filename)
+
+
 def _public_label(value: Any) -> str:
     text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or "")).strip()
     text = re.sub(r"\s+", " ", text)
@@ -759,8 +774,7 @@ def stream_hub_public_link(
             },
             media_type="text/plain",
         )
-    filename = target.name or str(record.get("filename") or "download")
-    mime_type = str(record.get("mime_type") or "").strip() or _guess_mime(filename)
+    filename, mime_type = public_file_response_metadata(record, target)
     status_code, _reason, headers, start, end = media_content_response_parts(
         filename=filename,
         mime_type=mime_type,

@@ -8,7 +8,12 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from adaos.services.drive_public_links import issue_hub_token, issue_public_token, register_hub_public_link
+from adaos.services.drive_public_links import (
+    issue_hub_token,
+    issue_public_token,
+    public_file_response_metadata,
+    register_hub_public_link,
+)
 from adaos.services.public_grants import normalize_public_capabilities
 
 
@@ -161,6 +166,20 @@ def test_root_drive_public_folder_lists_and_streams_children(monkeypatch, tmp_pa
     child = client.get(f"/v1/drive/public-links/{public_token}/content?path=note.md")
     assert child.status_code == 200
     assert child.content == b"# Note\n"
+
+    child_head = client.head(f"/v1/drive/public-links/{public_token}/content?path=note.md&download=1")
+    assert child_head.status_code == 200
+    assert child_head.headers["content-length"] == "7"
+    assert "attachment" in child_head.headers["content-disposition"]
+    assert 'filename="note.md"' in child_head.headers["content-disposition"]
+    assert child_head.headers["content-type"].split(";")[0] != "inode/directory"
+
+    response_name, response_mime = public_file_response_metadata(
+        {"filename": "docs", "resource_kind": "folder", "mime_type": "inode/directory"},
+        docs / "note.md",
+    )
+    assert response_name == "note.md"
+    assert response_mime != "inode/directory"
 
     blocked = client.get(f"/v1/drive/public-links/{public_token}/content?path=../outside.txt")
     assert blocked.status_code == 400

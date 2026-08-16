@@ -3240,6 +3240,7 @@ class NatsRouteTunnelRuntime:
                                         DrivePublicLinkForbidden,
                                         DrivePublicLinkNotFound,
                                         list_hub_public_link,
+                                        public_file_response_metadata,
                                         resolve_hub_public_link,
                                     )
 
@@ -3273,6 +3274,7 @@ class NatsRouteTunnelRuntime:
                                         "yes",
                                         "on",
                                     }
+                                    response_name, response_mime = public_file_response_metadata(record, target)
                                 except ValueError as exc:
                                     await _route_media_reply_json(
                                         key,
@@ -3326,8 +3328,8 @@ class NatsRouteTunnelRuntime:
                                     target=target,
                                     method=method,
                                     request_headers=headers,
-                                    display_name=str(record.get("filename") or target.name),
-                                    mime_type=str(record.get("mime_type") or ""),
+                                    display_name=response_name,
+                                    mime_type=response_mime,
                                     download=download_flag,
                                 )
                                 route_outcome = "drive_public_content_started"
