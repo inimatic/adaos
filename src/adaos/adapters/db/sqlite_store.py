@@ -18,6 +18,8 @@ from adaos.ports.paths import PathProvider
 _DB_FILE = "adaos.db"
 _log = logging.getLogger("adaos.sqlite")
 _SQLITE_DIAGNOSTICS_LOCK = threading.RLock()
+_SQLITE_WRITE_GATES_LOCK = threading.RLock()
+_SQLITE_WRITE_GATES: dict[str, threading.RLock] = {}
 _ACTIVE_CONNECTIONS: dict[int, dict[str, Any]] = {}
 _SQLITE_DIAGNOSTICS: dict[str, Any] = {
     "connections_opened_total": 0,
@@ -26,6 +28,9 @@ _SQLITE_DIAGNOSTICS: dict[str, Any] = {
     "slow_connection_total": 0,
     "lock_error_total": 0,
     "write_statement_total": 0,
+    "write_gate_wait_total": 0,
+    "write_gate_slow_wait_total": 0,
+    "last_write_gate_wait": None,
     "last_lock_error": "",
     "last_lock_error_at": None,
     "last_lock_caller": "",
@@ -71,6 +76,8 @@ def _register_connection(con: sqlite3.Connection, *, caller: str) -> None:
             "current_statement_started_at": None,
             "in_transaction": False,
             "write_transaction_started_at": None,
+            "write_gate_wait_started_at": None,
+            "write_gate_acquired_at": None,
         }
         _SQLITE_DIAGNOSTICS["connections_opened_total"] = int(
             _SQLITE_DIAGNOSTICS.get("connections_opened_total") or 0
@@ -94,6 +101,81 @@ def _is_write_statement(kind: str) -> bool:
         "UPDATE",
         "VACUUM",
     }
+
+
+def _sqlite_write_gate_warn_s() -> float:
+    try:
+        return max(0.0, float(os.getenv("ADAOS_SQLITE_WRITE_GATE_WARN_S", "0.1") or "0.1"))
+    except (TypeError, ValueError):
+        return 0.1
+
+
+def _write_gate_for_path(path: Path) -> threading.RLock:
+    key = str(path.resolve())
+    with _SQLITE_WRITE_GATES_LOCK:
+        gate = _SQLITE_WRITE_GATES.get(key)
+        if gate is None:
+            gate = threading.RLock()
+            _SQLITE_WRITE_GATES[key] = gate
+        return gate
+
+
+def _record_write_gate_wait_start(con: sqlite3.Connection, *, kind: str) -> None:
+    with _SQLITE_DIAGNOSTICS_LOCK:
+        row = _ACTIVE_CONNECTIONS.get(id(con))
+        if row is not None:
+            row["current_statement_kind"] = kind
+            row["write_gate_wait_started_at"] = time.time()
+
+
+def _record_write_gate_acquired(
+    con: sqlite3.Connection,
+    *,
+    kind: str,
+    waited_s: float,
+) -> None:
+    now = time.time()
+    with _SQLITE_DIAGNOSTICS_LOCK:
+        row = _ACTIVE_CONNECTIONS.get(id(con))
+        if row is not None:
+            row["write_gate_wait_started_at"] = None
+            row["write_gate_acquired_at"] = now
+            caller = str(row.get("caller") or "unknown")
+            thread_name = str(row.get("thread_name") or "")
+        else:
+            caller = "unknown"
+            thread_name = threading.current_thread().name
+        _SQLITE_DIAGNOSTICS["write_gate_wait_total"] = int(
+            _SQLITE_DIAGNOSTICS.get("write_gate_wait_total") or 0
+        ) + 1
+        wait = {
+            "caller": caller,
+            "thread_name": thread_name,
+            "statement_kind": kind,
+            "wait_s": round(max(0.0, waited_s), 6),
+            "acquired_at": now,
+        }
+        _SQLITE_DIAGNOSTICS["last_write_gate_wait"] = wait
+        warn_s = _sqlite_write_gate_warn_s()
+        if waited_s >= warn_s:
+            _SQLITE_DIAGNOSTICS["write_gate_slow_wait_total"] = int(
+                _SQLITE_DIAGNOSTICS.get("write_gate_slow_wait_total") or 0
+            ) + 1
+            _log.warning(
+                "SQLite write gate wait caller=%s duration_s=%.3f statement=%s thread=%s",
+                caller,
+                waited_s,
+                kind,
+                thread_name or "-",
+            )
+
+
+def _record_write_gate_released(con: sqlite3.Connection) -> None:
+    with _SQLITE_DIAGNOSTICS_LOCK:
+        row = _ACTIVE_CONNECTIONS.get(id(con))
+        if row is not None:
+            row["write_gate_wait_started_at"] = None
+            row["write_gate_acquired_at"] = None
 
 
 def _record_statement_start(con: sqlite3.Connection, statement: Any) -> None:
@@ -222,6 +304,16 @@ def sqlite_connection_diagnostics_snapshot() -> dict[str, Any]:
                         if write_started_at is not None
                         else None
                     ),
+                    "write_gate_wait_age_s": (
+                        round(max(0.0, now - float(row["write_gate_wait_started_at"])), 3)
+                        if row.get("write_gate_wait_started_at") is not None
+                        else None
+                    ),
+                    "write_gate_held_age_s": (
+                        round(max(0.0, now - float(row["write_gate_acquired_at"])), 3)
+                        if row.get("write_gate_acquired_at") is not None
+                        else None
+                    ),
                 }
             )
         return {
@@ -233,7 +325,31 @@ def sqlite_connection_diagnostics_snapshot() -> dict[str, Any]:
 
 
 class _ClosingConnection(sqlite3.Connection):
+    _adaos_write_gate: threading.RLock | None = None
+    _adaos_write_gate_acquired = False
+
+    def _acquire_write_gate(self, statement: Any) -> None:
+        kind = _statement_kind(statement)
+        gate = self._adaos_write_gate
+        if not _is_write_statement(kind) or gate is None or self._adaos_write_gate_acquired:
+            return
+        _record_write_gate_wait_start(self, kind=kind)
+        started_at = time.monotonic()
+        gate.acquire()
+        waited_s = max(0.0, time.monotonic() - started_at)
+        self._adaos_write_gate_acquired = True
+        _record_write_gate_acquired(self, kind=kind, waited_s=waited_s)
+
+    def _release_write_gate(self) -> None:
+        gate = self._adaos_write_gate
+        if gate is None or not self._adaos_write_gate_acquired:
+            return
+        self._adaos_write_gate_acquired = False
+        _record_write_gate_released(self)
+        gate.release()
+
     def execute(self, sql: Any, parameters: Any = (), /) -> sqlite3.Cursor:
+        self._acquire_write_gate(sql)
         _record_statement_start(self, sql)
         try:
             cursor = super().execute(sql, parameters)
@@ -244,6 +360,7 @@ class _ClosingConnection(sqlite3.Connection):
         return cursor
 
     def executemany(self, sql: Any, seq_of_parameters: Any, /) -> sqlite3.Cursor:
+        self._acquire_write_gate(sql)
         _record_statement_start(self, sql)
         try:
             cursor = super().executemany(sql, seq_of_parameters)
@@ -254,6 +371,7 @@ class _ClosingConnection(sqlite3.Connection):
         return cursor
 
     def executescript(self, sql_script: str, /) -> sqlite3.Cursor:
+        self._acquire_write_gate(sql_script)
         _record_statement_start(self, sql_script)
         try:
             cursor = super().executescript(sql_script)
@@ -264,20 +382,33 @@ class _ClosingConnection(sqlite3.Connection):
         return cursor
 
     def commit(self) -> None:
-        super().commit()
-        _record_transaction_end(self)
+        try:
+            super().commit()
+        except BaseException:
+            raise
+        else:
+            _record_transaction_end(self)
+            self._release_write_gate()
 
     def rollback(self) -> None:
-        super().rollback()
-        _record_transaction_end(self)
+        try:
+            super().rollback()
+        except BaseException:
+            raise
+        else:
+            _record_transaction_end(self)
+            self._release_write_gate()
 
     def close(self) -> None:
         try:
             in_transaction = bool(self.in_transaction)
         except Exception:
             in_transaction = False
-        _record_connection_close(self, in_transaction_before_close=in_transaction)
-        super().close()
+        try:
+            _record_connection_close(self, in_transaction_before_close=in_transaction)
+            super().close()
+        finally:
+            self._release_write_gate()
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         try:
@@ -288,7 +419,10 @@ class _ClosingConnection(sqlite3.Connection):
             return bool(super().__exit__(exc_type, exc, tb))
         finally:
             _record_connection_close(self, in_transaction_before_close=in_transaction)
-            sqlite3.Connection.close(self)
+            try:
+                sqlite3.Connection.close(self)
+            finally:
+                self._release_write_gate()
 
 
 def _sqlite_timeout_s() -> float:
@@ -316,7 +450,8 @@ class SQLite(SQL):
         self._db_path: Final[Path] = Path(paths.state_dir()) / _DB_FILE
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # ленивое создание файла
-        with sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s(), factory=_ClosingConnection) as con:
+        self._write_gate = _write_gate_for_path(self._db_path)
+        with self._connect_raw() as con:
             _configure_connection(con, foreign_keys=False)
             _register_connection(con, caller="adaos.sqlite.bootstrap")
             try:
@@ -326,9 +461,18 @@ class SQLite(SQL):
                     raise
 
     def connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self._db_path, timeout=_sqlite_timeout_s(), factory=_ClosingConnection)
+        con = self._connect_raw()
         _configure_connection(con, foreign_keys=True)
         _register_connection(con, caller=_connection_caller(2))
+        return con
+
+    def _connect_raw(self) -> _ClosingConnection:
+        con = sqlite3.connect(
+            self._db_path,
+            timeout=_sqlite_timeout_s(),
+            factory=_ClosingConnection,
+        )
+        con._adaos_write_gate = self._write_gate
         return con
 
 

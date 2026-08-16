@@ -60,6 +60,13 @@ The first production slice is intentionally small and in-process:
 - `node incidents` provides a registry-only CLI view through the existing
   reliability endpoint.
 - Active high-severity incidents are materialized as derived status cards.
+- A worker-thread sampler records bounded process CPU/read/write deltas and
+  system disk/network deltas every ten seconds by default. The normal 75-sample
+  view covers roughly twelve minutes before a detected incident.
+- `runtime.sqlite_connections` exposes active statement/transaction owners,
+  lock errors, and process write-gate wait/hold duration. Runtime writers for
+  the same database path serialize for the lifetime of a transaction; external
+  file locks still fail through SQLite's bounded timeout and remain observable.
 - Snapshot persistence helpers can save/load recent registry state with TTL and
   size limits. Automatic runtime lifecycle wiring is still pending.
 
@@ -127,11 +134,13 @@ For `runtime_api_timeout`, the registry captures local blocking evidence:
 - top processes by cumulative write bytes
 - process-domain hints derived from command line paths
 
-This is deliberately diagnostic, not proof. Cumulative process IO is only a
-hint. Production-grade attribution should add short delta sampling around the
-incident window. The registry now includes a bounded `process_io_delta_sample`
-helper; hot-path incident sources should opt into it only when the added sample
-delay is acceptable or when a background sampler owns the measurement.
+This is deliberately diagnostic, not proof. The background sampler compares
+per-process CPU/read/write counters and system disk/network counters with the
+previous sample, retains a bounded pre-failure window, and records command-line
+domain hints. It can show that a skill runtime, update worker, browser, or other
+process was active before a channel failure. It cannot prove causal ownership
+of shared kernel or filesystem work, and network counters are system-wide on
+platforms where per-process network accounting is unavailable.
 
 ## Production Pipeline
 

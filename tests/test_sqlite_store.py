@@ -93,7 +93,7 @@ def test_sqlite_diagnostics_record_lock_owner_callsite(tmp_path: Path, monkeypat
         con.execute("CREATE TABLE lock_probe(id INTEGER PRIMARY KEY)")
         con.commit()
 
-    holder = sql.connect()
+    holder = sqlite3.connect(tmp_path / "adaos.db", timeout=0.1)
     contender = sql.connect()
     baseline = sqlite_connection_diagnostics_snapshot()["lock_error_total"]
     try:
@@ -118,7 +118,7 @@ def test_sqlite_diagnostics_expose_statement_while_waiting_on_lock(tmp_path: Pat
         con.execute("CREATE TABLE blocked_probe(id INTEGER PRIMARY KEY)")
         con.commit()
 
-    holder = sql.connect()
+    holder = sqlite3.connect(tmp_path / "adaos.db", timeout=0.3)
     holder.execute("BEGIN IMMEDIATE")
     opened = threading.Event()
     connection_ids: list[int] = []
@@ -166,3 +166,67 @@ def test_sqlite_diagnostics_expose_statement_while_waiting_on_lock(tmp_path: Pat
         holder.rollback()
         holder.close()
         thread.join(timeout=2.0)
+
+
+def test_sqlite_process_write_gate_serializes_runtime_writers(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_SQLITE_TIMEOUT_S", "0.1")
+    monkeypatch.setenv("ADAOS_SQLITE_WRITE_GATE_WARN_S", "0.01")
+    sql = SQLite(_FakePaths(tmp_path))
+    with sql.connect() as con:
+        con.execute("CREATE TABLE gate_probe(id INTEGER PRIMARY KEY)")
+        con.commit()
+
+    holder = sql.connect()
+    holder.execute("BEGIN IMMEDIATE")
+    opened = threading.Event()
+    connection_ids: list[int] = []
+    errors: list[BaseException] = []
+
+    def _write_after_gate() -> None:
+        con = sql.connect()
+        connection_ids.append(id(con))
+        opened.set()
+        try:
+            con.execute("INSERT INTO gate_probe DEFAULT VALUES")
+            con.commit()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            con.close()
+
+    baseline = sqlite_connection_diagnostics_snapshot()["write_gate_slow_wait_total"]
+    thread = threading.Thread(target=_write_after_gate, name="sqlite-write-gate-contender")
+    thread.start()
+    try:
+        assert opened.wait(timeout=1.0)
+        deadline = time.time() + 1.0
+        waiting = None
+        while time.time() < deadline:
+            snapshot = sqlite_connection_diagnostics_snapshot()
+            waiting = next(
+                (
+                    item
+                    for item in snapshot["active_connections"]
+                    if item["connection_id"] == connection_ids[0]
+                    and item["write_gate_wait_age_s"] is not None
+                ),
+                None,
+            )
+            if waiting is not None and float(waiting["write_gate_wait_age_s"]) >= 0.01:
+                break
+            time.sleep(0.01)
+        assert waiting is not None
+        assert waiting["current_statement_kind"] == "INSERT"
+        assert waiting["thread_name"] == "sqlite-write-gate-contender"
+    finally:
+        holder.rollback()
+        holder.close()
+        thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert errors == []
+    with sql.connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM gate_probe").fetchone() == (1,)
+    snapshot = sqlite_connection_diagnostics_snapshot()
+    assert snapshot["write_gate_slow_wait_total"] >= baseline + 1
+    assert snapshot["last_write_gate_wait"]["thread_name"] == "sqlite-write-gate-contender"
