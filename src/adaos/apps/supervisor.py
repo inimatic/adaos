@@ -284,11 +284,20 @@ def _try_update_transition_guard(*, operation: str):
         else:
             try:
                 import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except ImportError:  # pragma: no cover - supported Unix targets provide fcntl
+                _LOG.warning(
+                    "cross-process update transition locking unavailable; "
+                    "using process-local guard operation=%s path=%s",
+                    operation,
+                    path,
+                )
                 locked = True
-            except (ImportError, OSError):
-                locked = False
+            else:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                except OSError:
+                    locked = False
         if not locked:
             yield False
             return

@@ -24,6 +24,9 @@ import yaml
 _LOG = logging.getLogger("adaos.services.skills_loader")
 _HANDLER_IMPORT_LOCK = threading.RLock()
 _LOADED_HANDLER_SOURCES: dict[str, dict[str, Any]] = {}
+_RETIRED_HANDLER_SOURCES: list[dict[str, Any]] = []
+_RETIRED_HANDLER_SOURCES_LIMIT = 128
+_RETIRED_HANDLER_TOTAL = 0
 
 
 def _source_digest(path: Path) -> str:
@@ -70,6 +73,8 @@ def _runtime_selection_from_handler(path: Path) -> dict[str, str]:
 
 
 def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any]:
+    global _RETIRED_HANDLER_TOTAL
+    previous_same_module = _LOADED_HANDLER_SOURCES.get(str(module_name))
     resolved = path.resolve()
     stat = resolved.stat()
     loaded_at = time.time()
@@ -91,6 +96,64 @@ def _record_loaded_handler_source(module_name: str, path: Path) -> dict[str, Any
         "_digest_verified_at": loaded_at,
     }
     record.update(_runtime_selection_from_handler(resolved))
+    superseded_modules: list[str] = []
+    skill_name = str(record.get("skill") or "").strip()
+    loaded_bucket = str(record.get("loaded_bucket") or "").strip()
+    loaded_slot = str(record.get("loaded_slot") or "").strip()
+    selected_bucket = str(record.get("selected_bucket") or "").strip()
+    selected_slot = str(record.get("selected_slot") or "").strip()
+    source_is_selected = bool(
+        skill_name
+        and loaded_slot
+        and selected_slot
+        and loaded_bucket == selected_bucket
+        and loaded_slot == selected_slot
+    )
+    if source_is_selected:
+        superseded_modules = [
+            name
+            for name, item in _LOADED_HANDLER_SOURCES.items()
+            if name != str(module_name) and str(item.get("skill") or "").strip() == skill_name
+        ]
+        superseded_records: list[tuple[str, dict[str, Any]]] = [
+            (name, dict(_LOADED_HANDLER_SOURCES[name]))
+            for name in superseded_modules
+        ]
+        if (
+            isinstance(previous_same_module, dict)
+            and str(previous_same_module.get("skill") or "").strip() == skill_name
+        ):
+            superseded_records.append((str(module_name), dict(previous_same_module)))
+        if superseded_records:
+            from adaos.sdk.core.decorators import retire_module_declarations
+
+            declarations = retire_module_declarations(superseded_modules)
+            retired_at = time.time()
+            for name in superseded_modules:
+                _LOADED_HANDLER_SOURCES.pop(name, None)
+                sys.modules.pop(name, None)
+            for name, previous in superseded_records:
+                _RETIRED_HANDLER_SOURCES.append(
+                    {
+                        "module": name,
+                        "skill": skill_name,
+                        "path": previous.get("path"),
+                        "loaded_at": previous.get("loaded_at"),
+                        "loaded_slot": previous.get("loaded_slot"),
+                        "loaded_digest": previous.get("loaded_digest"),
+                        "retired_at": retired_at,
+                        "retired_by_module": str(module_name),
+                        "retired_by_slot": loaded_slot,
+                    }
+                )
+            _RETIRED_HANDLER_TOTAL += len(superseded_records)
+            del _RETIRED_HANDLER_SOURCES[:-_RETIRED_HANDLER_SOURCES_LIMIT]
+            _LOG.info(
+                "retired superseded skill handlers skill=%s modules=%s declarations=%s",
+                skill_name,
+                ",".join(sorted(name for name, _previous in superseded_records)),
+                json.dumps(declarations, sort_keys=True, separators=(",", ":")),
+            )
     _LOADED_HANDLER_SOURCES[str(module_name)] = record
     return record
 
@@ -102,6 +165,7 @@ def skill_handler_source_snapshot() -> dict[str, Any]:
     reverify_interval_s = _source_digest_reverify_interval_s()
     with _HANDLER_IMPORT_LOCK:
         records = [dict(item) for item in _LOADED_HANDLER_SOURCES.values()]
+        retired_sources = [dict(item) for item in _RETIRED_HANDLER_SOURCES[-20:]]
     items: list[dict[str, Any]] = []
     for record in records:
         path = Path(str(record.get("path") or ""))
@@ -190,6 +254,8 @@ def skill_handler_source_snapshot() -> dict[str, Any]:
         "drift_total": len(drift_items),
         "source_drift_total": sum(1 for item in items if item.get("source_drift")),
         "selection_drift_total": sum(1 for item in items if item.get("selection_drift")),
+        "retired_total": _RETIRED_HANDLER_TOTAL,
+        "recent_retirements": retired_sources,
         "items": items,
     }
 
@@ -369,7 +435,12 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             if existing is not None and not reload:
                 _LOG.debug("reusing already imported skill handler module=%s path=%s", mod_name, handler)
                 return
+            registry_snapshot: dict[str, Any] | None = None
             if existing is not None and reload:
+                from adaos.sdk.core.decorators import _registry_snapshot, retire_module_declarations
+
+                registry_snapshot = _registry_snapshot()
+                retire_module_declarations({mod_name})
                 sys.modules.pop(mod_name, None)
             spec = importlib.util.spec_from_file_location(mod_name, handler)
             module = importlib.util.module_from_spec(spec)
@@ -378,10 +449,16 @@ class ImportlibSkillsLoader(SkillsLoaderPort):
             sys.modules[mod_name] = module
             try:
                 spec.loader.exec_module(module)  # type: ignore[attr-defined]
+                source = _record_loaded_handler_source(mod_name, handler)
             except Exception:
                 sys.modules.pop(mod_name, None)
+                if registry_snapshot is not None:
+                    from adaos.sdk.core.decorators import _restore_registry_snapshot
+
+                    _restore_registry_snapshot(registry_snapshot)
+                if existing is not None:
+                    sys.modules[mod_name] = existing
                 raise
-            source = _record_loaded_handler_source(mod_name, handler)
             _LOG.info(
                 "imported skill handler module=%s path=%s source_digest=%s loaded_slot=%s selected_slot=%s",
                 mod_name,

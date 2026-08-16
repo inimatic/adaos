@@ -7,6 +7,8 @@ import time
 import types
 from pathlib import Path
 
+import pytest
+
 if "y_py" not in sys.modules:
     sys.modules["y_py"] = types.SimpleNamespace(
         YDoc=type("YDoc", (), {}),
@@ -25,6 +27,7 @@ if "ypy_websocket" not in sys.modules:
     sys.modules["ypy_websocket"] = pkg
 
 from adaos.services import skills_loader_importlib as skills_loader_module
+from adaos.sdk.core import decorators as sdk_decorators
 from adaos.services.skill.declarations import runtime_stream_receiver_patterns
 from adaos.services.skills_loader_importlib import ImportlibSkillsLoader
 
@@ -466,6 +469,141 @@ def test_handler_source_snapshot_periodically_rehashes_unchanged_stat(monkeypatc
     finally:
         sys.modules.pop(mod_name, None)
         skills_loader_module._LOADED_HANDLER_SOURCES.pop(mod_name, None)
+
+
+def test_loading_selected_slot_retires_superseded_handler_registries(monkeypatch, tmp_path: Path) -> None:
+    loader = ImportlibSkillsLoader()
+    selected_slot = ["B"]
+    handlers: dict[str, Path] = {}
+    module_names: dict[str, str] = {}
+    source = "\n".join(
+        [
+            "from adaos.sdk.core.decorators import subscribe, tool",
+            "@tool('read_state', side_effects='none')",
+            "def read_state(_payload=None): return {'ok': True}",
+            "@subscribe('test.slot.changed')",
+            "def on_slot_changed(_event): return None",
+            "",
+        ]
+    )
+    for slot_name in ("A", "B"):
+        handler = tmp_path / f"slot-{slot_name.lower()}" / "handlers" / "main.py"
+        handler.parent.mkdir(parents=True)
+        handler.write_text(source, encoding="utf-8")
+        handlers[slot_name] = handler
+        module_names[slot_name] = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+
+    def _selection(path: Path) -> dict[str, str]:
+        loaded_slot = "A" if "slot-a" in path.as_posix() else "B"
+        return {
+            "skill": "slot_switch_skill",
+            "loaded_bucket": "v1.0",
+            "loaded_slot": loaded_slot,
+            "selected_version": "1.0.0",
+            "selected_bucket": "v1.0",
+            "selected_slot": selected_slot[0],
+        }
+
+    registry_snapshot = sdk_decorators._registry_snapshot()
+    retired_before = list(skills_loader_module._RETIRED_HANDLER_SOURCES)
+    retired_total_before = skills_loader_module._RETIRED_HANDLER_TOTAL
+    monkeypatch.setattr(skills_loader_module, "_runtime_selection_from_handler", _selection)
+    try:
+        loader._load_handler(handlers["B"])
+        assert module_names["B"] in sdk_decorators.tools_registry
+        assert any(fn.__module__ == module_names["B"] for _topic, fn in sdk_decorators.subscriptions)
+
+        selected_slot[0] = "A"
+        loader._load_handler(handlers["A"])
+
+        assert module_names["B"] not in sys.modules
+        assert module_names["B"] not in sdk_decorators.tools_registry
+        assert not any(fn.__module__ == module_names["B"] for _topic, fn in sdk_decorators.subscriptions)
+        assert module_names["A"] in sdk_decorators.tools_registry
+        snapshot = skills_loader_module.skill_handler_source_snapshot()
+        active = [item for item in snapshot["items"] if item.get("module") in set(module_names.values())]
+        assert len(active) == 1
+        assert active[0]["loaded_slot"] == "A"
+        assert active[0]["drift"] is False
+        assert snapshot["retired_total"] == retired_total_before + 1
+        assert snapshot["recent_retirements"][-1]["module"] == module_names["B"]
+    finally:
+        for module_name in module_names.values():
+            sys.modules.pop(module_name, None)
+            skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
+        skills_loader_module._RETIRED_HANDLER_SOURCES[:] = retired_before
+        skills_loader_module._RETIRED_HANDLER_TOTAL = retired_total_before
+        sdk_decorators._restore_registry_snapshot(registry_snapshot)
+
+
+def test_reloading_same_handler_replaces_registry_and_restores_it_on_import_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    loader = ImportlibSkillsLoader()
+    handler = tmp_path / "same-handler" / "handlers" / "main.py"
+    handler.parent.mkdir(parents=True)
+    module_name = "adaos_skill_" + handler.parent.as_posix().replace("/", "_")
+    selection = {
+        "skill": "same_handler_skill",
+        "loaded_bucket": "v1.0",
+        "loaded_slot": "A",
+        "selected_version": "1.0.0",
+        "selected_bucket": "v1.0",
+        "selected_slot": "A",
+    }
+    registry_snapshot = sdk_decorators._registry_snapshot()
+    retired_before = list(skills_loader_module._RETIRED_HANDLER_SOURCES)
+    retired_total_before = skills_loader_module._RETIRED_HANDLER_TOTAL
+    monkeypatch.setattr(skills_loader_module, "_runtime_selection_from_handler", lambda _path: selection)
+    try:
+        handler.write_text(
+            "from adaos.sdk.core.decorators import subscribe, tool\n"
+            "@tool('obsolete', side_effects='none')\n"
+            "def obsolete(_payload=None): return {'version': 1}\n"
+            "@subscribe('test.old')\n"
+            "def on_old(_event): return None\n",
+            encoding="utf-8",
+        )
+        loader._load_handler(handler)
+
+        handler.write_text(
+            "from adaos.sdk.core.decorators import subscribe, tool\n"
+            "@tool('current', side_effects='none')\n"
+            "def current(_payload=None): return {'version': 2}\n"
+            "@subscribe('test.new')\n"
+            "def on_new(_event): return None\n",
+            encoding="utf-8",
+        )
+        loader._load_handler(handler, reload=True)
+
+        assert set(sdk_decorators.tools_registry[module_name]) == {"current"}
+        module_topics = {
+            topic
+            for topic, fn in sdk_decorators.subscriptions
+            if fn.__module__ == module_name
+        }
+        assert module_topics == {"test.new"}
+        current_module = sys.modules[module_name]
+
+        handler.write_text("raise RuntimeError('broken replacement')\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="broken replacement"):
+            loader._load_handler(handler, reload=True)
+
+        assert sys.modules[module_name] is current_module
+        assert set(sdk_decorators.tools_registry[module_name]) == {"current"}
+        module_topics = {
+            topic
+            for topic, fn in sdk_decorators.subscriptions
+            if fn.__module__ == module_name
+        }
+        assert module_topics == {"test.new"}
+    finally:
+        sys.modules.pop(module_name, None)
+        skills_loader_module._LOADED_HANDLER_SOURCES.pop(module_name, None)
+        skills_loader_module._RETIRED_HANDLER_SOURCES[:] = retired_before
+        skills_loader_module._RETIRED_HANDLER_TOTAL = retired_total_before
+        sdk_decorators._restore_registry_snapshot(registry_snapshot)
 
 
 def test_runtime_source_sync_is_explicit_and_never_runs_in_candidate(monkeypatch, tmp_path: Path) -> None:

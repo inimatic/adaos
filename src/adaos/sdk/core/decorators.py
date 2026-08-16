@@ -511,6 +511,45 @@ def _restore_registry_snapshot(snapshot: dict[str, Any]) -> None:
         emits_map[str(qualname)] = set(topics or set())
 
 
+def retire_module_declarations(module_names: Iterable[str]) -> dict[str, int]:
+    """Remove declarations owned by superseded imported handler modules."""
+    targets = {str(name or "").strip() for name in module_names if str(name or "").strip()}
+    if not targets:
+        return {"modules": 0, "subscriptions": 0, "tools": 0, "metadata": 0, "emits": 0}
+
+    subscriptions_before = len(subscriptions)
+    subscriptions[:] = [
+        (topic, fn)
+        for topic, fn in subscriptions
+        if str(getattr(fn, "__module__", "") or "") not in targets
+    ]
+    removed_tools = sum(len(tools_registry.get(module) or {}) for module in targets)
+    for module in targets:
+        tools_registry.pop(module, None)
+
+    metadata_keys = [
+        key
+        for key in tools_meta
+        if any(key == module or key.startswith(f"{module}.") for module in targets)
+    ]
+    emit_keys = [
+        key
+        for key in emits_map
+        if any(key == module or key.startswith(f"{module}.") for module in targets)
+    ]
+    for key in metadata_keys:
+        tools_meta.pop(key, None)
+    for key in emit_keys:
+        emits_map.pop(key, None)
+    return {
+        "modules": len(targets),
+        "subscriptions": subscriptions_before - len(subscriptions),
+        "tools": removed_tools,
+        "metadata": len(metadata_keys),
+        "emits": len(emit_keys),
+    }
+
+
 def _compact_subscription_registry_for_skills(skill_names: Iterable[str]) -> tuple[int, int]:
     targets = {str(item or "").strip() for item in (skill_names or []) if str(item or "").strip()}
     if not targets:
