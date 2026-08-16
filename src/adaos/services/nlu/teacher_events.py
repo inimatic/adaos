@@ -12,12 +12,65 @@ from adaos.services.yjs.doc import async_get_ydoc
 from adaos.services.yjs.store import ystore_write_metadata
 from adaos.services.nlu.ycoerce import coerce_dict, iter_mappings
 
-_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "96") or "96")
-_MAX_LLM_LOGS = int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX", "48") or "48")
-_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "32") or "32")
-_MAX_CANDIDATE_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATE_THREADS_MAX", "48") or "48")
-_MAX_THREAD_DETAILS_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_THREAD_DETAILS_MAX_CHARS", "12000") or "12000")
+_MAX_EVENTS = int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX", "24") or "24")
+_MAX_LLM_LOGS = int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX", "12") or "12")
+_MAX_ITEMS = int(os.getenv("ADAOS_NLU_TEACHER_ITEMS_MAX", "24") or "24")
+_MAX_CANDIDATES = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATES_MAX", "16") or "16")
+_MAX_REVISIONS = int(os.getenv("ADAOS_NLU_TEACHER_REVISIONS_MAX", "16") or "16")
+_MAX_DATASET = int(os.getenv("ADAOS_NLU_TEACHER_DATASET_MAX", "24") or "24")
+_MAX_PLAN = int(os.getenv("ADAOS_NLU_TEACHER_PLAN_MAX", "16") or "16")
+_MAX_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_THREADS_MAX", "10") or "10")
+_MAX_CANDIDATE_THREADS = int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATE_THREADS_MAX", "12") or "12")
+_MAX_THREAD_DETAILS_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_THREAD_DETAILS_MAX_CHARS", "3000") or "3000")
+_MAX_PROJECTION_BYTES = int(os.getenv("ADAOS_NLU_TEACHER_PROJECTION_MAX_BYTES", str(512 * 1024)) or str(512 * 1024))
+_MAX_PROJECTION_ROW_BYTES = int(os.getenv("ADAOS_NLU_TEACHER_PROJECTION_ROW_MAX_BYTES", str(24 * 1024)) or str(24 * 1024))
+_MAX_PROJECTION_STRING_CHARS = int(os.getenv("ADAOS_NLU_TEACHER_PROJECTION_STRING_MAX_CHARS", "4096") or "4096")
+_COLLECTION_BYTE_LIMITS = {
+    "events": int(os.getenv("ADAOS_NLU_TEACHER_EVENTS_MAX_BYTES", str(80 * 1024)) or str(80 * 1024)),
+    "llm_logs": int(os.getenv("ADAOS_NLU_TEACHER_LLM_LOGS_MAX_BYTES", str(80 * 1024)) or str(80 * 1024)),
+    "items": int(os.getenv("ADAOS_NLU_TEACHER_ITEMS_MAX_BYTES", str(48 * 1024)) or str(48 * 1024)),
+    "candidates": int(os.getenv("ADAOS_NLU_TEACHER_CANDIDATES_MAX_BYTES", str(96 * 1024)) or str(96 * 1024)),
+    "revisions": int(os.getenv("ADAOS_NLU_TEACHER_REVISIONS_MAX_BYTES", str(24 * 1024)) or str(24 * 1024)),
+    "dataset": int(os.getenv("ADAOS_NLU_TEACHER_DATASET_MAX_BYTES", str(24 * 1024)) or str(24 * 1024)),
+    "plan": int(os.getenv("ADAOS_NLU_TEACHER_PLAN_MAX_BYTES", str(16 * 1024)) or str(16 * 1024)),
+}
 _LEDGER_BACKFILL_SCHEMA = "adaos.nlu_teacher.ledger_backfill.v1"
+
+_COLLECTION_LIMITS = {
+    "events": _MAX_EVENTS,
+    "llm_logs": _MAX_LLM_LOGS,
+    "items": _MAX_ITEMS,
+    "candidates": _MAX_CANDIDATES,
+    "revisions": _MAX_REVISIONS,
+    "dataset": _MAX_DATASET,
+    "plan": _MAX_PLAN,
+}
+_ROW_PRIORITY_KEYS = (
+    "id",
+    "log_id",
+    "ts",
+    "created_at",
+    "request_id",
+    "candidate_id",
+    "kind",
+    "status",
+    "title",
+    "subtitle",
+    "text",
+    "reason",
+    "via",
+    "target",
+    "classification",
+    "candidate",
+    "action_candidate",
+    "regex_rule",
+    "training_strategy",
+    "diagnostic",
+    "error",
+    "retry",
+    "response",
+    "_meta",
+)
 
 
 def _nlu_teacher_events_write_meta():
@@ -42,13 +95,168 @@ def _row_ts(item: Mapping[str, Any]) -> float:
         return 0.0
 
 
+def _json_size(value: Any) -> int:
+    try:
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        )
+    except Exception:
+        return len(str(value).encode("utf-8", errors="replace"))
+
+
+def _truncate_projection_value(
+    value: Any,
+    *,
+    string_chars: int,
+    list_items: int,
+    mapping_items: int,
+    depth: int = 0,
+) -> Any:
+    if depth >= 8:
+        return "<projection-depth-limit>"
+    if isinstance(value, str):
+        if string_chars > 0 and len(value) > string_chars:
+            return value[:string_chars].rstrip() + "..."
+        return value
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        ordered_keys = [key for key in _ROW_PRIORITY_KEYS if key in value]
+        ordered_keys.extend(key for key in value if key not in ordered_keys)
+        if mapping_items > 0:
+            ordered_keys = ordered_keys[:mapping_items]
+        return {
+            str(key): _truncate_projection_value(
+                value[key],
+                string_chars=string_chars,
+                list_items=list_items,
+                mapping_items=mapping_items,
+                depth=depth + 1,
+            )
+            for key in ordered_keys
+        }
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        items = list(value)
+        if list_items > 0:
+            items = items[-list_items:]
+        return [
+            _truncate_projection_value(
+                item,
+                string_chars=string_chars,
+                list_items=list_items,
+                mapping_items=mapping_items,
+                depth=depth + 1,
+            )
+            for item in items
+        ]
+    return str(value)
+
+
+def _compact_projection_row(collection: str, row: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    item = dict(row)
+    row_limit = max(0, int(_MAX_PROJECTION_ROW_BYTES))
+    if row_limit <= 0 or _json_size(item) <= row_limit:
+        return item, False
+
+    for string_chars, list_items, mapping_items in (
+        (max(256, int(_MAX_PROJECTION_STRING_CHARS)), 32, 64),
+        (1024, 12, 32),
+        (256, 4, 16),
+    ):
+        compacted = _truncate_projection_value(
+            item,
+            string_chars=string_chars,
+            list_items=list_items,
+            mapping_items=mapping_items,
+        )
+        if not isinstance(compacted, dict):
+            compacted = {}
+        compacted["_projection_truncated"] = True
+        compacted["_projection_source"] = "conversation_ledger"
+        compacted.setdefault(
+            "history_query",
+            {
+                "request_id": item.get("request_id"),
+                "candidate_id": item.get("candidate_id") or item.get("id") if collection == "candidates" else item.get("candidate_id"),
+            },
+        )
+        if _json_size(compacted) <= row_limit:
+            return compacted, True
+
+    minimal = {
+        key: item.get(key)
+        for key in _ROW_PRIORITY_KEYS[:13]
+        if item.get(key) not in (None, "", [], {})
+    }
+    minimal.update(
+        {
+            "_projection_truncated": True,
+            "_projection_source": "conversation_ledger",
+            "history_query": {
+                "request_id": item.get("request_id"),
+                "candidate_id": item.get("candidate_id") or (item.get("id") if collection == "candidates" else None),
+            },
+        }
+    )
+    return minimal, True
+
+
+def _bound_projection_collection(
+    teacher: dict[str, Any],
+    *,
+    collection: str,
+    maximum: int,
+    byte_limit: int,
+) -> tuple[bool, int, int]:
+    rows = sorted(_as_list_of_dicts(teacher.get(collection)), key=_row_ts)
+    original_total = len(rows)
+    if maximum > 0 and len(rows) > maximum:
+        rows = rows[-maximum:]
+    compacted_rows: list[tuple[dict[str, Any], int]] = []
+    compacted_total = 0
+    for row in rows:
+        compacted, changed = _compact_projection_row(collection, row)
+        compacted_total += int(changed)
+        compacted_rows.append((compacted, _json_size(compacted)))
+
+    retained_reversed: list[dict[str, Any]] = []
+    retained_bytes = 0
+    limit = max(0, int(byte_limit))
+    for row, row_bytes in reversed(compacted_rows):
+        if limit > 0 and retained_reversed and retained_bytes + row_bytes > limit:
+            continue
+        if limit > 0 and not retained_reversed and row_bytes > limit:
+            row, _ = _compact_projection_row(collection, row)
+            row_bytes = _json_size(row)
+        if limit <= 0 or retained_bytes + row_bytes <= limit or not retained_reversed:
+            retained_reversed.append(row)
+            retained_bytes += row_bytes
+    retained = list(reversed(retained_reversed))
+    teacher[collection] = retained
+    dropped_total = max(0, original_total - len(retained))
+    return bool(dropped_total or compacted_total), dropped_total, retained_bytes
+
+
 def teacher_projection_limits() -> dict[str, int]:
     return {
         "events": max(0, _MAX_EVENTS),
         "llm_logs": max(0, _MAX_LLM_LOGS),
+        "items": max(0, _MAX_ITEMS),
+        "candidates": max(0, _MAX_CANDIDATES),
+        "revisions": max(0, _MAX_REVISIONS),
+        "dataset": max(0, _MAX_DATASET),
+        "plan": max(0, _MAX_PLAN),
         "threads_by_request": max(0, _MAX_THREADS),
         "threads_by_candidate": max(0, _MAX_CANDIDATE_THREADS),
         "thread_details_chars": max(0, _MAX_THREAD_DETAILS_CHARS),
+        "projection_bytes": max(0, _MAX_PROJECTION_BYTES),
+        "projection_row_bytes": max(0, _MAX_PROJECTION_ROW_BYTES),
     }
 
 
@@ -64,14 +272,18 @@ def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
     previous = coerce_dict(teacher.get("projection_window"))
     truncated = coerce_dict(previous.get("truncated"))
 
-    for key in ("events", "llm_logs"):
-        items = sorted(
-            _as_list_of_dicts(teacher.get(key)),
-            key=_row_ts,
+    retained_bytes: dict[str, int] = {}
+    dropped_totals: dict[str, int] = {}
+    for key, maximum in _COLLECTION_LIMITS.items():
+        changed, dropped_total, collection_bytes = _bound_projection_collection(
+            teacher,
+            collection=key,
+            maximum=max(0, int(maximum)),
+            byte_limit=max(0, int(_COLLECTION_BYTE_LIMITS.get(key) or 0)),
         )
-        bounded, dropped = _bounded_tail(items, limits[key])
-        teacher[key] = bounded
-        truncated[key] = bool(truncated.get(key)) or dropped
+        truncated[key] = bool(truncated.get(key)) or changed
+        dropped_totals[key] = dropped_total
+        retained_bytes[key] = collection_bytes
 
     projection_window = {
         "schema": "adaos.nlu_teacher.projection_window.v1",
@@ -80,10 +292,20 @@ def bound_teacher_projection(teacher: dict[str, Any]) -> dict[str, Any]:
         "history_endpoint": "/api/nlu/teacher/{webspace_id}/history",
         "limits": limits,
         "retained": {
-            "events": len(_as_list_of_dicts(teacher.get("events"))),
-            "llm_logs": len(_as_list_of_dicts(teacher.get("llm_logs"))),
+            key: len(_as_list_of_dicts(teacher.get(key)))
+            for key in _COLLECTION_LIMITS
         },
         "truncated": truncated,
+        "dropped": dropped_totals,
+        "retained_bytes": retained_bytes,
+        "byte_budget": {
+            "max_bytes": max(0, int(_MAX_PROJECTION_BYTES)),
+            "max_row_bytes": max(0, int(_MAX_PROJECTION_ROW_BYTES)),
+            "collection_limits": {
+                key: max(0, int(value))
+                for key, value in _COLLECTION_BYTE_LIMITS.items()
+            },
+        },
     }
     ledger_backfill = coerce_dict(previous.get("ledger_backfill"))
     if ledger_backfill:
@@ -226,10 +448,18 @@ def teacher_projection_needs_compaction(teacher: Mapping[str, Any]) -> bool:
     limits = teacher_projection_limits()
     if "events_by_candidate" in teacher:
         return True
-    if limits["events"] > 0 and len(_as_list_of_dicts(teacher.get("events"))) > limits["events"]:
-        return True
-    if limits["llm_logs"] > 0 and len(_as_list_of_dicts(teacher.get("llm_logs"))) > limits["llm_logs"]:
-        return True
+    for key in _COLLECTION_LIMITS:
+        rows = _as_list_of_dicts(teacher.get(key))
+        if limits[key] > 0 and len(rows) > limits[key]:
+            return True
+        byte_limit = max(0, int(_COLLECTION_BYTE_LIMITS.get(key) or 0))
+        if byte_limit > 0 and _json_size(rows) > byte_limit:
+            return True
+        if any(
+            _MAX_PROJECTION_ROW_BYTES > 0 and _json_size(item) > _MAX_PROJECTION_ROW_BYTES
+            for item in rows
+        ):
+            return True
     if limits["threads_by_request"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_request"))) > limits["threads_by_request"]:
         return True
     if limits["threads_by_candidate"] > 0 and len(_as_list_of_dicts(teacher.get("threads_by_candidate"))) > limits["threads_by_candidate"]:
@@ -237,6 +467,8 @@ def teacher_projection_needs_compaction(teacher: Mapping[str, Any]) -> bool:
     for item in _as_list_of_dicts(teacher.get("threads_by_request")):
         if limits["thread_details_chars"] > 0 and len(str(item.get("details") or "")) > limits["thread_details_chars"]:
             return True
+    if limits["projection_bytes"] > 0 and _json_size(teacher) > limits["projection_bytes"]:
+        return True
     return not bool(coerce_dict(teacher.get("projection_window")))
 
 
@@ -785,7 +1017,10 @@ def rebuild_threads(teacher: dict[str, Any], *, bounded: bool = True) -> dict[st
 
         details_truncated = False
         if bounded and _MAX_THREAD_DETAILS_CHARS > 0 and len(details) > _MAX_THREAD_DETAILS_CHARS:
-            details = details[:_MAX_THREAD_DETAILS_CHARS].rstrip() + "\n... (load full history from ledger)\n"
+            suffix = "\n... (load full history from ledger)\n"
+            prefix_limit = max(0, _MAX_THREAD_DETAILS_CHARS - len(suffix))
+            details = details[:prefix_limit].rstrip() + suffix
+            details = details[:_MAX_THREAD_DETAILS_CHARS]
             details_truncated = True
 
         threads_by_request.append(
@@ -996,6 +1231,123 @@ def rebuild_workbench_signals(teacher: dict[str, Any]) -> dict[str, Any]:
     return teacher
 
 
+def _refresh_projection_window_retained(teacher: dict[str, Any]) -> dict[str, Any]:
+    window = coerce_dict(teacher.get("projection_window"))
+    window["retained"] = {
+        **coerce_dict(window.get("retained")),
+        **{
+            key: len(_as_list_of_dicts(teacher.get(key)))
+            for key in _COLLECTION_LIMITS
+        },
+        "threads_by_request": len(_as_list_of_dicts(teacher.get("threads_by_request"))),
+        "threads_by_candidate": len(_as_list_of_dicts(teacher.get("threads_by_candidate"))),
+    }
+    teacher["projection_window"] = window
+    return window
+
+
+def _enforce_teacher_projection_total_budget(teacher: dict[str, Any]) -> None:
+    maximum = max(0, int(_MAX_PROJECTION_BYTES))
+    if maximum <= 0:
+        return
+
+    # Collection limits are the normal path. This second boundary prevents one
+    # unusually rich row, or a future producer-added collection, from turning
+    # the replicated projection into a channel-sized payload.
+    attempts = 0
+    while _json_size(teacher) > maximum and attempts < 12:
+        attempts += 1
+        candidates: list[tuple[int, str, list[dict[str, Any]]]] = []
+        for key in _COLLECTION_LIMITS:
+            rows = _as_list_of_dicts(teacher.get(key))
+            if rows:
+                candidates.append((_json_size(rows), key, rows))
+        if not candidates:
+            break
+        _size, key, rows = max(candidates)
+        drop_total = max(1, len(rows) // 3)
+        teacher[key] = rows[drop_total:]
+        window = coerce_dict(teacher.get("projection_window"))
+        truncated = coerce_dict(window.get("truncated"))
+        dropped = coerce_dict(window.get("dropped"))
+        truncated[key] = True
+        dropped[key] = int(dropped.get(key) or 0) + drop_total
+        window["truncated"] = truncated
+        window["dropped"] = dropped
+        teacher["projection_window"] = window
+        rebuild_threads(teacher, bounded=True)
+        rebuild_workbench_signals(teacher)
+        _refresh_projection_window_retained(teacher)
+
+    # Derived rows can still contain formatted diagnostics. Keep their newest
+    # identity and route-to-ledger metadata if the total projection is tight.
+    for key in ("workbench_signals", "threads_by_request", "threads_by_candidate"):
+        if _json_size(teacher) <= maximum:
+            break
+        rows = _as_list_of_dicts(teacher.get(key))
+        compacted = [_compact_projection_row(key, row)[0] for row in rows]
+        while compacted and _json_size(teacher) > maximum:
+            compacted = compacted[1:]
+            teacher[key] = compacted
+
+    # Unknown producer fields are not allowed to bypass the projection budget.
+    # Their authoritative state must live in the ledger or a skill-local store.
+    protected = {
+        *list(_COLLECTION_LIMITS),
+        "projection_window",
+        "threads_by_request",
+        "threads_by_candidate",
+        "workbench_signals",
+    }
+    if _json_size(teacher) > maximum:
+        auxiliary = sorted(
+            (str(item) for item in teacher if str(item) not in protected),
+            key=lambda item: _json_size(teacher.get(item)),
+            reverse=True,
+        )
+        for key in auxiliary:
+            if _json_size(teacher) <= maximum:
+                break
+            value = teacher.get(key)
+            compacted = _truncate_projection_value(
+                value,
+                string_chars=512,
+                list_items=8,
+                mapping_items=24,
+            )
+            if _json_size(compacted) >= _json_size(value):
+                compacted = {
+                    "_projection_truncated": True,
+                    "_projection_source": "skill_local_or_ledger",
+                }
+            teacher[key] = compacted
+            window = coerce_dict(teacher.get("projection_window"))
+            truncated = coerce_dict(window.get("truncated"))
+            truncated[key] = True
+            window["truncated"] = truncated
+            teacher["projection_window"] = window
+
+    if _json_size(teacher) > maximum:
+        for key in ("workbench_signals", "threads_by_candidate", "threads_by_request"):
+            if _json_size(teacher) <= maximum:
+                break
+            teacher[key] = []
+
+    window = _refresh_projection_window_retained(teacher)
+    byte_budget = coerce_dict(window.get("byte_budget"))
+    estimated_bytes = _json_size(teacher)
+    byte_budget.update(
+        {
+            "max_bytes": maximum,
+            "estimated_bytes": estimated_bytes,
+            "over_budget": estimated_bytes > maximum,
+            "enforcement_passes": attempts,
+        }
+    )
+    window["byte_budget"] = byte_budget
+    teacher["projection_window"] = window
+
+
 def rebuild_teacher_derived_views(teacher: dict[str, Any], *, bounded: bool = True) -> dict[str, Any]:
     """Rebuild bounded UI views without persisting duplicate event history."""
     teacher.pop("events_by_candidate", None)
@@ -1004,13 +1356,8 @@ def rebuild_teacher_derived_views(teacher: dict[str, Any], *, bounded: bool = Tr
     rebuild_threads(teacher, bounded=bounded)
     rebuild_workbench_signals(teacher)
     if bounded:
-        window = coerce_dict(teacher.get("projection_window"))
-        window["retained"] = {
-            **coerce_dict(window.get("retained")),
-            "threads_by_request": len(_as_list_of_dicts(teacher.get("threads_by_request"))),
-            "threads_by_candidate": len(_as_list_of_dicts(teacher.get("threads_by_candidate"))),
-        }
-        teacher["projection_window"] = window
+        _refresh_projection_window_retained(teacher)
+        _enforce_teacher_projection_total_budget(teacher)
     return teacher
 
 

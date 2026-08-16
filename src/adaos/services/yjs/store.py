@@ -7,6 +7,7 @@ import contextlib
 import contextvars
 import asyncio
 import inspect
+import json
 import subprocess
 import sys
 import threading
@@ -59,6 +60,20 @@ _YSTORE_SNAPSHOT_PREFLIGHT = _env_flag("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT", True)
 _YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S = _env_float("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_TIMEOUT_S", 5.0, minimum=0.25)
 _YSTORE_SNAPSHOT_PREFLIGHT_LIMITER = anyio.CapacityLimiter(
     _env_int("ADAOS_YSTORE_SNAPSHOT_PREFLIGHT_WORKERS", 2, minimum=1)
+)
+_YSTORE_RUNTIME_PROJECTION_PREPARE = _env_flag("ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE", True)
+_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES = _env_int(
+    "ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES",
+    1200 * 1024,
+    minimum=0,
+)
+_YSTORE_RUNTIME_PROJECTION_PREPARE_TIMEOUT_S = _env_float(
+    "ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_TIMEOUT_S",
+    30.0,
+    minimum=1.0,
+)
+_YSTORE_RUNTIME_PROJECTION_PREPARE_LIMITER = anyio.CapacityLimiter(
+    _env_int("ADAOS_YSTORE_RUNTIME_PROJECTION_PREPARE_WORKERS", 1, minimum=1)
 )
 _YSTORE_SNAPSHOT_SUFFIX = ".ysnap"
 
@@ -308,6 +323,78 @@ def _preflight_snapshot_file(path: Path) -> tuple[bool, str]:
     return False, f"returncode={result.returncode} stderr={stderr}"
 
 
+def _prepare_runtime_projection_snapshot(path: Path) -> dict[str, Any]:
+    if not _YSTORE_RUNTIME_PROJECTION_PREPARE:
+        return {"changed": False, "applied": False, "reason": "disabled"}
+    exists, size = _snapshot_file_info(path)
+    if not exists:
+        return {"changed": False, "applied": False, "reason": "missing"}
+    if size < int(_YSTORE_RUNTIME_PROJECTION_PREPARE_MIN_BYTES):
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": "below_size_threshold",
+            "source_bytes": size,
+        }
+    script = (
+        "import json, sys\n"
+        "from adaos.services.yjs.snapshot_projection import prepare_runtime_snapshot\n"
+        "result = prepare_runtime_snapshot(sys.argv[1], apply=True)\n"
+        "print(json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(',', ':')))\n"
+    )
+    started = time.perf_counter()
+    try:
+        process = subprocess.run(
+            [sys.executable, "-c", script, str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=float(_YSTORE_RUNTIME_PROJECTION_PREPARE_TIMEOUT_S),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": "timeout",
+            "source_bytes": size,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+    except Exception as exc:
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": f"worker_error:{type(exc).__name__}",
+            "source_bytes": size,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+        }
+    elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
+    if process.returncode != 0:
+        stderr = (process.stderr or b"")[-1000:].decode("utf-8", errors="replace").strip()
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": f"worker_returncode:{process.returncode}",
+            "source_bytes": size,
+            "elapsed_ms": elapsed_ms,
+            "error": stderr,
+        }
+    lines = (process.stdout or b"").decode("utf-8", errors="replace").splitlines()
+    try:
+        result = json.loads(next(line for line in reversed(lines) if line.strip()))
+    except Exception:
+        return {
+            "changed": False,
+            "applied": False,
+            "reason": "invalid_worker_output",
+            "source_bytes": size,
+            "elapsed_ms": elapsed_ms,
+        }
+    if not isinstance(result, dict):
+        result = {"changed": False, "applied": False, "reason": "invalid_worker_result"}
+    result["elapsed_ms"] = elapsed_ms
+    return result
+
+
 def _quarantine_corrupt_snapshot(path: Path, reason: str) -> Path | None:
     try:
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -540,6 +627,9 @@ class AdaosMemoryYStore(BaseYStore):
         self._disk_snapshot_skip_nonempty_total = 0
         self._last_disk_load_mode = ""
         self._last_disk_snapshot_bytes = 0
+        self._runtime_projection_prepare_total = 0
+        self._runtime_projection_prepare_changed_total = 0
+        self._last_runtime_projection_prepare: dict[str, Any] = {}
 
     async def replace_snapshot_update(
         self,
@@ -1163,6 +1253,42 @@ class AdaosMemoryYStore(BaseYStore):
             self._loaded_from_disk = True
             return
 
+        prepare_result = await anyio.to_thread.run_sync(
+            _prepare_runtime_projection_snapshot,
+            path,
+            limiter=_YSTORE_RUNTIME_PROJECTION_PREPARE_LIMITER,
+        )
+        with self._lock:
+            self._runtime_projection_prepare_total += 1
+            if bool(prepare_result.get("changed")) and bool(prepare_result.get("applied")):
+                self._runtime_projection_prepare_changed_total += 1
+            self._last_runtime_projection_prepare = dict(prepare_result)
+        if bool(prepare_result.get("changed")) and bool(prepare_result.get("applied")):
+            snapshot_exists, snapshot_size = await anyio.to_thread.run_sync(_snapshot_file_info, path)
+            self._snapshot_file_exists = snapshot_exists
+            self._snapshot_file_size = snapshot_size
+            _log.info(
+                "YStore runtime projection prepared off event loop webspace=%s source_bytes=%s compacted_bytes=%s "
+                "teacher_before_bytes=%s teacher_after_bytes=%s elapsed_ms=%s",
+                self.path,
+                prepare_result.get("source_bytes"),
+                prepare_result.get("compacted_bytes"),
+                prepare_result.get("teacher_before_bytes"),
+                prepare_result.get("teacher_after_bytes"),
+                prepare_result.get("elapsed_ms"),
+            )
+        elif str(prepare_result.get("reason") or "") in {
+            "timeout",
+            "invalid_worker_output",
+            "invalid_worker_result",
+        } or str(prepare_result.get("reason") or "").startswith(("worker_error:", "worker_returncode:")):
+            _log.warning(
+                "YStore runtime projection preparation failed open; retaining source webspace=%s reason=%s error=%s",
+                self.path,
+                prepare_result.get("reason"),
+                prepare_result.get("error"),
+            )
+
         preflight_ok, preflight_reason = await anyio.to_thread.run_sync(
             _preflight_snapshot_file,
             path,
@@ -1601,6 +1727,9 @@ class AdaosMemoryYStore(BaseYStore):
             "disk_snapshot_skip_nonempty_total": int(self._disk_snapshot_skip_nonempty_total),
             "last_disk_load_mode": self._last_disk_load_mode or None,
             "last_disk_snapshot_bytes": int(self._last_disk_snapshot_bytes),
+            "runtime_projection_prepare_total": int(self._runtime_projection_prepare_total),
+            "runtime_projection_prepare_changed_total": int(self._runtime_projection_prepare_changed_total),
+            "last_runtime_projection_prepare": dict(self._last_runtime_projection_prepare),
             "last_update_bytes": int(self._last_update_bytes),
             "last_snapshot_bytes": int(self._last_snapshot_bytes),
             "last_backup_kind": self._last_backup_kind or None,

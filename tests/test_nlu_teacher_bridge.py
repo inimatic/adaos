@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from types import SimpleNamespace
 
@@ -495,6 +497,7 @@ def test_teacher_durable_projection_is_bounded_and_keeps_newest_threads():
 
     assert len(teacher["events"]) == limits["events"]
     assert len(teacher["llm_logs"]) == limits["llm_logs"]
+    assert len(teacher["candidates"]) == limits["candidates"]
     assert len(teacher["threads_by_request"]) == limits["threads_by_request"]
     assert len(teacher["threads_by_candidate"]) == limits["threads_by_candidate"]
     assert teacher["threads_by_request"][-1]["request_id"] == "req-139"
@@ -503,6 +506,11 @@ def test_teacher_durable_projection_is_bounded_and_keeps_newest_threads():
     assert teacher["projection_window"]["truncated"]["events"] is True
     assert teacher["projection_window"]["truncated"]["llm_logs"] is True
     assert teacher["projection_window"]["ledger_backfill"]["completed"] is True
+    assert teacher["projection_window"]["byte_budget"]["over_budget"] is False
+    assert (
+        len(json.dumps(teacher, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        <= limits["projection_bytes"]
+    )
 
 
 def test_teacher_history_backfill_is_idempotent_and_preserves_llm_logs():

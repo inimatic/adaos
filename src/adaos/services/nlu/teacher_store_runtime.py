@@ -116,11 +116,21 @@ def _merge_teacher(*, current: dict[str, Any], saved: dict[str, Any]) -> dict[st
         saved=saved.get("events"),
         max_items=limits["events"],
     )
-    merged["revisions"] = _merge_list_by_id(current=current.get("revisions"), saved=saved.get("revisions"), max_items=200)
-    merged["candidates"] = _merge_list_by_id(current=current.get("candidates"), saved=saved.get("candidates"), max_items=200)
-    merged["dataset"] = _merge_list_by_id(current=current.get("dataset"), saved=saved.get("dataset"), max_items=500)
-    merged["items"] = _merge_list_by_id(current=current.get("items"), saved=saved.get("items"), max_items=200)
-    merged["plan"] = _merge_list_by_id(current=current.get("plan"), saved=saved.get("plan"), max_items=200)
+    merged["revisions"] = _merge_list_by_id(
+        current=current.get("revisions"), saved=saved.get("revisions"), max_items=limits["revisions"]
+    )
+    merged["candidates"] = _merge_list_by_id(
+        current=current.get("candidates"), saved=saved.get("candidates"), max_items=limits["candidates"]
+    )
+    merged["dataset"] = _merge_list_by_id(
+        current=current.get("dataset"), saved=saved.get("dataset"), max_items=limits["dataset"]
+    )
+    merged["items"] = _merge_list_by_id(
+        current=current.get("items"), saved=saved.get("items"), max_items=limits["items"]
+    )
+    merged["plan"] = _merge_list_by_id(
+        current=current.get("plan"), saved=saved.get("plan"), max_items=limits["plan"]
+    )
     merged["llm_logs"] = _merge_list_by_id(
         current=current.get("llm_logs"),
         saved=saved.get("llm_logs"),

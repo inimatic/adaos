@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 import y_py as Y
 
 from adaos.services.yjs import structural_compaction as compaction
+from adaos.services.yjs import snapshot_projection
 
 
 def _snapshot_with_history() -> bytes:
@@ -94,3 +96,56 @@ def test_webspace_compaction_refuses_a_live_room(monkeypatch, tmp_path) -> None:
             offline_witness=compaction.OFFLINE_WITNESS,
             apply=True,
         )
+
+
+def test_runtime_projection_prepare_bounds_teacher_before_cold_replay(tmp_path) -> None:
+    path = tmp_path / "desktop.ysnap"
+    doc = Y.YDoc()
+    teacher = {
+        "events": [
+            {
+                "id": f"evt-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index}",
+                "kind": "llm.response",
+                "raw": {"payload": "x" * 12000},
+            }
+            for index in range(80)
+        ],
+        "llm_logs": [
+            {
+                "id": f"log-{index}",
+                "ts": float(index),
+                "request_id": f"req-{index}",
+                "response": {"raw": "y" * 16000},
+            }
+            for index in range(40)
+        ],
+    }
+    with doc.begin_transaction() as txn:
+        doc.get_map("data").set(txn, "nlu_teacher", teacher)
+        application = Y.YMap({})
+        doc.get_map("ui").set(txn, "application", application)
+        application.set(txn, "title", "desktop")
+    path.write_bytes(bytes(Y.encode_state_as_update(doc)))
+    source_bytes = path.stat().st_size
+
+    dry_run = snapshot_projection.prepare_runtime_snapshot(path)
+    assert dry_run["changed"] is True
+    assert dry_run["applied"] is False
+    assert path.stat().st_size == source_bytes
+
+    result = snapshot_projection.prepare_runtime_snapshot(path, apply=True)
+    restored = Y.YDoc()
+    Y.apply_update(restored, path.read_bytes())
+    bounded = json.loads(restored.get_map("data").to_json())["nlu_teacher"]
+    application = restored.get_map("ui").get("application")
+
+    assert result["applied"] is True
+    assert result["compacted_bytes"] < result["source_bytes"]
+    assert result["teacher_after_bytes"] < result["teacher_before_bytes"]
+    assert bounded["projection_window"]["byte_budget"]["over_budget"] is False
+    assert len(bounded["events"]) <= 24
+    assert len(bounded["llm_logs"]) <= 12
+    assert isinstance(application, Y.YMap)
+    assert application.get("title") == "desktop"
