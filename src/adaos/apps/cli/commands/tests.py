@@ -1,11 +1,14 @@
 # src/adaos/apps/cli/commands/tests.py
 from __future__ import annotations
 import os, sys
+import json
 from pathlib import Path
 from typing import List, Optional
 import typer
 import subprocess
 import inspect
+import tempfile
+import xml.etree.ElementTree as ET
 from adaos.apps.cli.i18n import _
 from adaos.services.sandbox.bootstrap import ensure_dev_venv
 from adaos.services.agent_context import get_ctx
@@ -14,6 +17,19 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.ports.sandbox import ExecLimits
 
 app = typer.Typer(help="Run AdaOS test suites")
+
+_PYTEST_COMMAND_LINE_SAFE_CHARS = 24_000
+_TEST_DISCOVERY_EXCLUDED_DIRS = {
+    ".git",
+    ".runtime",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "runtime",
+    "site-packages",
+    "venv",
+    "vendor",
+}
 
 
 def _ensure_tmp_base_dir() -> Path:
@@ -99,12 +115,25 @@ def _install_all_skills(limit: int | None = None) -> list[str]:
 
 
 def _collect_test_dirs(root: Path) -> List[str]:
-    paths: List[str] = []
-    if root.is_dir():
-        for tdir in root.rglob("tests"):
-            if tdir.is_dir() and any(f.name.startswith("test_") and f.suffix == ".py" for f in tdir.rglob("test_*.py")):
-                paths.append(str(tdir))
-    return paths
+    if not root.is_dir():
+        return []
+
+    test_dirs: dict[Path, None] = {}
+    for current_dir, dir_names, file_names in os.walk(root):
+        dir_names[:] = [
+            name for name in dir_names if name not in _TEST_DISCOVERY_EXCLUDED_DIRS
+        ]
+        if not any(name.startswith("test_") and name.endswith(".py") for name in file_names):
+            continue
+
+        current = Path(current_dir)
+        for candidate in (current, *current.parents):
+            if candidate == root.parent:
+                break
+            if candidate.name == "tests":
+                test_dirs.setdefault(candidate, None)
+                break
+    return [str(path.resolve()) for path in sorted(test_dirs)]
 
 
 def _prune_duplicate_skill_tests(paths: List[str]) -> List[str]:
@@ -174,6 +203,150 @@ def _drive_key(path_str: str) -> str:
     return (d or "NO_DRIVE").upper()
 
 
+def _build_pytest_command(
+    *,
+    executable: str,
+    prefix: list[str],
+    pytest_args: list[str],
+    paths: list[str],
+    base_dir: Path,
+) -> tuple[list[str], Path | None]:
+    command_prefix = [executable, *prefix, "-m", "pytest", *pytest_args]
+    direct_command = [*command_prefix, *paths]
+    if len(subprocess.list2cmdline(direct_command)) < _PYTEST_COMMAND_LINE_SAFE_CHARS:
+        return direct_command, None
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        prefix="adaos-pytest-paths-",
+        suffix=".txt",
+        dir=base_dir,
+        delete=False,
+    ) as handle:
+        for path in paths:
+            if "\n" in path or "\r" in path:
+                raise ValueError("pytest path contains a newline")
+            handle.write(f"{path}\n")
+        args_file = Path(handle.name)
+    return [*command_prefix, f"@{args_file}"], args_file
+
+
+def _find_skill_root(path: Path) -> Path | None:
+    current = path.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "skill.yaml").is_file():
+            return candidate
+    return None
+
+
+def _skill_test_environment(paths: list[str]) -> tuple[list[str], set[str], Path | None]:
+    python_paths: list[str] = []
+    skill_names: set[str] = set()
+    skill_roots: list[Path] = []
+
+    def _add(path: Path) -> None:
+        value = str(path)
+        if value not in python_paths:
+            python_paths.append(value)
+
+    for path in paths:
+        test_path = Path(path)
+        skill_root = _find_skill_root(test_path)
+        if skill_root is None:
+            continue
+        if skill_root not in skill_roots:
+            skill_roots.append(skill_root)
+        skill_names.add(skill_root.name)
+        _add(test_path if test_path.is_dir() else test_path.parent)
+        _add(skill_root)
+
+        skills_dir = skill_root.parent
+        if skills_dir.name == "skills":
+            namespace_root = skills_dir.parent
+            _add(namespace_root)
+
+            runtime_descriptor = skills_dir / ".runtime" / skill_root.name / "current_runtime.json"
+            try:
+                runtime = json.loads(runtime_descriptor.read_text(encoding="utf-8"))
+                runtime_bucket = str(runtime.get("runtime_bucket") or "").strip()
+                vendor_root = runtime_descriptor.parent / runtime_bucket / "vendor"
+                if runtime_bucket and vendor_root.is_dir():
+                    _add(vendor_root)
+            except (OSError, ValueError, TypeError):
+                pass
+
+        for parent in skill_root.parents:
+            vendor_root = parent / "vendor"
+            if vendor_root.is_dir():
+                _add(vendor_root)
+                break
+
+    single_root = skill_roots[0] if len(skill_roots) == 1 else None
+    return python_paths, skill_names, single_root
+
+
+def _junit_target(args: list[str]) -> str | None:
+    for index, arg in enumerate(args):
+        for option in ("--junitxml", "--junit-xml"):
+            if arg == option and index + 1 < len(args):
+                return args[index + 1]
+            prefix = f"{option}="
+            if arg.startswith(prefix):
+                return arg[len(prefix) :]
+    return None
+
+
+def _replace_junit_target(args: list[str], target: Path) -> list[str]:
+    updated = list(args)
+    target_value = target.as_posix()
+    for index, arg in enumerate(updated):
+        for option in ("--junitxml", "--junit-xml"):
+            if arg == option and index + 1 < len(updated):
+                updated[index + 1] = target_value
+                return updated
+            prefix = f"{option}="
+            if arg.startswith(prefix):
+                updated[index] = f"{prefix}{target_value}"
+                return updated
+    return updated
+
+
+def _merge_junit_reports(shards: list[Path], target: Path) -> int:
+    suites: list[ET.Element] = []
+    for shard in shards:
+        if not shard.is_file():
+            continue
+        document_root = ET.parse(shard).getroot()
+        if document_root.tag == "testsuite":
+            suites.append(document_root)
+        else:
+            suites.extend(document_root.findall("testsuite"))
+
+    if not suites:
+        return 0
+
+    merged = ET.Element("testsuites", {"name": "pytest tests"})
+    integer_totals = {name: 0 for name in ("tests", "errors", "failures", "skipped")}
+    elapsed = 0.0
+    for suite in suites:
+        merged.append(suite)
+        for name in integer_totals:
+            integer_totals[name] += int(suite.get(name, "0"))
+        elapsed += float(suite.get("time", "0"))
+    for name, value in integer_totals.items():
+        merged.set(name, str(value))
+    merged.set("time", f"{elapsed:.3f}")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(merged).write(target, encoding="utf-8", xml_declaration=True)
+    for shard in shards:
+        shard.unlink(missing_ok=True)
+    return len(suites)
+
+
 def _run_one_group(
     ctx=None, *, base_dir: Path, venv_python: str, paths: list[str], addopts: str = "", py_exec: str, py_prefix: list[str], use_sandbox: bool  # ← опционально: AgentContext
 ) -> tuple[int, str, str]:
@@ -189,9 +362,7 @@ def _run_one_group(
     pytest_args = [
         "-q",
         "--strict-markers",
-        "-o",
-        "importmode=importlib",  # avoid import file mismatch when duplicate basenames exist
-        *paths,
+        "--import-mode=importlib",
     ]
 
     extra_env = {"PYTHONUNBUFFERED": "1"}
@@ -207,62 +378,40 @@ def _run_one_group(
     except Exception:
         pass
 
-    # Derive PYTHONPATH for skill runtime tests: include slot src/ and vendor/
-    # and set ADAOS_SKILL_* if tests are for a single skill.
+    # Give each isolated skill process both its top-level imports (handlers.*)
+    # and its namespace imports (skills.<name>.*).
     try:
-        skill_names: set[str] = set()
-        pp_entries: list[str] = []
-        for p in paths:
-            try:
-                t = Path(p)
-                # find enclosing 'src' directory (slot src)
-                src_dir = None
-                cur = t.resolve()
-                for parent in [cur] + list(cur.parents):
-                    if parent.name == "src" and (parent / "skills").exists():
-                        src_dir = parent
-                        break
-                if src_dir is None:
-                    continue
-                vendor = src_dir.parent / "vendor"
-                # add unique entries, preserve order (src first)
-                if str(src_dir) not in pp_entries:
-                    pp_entries.append(str(src_dir))
-                if vendor.exists() and str(vendor) not in pp_entries:
-                    pp_entries.append(str(vendor))
-                # try to infer skill name from src/skills/<name>
-                skills_dir = src_dir / "skills"
-                for child in skills_dir.iterdir() if skills_dir.exists() else []:
-                    if child.is_dir():
-                        skill_names.add(child.name)
-            except Exception:
-                continue
+        pp_entries, skill_names, skill_root = _skill_test_environment(paths)
         if pp_entries:
-            # isolate from user site and prepend our entries
             extra_env["PYTHONNOUSERSITE"] = "1"
-            existing = os.environ.get("PYTHONPATH", "")
-            joined = os.pathsep.join(pp_entries + ([existing] if existing else []))
-            extra_env["PYTHONPATH"] = joined
+            extra_env["PYTHONPATH"] = os.pathsep.join(pp_entries)
         if len(skill_names) == 1:
             skill_name = next(iter(skill_names))
             extra_env.setdefault("ADAOS_SKILL_NAME", skill_name)
             extra_env.setdefault("ADAOS_SKILL_PACKAGE", f"skills.{skill_name}")
             extra_env.setdefault("ADAOS_SKILL_MODE", "runtime")
-            # best-effort root
-            for entry in pp_entries:
-                sdir = Path(entry) / "skills" / skill_name
-                if sdir.exists():
-                    extra_env.setdefault("ADAOS_SKILL_ROOT", str(sdir))
-                    break
+            if skill_root is not None:
+                extra_env.setdefault("ADAOS_SKILL_ROOT", str(skill_root))
+                extra_env.setdefault("ADAOS_DEV_SKILL_DIR", str(skill_root))
     except Exception:
         pass
 
     if addopts:
         # preserve user's opts and ensure our importmode survives
         extra_env["PYTEST_ADDOPTS"] = addopts
-    cmd = [(venv_python or py_exec), *([] if venv_python else py_prefix), "-m", "pytest", *pytest_args]
+    cmd, args_file = _build_pytest_command(
+        executable=(venv_python or py_exec),
+        prefix=([] if venv_python else py_prefix),
+        pytest_args=pytest_args,
+        paths=paths,
+        base_dir=base_dir,
+    )
     test_cwd = Path(ctx.paths.repo_root()).resolve() if ctx is not None else base_dir
-    return _sandbox_run(cmd, cwd=test_cwd, extra_env=extra_env, use_sandbox=use_sandbox)
+    try:
+        return _sandbox_run(cmd, cwd=test_cwd, extra_env=extra_env, use_sandbox=use_sandbox)
+    finally:
+        if args_file is not None:
+            args_file.unlink(missing_ok=True)
 
 
 def _mk_sandbox(base_dir: Path, profile: str = "tool"):
@@ -502,6 +651,7 @@ def run_tests(
     base_dir = Path(os.environ["ADAOS_BASE_DIR"])
     repo_root = Path(ctx.paths.repo_root()).resolve()
     pytest_paths: List[str] = []
+    skill_test_paths: set[str] = set()
     # 1) Подготовка dev venv (однократно), затем используем его python
     if bootstrap and sandbox:
         try:
@@ -556,11 +706,15 @@ def run_tests(
                 typer.secho(f"[AdaOS] Auto-install skipped/failed: {e}", fg=typer.colors.YELLOW)
 
         skills_root = ctx.paths.skills_dir()
-        pytest_paths.extend(_collect_test_dirs(skills_root))
+        collected = _collect_test_dirs(skills_root)
+        pytest_paths.extend(collected)
+        skill_test_paths.update(str(Path(path).resolve()) for path in collected)
 
         # при разработке — добавим тесты из исходников, если есть
         src_skills = repo_root / "src" / "adaos" / "skills"
-        pytest_paths.extend(_collect_test_dirs(src_skills))
+        collected = _collect_test_dirs(src_skills)
+        pytest_paths.extend(collected)
+        skill_test_paths.update(str(Path(path).resolve()) for path in collected)
 
     # Prefer runtime/tests if both are present for a skill
     pytest_paths = _prune_duplicate_skill_tests(pytest_paths)
@@ -581,7 +735,13 @@ def run_tests(
 
     grouped: dict[str, List[str]] = defaultdict(list)
     for p in pytest_paths:
-        grouped[_drive_key(p)].append(p)
+        drive = _drive_key(p)
+        resolved = str(Path(p).resolve())
+        if resolved in skill_test_paths:
+            group_key = f"{drive} skill={Path(p).parent.name} path={resolved}"
+        else:
+            group_key = f"{drive} sdk"
+        grouped[group_key].append(p)
 
     # 4) Формирование addopts (на всю группу единые)
     addopts_parts: List[str] = []
@@ -589,13 +749,30 @@ def run_tests(
         addopts_parts += ["-m", marker]
     if extra:
         addopts_parts += extra
-    addopts_str = subprocess.list2cmdline(addopts_parts).strip()
+    junit_value = _junit_target(addopts_parts)
+    junit_target = None
+    junit_option_target = None
+    junit_shards: list[Path] = []
+    if junit_value and len(grouped) > 1:
+        candidate = Path(junit_value)
+        junit_option_target = candidate
+        junit_target = candidate if candidate.is_absolute() else repo_root / candidate
 
     # 5) Прогон по группам (каждую — через venv_python)
     overall_code = 0
-    for dk, paths in grouped.items():
+    for group_index, (group_label, paths) in enumerate(grouped.items(), start=1):
         interp = venv_python or py_exec
         prefix = [] if venv_python else py_prefix
+        group_addopts = addopts_parts
+        if junit_target is not None and junit_option_target is not None:
+            suffix = junit_option_target.suffix or ".xml"
+            option_shard = junit_option_target.with_name(
+                f"{junit_option_target.stem}-{group_index:03d}{suffix}"
+            )
+            shard = option_shard if option_shard.is_absolute() else repo_root / option_shard
+            junit_shards.append(shard)
+            group_addopts = _replace_junit_target(addopts_parts, option_shard)
+        addopts_str = subprocess.list2cmdline(group_addopts).strip()
 
         code, out, err = _run_one_group(
             ctx=ctx,
@@ -612,7 +789,22 @@ def run_tests(
             code = 0
 
         color = typer.colors.CYAN if code == 0 else typer.colors.RED
-        typer.secho(f"[pytest {dk}] exit={code} sandbox=yes\n--- stdout ---\n{out}\n--- stderr ---\n{err}", fg=color)
+        typer.secho(f"[pytest {group_label}] exit={code} sandbox=yes\n--- stdout ---\n{out}\n--- stderr ---\n{err}", fg=color)
         overall_code = code if overall_code == 0 else overall_code
+
+    if junit_target is not None:
+        merged_count = _merge_junit_reports(junit_shards, junit_target)
+        expected_count = len(junit_shards)
+        if merged_count != expected_count:
+            typer.secho(
+                f"[AdaOS] JUnit merge incomplete: expected={expected_count} merged={merged_count}",
+                fg=typer.colors.RED,
+            )
+            overall_code = overall_code or 2
+        else:
+            typer.secho(
+                f"[AdaOS] Merged {merged_count} JUnit suites into {junit_target}",
+                fg=typer.colors.BLUE,
+            )
 
     raise typer.Exit(code=overall_code)
