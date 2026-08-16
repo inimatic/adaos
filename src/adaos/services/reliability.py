@@ -1814,6 +1814,7 @@ def set_integration_readiness(
 def runtime_signal_snapshot() -> dict[str, Any]:
     from adaos.services.logging import logging_queue_snapshot
     from adaos.services.reliability_runtime_beacon import reliability_runtime_beacon_snapshot
+    from adaos.services.runtime_executor import runtime_default_executor_snapshot
     from adaos.services.subnet_heartbeat_runtime import heartbeat_persistence_snapshot
 
     try:
@@ -1836,6 +1837,7 @@ def runtime_signal_snapshot() -> dict[str, Any]:
             "integrations": {name: signal.to_dict() for name, signal in sorted(_INTEGRATIONS.items())},
             "event_loop": runtime_event_loop_lag_snapshot(),
             "event_loop_watchdog": runtime_event_loop_watchdog_snapshot(),
+            "default_executor": runtime_default_executor_snapshot(),
             "logging_queue": logging_queue_snapshot(),
             "reliability_runtime_beacon": reliability_runtime_beacon_snapshot(),
             "subnet_heartbeat_persistence": heartbeat_persistence_snapshot(),

@@ -988,6 +988,17 @@ async def _runtime_context(app: FastAPI):
     except Exception:
         pass
 
+    try:
+        from adaos.services.runtime_executor import install_runtime_default_executor
+
+        with _StartupTimer("prewarm_runtime_default_executor"):
+            app.state.runtime_default_executor = await install_runtime_default_executor()
+    except Exception:
+        logging.getLogger("adaos.api.server").warning(
+            "failed to prewarm runtime default executor",
+            exc_info=True,
+        )
+
     # 3.6) стартуем RouterService с локальной шиной
     _mount_browser_assets_static(app)
 
