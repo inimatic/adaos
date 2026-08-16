@@ -85,14 +85,6 @@ class WebspaceMaterializationService:
             else:
                 prepared_skill_decls = skill_decls_snapshot
                 prepared_skill_fingerprint = str(skill_decls_fingerprint or "").strip()
-                if prepared_skill_decls is None:
-                    prepare_started = time.perf_counter()
-                    prepared_skill_decls, prepared_skill_fingerprint = await operations.run_materialization_cpu(
-                        runtime._prepare_materialization_skill_decls_sync,
-                        webspace_id,
-                        skill_source_mode,
-                    )
-                    operations.record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                 worker_result = await operations.run_materialization_worker(
                     webspace_id,
                     mode="payload_only",
@@ -102,6 +94,8 @@ class WebspaceMaterializationService:
                     skill_decls_snapshot=prepared_skill_decls,
                     skill_decls_fingerprint=prepared_skill_fingerprint,
                 )
+                if prepared_skill_decls is None:
+                    ydoc_timings["prepare_skill_decls_in_worker"] = 0.0
                 operations.record_timing(ydoc_timings, "payload_worker", stage_started)
                 ydoc_timings["materialization_cache_miss"] = 0.0
                 operations.remember_materialized_worker_result(
@@ -295,21 +289,14 @@ class WebspaceMaterializationService:
                         ydoc_timings["materialization_cache_hit"] = 0.0
                     else:
                         if operations.materialization_worker_enabled():
-                            prepare_started = time.perf_counter()
-                            prepared_skill_decls, prepared_skill_fingerprint = await operations.run_materialization_cpu(
-                                runtime._prepare_materialization_skill_decls_sync,
-                                webspace_id,
-                            )
-                            operations.record_timing(ydoc_timings, "prepare_skill_decls", prepare_started)
                             worker_result = await operations.run_materialization_worker(
                                 webspace_id,
                                 mode="fresh_doc",
                                 request_id=request_id,
                                 scenario_id=initial_scenario_id,
                                 materialization_identity=materialization_identity,
-                                skill_decls_snapshot=prepared_skill_decls,
-                                skill_decls_fingerprint=prepared_skill_fingerprint,
                             )
+                            ydoc_timings["prepare_skill_decls_in_worker"] = 0.0
                         else:
                             worker_result = await operations.run_materialization_cpu(
                                 runtime._rebuild_fresh_doc_snapshot_sync,

@@ -3504,6 +3504,85 @@ def test_scenario_switch_rebuild_can_defer_listing_sync(monkeypatch) -> None:
     assert result["timings_ms"]["scenario_switch_sync_listing_deferred"] == 0.0
 
 
+def test_skill_lifecycle_rebuild_uses_process_isolated_payload(monkeypatch) -> None:
+    materialize_calls: list[dict[str, object]] = []
+    direct_rebuild_calls: list[str] = []
+    live_refresh_calls: list[dict[str, object]] = []
+
+    async def _fake_refresh(
+        ctx,  # noqa: ARG001
+        webspace_id: str,  # noqa: ARG001
+        *,
+        scenario_id: str | None = None,
+        scenario_resolution: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "attempted": True,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+        }
+
+    async def _fake_materialize(self, webspace_id: str, **kwargs):
+        materialize_calls.append({"webspace_id": webspace_id, **kwargs})
+        self._last_rebuild_timings_ms = {"payload_worker": 10.0, "total": 10.0}
+        self._last_rebuild_ydoc_timings_ms = {"worker_process": 10.0, "total": 10.0}
+        self._last_worker_diagnostics = {"mode": "payload_only"}
+        self._last_apply_summary = {"payload_only": True}
+        self._last_materialized_payload = {
+            "scenario_id": "web_desktop",
+            "application": {"desktop": {"pageSchema": {"id": "desktop"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+        }
+        return SimpleNamespace(scenario_id="web_desktop", apps=[], widgets=[])
+
+    async def _unexpected_direct_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+        direct_rebuild_calls.append(webspace_id)
+        raise AssertionError("skill lifecycle rebuild must not run synchronously in the owner loop")
+
+    async def _fake_live_refresh(webspace_id: str, **kwargs):
+        live_refresh_calls.append({"webspace_id": webspace_id, **kwargs})
+        return {"ok": True, "webspace_id": webspace_id}
+
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "rebuild_webspace_async",
+        _unexpected_direct_rebuild,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adaos.services.yjs.gateway",
+        types.SimpleNamespace(apply_materialized_payload_to_live_room=_fake_live_refresh),
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.rebuild_webspace_from_sources(
+            "phase2-skill-lifecycle-worker",
+            action="skill_activation_sync",
+            scenario_id="web_desktop",
+            scenario_resolution="explicit",
+            source_of_truth="skill_runtime",
+        )
+    )
+
+    assert result["accepted"] is True
+    assert direct_rebuild_calls == []
+    assert len(materialize_calls) == 1
+    assert materialize_calls[0]["isolate_process"] is True
+    assert len(live_refresh_calls) == 1
+    assert live_refresh_calls[0]["materialized_payload"]["scenario_id"] == "web_desktop"
+
+
 def test_deferred_webspace_listing_sync_coalesces(monkeypatch) -> None:
     sync_calls: list[str] = []
 

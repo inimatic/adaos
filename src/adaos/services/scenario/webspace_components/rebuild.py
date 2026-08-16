@@ -348,7 +348,15 @@ class WebspaceRebuildService:
         publish_live_room = bool(live_room_update_requested)
         if requested_action == "builder_revision_apply" and not prefer_live_room:
             publish_live_room = operations.builder_revision_detached_direct_live_room_updates_enabled()
-        payload_only_rebuild = scenario_switch_payload_rebuild or bool(scenario_content_override)
+        skill_runtime_payload_rebuild = (
+            requested_action.startswith("skill_")
+            and requested_action.endswith("_sync")
+        )
+        payload_only_rebuild = (
+            scenario_switch_payload_rebuild
+            or skill_runtime_payload_rebuild
+            or bool(scenario_content_override)
+        )
         try:
             stage_started = time.perf_counter()
             rebuild_timeout_s = operations.semantic_rebuild_timeout_s(requested_action)
@@ -393,9 +401,11 @@ class WebspaceRebuildService:
                 payload_rebuild_kwargs: dict[str, Any] = {
                     "scenario_id": target_scenario,
                     "materialization_identity": effective_materialization_identity,
-                    # A scenario switch resolves plain effective branches. Keep it
-                    # off the event loop, but do not pay for a second runtime.
-                    "isolate_process": False,
+                    # Skill lifecycle rebuilds scan and merge every active
+                    # declaration. Keep that CPU/GIL work outside the channel
+                    # owner process; scenario switches retain the low-latency
+                    # in-process payload path.
+                    "isolate_process": bool(skill_runtime_payload_rebuild),
                 }
                 if scenario_content_override:
                     payload_rebuild_kwargs["scenario_content_override"] = scenario_content_override
