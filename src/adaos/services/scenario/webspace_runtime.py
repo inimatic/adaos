@@ -2455,9 +2455,21 @@ def _reconcile_attached_y_map(node: Any, txn: Any, next_value: Any) -> bool:
 
 
 def _fingerprint_json_like(value: Any) -> str:
+    def _canonicalize_numbers(node: Any) -> Any:
+        # y_py exposes JSON numbers as floats after a YDoc round-trip. JSON
+        # itself has one numeric type, so 1 and 1.0 must produce the same
+        # branch token or every cold-room validation rewrites equal branches.
+        if isinstance(node, float):
+            return int(node) if node.is_integer() else node
+        if isinstance(node, dict):
+            return {str(key): _canonicalize_numbers(item) for key, item in node.items()}
+        if isinstance(node, list):
+            return [_canonicalize_numbers(item) for item in node]
+        return node
+
     try:
         normalized = json.dumps(
-            _clone_json_like(value),
+            _canonicalize_numbers(_clone_json_like(value)),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,

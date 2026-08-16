@@ -58,6 +58,29 @@ def _clear_scenario_switch_task_state() -> None:
     state.clear_records(state.WEBSPACE_REBUILD_STATUS)
 
 
+def test_json_fingerprint_normalizes_yjs_integral_float_roundtrip() -> None:
+    if not hasattr(_real_y_py, "YDoc"):
+        pytest.skip("y_py is unavailable")
+
+    expected = {
+        "node_index": 1,
+        "layout": {"width": 320, "ratio": 1.25},
+        "limits": [0, 2, 4],
+    }
+    ydoc = _real_y_py.YDoc()
+    with ydoc.begin_transaction() as txn:
+        ydoc.get_map("data").set(txn, "catalog", expected)
+
+    round_tripped = ydoc.get_map("data").get("catalog")
+    assert round_tripped["node_index"] == 1.0
+    assert webspace_runtime_module._fingerprint_json_like(round_tripped) == (  # noqa: SLF001
+        webspace_runtime_module._fingerprint_json_like(expected)  # noqa: SLF001
+    )
+    assert webspace_runtime_module._fingerprint_json_like({"ratio": 1.25}) != (  # noqa: SLF001
+        webspace_runtime_module._fingerprint_json_like({"ratio": 1.5})  # noqa: SLF001
+    )
+
+
 def test_build_local_desktop_catalog_snapshot_uses_runtime_skill_decls(monkeypatch) -> None:
     captured_modes: list[str] = []
 
