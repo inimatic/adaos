@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Iterable, List, Any
-import sqlite3
 import json
+import logging
+import os
+import sqlite3
+import threading
+import time
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
@@ -23,6 +27,39 @@ _ROW_SELECT = (
 )
 
 _UNSET = object()
+
+_log = logging.getLogger("adaos.workspaces.index")
+_WORKSPACE_SCHEMA_REVISION = "2026-08-16.1"
+_WORKSPACE_SCHEMA_LOCK = threading.RLock()
+_ENSURED_WORKSPACE_SCHEMA_REVISIONS: set[tuple[str, str]] = set()
+_PENDING_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
+_INFLIGHT_CURRENT_SCENARIO_OVERLAYS: dict[str, tuple[Any, float, str]] = {}
+_CURRENT_SCENARIO_OVERLAY_WORKER: threading.Thread | None = None
+_WORKSPACE_PERSISTENCE_DIAGNOSTICS: dict[str, Any] = {
+    "schema_revision": _WORKSPACE_SCHEMA_REVISION,
+    "schema_ensure_total": 0,
+    "schema_cache_hit_total": 0,
+    "schema_apply_total": 0,
+    "schema_lock_error_total": 0,
+    "last_schema_identity": "",
+    "last_schema_wait_ms": 0.0,
+    "max_schema_wait_ms": 0.0,
+    "last_schema_apply_ms": 0.0,
+    "max_schema_apply_ms": 0.0,
+    "last_schema_error": "",
+    "last_schema_error_at": None,
+    "overlay_deferred_total": 0,
+    "overlay_coalesced_total": 0,
+    "overlay_retry_total": 0,
+    "overlay_recovered_total": 0,
+    "overlay_failed_total": 0,
+    "last_overlay_deferred_at": None,
+    "last_overlay_recovered_at": None,
+    "last_overlay_error": "",
+    "last_overlay_webspace_id": "",
+    "last_overlay_scenario_id": "",
+    "last_overlay_reason": "",
+}
 
 
 def _normalize_workspace_id(value: Any) -> str:
@@ -616,7 +653,63 @@ def _persist_manifest_defaults(con, manifest: WebspaceManifest) -> WebspaceManif
     return normalized
 
 
-def _ensure_schema(con) -> None:
+def _workspace_schema_identity(con: sqlite3.Connection) -> str:
+    try:
+        rows = con.execute("PRAGMA database_list").fetchall()
+    except sqlite3.Error:
+        rows = []
+    for row in rows:
+        if len(row) < 3 or str(row[1] or "") != "main":
+            continue
+        raw_path = str(row[2] or "").strip()
+        if raw_path:
+            try:
+                resolved = Path(raw_path).resolve()
+                stat = resolved.stat()
+                inode = int(getattr(stat, "st_ino", 0) or 0)
+                device = int(getattr(stat, "st_dev", 0) or 0)
+                return f"{resolved}::{device}:{inode}" if inode else str(resolved)
+            except OSError:
+                return raw_path
+    return f"connection:{id(con)}"
+
+
+def _workspace_schema_warn_ms() -> float:
+    try:
+        return max(0.0, float(os.getenv("ADAOS_WORKSPACE_SCHEMA_WARN_MS", "250") or "250"))
+    except (TypeError, ValueError):
+        return 250.0
+
+
+def workspace_persistence_diagnostics_snapshot() -> dict[str, Any]:
+    with _WORKSPACE_SCHEMA_LOCK:
+        pending_rows = [
+            *_PENDING_CURRENT_SCENARIO_OVERLAYS.values(),
+            *_INFLIGHT_CURRENT_SCENARIO_OVERLAYS.values(),
+        ]
+        oldest_pending_at = min((float(item[1]) for item in pending_rows), default=None)
+        return {
+            "schema": "adaos.workspace_persistence.diagnostics.v1",
+            **dict(_WORKSPACE_PERSISTENCE_DIAGNOSTICS),
+            "ensured_database_total": len(_ENSURED_WORKSPACE_SCHEMA_REVISIONS),
+            "overlay_pending_total": len(
+                set(_PENDING_CURRENT_SCENARIO_OVERLAYS) | set(_INFLIGHT_CURRENT_SCENARIO_OVERLAYS)
+            ),
+            "overlay_queued_total": len(_PENDING_CURRENT_SCENARIO_OVERLAYS),
+            "overlay_inflight_total": len(_INFLIGHT_CURRENT_SCENARIO_OVERLAYS),
+            "overlay_oldest_pending_age_s": (
+                round(max(0.0, time.time() - oldest_pending_at), 3)
+                if oldest_pending_at is not None
+                else None
+            ),
+            "overlay_worker_alive": bool(
+                _CURRENT_SCENARIO_OVERLAY_WORKER is not None
+                and _CURRENT_SCENARIO_OVERLAY_WORKER.is_alive()
+            ),
+        }
+
+
+def _apply_workspace_schema(con: sqlite3.Connection) -> None:
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS y_workspaces(
@@ -669,6 +762,57 @@ def _ensure_schema(con) -> None:
         VALUES(1, 0, 0)
         """
     )
+
+
+def _ensure_schema(con: sqlite3.Connection) -> None:
+    identity = _workspace_schema_identity(con)
+    cache_key = (identity, _WORKSPACE_SCHEMA_REVISION)
+    wait_started = time.perf_counter()
+    with _WORKSPACE_SCHEMA_LOCK:
+        wait_ms = (time.perf_counter() - wait_started) * 1000.0
+        diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+        diagnostics["schema_ensure_total"] = int(diagnostics.get("schema_ensure_total") or 0) + 1
+        diagnostics["last_schema_identity"] = identity
+        diagnostics["last_schema_wait_ms"] = round(wait_ms, 3)
+        diagnostics["max_schema_wait_ms"] = round(
+            max(float(diagnostics.get("max_schema_wait_ms") or 0.0), wait_ms),
+            3,
+        )
+        if cache_key in _ENSURED_WORKSPACE_SCHEMA_REVISIONS:
+            diagnostics["schema_cache_hit_total"] = int(diagnostics.get("schema_cache_hit_total") or 0) + 1
+            return
+
+        apply_started = time.perf_counter()
+        try:
+            _apply_workspace_schema(con)
+            # Publish schema changes before another connection observes the cache.
+            con.commit()
+        except sqlite3.OperationalError as exc:
+            diagnostics["last_schema_error"] = f"{type(exc).__name__}: {exc}"
+            diagnostics["last_schema_error_at"] = time.time()
+            if "locked" in str(exc).lower():
+                diagnostics["schema_lock_error_total"] = int(diagnostics.get("schema_lock_error_total") or 0) + 1
+            raise
+
+        apply_ms = (time.perf_counter() - apply_started) * 1000.0
+        _ENSURED_WORKSPACE_SCHEMA_REVISIONS.add(cache_key)
+        diagnostics["schema_apply_total"] = int(diagnostics.get("schema_apply_total") or 0) + 1
+        diagnostics["last_schema_apply_ms"] = round(apply_ms, 3)
+        diagnostics["max_schema_apply_ms"] = round(
+            max(float(diagnostics.get("max_schema_apply_ms") or 0.0), apply_ms),
+            3,
+        )
+        diagnostics["last_schema_error"] = ""
+        diagnostics["last_schema_error_at"] = None
+        warn_ms = _workspace_schema_warn_ms()
+        if wait_ms >= warn_ms or apply_ms >= warn_ms:
+            _log.warning(
+                "workspace schema ensure slow identity=%s revision=%s wait_ms=%.3f apply_ms=%.3f",
+                identity,
+                _WORKSPACE_SCHEMA_REVISION,
+                wait_ms,
+                apply_ms,
+            )
 
 
 def _bump_workspace_catalog_version(con) -> int:
@@ -1141,6 +1285,115 @@ def set_workspace_current_scenario_overlay(workspace_id: str, scenario_id: Any) 
         catalog_version=catalog_version,
     )
     return updated
+
+
+def _current_scenario_overlay_retry_worker() -> None:
+    global _CURRENT_SCENARIO_OVERLAY_WORKER
+
+    retry_delay_s = 0.25
+    while True:
+        with _WORKSPACE_SCHEMA_LOCK:
+            if not _PENDING_CURRENT_SCENARIO_OVERLAYS:
+                _CURRENT_SCENARIO_OVERLAY_WORKER = None
+                return
+            webspace_id = next(iter(_PENDING_CURRENT_SCENARIO_OVERLAYS))
+            scenario_id, requested_at, reason = _PENDING_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id)
+            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS[webspace_id] = (scenario_id, requested_at, reason)
+        try:
+            set_workspace_current_scenario_overlay(webspace_id, scenario_id)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                with _WORKSPACE_SCHEMA_LOCK:
+                    _INFLIGHT_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id, None)
+                    diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+                    diagnostics["overlay_failed_total"] = int(diagnostics.get("overlay_failed_total") or 0) + 1
+                    diagnostics["last_overlay_error"] = f"{type(exc).__name__}: {exc}"
+                _log.warning(
+                    "deferred current scenario overlay failed webspace=%s scenario=%s reason=%s",
+                    webspace_id,
+                    scenario_id,
+                    reason,
+                    exc_info=True,
+                )
+                continue
+            with _WORKSPACE_SCHEMA_LOCK:
+                _INFLIGHT_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id, None)
+                diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+                diagnostics["overlay_retry_total"] = int(diagnostics.get("overlay_retry_total") or 0) + 1
+                diagnostics["last_overlay_error"] = f"{type(exc).__name__}: {exc}"
+                # Keep a newer request when the desired scenario changed while this write was waiting.
+                _PENDING_CURRENT_SCENARIO_OVERLAYS.setdefault(
+                    webspace_id,
+                    (scenario_id, requested_at, reason),
+                )
+            time.sleep(retry_delay_s)
+            retry_delay_s = min(2.0, retry_delay_s * 2.0)
+            continue
+        except Exception as exc:
+            with _WORKSPACE_SCHEMA_LOCK:
+                _INFLIGHT_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id, None)
+                diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+                diagnostics["overlay_failed_total"] = int(diagnostics.get("overlay_failed_total") or 0) + 1
+                diagnostics["last_overlay_error"] = f"{type(exc).__name__}: {exc}"
+            _log.warning(
+                "deferred current scenario overlay failed webspace=%s scenario=%s reason=%s",
+                webspace_id,
+                scenario_id,
+                reason,
+                exc_info=True,
+            )
+            continue
+
+        retry_delay_s = 0.25
+        with _WORKSPACE_SCHEMA_LOCK:
+            _INFLIGHT_CURRENT_SCENARIO_OVERLAYS.pop(webspace_id, None)
+            diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+            diagnostics["overlay_recovered_total"] = int(diagnostics.get("overlay_recovered_total") or 0) + 1
+            diagnostics["last_overlay_recovered_at"] = time.time()
+            diagnostics["last_overlay_error"] = ""
+
+
+def defer_workspace_current_scenario_overlay(
+    workspace_id: str,
+    scenario_id: Any,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    global _CURRENT_SCENARIO_OVERLAY_WORKER
+
+    token = _normalize_workspace_id(workspace_id)
+    requested_at = time.time()
+    normalized_reason = str(reason or "sqlite.locked").strip() or "sqlite.locked"
+    with _WORKSPACE_SCHEMA_LOCK:
+        coalesced = (
+            token in _PENDING_CURRENT_SCENARIO_OVERLAYS
+            or token in _INFLIGHT_CURRENT_SCENARIO_OVERLAYS
+        )
+        _PENDING_CURRENT_SCENARIO_OVERLAYS[token] = (scenario_id, requested_at, normalized_reason)
+        diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+        diagnostics["overlay_deferred_total"] = int(diagnostics.get("overlay_deferred_total") or 0) + 1
+        if coalesced:
+            diagnostics["overlay_coalesced_total"] = int(diagnostics.get("overlay_coalesced_total") or 0) + 1
+        diagnostics["last_overlay_deferred_at"] = requested_at
+        diagnostics["last_overlay_webspace_id"] = token
+        diagnostics["last_overlay_scenario_id"] = str(scenario_id or "").strip()
+        diagnostics["last_overlay_reason"] = normalized_reason
+        if _CURRENT_SCENARIO_OVERLAY_WORKER is None or not _CURRENT_SCENARIO_OVERLAY_WORKER.is_alive():
+            _CURRENT_SCENARIO_OVERLAY_WORKER = threading.Thread(
+                target=_current_scenario_overlay_retry_worker,
+                name="adaos-workspace-overlay-persistence",
+                daemon=True,
+            )
+            _CURRENT_SCENARIO_OVERLAY_WORKER.start()
+    return {
+        "accepted": True,
+        "pending": True,
+        "coalesced": coalesced,
+        "webspace_id": token,
+        "scenario_id": str(scenario_id or "").strip() or None,
+        "reason": normalized_reason,
+        "requested_at": requested_at,
+    }
 
 
 def set_workspace_installed_overlay(workspace_id: str, installed: Any) -> WebspaceManifest:

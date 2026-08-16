@@ -1,6 +1,6 @@
 # Issue Tracker
 
-Snapshot: 2026-08-15.
+Snapshot: 2026-08-16.
 
 This document contains only active AdaOS execution work. Architecture,
 sequencing, and milestone completion are owned by the documents listed in the
@@ -87,6 +87,7 @@ The local Wave 0-1 gate is closed. The active sequence is:
 | `LRLT-003` | open | Add media-indexer timing, bounded concurrency/payloads, and a focused stall reproducer if media load becomes an active bottleneck. | [Realtime Reliability](architecture/realtime-reliability-roadmap.md) |
 | `MRI-004` | open | Document weather provider selection and API-key behavior so provider failures are distinguishable from modal/rendering failures. | [Post-Deploy E2E](architecture/post-deploy-e2e-testing.md) |
 | `BUILDER-EVIDENCE-ACTIONS` | open | Add governed open/copy actions for Automation evidence files. | [Builder Roadmap](architecture/builder-roadmap.md#phase-8-product-experience) |
+| `RESEARCH-WORKBENCH-READ-001` | ready for stand | Local `desktop-dev` proved all project-detail read surfaces after existing but uninitialized research Projects were changed from HTTP failures to typed empty states. Deploy the canonical `research_orchestrator_skill` release, then repeat `get_direction`, artifacts, consensus, and AutomationBrief reads for initialized and uninitialized Projects on a clean stand; verify the browser shows empty guidance rather than `Data is temporarily unavailable`, and verify an unknown Project still fails closed. | [Research Fabric](architecture/research-fabric.md), [Post-Deploy E2E](architecture/post-deploy-e2e-testing.md) |
 | `UILOG-LLM-GROUPING` | open | Add richer LLM-oriented grouping beyond the bounded diagnostic aggregation required by `UILOG-001`. | [UI Runtime Diagnostics](architecture/ui-runtime-diagnostics.md) |
 
 ## Deferred

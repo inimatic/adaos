@@ -7299,6 +7299,32 @@ def _skill_env_io_guard_runtime_snapshot() -> dict[str, Any]:
         }
 
 
+def _workspace_persistence_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.services.workspaces.index import workspace_persistence_diagnostics_snapshot
+
+        return workspace_persistence_diagnostics_snapshot()
+    except Exception as exc:
+        return {
+            "schema": "adaos.workspace_persistence.diagnostics.v1",
+            "available": False,
+            "error": type(exc).__name__,
+        }
+
+
+def _sqlite_connection_runtime_snapshot() -> dict[str, Any]:
+    try:
+        from adaos.adapters.db.sqlite_store import sqlite_connection_diagnostics_snapshot
+
+        return sqlite_connection_diagnostics_snapshot()
+    except Exception as exc:
+        return {
+            "schema": "adaos.sqlite.connection_diagnostics.v1",
+            "available": False,
+            "error": type(exc).__name__,
+        }
+
+
 def _probe_supervisor_transition_runtime_snapshot(*, timeout_sec: float = 1.0) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SUPERVISOR_ENABLED", "0") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         payload = {
@@ -8446,6 +8472,8 @@ def reliability_snapshot(
     skill_runtime_migration = skill_runtime_migration_runtime_snapshot()
     skill_subscription_execution = _skill_subscription_execution_runtime_snapshot()
     skill_env_io_guard = _skill_env_io_guard_runtime_snapshot()
+    workspace_persistence = _workspace_persistence_runtime_snapshot()
+    sqlite_connections = _sqlite_connection_runtime_snapshot()
     incidents = incident_registry_snapshot(limit=50, include_evidence=True)
     event_model_phase0_communication = _event_model_phase0_communication_checkpoint(
         sync_runtime=sync_runtime,
@@ -8495,6 +8523,8 @@ def reliability_snapshot(
             "skill_runtime_migration": skill_runtime_migration,
             "skill_subscription_execution": skill_subscription_execution,
             "skill_env_io_guard": skill_env_io_guard,
+            "workspace_persistence": workspace_persistence,
+            "sqlite_connections": sqlite_connections,
             "incident_registry": incidents,
             "media_runtime": media_runtime,
             "supervisor_runtime": supervisor_runtime,

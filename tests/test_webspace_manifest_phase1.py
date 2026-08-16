@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
+import sqlite3
 import sys
+import threading
+import time
 import types
 from types import SimpleNamespace
 
@@ -285,6 +289,79 @@ def test_workspace_current_scenario_overlay_roundtrip() -> None:
 
     assert get_workspace_current_scenario_overlay("current-scenario-space") is None
     assert "workspace" not in get_workspace_overlay("current-scenario-space")
+
+
+def test_workspace_schema_is_applied_once_per_database_under_concurrency(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "workspace-schema.db"
+    original_apply = workspace_index_module._apply_workspace_schema
+    apply_count = 0
+    count_lock = threading.Lock()
+
+    def _counted_apply(con):
+        nonlocal apply_count
+        with count_lock:
+            apply_count += 1
+        time.sleep(0.02)
+        original_apply(con)
+
+    monkeypatch.setattr(workspace_index_module, "_apply_workspace_schema", _counted_apply)
+
+    def _ensure() -> None:
+        con = sqlite3.connect(db_path)
+        try:
+            workspace_index_module._ensure_schema(con)
+        finally:
+            con.close()
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(lambda _: _ensure(), range(12)))
+
+    snapshot = workspace_index_module.workspace_persistence_diagnostics_snapshot()
+    assert apply_count == 1
+    assert snapshot["schema_cache_hit_total"] >= 11
+
+
+def test_deferred_current_scenario_overlay_retries_sqlite_lock(monkeypatch) -> None:
+    recovered = threading.Event()
+    calls: list[tuple[str, str]] = []
+    baseline = workspace_index_module.workspace_persistence_diagnostics_snapshot()
+
+    def _persist(webspace_id: str, scenario_id: str) -> None:
+        calls.append((webspace_id, scenario_id))
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        recovered.set()
+
+    with workspace_index_module._WORKSPACE_SCHEMA_LOCK:
+        assert not workspace_index_module._PENDING_CURRENT_SCENARIO_OVERLAYS
+        assert not workspace_index_module._INFLIGHT_CURRENT_SCENARIO_OVERLAYS
+        assert workspace_index_module._CURRENT_SCENARIO_OVERLAY_WORKER is None
+    monkeypatch.setattr(workspace_index_module, "set_workspace_current_scenario_overlay", _persist)
+
+    accepted = workspace_index_module.defer_workspace_current_scenario_overlay(
+        "deferred-overlay-space",
+        "media_center",
+        reason="test.sqlite_locked",
+    )
+
+    assert accepted["accepted"] is True
+    assert accepted["pending"] is True
+    assert recovered.wait(timeout=2.0)
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        snapshot = workspace_index_module.workspace_persistence_diagnostics_snapshot()
+        if snapshot["overlay_pending_total"] == 0 and not snapshot["overlay_worker_alive"]:
+            break
+        time.sleep(0.01)
+    assert calls == [
+        ("deferred-overlay-space", "media_center"),
+        ("deferred-overlay-space", "media_center"),
+    ]
+    assert snapshot["overlay_pending_total"] == 0
+    assert snapshot["overlay_queued_total"] == 0
+    assert snapshot["overlay_inflight_total"] == 0
+    assert snapshot["overlay_retry_total"] >= baseline["overlay_retry_total"] + 1
+    assert snapshot["overlay_recovered_total"] >= baseline["overlay_recovered_total"] + 1
 
 
 def test_operational_state_ignores_stale_live_current_when_manifest_home_is_explicit(monkeypatch) -> None:

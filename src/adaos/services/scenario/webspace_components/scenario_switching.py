@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping
@@ -205,6 +206,7 @@ class WebspaceScenarioSwitchingService:
         request_id = request.request_id
         request_source = request.request_source
         request_client = request.request_client
+        overlay_persistence: dict[str, Any] = {"state": "ready", "pending": False}
 
         switch_started = time.perf_counter()
         timings_ms: Dict[str, float] = {}
@@ -431,11 +433,27 @@ class WebspaceScenarioSwitchingService:
                             operations.record_timing(timings_ms, "write_switch_pointer", stage_started)
 
             stage_started = time.perf_counter()
-            row = await asyncio.to_thread(
-                operations.workspace_index.set_workspace_current_scenario_overlay,
-                webspace_id,
-                scenario_id,
-            )
+            try:
+                await asyncio.to_thread(
+                    operations.workspace_index.set_workspace_current_scenario_overlay,
+                    webspace_id,
+                    scenario_id,
+                )
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+                overlay_persistence = operations.workspace_index.defer_workspace_current_scenario_overlay(
+                    webspace_id,
+                    scenario_id,
+                    reason="scenario_switch.sqlite_locked",
+                )
+                overlay_persistence["state"] = "deferred"
+                overlay_persistence["error"] = f"{type(exc).__name__}: {exc}"
+                operations.log.warning(
+                    "scenario switch overlay persistence deferred webspace=%s scenario=%s",
+                    webspace_id,
+                    scenario_id,
+                )
             operations.record_timing(timings_ms, "persist_current_scenario", stage_started)
         except Exception:
             finalized_timings = operations.finalize_timing_map(timings_ms, started_at=switch_started)
@@ -559,6 +577,7 @@ class WebspaceScenarioSwitchingService:
                 "background_rebuild": True,
                 "scenario_switch_mode": switch_mode,
                 "selector_commit_mode": selector_commit_mode,
+                "overlay_persistence": dict(overlay_persistence),
                 "timings_ms": finalized_timings,
                 "phase_timings_ms": operations.derive_phase_timings(
                     switch_timings_ms=finalized_timings,
@@ -616,6 +635,7 @@ class WebspaceScenarioSwitchingService:
             "background_rebuild": False,
             "scenario_switch_mode": switch_mode,
             "selector_commit_mode": selector_commit_mode,
+            "overlay_persistence": dict(overlay_persistence),
             "timings_ms": finalized_timings,
             "rebuild_timings_ms": operations.copy_timing_map(rebuild_result.get("timings_ms")),
             "semantic_rebuild_timings_ms": operations.copy_timing_map(rebuild_result.get("semantic_rebuild_timings_ms")),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
 import threading
 import time
@@ -2168,6 +2169,72 @@ def test_switch_webspace_scenario_can_persist_home_scenario(monkeypatch) -> None
     assert "time_to_full_hydration" in result["phase_timings_ms"]
     assert result["phase_timings_ms"]["time_to_first_structure"] == result["phase_timings_ms"]["time_to_full_hydration"]
     assert result["phase_timings_ms"]["time_to_interactive_focus"] == result["phase_timings_ms"]["time_to_full_hydration"]
+
+
+def test_switch_webspace_scenario_defers_locked_secondary_overlay(monkeypatch) -> None:
+    webspace_id = "phase2-locked-overlay"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Locked Overlay",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    _patch_switch_dependencies(monkeypatch)
+    deferred: list[tuple[str, str, str]] = []
+
+    def _locked_overlay(_webspace_id: str, _scenario_id: str) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    def _defer(webspace_id: str, scenario_id: str, *, reason: str):
+        deferred.append((webspace_id, scenario_id, reason))
+        return {"accepted": True, "pending": True, "reason": reason}
+
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "set_workspace_current_scenario_overlay", _locked_overlay)
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "defer_workspace_current_scenario_overlay", _defer)
+
+    result = asyncio.run(
+        webspace_runtime_module.switch_webspace_scenario(
+            webspace_id,
+            "media_center",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["overlay_persistence"]["state"] == "deferred"
+    assert result["overlay_persistence"]["pending"] is True
+    assert deferred == [(webspace_id, "media_center", "scenario_switch.sqlite_locked")]
+
+
+def test_switch_webspace_scenario_does_not_defer_non_lock_database_error(monkeypatch) -> None:
+    webspace_id = "phase2-overlay-io-error"
+    ensure_workspace(webspace_id)
+    set_workspace_manifest(
+        webspace_id,
+        display_name="Broken Overlay",
+        kind="workspace",
+        source_mode="workspace",
+        home_scenario="web_desktop",
+    )
+    _patch_switch_dependencies(monkeypatch)
+
+    def _broken_overlay(_webspace_id: str, _scenario_id: str) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(webspace_runtime_module.workspace_index, "set_workspace_current_scenario_overlay", _broken_overlay)
+
+    result = asyncio.run(
+        webspace_runtime_module.switch_webspace_scenario(
+            webspace_id,
+            "media_center",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert result["error"] == "scenario_switch_failed"
 
 
 def test_switch_webspace_scenario_keeps_home_unchanged_by_default_for_dev_webspace(monkeypatch) -> None:
