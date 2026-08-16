@@ -927,6 +927,7 @@ class SkillManager:
         *,
         space: str = "workspace",
         path: Path | None = None,
+        notify_unchanged: bool = True,
     ) -> Dict[str, Any]:
         """
         Synchronise an existing runtime slot with latest sources and tool
@@ -1037,6 +1038,10 @@ class SkillManager:
             "files": changed_files,
             "tools_added": tools_added,
         }
+
+        payload["changed"] = bool(changed_files or tools_added)
+        if not payload["changed"] and not notify_unchanged:
+            return payload
 
         # Keep local node capacity in sync so UI layers (e.g. web desktop)
         # can discover skills/apps from node.yaml even when only runtime_update

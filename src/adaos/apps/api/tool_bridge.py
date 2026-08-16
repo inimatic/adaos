@@ -973,6 +973,10 @@ def _mark_workspace_runtime_sync_attempt(skill_name: str) -> None:
     _WORKSPACE_RUNTIME_LAST_SYNC_AT[str(skill_name or "").strip()] = time.monotonic()
 
 
+def _dev_runtime_sync_key(skill_name: str) -> str:
+    return f"dev:{str(skill_name or '').strip()}"
+
+
 def _repo_workspace_skill_dir(ctx: AgentContext, skill_name: str) -> Path | None:
     try:
         repo_root_attr = getattr(ctx.paths, "repo_root", None)
@@ -1356,6 +1360,58 @@ def _maybe_sync_workspace_runtime(ctx: AgentContext, mgr: SkillManager, skill_na
         )
 
 
+def _maybe_sync_dev_runtime(ctx: AgentContext, mgr: SkillManager, skill_name: str) -> None:
+    """Keep DEV execution and its preflight contract on the same source revision."""
+
+    if not _dev_skill_source_exists(ctx, skill_name):
+        return
+    sync_key = _dev_runtime_sync_key(skill_name)
+    with _workspace_runtime_lock(sync_key):
+        if _workspace_runtime_sync_recent(sync_key):
+            return
+        _mark_workspace_runtime_sync_attempt(sync_key)
+        try:
+            result = mgr.runtime_update(skill_name, space="dev", notify_unchanged=False)
+        except Exception:
+            _log.warning("DEV runtime sync failed for skill=%s", skill_name, exc_info=True)
+            return
+    if isinstance(result, dict) and result.get("ok") is False:
+        _log.warning(
+            "DEV runtime sync returned not ok for skill=%s reason=%s detail=%s",
+            skill_name,
+            result.get("reason"),
+            result.get("error") or result.get("path") or result.get("source_path"),
+        )
+    elif isinstance(result, dict) and result.get("changed"):
+        _log.info(
+            "DEV runtime synchronized before tool preflight skill=%s version=%s slot=%s files=%d tools=%d",
+            skill_name,
+            result.get("version"),
+            result.get("slot"),
+            len(result.get("files") or []),
+            len(result.get("tools_added") or []),
+        )
+
+
+def _runtime_contract_diagnostics(mgr: SkillManager, skill_name: str, *, dev: bool) -> dict[str, Any]:
+    runtime_space = "dev" if dev else "workspace"
+    try:
+        status = mgr.dev_runtime_status(skill_name) if dev else mgr.runtime_status(skill_name)
+    except Exception as exc:
+        return {
+            "runtime_space": runtime_space,
+            "runtime_status": "unavailable",
+            "runtime_error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "runtime_space": runtime_space,
+        "runtime_status": "ready" if bool(status.get("ready", True)) else "not_ready",
+        "runtime_version": str(status.get("version") or "").strip() or None,
+        "runtime_slot": str(status.get("active_slot") or "").strip() or None,
+        "resolved_manifest": str(status.get("resolved_manifest") or "").strip() or None,
+    }
+
+
 def _repair_workspace_runtime(
     ctx: AgentContext,
     mgr: SkillManager,
@@ -1533,6 +1589,9 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
     ):
         body = body.model_copy(update={"dev": True})
 
+    if body.dev:
+        await asyncio.to_thread(_maybe_sync_dev_runtime, ctx, mgr, skill_name)
+
     accepting_new_work = is_accepting_new_work()
     # Preserve the cheap legacy path for obviously read-only calls while the
     # runtime is ready. A read intent or a lifecycle exception, however, must
@@ -1549,6 +1608,21 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
         )
     trusted_read_only = _declared_side_effects_are_read_only(declared_side_effects)
     if body.intent == "read" and not trusted_read_only:
+        runtime_contract = await asyncio.to_thread(
+            _runtime_contract_diagnostics,
+            mgr,
+            skill_name,
+            dev=bool(body.dev),
+        )
+        _log.warning(
+            "tool intent mismatch tool=%s requested=read declared=%s runtime_space=%s version=%s slot=%s manifest=%s",
+            body.tool,
+            declared_side_effects or "undeclared",
+            runtime_contract.get("runtime_space"),
+            runtime_contract.get("runtime_version"),
+            runtime_contract.get("runtime_slot"),
+            runtime_contract.get("resolved_manifest"),
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -1556,6 +1630,10 @@ async def _call_tool_impl(body: ToolCall, request: Request, response: Response, 
                 "tool": body.tool,
                 "requested_intent": "read",
                 "declared_side_effects": declared_side_effects or "undeclared",
+                "runtime_space": runtime_contract.get("runtime_space"),
+                "runtime_version": runtime_contract.get("runtime_version"),
+                "runtime_slot": runtime_contract.get("runtime_slot"),
+                "runtime_status": runtime_contract.get("runtime_status"),
                 "retryable": False,
             },
         )

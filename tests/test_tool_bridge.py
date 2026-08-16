@@ -144,6 +144,9 @@ def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) ->
         def __init__(self, **_kwargs) -> None:
             return None
 
+        def runtime_status(self, _name: str) -> dict[str, object]:
+            return {"version": "1.4.2", "active_slot": "B", "ready": True}
+
     monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
     monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
     monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
@@ -160,6 +163,10 @@ def test_call_tool_rejects_read_intent_for_trusted_mutating_tool(monkeypatch) ->
     assert excinfo.value.status_code == 409
     assert excinfo.value.detail["error"] == "tool_intent_mismatch"
     assert excinfo.value.detail["declared_side_effects"] == "local_write"
+    assert excinfo.value.detail["runtime_space"] == "workspace"
+    assert excinfo.value.detail["runtime_version"] == "1.4.2"
+    assert excinfo.value.detail["runtime_slot"] == "B"
+    assert excinfo.value.detail["runtime_status"] == "ready"
 
 
 def test_call_tool_allows_trusted_reads_but_rejects_mutations_while_draining(monkeypatch) -> None:
@@ -683,6 +690,101 @@ def test_call_tool_infers_dev_runtime_from_registered_webspace(monkeypatch) -> N
     assert calls == ["recipe_skill:list_recipes"]
     assert len(preflight_thread_ids) == 2
     assert all(thread_id != owner_thread_id for thread_id in preflight_thread_ids)
+
+
+def test_call_tool_syncs_dev_runtime_before_read_contract_preflight(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+    owner_thread_id = threading.get_ident()
+    worker_thread_ids: list[int] = []
+    dev_skill = tmp_path / "dev" / "research_orchestrator_skill"
+    dev_skill.mkdir(parents=True)
+    (dev_skill / "skill.yaml").write_text(
+        "name: research_orchestrator_skill\nversion: 0.2.5\n",
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "runtime" / "resolved.manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps({"tools": {"list_directions": {}}, "version": "0.2.5"}),
+        encoding="utf-8",
+    )
+
+    class _Paths:
+        def dev_skills_dir(self):
+            return tmp_path / "dev"
+
+    ctx = SimpleNamespace(
+        skills_repo=None,
+        sql=None,
+        git=None,
+        paths=_Paths(),
+        caps=None,
+        settings=None,
+        bus=None,
+    )
+
+    class _FakeSkillManager:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        def dev_runtime_status(self, _name: str) -> dict[str, object]:
+            return {
+                "version": "0.2.5",
+                "active_slot": "A",
+                "ready": True,
+                "resolved_manifest": str(manifest_path),
+            }
+
+        def runtime_update(
+            self,
+            name: str,
+            *,
+            space: str = "workspace",
+            notify_unchanged: bool = True,
+        ) -> dict[str, object]:
+            worker_thread_ids.append(threading.get_ident())
+            calls.append(f"update:{name}:{space}:{notify_unchanged}")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "version": "0.2.5",
+                        "tools": {"list_directions": {"side_effects": "none"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "changed": True,
+                "version": "0.2.5",
+                "slot": "A",
+                "files": ["skill.yaml"],
+                "tools_added": ["list_directions"],
+            }
+
+        def run_dev_tool(self, skill_name: str, tool_name: str, payload: dict[str, object], timeout=None):
+            calls.append(f"run:{skill_name}:{tool_name}")
+            return {"ok": True, "items": [], "payload": payload}
+
+    monkeypatch.setattr(tool_bridge_module, "is_accepting_new_work", lambda: True)
+    monkeypatch.setattr(tool_bridge_module, "SkillManager", _FakeSkillManager)
+    monkeypatch.setattr(tool_bridge_module, "SqliteSkillRegistry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tool_bridge_module, "attach_http_trace_headers", lambda _req, _resp: "trace-123")
+    monkeypatch.setattr(tool_bridge_module, "_webspace_uses_dev_runtime", lambda _payload: True)
+
+    body = tool_bridge_module.ToolCall(
+        tool="research_orchestrator_skill:list_directions",
+        arguments={"webspace_id": "desktop-dev"},
+        intent="read",
+    )
+    first = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+    second = asyncio.run(tool_bridge_module.call_tool(body, SimpleNamespace(headers={}), Response(), ctx=ctx))
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert calls.count("update:research_orchestrator_skill:dev:False") == 1
+    assert calls.count("run:research_orchestrator_skill:list_directions") == 2
+    assert worker_thread_ids and all(thread_id != owner_thread_id for thread_id in worker_thread_ids)
 
 
 def test_call_tool_uses_installed_runtime_for_dev_webspace_without_dev_skill(monkeypatch) -> None:
