@@ -47,6 +47,17 @@ _HUB_LOCAL_TOOL_NAMES: tuple[str, ...] = (
 _UI_NAVIGATION_TOOL_NAMES: tuple[str, ...] = (
     "prompt_engineer_skill:prompt_select_project",
 )
+_DECLARED_SIDE_EFFECT_RISK_CLASS: dict[str, str] = {
+    "safe": "safe",
+    "none": "safe",
+    "read": "safe",
+    "read_only": "safe",
+    "readonly": "safe",
+    "ui_navigation": "ui_navigation",
+    "local_write": "local_write",
+    "runtime_write": "local_write",
+    "external_write": "network",
+}
 
 
 async def _skill_manager_for_context(ctx: AgentContext) -> SkillManager:
@@ -269,20 +280,25 @@ def _runtime_action_risk(
                 side_effect_class = "cross_node"
         elif effective_target and node_identities_match(effective_target, local_node_id):
             include_node_targets = False
-    elif side_effect_class in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}:
-        include_node_targets = False
     normalized_side_effect = str(side_effect_class or "").strip().lower().replace("-", "_")
-    ignore_freeform = normalized_side_effect in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}
-    if trusted_side_effect_class and normalized_side_effect in {
+    declared_risk_class = (
+        _DECLARED_SIDE_EFFECT_RISK_CLASS.get(normalized_side_effect)
+        if trusted_side_effect_class
+        else None
+    )
+    if declared_risk_class is not None:
+        include_node_targets = False
+    elif normalized_side_effect in {"safe", "read_only", "readonly", "local_write", "ui_navigation"}:
+        include_node_targets = False
+    ignore_freeform = declared_risk_class is not None or normalized_side_effect in {
         "safe",
-        "none",
-        "read",
         "read_only",
         "readonly",
         "local_write",
         "ui_navigation",
-    }:
-        action = {"side_effect_class": side_effect_class}
+    }
+    if declared_risk_class is not None:
+        action = {"side_effect_class": declared_risk_class}
     elif normalized_side_effect in {"safe", "read_only", "readonly"}:
         action = {"side_effect_class": "safe"}
     elif local_write_tool and normalized_side_effect == "local_write":

@@ -582,6 +582,44 @@ def test_declared_local_write_does_not_treat_stored_url_as_network(tmp_path) -> 
     assert risk["approval_required"] is False
 
 
+def test_declared_runtime_write_does_not_treat_skill_name_as_cross_node() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="subnet_env:refresh_snapshot",
+        arguments={"webspace_id": "desktop"},
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="subnet_env",
+        public_tool="refresh_snapshot",
+        payload=dict(body.arguments or {}),
+        forced_side_effect_class="runtime_write",
+    )
+
+    assert risk["risk_class"] == "local_write"
+    assert risk["approval_required"] is False
+    assert {reason["risk_class"] for reason in risk["reasons"]} == {"local_write"}
+
+
+def test_declared_external_write_requires_network_approval_without_keyword_hints() -> None:
+    body = tool_bridge_module.ToolCall(
+        tool="publisher_skill:publish",
+        arguments={"entry_id": "entry-1"},
+    )
+
+    risk = tool_bridge_module._runtime_action_risk(
+        body=body,
+        skill_name="publisher_skill",
+        public_tool="publish",
+        payload=dict(body.arguments or {}),
+        forced_side_effect_class="external_write",
+    )
+
+    assert risk["risk_class"] == "network"
+    assert risk["approval_required"] is True
+    assert {reason["risk_class"] for reason in risk["reasons"]} == {"network"}
+
+
 def test_webspace_runtime_resolution_uses_registered_kind(monkeypatch) -> None:
     from adaos.services.workspaces import index as workspace_index
 
