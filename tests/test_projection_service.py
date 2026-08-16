@@ -1304,6 +1304,11 @@ def test_projection_governance_attributes_sibling_write_amplification_suspect(mo
         },
         route={"projection_slot": "mediaserver.library"},
     )
+    monkeypatch.setattr(
+        projection_service_module,
+        "_iter_persisted_yjs_projection_guard_events",
+        lambda: (_ for _ in ()).throw(AssertionError("hot projection path read persisted diagnostics")),
+    )
 
     asyncio.run(service.apply("subnet", "infrastate.summary", {"ok": True}, webspace_id="desktop"))
 
@@ -1318,6 +1323,21 @@ def test_projection_governance_attributes_sibling_write_amplification_suspect(mo
     assert suspects[0]["path"] == "data/nodes/hub/media/library"
     assert suspects[0]["payload_bytes"] == 402482
     assert snapshot["last_amplified_branch_owner"] == "skill:mediaserver"
+
+
+def test_projection_uses_agent_context_node_id_without_reloading_config(monkeypatch) -> None:
+    monkeypatch.setattr(
+        projection_service_module,
+        "_local_node_id",
+        lambda: (_ for _ in ()).throw(AssertionError("node config reloaded")),
+    )
+
+    assert (
+        projection_service_module._context_local_node_id(
+            SimpleNamespace(config=SimpleNamespace(node_id="member-local"))
+        )
+        == "member-local"
+    )
 
 
 def test_projection_service_governance_snapshot_tracks_throttle_and_block_events(monkeypatch) -> None:

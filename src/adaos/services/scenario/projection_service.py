@@ -48,6 +48,7 @@ def _float_env(name: str, default: float, minimum: float) -> float:
 
 
 _PRIMARY_DOC_MAX_STRING_CHARS = _int_env("ADAOS_YJS_PRIMARY_DOC_MAX_STRING_CHARS", 4096, 512)
+_PROJECTION_APPLY_WARN_MS = _float_env("ADAOS_PROJECTION_APPLY_WARN_MS", 250.0, 0.0)
 _YJS_PROJECTION_GUARD_ENABLED = str(os.getenv("ADAOS_YJS_PROJECTION_GUARD_ENABLE") or "1").strip().lower() in {
     "1",
     "true",
@@ -263,6 +264,17 @@ def _local_node_id() -> str:
     return "hub"
 
 
+def _context_local_node_id(ctx: Any) -> str:
+    conf = getattr(ctx, "config", None)
+    node_id = str(getattr(conf, "node_id", "") or "").strip()
+    if node_id:
+        return node_id
+    nested = str(getattr(getattr(conf, "node_settings", None), "id", "") or "").strip()
+    if nested:
+        return nested
+    return _local_node_id()
+
+
 def _positive_int(value: Any) -> int | None:
     try:
         result = int(value)
@@ -351,7 +363,7 @@ def _projection_amplification_suspects(
     token_ws = str(webspace_id or "").strip() or "default"
     token_owner = str(writer_owner or "").strip()
     candidates: list[dict[str, Any]] = []
-    for row in _yjs_projection_guard_rows():
+    for row in _memory_yjs_projection_guard_rows():
         row_path = str(row.get("path") or "").strip()
         if _projection_amplification_domain(row_path) != domain:
             continue
@@ -483,8 +495,7 @@ def _aggregate_yjs_projection_guard_events(events: list[Mapping[str, Any]]) -> d
 
 def _yjs_projection_guard_rows() -> list[dict[str, Any]]:
     persisted = _aggregate_yjs_projection_guard_events(_iter_persisted_yjs_projection_guard_events())
-    with _YJS_PROJECTION_GUARD_LOCK:
-        memory_rows = [dict(item) for item in _YJS_PROJECTION_GUARD_STATS.values()]
+    memory_rows = _memory_yjs_projection_guard_rows()
     if not persisted:
         return memory_rows
     for row in memory_rows:
@@ -502,6 +513,11 @@ def _yjs_projection_guard_rows() -> list[dict[str, Any]]:
             existing.update(row)
         existing["guarded_total"] = guarded_total
     return [dict(item) for item in persisted.values()]
+
+
+def _memory_yjs_projection_guard_rows() -> list[dict[str, Any]]:
+    with _YJS_PROJECTION_GUARD_LOCK:
+        return [dict(item) for item in _YJS_PROJECTION_GUARD_STATS.values()]
 
 
 def _record_yjs_projection_guard_event(
@@ -1549,13 +1565,27 @@ class ProjectionService:
             _log.debug("no projections configured for scope=%s slot=%s", scope, slot)
             return
         for t in targets:
-            if t.backend == "yjs":
-                await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id, rule=rule)
-            elif t.backend == "kv":
-                self._apply_kv(scope, slot, value, user_id=user_id)
-            else:
-                # sql/other backends are reserved for future use
-                _log.debug("backend %s is not implemented yet for scope=%s slot=%s", t.backend, scope, slot)
+            target_started = time.perf_counter()
+            try:
+                if t.backend == "yjs":
+                    await self._apply_yjs(t, value, scope=scope, slot=slot, user_id=user_id, webspace_id=webspace_id, rule=rule)
+                elif t.backend == "kv":
+                    self._apply_kv(scope, slot, value, user_id=user_id)
+                else:
+                    # sql/other backends are reserved for future use
+                    _log.debug("backend %s is not implemented yet for scope=%s slot=%s", t.backend, scope, slot)
+            finally:
+                elapsed_ms = (time.perf_counter() - target_started) * 1000.0
+                if elapsed_ms >= _PROJECTION_APPLY_WARN_MS:
+                    _log.warning(
+                        "projection target slow owner=%s scope=%s slot=%s backend=%s webspace=%s duration_ms=%.3f",
+                        _projection_write_owner(),
+                        scope,
+                        slot,
+                        str(getattr(t, "backend", "") or "unknown"),
+                        str(webspace_id or getattr(t, "webspace_id", "") or "default"),
+                        elapsed_ms,
+                    )
 
     async def _apply_yjs(
         self,
@@ -1578,7 +1608,7 @@ class ProjectionService:
         if not path:
             return
         if str(scope or "").strip() == "subnet":
-            path = node_scope_data_path(path, _local_node_id())
+            path = node_scope_data_path(path, _context_local_node_id(self.ctx))
 
         # Allow simple {user_id} templating inside Yjs paths.
         if "{user_id}" in path:
