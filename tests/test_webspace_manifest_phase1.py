@@ -291,6 +291,38 @@ def test_workspace_current_scenario_overlay_roundtrip() -> None:
     assert "workspace" not in get_workspace_overlay("current-scenario-space")
 
 
+def test_workspace_current_scenario_overlay_honors_fast_busy_timeout() -> None:
+    webspace_id = "current-scenario-fast-timeout"
+    ensure_workspace(webspace_id)
+    ctx = get_ctx()
+    baseline = workspace_index_module.workspace_persistence_diagnostics_snapshot()
+    blocker = ctx.sql.connect()
+    try:
+        blocker.execute("BEGIN IMMEDIATE")
+        started = time.perf_counter()
+        try:
+            set_workspace_current_scenario_overlay(
+                webspace_id,
+                "media_center",
+                busy_timeout_ms=50,
+            )
+        except sqlite3.OperationalError as exc:
+            assert "locked" in str(exc).lower()
+        else:
+            raise AssertionError("overlay write unexpectedly bypassed the SQLite lock")
+        elapsed_s = time.perf_counter() - started
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    snapshot = workspace_index_module.workspace_persistence_diagnostics_snapshot()
+    assert elapsed_s < 1.0
+    assert snapshot["overlay_fast_write_total"] >= baseline["overlay_fast_write_total"] + 1
+    assert snapshot["overlay_fast_lock_total"] >= baseline["overlay_fast_lock_total"] + 1
+    assert snapshot["overlay_fast_timeout_ms"] == 50
+    assert snapshot["last_overlay_fast_write_ms"] < 1_000
+
+
 def test_workspace_schema_is_applied_once_per_database_under_concurrency(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "workspace-schema.db"
     original_apply = workspace_index_module._apply_workspace_schema

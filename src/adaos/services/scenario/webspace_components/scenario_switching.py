@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping
 
 from .state import WebspaceTaskState
+
+
+def _scenario_overlay_busy_timeout_ms() -> int:
+    raw = str(os.environ.get("ADAOS_SCENARIO_OVERLAY_BUSY_TIMEOUT_MS") or "").strip()
+    try:
+        value = int(raw) if raw else 200
+    except ValueError:
+        value = 200
+    return max(25, min(1_000, value))
 
 
 @dataclass(frozen=True)
@@ -438,6 +448,7 @@ class WebspaceScenarioSwitchingService:
                     operations.workspace_index.set_workspace_current_scenario_overlay,
                     webspace_id,
                     scenario_id,
+                    busy_timeout_ms=_scenario_overlay_busy_timeout_ms(),
                 )
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc).lower():

@@ -53,6 +53,11 @@ _WORKSPACE_PERSISTENCE_DIAGNOSTICS: dict[str, Any] = {
     "overlay_retry_total": 0,
     "overlay_recovered_total": 0,
     "overlay_failed_total": 0,
+    "overlay_fast_write_total": 0,
+    "overlay_fast_lock_total": 0,
+    "overlay_fast_timeout_ms": None,
+    "last_overlay_fast_write_ms": 0.0,
+    "max_overlay_fast_write_ms": 0.0,
     "last_overlay_deferred_at": None,
     "last_overlay_recovered_at": None,
     "last_overlay_error": "",
@@ -1248,7 +1253,14 @@ def set_workspace_home_scenario_ref_overlay(workspace_id: str, scenario_ref: Any
     return set_workspace_overlay(workspace_id, overlay)
 
 
-def set_workspace_current_scenario_overlay(workspace_id: str, scenario_id: Any) -> WebspaceManifest:
+def set_workspace_current_scenario_overlay(
+    workspace_id: str,
+    scenario_id: Any,
+    *,
+    busy_timeout_ms: int | None = None,
+) -> WebspaceManifest:
+    fast_write_started = time.perf_counter() if busy_timeout_ms is not None else None
+    fast_write_locked = False
     workspace_id = _normalize_workspace_id(workspace_id)
     current = ensure_workspace(workspace_id)
     overlay = current.ui_overlay
@@ -1268,15 +1280,43 @@ def set_workspace_current_scenario_overlay(workspace_id: str, scenario_id: Any) 
     if encoded_overlay == current.ui_overlay_json:
         return current
 
-    sql = get_ctx().sql
-    with sql.connect() as con:
-        _ensure_schema(con)
-        con.execute(
-            "UPDATE y_workspaces SET ui_overlay_json=? WHERE workspace_id=?",
-            (encoded_overlay, workspace_id),
-        )
-        catalog_version = _bump_workspace_catalog_version(con)
-        con.commit()
+    try:
+        sql = get_ctx().sql
+        with sql.connect() as con:
+            _ensure_schema(con)
+            if busy_timeout_ms is not None:
+                bounded_timeout_ms = max(25, min(1_000, int(busy_timeout_ms)))
+                con.execute(f"PRAGMA busy_timeout={bounded_timeout_ms}")
+            con.execute(
+                "UPDATE y_workspaces SET ui_overlay_json=? WHERE workspace_id=?",
+                (encoded_overlay, workspace_id),
+            )
+            catalog_version = _bump_workspace_catalog_version(con)
+            con.commit()
+    except sqlite3.OperationalError as exc:
+        fast_write_locked = "locked" in str(exc).lower()
+        raise
+    finally:
+        if fast_write_started is not None:
+            elapsed_ms = round((time.perf_counter() - fast_write_started) * 1000.0, 3)
+            with _WORKSPACE_SCHEMA_LOCK:
+                diagnostics = _WORKSPACE_PERSISTENCE_DIAGNOSTICS
+                diagnostics["overlay_fast_write_total"] = int(
+                    diagnostics.get("overlay_fast_write_total") or 0
+                ) + 1
+                if fast_write_locked:
+                    diagnostics["overlay_fast_lock_total"] = int(
+                        diagnostics.get("overlay_fast_lock_total") or 0
+                    ) + 1
+                diagnostics["overlay_fast_timeout_ms"] = max(
+                    25,
+                    min(1_000, int(busy_timeout_ms)),
+                )
+                diagnostics["last_overlay_fast_write_ms"] = elapsed_ms
+                diagnostics["max_overlay_fast_write_ms"] = max(
+                    float(diagnostics.get("max_overlay_fast_write_ms") or 0.0),
+                    elapsed_ms,
+                )
 
     updated = replace(current, ui_overlay_json=encoded_overlay)
     _emit_workspace_event(

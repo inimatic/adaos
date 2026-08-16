@@ -2184,7 +2184,13 @@ def test_switch_webspace_scenario_defers_locked_secondary_overlay(monkeypatch) -
     _patch_switch_dependencies(monkeypatch)
     deferred: list[tuple[str, str, str]] = []
 
-    def _locked_overlay(_webspace_id: str, _scenario_id: str) -> None:
+    def _locked_overlay(
+        _webspace_id: str,
+        _scenario_id: str,
+        *,
+        busy_timeout_ms: int | None = None,
+    ) -> None:
+        assert busy_timeout_ms == 200
         raise sqlite3.OperationalError("database is locked")
 
     def _defer(webspace_id: str, scenario_id: str, *, reason: str):
@@ -2220,7 +2226,13 @@ def test_switch_webspace_scenario_does_not_defer_non_lock_database_error(monkeyp
     )
     _patch_switch_dependencies(monkeypatch)
 
-    def _broken_overlay(_webspace_id: str, _scenario_id: str) -> None:
+    def _broken_overlay(
+        _webspace_id: str,
+        _scenario_id: str,
+        *,
+        busy_timeout_ms: int | None = None,
+    ) -> None:
+        assert busy_timeout_ms == 200
         raise sqlite3.OperationalError("disk I/O error")
 
     monkeypatch.setattr(webspace_runtime_module.workspace_index, "set_workspace_current_scenario_overlay", _broken_overlay)

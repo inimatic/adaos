@@ -2131,7 +2131,7 @@ def test_switch_webspace_scenario_defers_pointer_to_atomic_materialization(monke
     monkeypatch.setattr(
         webspace_runtime_module.workspace_index,
         "set_workspace_current_scenario_overlay",
-        lambda webspace_id, scenario_id: row,
+        lambda webspace_id, scenario_id, **_kwargs: row,
     )
     monkeypatch.setattr(webspace_runtime_module, "_scenario_switch_mode", lambda: "pointer_only")
     monkeypatch.setattr(webspace_runtime_module, "_scenario_exists_for_switch", lambda scenario_id, space="workspace": True)
@@ -3122,8 +3122,15 @@ def test_node_cli_benchmark_scenario_restores_baseline_and_prints_summary(monkey
         }
 
     monkeypatch.setattr(node_cli_module, "_control_post_json", _fake_post_json)
-    monkeypatch.setattr(node_cli_module.time, "perf_counter", lambda: next(perf_values))
-    monkeypatch.setattr(node_cli_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        node_cli_module,
+        "time",
+        SimpleNamespace(
+            time=node_cli_module.time.time,
+            perf_counter=lambda: next(perf_values),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(node_cli_module.typer, "echo", lambda message="": echoed.append(str(message)))
 
     node_cli_module._node_yjs_benchmark_scenario_action(
@@ -3303,8 +3310,15 @@ def test_node_cli_benchmark_scenario_tolerates_transient_rebuild_poll_timeout(mo
             )
         ),
     )
-    monkeypatch.setattr(node_cli_module.time, "perf_counter", lambda: next(perf_values))
-    monkeypatch.setattr(node_cli_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        node_cli_module,
+        "time",
+        SimpleNamespace(
+            time=node_cli_module.time.time,
+            perf_counter=lambda: next(perf_values),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(node_cli_module.typer, "echo", lambda message="": echoed.append(str(message)))
 
     node_cli_module._node_yjs_benchmark_scenario_action(
@@ -3454,8 +3468,15 @@ def test_node_cli_benchmark_scenario_falls_back_from_lightweight_poll_endpoints(
             )
         ),
     )
-    monkeypatch.setattr(node_cli_module.time, "perf_counter", lambda: next(perf_values))
-    monkeypatch.setattr(node_cli_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        node_cli_module,
+        "time",
+        SimpleNamespace(
+            time=node_cli_module.time.time,
+            perf_counter=lambda: next(perf_values),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(node_cli_module.typer, "echo", lambda message="": echoed.append(str(message)))
 
     node_cli_module._node_yjs_benchmark_scenario_action(
@@ -3597,8 +3618,15 @@ def test_node_cli_benchmark_scenario_uses_embedded_rebuild_materialization(monke
             )
         ),
     )
-    monkeypatch.setattr(node_cli_module.time, "perf_counter", lambda: next(perf_values))
-    monkeypatch.setattr(node_cli_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        node_cli_module,
+        "time",
+        SimpleNamespace(
+            time=node_cli_module.time.time,
+            perf_counter=lambda: next(perf_values),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(node_cli_module.typer, "echo", lambda message="": echoed.append(str(message)))
 
     node_cli_module._node_yjs_benchmark_scenario_action(
@@ -3781,8 +3809,15 @@ def test_node_cli_benchmark_scenario_falls_back_to_active_runtime_from_superviso
             )
         ),
     )
-    monkeypatch.setattr(node_cli_module.time, "perf_counter", lambda: next(perf_values))
-    monkeypatch.setattr(node_cli_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        node_cli_module,
+        "time",
+        SimpleNamespace(
+            time=node_cli_module.time.time,
+            perf_counter=lambda: next(perf_values),
+            sleep=lambda _seconds: None,
+        ),
+    )
     monkeypatch.setattr(node_cli_module.typer, "echo", lambda message="": echoed.append(str(message)))
 
     node_cli_module._node_yjs_benchmark_scenario_action(
