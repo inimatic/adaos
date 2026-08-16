@@ -46,7 +46,7 @@
         },
         {
           "path": "web_desktop.seed.yjs.b64",
-          "sha256": "9962cf87590f0f31a1fd3b3655db28c0457c9d4adcad0bfe699ca513dcb0154a"
+          "sha256": "0c2f61a6eab31abe91de0ed2660ccc59cfe77cb442be1882fdf0ba84fc420fb9"
         }
       ]
     },
@@ -79,7 +79,7 @@
       "id": "weather_skill",
       "version": "android-poc.1",
       "descriptor": "weather_skill.webui.json",
-      "sha256": "54e2b6853034ecd5dc9d575b1f77171a733e1d6a861fd14d30bdb41a23d423d5"
+      "sha256": "69d57c162052074538752368976e220e04c76c48eaa768a5c87d7e25f9253946"
     },
     {
       "id": "adaos_connect",

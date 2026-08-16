@@ -44,6 +44,15 @@ PORTABLE_RASA_PATH = (
     / "nlu"
     / "portable_rasa.py"
 )
+VOSK_MODEL_MANAGER_PATH = (
+    Path(__file__).parents[1]
+    / "src"
+    / "adaos"
+    / "adapters"
+    / "audio"
+    / "stt"
+    / "model_manager.py"
+)
 WEATHER_WEBUI_BUNDLE_PATH = BOOTSTRAP_PATH.parent / "bundle" / "weather_skill.webui.json"
 
 
@@ -101,7 +110,7 @@ def _control_command(websocket, command_id: str, kind: str, payload: dict) -> tu
 
 
 def _load_bootstrap():
-    _install_portable_rasa_module()
+    _install_shared_android_modules()
     package_name = "_adaos_android_bootstrap_test"
     package = sys.modules.get(package_name)
     if package is None:
@@ -117,16 +126,19 @@ def _load_bootstrap():
     return module
 
 
-def _install_portable_rasa_module() -> None:
-    """Expose only the shared inference module to the isolated Android host test."""
+def _install_shared_android_modules() -> None:
+    """Expose the shared Python modules copied into the APK by Gradle."""
 
-    module_name = "adaos.services.nlu.portable_rasa"
-    if module_name in sys.modules:
-        return
     packages = (
         ("adaos", ANDROID_PYTHON_ROOT / "adaos"),
         ("adaos.services", ANDROID_PYTHON_ROOT / "adaos" / "services"),
         ("adaos.services.nlu", ANDROID_PYTHON_ROOT / "adaos" / "services" / "nlu"),
+        ("adaos.adapters", ANDROID_PYTHON_ROOT / "adaos" / "adapters"),
+        ("adaos.adapters.audio", ANDROID_PYTHON_ROOT / "adaos" / "adapters" / "audio"),
+        (
+            "adaos.adapters.audio.stt",
+            ANDROID_PYTHON_ROOT / "adaos" / "adapters" / "audio" / "stt",
+        ),
     )
     for package_name, package_path in packages:
         if package_name in sys.modules:
@@ -139,12 +151,20 @@ def _install_portable_rasa_module() -> None:
         if parent_name and parent_name in sys.modules:
             setattr(sys.modules[parent_name], child_name, package)
 
-    spec = importlib.util.spec_from_file_location(module_name, PORTABLE_RASA_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    setattr(sys.modules["adaos.services.nlu"], "portable_rasa", module)
+    shared_modules = (
+        ("adaos.services.nlu.portable_rasa", PORTABLE_RASA_PATH),
+        ("adaos.adapters.audio.stt.model_manager", VOSK_MODEL_MANAGER_PATH),
+    )
+    for module_name, module_path in shared_modules:
+        if module_name in sys.modules:
+            continue
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        parent_name, _, child_name = module_name.rpartition(".")
+        setattr(sys.modules[parent_name], child_name, module)
 
 
 def _load_member_fixture():
