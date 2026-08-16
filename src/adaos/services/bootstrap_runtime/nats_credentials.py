@@ -73,12 +73,21 @@ class NatsCredentialService:
             return False
         self._last_fetch_at = now
         debug = os.getenv("HUB_NATS_VERBOSE", "0") == "1"
+
+        fetched, resolved_hub_id = await asyncio.to_thread(self._fetch_blocking, debug=debug)
+        if fetched:
+            self.update_hub_id(resolved_hub_id)
+        return fetched
+
+    def _fetch_blocking(self, *, debug: bool) -> tuple[bool, str | None]:
+        """Fetch and persist credentials without blocking the channel owner loop."""
+
         try:
             from adaos.services.node_config import _expand_path as expand_path
             from adaos.services.node_config import load_config
             from adaos.services.root.client import RootHttpClient
         except Exception:
-            return False
+            return False, None
 
         service = self._service
         try:
@@ -150,41 +159,38 @@ class NatsCredentialService:
                         }
                     },
                 )
-            return False
+            return False, None
 
-        def _request_token() -> dict[str, Any] | None:
-            try:
-                identity = runtime_identity_snapshot()
-                data = client.request(
-                    "POST",
-                    "/v1/hub/nats/token",
-                    json={
-                        "runtime_instance_id": str(identity.get("runtime_instance_id") or ""),
-                        "transition_role": str(identity.get("transition_role") or "active"),
-                        "active_slot": str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or ""),
-                        "runtime_host": str(os.getenv("ADAOS_RUNTIME_HOST") or ""),
-                        "runtime_port": str(os.getenv("ADAOS_RUNTIME_PORT") or ""),
+        try:
+            identity = runtime_identity_snapshot()
+            response = client.request(
+                "POST",
+                "/v1/hub/nats/token",
+                json={
+                    "runtime_instance_id": str(identity.get("runtime_instance_id") or ""),
+                    "transition_role": str(identity.get("transition_role") or "active"),
+                    "active_slot": str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or ""),
+                    "runtime_host": str(os.getenv("ADAOS_RUNTIME_HOST") or ""),
+                    "runtime_port": str(os.getenv("ADAOS_RUNTIME_PORT") or ""),
+                },
+            )
+            data = dict(response) if isinstance(response, dict) else None
+        except Exception as exc:
+            if debug:
+                logging.getLogger("adaos.hub_io").warning(
+                    "nats.token_request_failed",
+                    extra={
+                        "extra": {
+                            "base_url": str(base_url),
+                            "verify": str(verify),
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        }
                     },
                 )
-                return dict(data) if isinstance(data, dict) else None
-            except Exception as exc:
-                if debug:
-                    logging.getLogger("adaos.hub_io").warning(
-                        "nats.token_request_failed",
-                        extra={
-                            "extra": {
-                                "base_url": str(base_url),
-                                "verify": str(verify),
-                                "error": str(exc),
-                                "error_type": type(exc).__name__,
-                            }
-                        },
-                    )
-                return None
-
-        data = await asyncio.to_thread(_request_token)
+            data = None
         if not isinstance(data, dict):
-            return False
+            return False, None
         token = data.get("hub_nats_token")
         nats_user = data.get("nats_user")
         response_hub_id = data.get("hub_id")
@@ -195,7 +201,7 @@ class NatsCredentialService:
                     "nats.token_response_incomplete",
                     extra={"extra": {"data": data}},
                 )
-            return False
+            return False, None
 
         try:
             resolved_hub_id, resolved_nats_user = service._nats_policy.canonical_identity(
@@ -213,7 +219,6 @@ class NatsCredentialService:
                 user=str(resolved_nats_user or nats_user),
                 password=str(token),
             )
-            self.update_hub_id(resolved_hub_id)
-            return True
+            return True, resolved_hub_id
         except Exception:
-            return False
+            return False, None

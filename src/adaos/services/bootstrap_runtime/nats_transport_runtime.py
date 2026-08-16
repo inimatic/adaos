@@ -434,7 +434,7 @@ async def _run_nats_root_transport(
                     candidate_passive_mode = service._nats_policy.candidate_passive_mode()
                     try:
                         nats_attempt_server = None
-                        nurl, nuser, npass = _read_node_nats()
+                        nurl, nuser, npass = await asyncio.to_thread(_read_node_nats)
                         requested_transport = str(os.getenv("HUB_NATS_TRANSPORT", "") or "").strip().lower()
                         if not nurl or not nuser or not npass:
                             fetched = await _fetch_nats_credentials()

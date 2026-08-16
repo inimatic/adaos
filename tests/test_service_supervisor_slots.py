@@ -742,6 +742,57 @@ def test_service_supervisor_dependency_setup_does_not_block_event_loop(monkeypat
     assert asyncio.run(_run()) is True
 
 
+def test_service_supervisor_prepares_launch_plan_off_event_loop(monkeypatch, tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    name = "launch_plan_service"
+    skill_root = tmp_path / ".runtime" / name / "v0.1" / "slots" / "A" / "src" / "skills" / name
+    skill_root.mkdir(parents=True)
+    spec = mod._resolve_service_spec(
+        name,
+        skill_root,
+        {
+            "runtime": {"kind": "service"},
+            "service": {"port": 18124, "command": ["-m", "handlers.service"]},
+        },
+    )
+    assert spec is not None
+    setup_started = threading.Event()
+    setup_finished = threading.Event()
+
+    class _Proc:
+        pid = 9132
+
+        def poll(self):
+            return None
+
+    def _slow_launch_plan(_name, _spec, _python):  # noqa: ANN001
+        setup_started.set()
+        time.sleep(0.2)
+        setup_finished.set()
+        return ([str(os.sys.executable)], {}, tmp_path / "service.log")
+
+    monkeypatch.setattr(mod, "_service_health_ok", lambda _spec: False)
+    monkeypatch.setattr(mod, "_service_listener_snapshot", lambda _spec: {"pid": 0})
+    monkeypatch.setattr(mod, "_spawn_service_process", lambda *args, **kwargs: _Proc())
+
+    supervisor = mod.ServiceSkillSupervisor()
+    monkeypatch.setattr(supervisor, "_select_python", lambda _spec: Path(os.sys.executable))
+    monkeypatch.setattr(supervisor, "_service_launch_plan", _slow_launch_plan)
+    monkeypatch.setattr(supervisor, "_wait_ready", lambda _spec: asyncio.sleep(0))
+
+    async def _run() -> bool:
+        task = asyncio.create_task(supervisor.ensure_started(name, spec, force=True))
+        while not setup_started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.02)
+        responsive_during_setup = not setup_finished.is_set()
+        await task
+        return responsive_during_setup
+
+    assert asyncio.run(_run()) is True
+
+
 def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod

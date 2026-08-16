@@ -801,6 +801,55 @@ class ServiceSkillSupervisor:
             )
         return values
 
+    def _service_launch_plan(
+        self,
+        name: str,
+        spec: ServiceSpec,
+        python: Path,
+    ) -> tuple[list[str], dict[str, str], Path]:
+        """Prepare filesystem and storage-backed process inputs off the owner loop."""
+
+        env = os.environ.copy()
+        env["ADAOS_SERVICE_SKILL"] = name
+        env["ADAOS_SERVICE_HOST"] = spec.host
+        env["ADAOS_SERVICE_PORT"] = str(spec.port)
+        env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
+        env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
+        bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)
+        if bucket_root is not None:
+            skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
+            internal_data = bucket_root / "data" / "internal"
+            # Owner identity and storage paths are capabilities of this service,
+            # never ambient values inherited from the parent runtime.
+            env["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
+            env["ADAOS_SKILL_MEMORY_PATH"] = str(skill_env_path)
+            env["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(internal_data)
+            env["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(internal_data)
+            env["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(internal_data)
+            env.update(self._service_storage_environment(spec, bucket_root))
+        env["ADAOS_SKILL_NAME"] = name
+        env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"
+        env["ADAOS_SKILL_ROOT"] = str(spec.skill_root)
+        env["ADAOS_SKILL_MODE"] = "runtime"
+        env["ADAOS_BASE_DIR"] = str(_path_value(self._ctx.paths.base_dir()))
+        for env_name, path_value in (
+            ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
+            ("ADAOS_REPO_ROOT", _optional_path_value(self._ctx.paths, "repo_root")),
+            ("ADAOS_MODELS_DIR", _optional_path_value(self._ctx.paths, "models_dir")),
+            ("ADAOS_STATE_DIR", _optional_path_value(self._ctx.paths, "state_dir")),
+            ("ADAOS_LOGS_DIR", _optional_path_value(self._ctx.paths, "logs_dir")),
+        ):
+            if path_value is not None:
+                env[env_name] = str(path_value)
+        env["PYTHONPATH"] = _service_pythonpath(self._ctx.paths, spec.skill_root, env.get("PYTHONPATH", ""))
+
+        cmd = self._build_command(python, spec.command)
+        logs_dir = self._ctx.paths.logs_dir()
+        logs_dir = Path(logs_dir() if callable(logs_dir) else logs_dir)
+        log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
+        log_path = Path(log_path_fn(name)) if callable(log_path_fn) else logs_dir / f"service.{name}.log"
+        return cmd, env, log_path
+
     def list(self) -> list[str]:
         self.ensure_discovered()
         return sorted(self._specs.keys())
@@ -1126,46 +1175,12 @@ class ServiceSkillSupervisor:
         self._external_ready_at.pop(name, None)
 
         python = await asyncio.to_thread(self._select_python, spec)
-        env = os.environ.copy()
-        env["ADAOS_SERVICE_SKILL"] = name
-        env["ADAOS_SERVICE_HOST"] = spec.host
-        env["ADAOS_SERVICE_PORT"] = str(spec.port)
-        env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
-        env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
-        bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)
-        if bucket_root is not None:
-            skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
-            internal_data = bucket_root / "data" / "internal"
-            # Owner identity and storage paths are capabilities of this service,
-            # never ambient values inherited from the process that happened to
-            # start it.  Reusing a caller's skill environment breaks isolation.
-            env["ADAOS_SKILL_ENV_PATH"] = str(skill_env_path)
-            env["ADAOS_SKILL_MEMORY_PATH"] = str(skill_env_path)
-            env["ADAOS_SKILL_INTERNAL_DATA_ROOT"] = str(internal_data)
-            env["ADAOS_SKILL_INTERNAL_ACTIVE_PATH"] = str(internal_data)
-            env["ADAOS_SKILL_INTERNAL_TARGET_PATH"] = str(internal_data)
-            env.update(self._service_storage_environment(spec, bucket_root))
-        env["ADAOS_SKILL_NAME"] = name
-        env["ADAOS_SKILL_PACKAGE"] = f"skills.{name}"
-        env["ADAOS_SKILL_ROOT"] = str(spec.skill_root)
-        env["ADAOS_SKILL_MODE"] = "runtime"
-        env["ADAOS_BASE_DIR"] = str(_path_value(self._ctx.paths.base_dir()))
-        for env_name, path_value in (
-            ("ADAOS_PACKAGE_DIR", _optional_path_value(self._ctx.paths, "package_path", "package_dir")),
-            ("ADAOS_REPO_ROOT", _optional_path_value(self._ctx.paths, "repo_root")),
-            ("ADAOS_MODELS_DIR", _optional_path_value(self._ctx.paths, "models_dir")),
-            ("ADAOS_STATE_DIR", _optional_path_value(self._ctx.paths, "state_dir")),
-            ("ADAOS_LOGS_DIR", _optional_path_value(self._ctx.paths, "logs_dir")),
-        ):
-            if path_value is not None:
-                env[env_name] = str(path_value)
-        env["PYTHONPATH"] = _service_pythonpath(self._ctx.paths, spec.skill_root, env.get("PYTHONPATH", ""))
-
-        cmd = self._build_command(python, spec.command)
-        logs_dir = self._ctx.paths.logs_dir()
-        logs_dir = Path(logs_dir() if callable(logs_dir) else logs_dir)
-        log_path_fn = getattr(self._ctx.paths, "skill_service_log_path", None)
-        log_path = Path(log_path_fn(name)) if callable(log_path_fn) else logs_dir / f"service.{name}.log"
+        cmd, env, log_path = await asyncio.to_thread(
+            self._service_launch_plan,
+            name,
+            spec,
+            python,
+        )
 
         if self._shutdown_requested:
             return

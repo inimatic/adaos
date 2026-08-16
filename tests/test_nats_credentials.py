@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 
@@ -51,3 +52,25 @@ async def test_credentials_fetch_is_rate_limited_by_owner() -> None:
 
     assert await runtime.fetch() is False
     assert runtime.hub_id == "sn_local"
+
+
+@pytest.mark.asyncio
+async def test_credentials_fetch_blocking_pipeline_runs_off_event_loop(monkeypatch) -> None:
+    runtime = NatsCredentialService(
+        SimpleNamespace(_nats_policy=SimpleNamespace()),
+        hub_id="sn_local",
+    )
+
+    def _slow_fetch(*, debug: bool) -> tuple[bool, str | None]:  # noqa: ARG001
+        time.sleep(0.2)
+        return True, "sn_refreshed"
+
+    monkeypatch.setattr(runtime, "_fetch_blocking", _slow_fetch)
+    started = time.perf_counter()
+    task = asyncio.create_task(runtime.fetch())
+    await asyncio.sleep(0.02)
+
+    assert time.perf_counter() - started < 0.1
+    assert not task.done()
+    assert await task is True
+    assert runtime.hub_id == "sn_refreshed"
