@@ -19,7 +19,12 @@ from adaos.domain.artifact_release import (
 )
 from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services import workspace_sync as workspace_sync_module
-from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized
+from adaos.services.workspace_sync import (
+    reconcile_workspace_db_to_materialized,
+    resolve_scenario_requirements,
+    runtime_required_scenario_refs,
+    sync_workspace_sparse_to_registry,
+)
 from adaos.services.workspace_registry import (
     load_workspace_registry_git_ref,
     list_workspace_registry_entries,
@@ -478,6 +483,49 @@ def test_registry_pattern_set_keeps_registry_json_first():
     assert patterns.count("registry.json") == 1
 
 
+def test_runtime_required_scenarios_include_bootstrap_home_current_and_reference(monkeypatch):
+    workspaces = [
+        SimpleNamespace(
+            effective_home_scenario="media_center",
+            current_scenario_overlay="adaos_drive",
+            home_scenario_ref_overlay={"scenario_id": "remote_dashboard"},
+        )
+    ]
+    monkeypatch.setattr("adaos.services.workspaces.index.list_workspaces", lambda: workspaces)
+
+    assert runtime_required_scenario_refs() == [
+        "adaos_drive",
+        "media_center",
+        "remote_dashboard",
+        "web_desktop",
+    ]
+
+
+def test_scenario_requirements_resolve_aliases_and_required_skill_closure():
+    payload = {
+        "version": 2,
+        "skills": [],
+        "scenarios": [
+            {
+                "kind": "scenario",
+                "id": "desktop-shell",
+                "name": "web_desktop",
+                "install": {"kind": "scenario", "id": "desktop-shell", "name": "web_desktop"},
+                "skills": {"required": ["web_desktop_skill", "voice_chat_skill"]},
+            }
+        ],
+    }
+
+    scenarios, skills, unresolved = resolve_scenario_requirements(
+        payload,
+        ["desktop-shell", "missing_scenario", "../unsafe"],
+    )
+
+    assert scenarios == ["missing_scenario", "web_desktop"]
+    assert skills == ["voice_chat_skill", "web_desktop_skill"]
+    assert unresolved == ["../unsafe", "missing_scenario"]
+
+
 def test_registry_v1_is_readable_and_rewritten_as_v2_without_losing_fields(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -860,6 +908,104 @@ class _Sql:
 
     def connect(self):
         return sqlite3.connect(self.path)
+
+
+def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_workspace_registry(
+        workspace,
+        {
+            "version": 2,
+            "skills": [],
+            "scenarios": [
+                {
+                    "kind": "scenario",
+                    "id": "web_desktop",
+                    "name": "web_desktop",
+                    "install": {"kind": "scenario", "id": "web_desktop", "name": "web_desktop"},
+                    "skills": {"required": ["web_desktop_skill", "voice_chat_skill"]},
+                },
+                {
+                    "kind": "scenario",
+                    "id": "media_center",
+                    "name": "media_center",
+                    "install": {"kind": "scenario", "id": "media_center", "name": "media_center"},
+                    "skills": {"required": ["media_center_skill", "mediaserver"]},
+                },
+            ],
+        },
+    )
+    sql = _Sql(tmp_path / "adaos.db")
+    SqliteScenarioRegistry(sql).register("media_center", active_version="0.1.0")
+
+    class _Git:
+        def __init__(self):
+            self.pulls = 0
+
+        def changed_files(self, _root):
+            return []
+
+        def pull(self, _root):
+            self.pulls += 1
+
+    class _Sparse:
+        patterns = ["registry.json", "scenarios/media_center"]
+
+        def __init__(self, _git, _root):
+            pass
+
+        def read_patterns(self):
+            return list(self.patterns)
+
+        def update(self, *, add=(), remove=()):
+            self.patterns = [item for item in self.patterns if item not in remove]
+            for item in add:
+                if item not in self.patterns:
+                    self.patterns.append(item)
+            return list(self.patterns)
+
+    git = _Git()
+    ctx = SimpleNamespace(
+        paths=SimpleNamespace(workspace_dir=lambda: workspace),
+        sql=sql,
+        git=git,
+        settings=SimpleNamespace(base_dir=tmp_path),
+    )
+    monkeypatch.setattr(workspace_sync_module, "SparseWorkspace", _Sparse)
+    monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: ["web_desktop"])
+    monkeypatch.setattr(
+        workspace_sync_module,
+        "reconcile_workspace_db_to_materialized",
+        lambda _ctx: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "adaos.services.git.availability.get_git_availability",
+        lambda **_kwargs: SimpleNamespace(enabled=True),
+    )
+
+    result = sync_workspace_sparse_to_registry(ctx)
+
+    assert result["ok"] is True
+    assert result["runtime_scenario_refs"] == ["web_desktop"]
+    assert result["scenarios"] == ["media_center", "web_desktop"]
+    assert result["scenario_required_skills"] == [
+        "media_center_skill",
+        "mediaserver",
+        "voice_chat_skill",
+        "web_desktop_skill",
+    ]
+    assert result["unresolved_runtime_scenarios"] == []
+    assert result["patterns"] == [
+        "registry.json",
+        "skills/media_center_skill",
+        "skills/mediaserver",
+        "skills/voice_chat_skill",
+        "skills/web_desktop_skill",
+        "scenarios/media_center",
+        "scenarios/web_desktop",
+    ]
+    assert git.pulls == 1
 
 
 def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):

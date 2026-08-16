@@ -763,7 +763,24 @@ class BootstrapBootCoordinator:
             from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized as _reconcile_workspace_db_to_materialized
 
             _reconcile_started = _startup_stage_mark("bootstrap_reconcile_workspace_registry")
-            await asyncio.to_thread(_reconcile_workspace_db_to_materialized, _get_ctx())
+            _reconcile_result = await asyncio.to_thread(_reconcile_workspace_db_to_materialized, _get_ctx())
+            _runtime_requirements = (
+                _reconcile_result.get("runtime_requirements")
+                if isinstance(_reconcile_result, dict)
+                else None
+            )
+            if isinstance(_runtime_requirements, dict):
+                _missing_scenarios = list(_runtime_requirements.get("missing_scenarios") or [])
+                _missing_skills = list(_runtime_requirements.get("missing_skills") or [])
+                _unresolved_scenarios = list(_runtime_requirements.get("unresolved_scenarios") or [])
+                if _missing_scenarios or _missing_skills or _unresolved_scenarios:
+                    service._log.error(
+                        "workspace runtime requirements unavailable missing_scenarios=%s "
+                        "missing_skills=%s unresolved_scenarios=%s; run `adaos setup update`",
+                        _missing_scenarios,
+                        _missing_skills,
+                        _unresolved_scenarios,
+                    )
             _startup_stage_mark("bootstrap_reconcile_workspace_registry", started=_reconcile_started)
         except Exception:
             service._log.debug("failed to reconcile workspace sqlite registry on boot", exc_info=True)

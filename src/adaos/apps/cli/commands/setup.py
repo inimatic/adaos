@@ -340,6 +340,16 @@ def update(
                     out["warnings"].append("skill registry empty; preserved workspace skills from current sparse/materialized state")
                 if fallback_used.get("scenarios"):
                     out["warnings"].append("scenario registry empty; preserved workspace scenarios from current sparse/materialized state")
+            unresolved_runtime_scenarios = [
+                str(name)
+                for name in (res.get("unresolved_runtime_scenarios") or [])
+                if str(name).strip()
+            ]
+            if unresolved_runtime_scenarios:
+                out["warnings"].append(
+                    "runtime scenarios are absent from workspace registry: "
+                    + ", ".join(unresolved_runtime_scenarios)
+                )
             if not res.get("ok"):
                 out["warnings"].append(f"workspace pull: {res.get('error')}")
         except Exception as exc:
