@@ -837,14 +837,21 @@ def test_skill_runtime_notify_activated_invalidates_capacity_cache(monkeypatch) 
     client = _make_client(skill_mgr, scenario_mgr)
     invalidations: list[bool] = []
     emitted: list[tuple[str, dict[str, Any], str]] = []
+    reload_thread_ids: list[int] = []
+    materialization_thread_ids: list[int] = []
 
     async def _reload(_ctx, skill_name: str):
+        reload_thread_ids.append(threading.get_ident())
         return {"ok": True, "skill": skill_name, "handlers": ["handlers/main.py"]}
+
+    def _invalidate_materialization(*_args, **_kwargs):
+        materialization_thread_ids.append(threading.get_ident())
+        return {"status": "invalidated"}
 
     monkeypatch.setattr(skills, "get_ctx", lambda: SimpleNamespace(bus=object()))
     monkeypatch.setattr(skills, "invalidate_local_capacity_cache", lambda: invalidations.append(True))
     monkeypatch.setattr(skills, "_reload_live_skill_handlers", _reload)
-    monkeypatch.setattr(skills, "invalidate_webspace_materialization_cache", lambda *args, **kwargs: {"status": "invalidated"})
+    monkeypatch.setattr(skills, "invalidate_webspace_materialization_cache", _invalidate_materialization)
     monkeypatch.setattr(skills, "bus_emit", lambda bus, typ, payload, source: emitted.append((typ, payload, source)))
 
     resp = client.post(
@@ -855,6 +862,8 @@ def test_skill_runtime_notify_activated_invalidates_capacity_cache(monkeypatch) 
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert invalidations == [True]
+    assert materialization_thread_ids
+    assert materialization_thread_ids != reload_thread_ids
     assert emitted == [
         (
             "skills.activated",

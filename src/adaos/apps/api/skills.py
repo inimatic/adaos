@@ -587,7 +587,8 @@ async def uninstall(body: UninstallReq, mgr: SkillManager = Depends(_get_manager
         body.name,
         force=bool(body.force),
     )
-    invalidate_webspace_materialization_cache(
+    await asyncio.to_thread(
+        invalidate_webspace_materialization_cache,
         webspace_id,
         reason=f"skill_uninstall:{body.name}",
         action="skill_uninstall_sync",
@@ -615,7 +616,8 @@ async def get_skill(name: str, mgr: SkillManager = Depends(_get_manager)):
 @router.delete("/{name}")
 async def remove(name: str, mgr: SkillManager = Depends(_get_manager)):
     await asyncio.to_thread(mgr.uninstall, name)
-    invalidate_webspace_materialization_cache(
+    await asyncio.to_thread(
+        invalidate_webspace_materialization_cache,
         default_webspace_id(),
         reason=f"skill_delete:{name}",
         action="skill_uninstall_sync",
@@ -740,7 +742,8 @@ async def runtime_activate(
             webspace_id=webspace_id,
         )
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = invalidate_webspace_materialization_cache(
+        materialization_cache = await asyncio.to_thread(
+            invalidate_webspace_materialization_cache,
             webspace_id,
             reason=f"skill_activate:{body.name}",
             action="skill_activation_sync",
@@ -776,7 +779,8 @@ async def runtime_activate(
         except (SkillCoreCompatibilityError, SkillDependencyIsolationError) as compat_exc:
             raise HTTPException(status_code=409, detail=str(compat_exc)) from compat_exc
         reload_result = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = invalidate_webspace_materialization_cache(
+        materialization_cache = await asyncio.to_thread(
+            invalidate_webspace_materialization_cache,
             webspace_id,
             reason=f"skill_activate:{body.name}",
             action="skill_activation_sync",
@@ -805,7 +809,8 @@ async def runtime_notify_activated(body: RuntimeNotifyActivatedReq):
     }
     invalidate_local_capacity_cache()
     reload_result = await _reload_live_skill_handlers(ctx, body.name)
-    materialization_cache = invalidate_webspace_materialization_cache(
+    materialization_cache = await asyncio.to_thread(
+        invalidate_webspace_materialization_cache,
         webspace_id,
         reason=f"skills_activated:{body.name}",
         action="skill_activation_sync",
@@ -924,7 +929,8 @@ async def update_skill(body: UpdateReq, ctx: AgentContext = Depends(get_ctx)):
             log.exception("runtime refresh failed after skill update: %s", body.name)
             raise HTTPException(status_code=409, detail=f"runtime refresh failed after skill update: {exc}") from exc
         handler_reload = await _reload_live_skill_handlers(ctx, body.name)
-        materialization_cache = invalidate_webspace_materialization_cache(
+        materialization_cache = await asyncio.to_thread(
+            invalidate_webspace_materialization_cache,
             webspace_id,
             reason=f"skill_update:{body.name}",
             action="skill_update_sync",
