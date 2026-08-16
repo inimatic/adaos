@@ -345,10 +345,10 @@ async def _runtime_process_activity_monitor() -> None:
     try:
         interval_sec = min(
             60.0,
-            max(1.0, float(str(os.getenv("ADAOS_INCIDENT_PROCESS_SAMPLE_INTERVAL_S") or "5").strip())),
+            max(1.0, float(str(os.getenv("ADAOS_INCIDENT_PROCESS_SAMPLE_INTERVAL_S") or "10").strip())),
         )
     except Exception:
-        interval_sec = 5.0
+        interval_sec = 10.0
     while True:
         try:
             await asyncio.to_thread(capture_process_activity_sample)

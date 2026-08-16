@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+import pytest
+
 import adaos.services.incident_registry as incidents
 
 
@@ -255,13 +259,13 @@ def test_process_activity_history_keeps_pre_failure_cpu_io_and_network_deltas(mo
     assert activity["read_delta_bytes"] == 5000
 
 
-def test_process_activity_history_default_covers_six_minutes_at_runtime_sample_rate() -> None:
+def test_process_activity_history_default_covers_twelve_minutes_at_runtime_sample_rate() -> None:
     incidents.reset_incident_registry()
     for index in range(80):
         incidents._PROCESS_ACTIVITY_HISTORY.append(
             {
-                "ts": 100.0 + index * 5.0,
-                "interval_s": 5.0,
+                "ts": 100.0 + index * 10.0,
+                "interval_s": 10.0,
                 "top_activity": [],
                 "system_delta": {},
             }
@@ -270,8 +274,25 @@ def test_process_activity_history_default_covers_six_minutes_at_runtime_sample_r
     history = incidents.process_activity_history_snapshot()
 
     assert history["returned"] >= 73
-    assert history["coverage_s"] >= 360.0
+    assert history["coverage_s"] >= 720.0
     assert history["history_capacity"] >= history["returned"]
+
+
+def test_process_activity_name_filter_keeps_channel_related_and_configured_processes(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_INCIDENT_PROCESS_NAME_HINTS", "custom-worker")
+
+    assert incidents._process_activity_name_relevant("python.exe", pid=123) is True
+    assert incidents._process_activity_name_relevant("custom-worker.exe", pid=124) is True
+    assert incidents._process_activity_name_relevant("svchost.exe", pid=125) is False
+    assert incidents._process_activity_name_relevant("unrelated.exe", pid=os.getpid()) is True
+
+
+def test_latest_process_activity_sample_reads_history_without_capture(monkeypatch) -> None:
+    incidents.reset_incident_registry()
+    incidents._PROCESS_ACTIVITY_HISTORY.append({"ts": 123.0, "process_total": 4})
+    monkeypatch.setattr(incidents, "_process_rows", lambda: pytest.fail("must not capture processes"))
+
+    assert incidents.latest_process_activity_sample() == {"ts": 123.0, "process_total": 4}
 
 
 def test_process_activity_attributes_windows_skill_runtime_paths() -> None:

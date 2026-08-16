@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from adaos.services.incident_registry import (
-    capture_process_activity_sample,
+    latest_process_activity_sample,
     record_runtime_event_loop_stall,
 )
 from adaos.services.reliability import (
@@ -184,7 +184,7 @@ class RuntimeEventLoopWatchdog:
                 if report_incident:
                     last_report_at = observed_at
                     try:
-                        process_sample = capture_process_activity_sample()
+                        process_sample = latest_process_activity_sample()
                     except Exception as exc:
                         process_sample = {"available": False, "error": type(exc).__name__}
                     try:

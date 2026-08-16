@@ -32,7 +32,7 @@ def test_watchdog_captures_loop_stack_while_probe_is_unacknowledged(monkeypatch)
 
     monkeypatch.setattr(
         watchdog_module,
-        "capture_process_activity_sample",
+        "latest_process_activity_sample",
         lambda: {"top_activity": [{"pid": 42, "domain": "skill:test_skill"}]},
     )
 
@@ -134,7 +134,7 @@ def test_watchdog_preserves_skill_attribution_until_stall_completion(monkeypatch
     monkeypatch.setattr(watchdog_module, "set_runtime_event_loop_watchdog_state", lambda **_kwargs: {})
     monkeypatch.setattr(watchdog_module, "record_runtime_event_loop_watchdog_probe", lambda **_kwargs: {})
     monkeypatch.setattr(watchdog_module, "record_runtime_event_loop_stall", lambda **_kwargs: {})
-    monkeypatch.setattr(watchdog_module, "capture_process_activity_sample", lambda: {})
+    monkeypatch.setattr(watchdog_module, "latest_process_activity_sample", lambda: {})
     monkeypatch.setattr(
         subscription_execution,
         "capture_active_skill_handlers_for_stack",

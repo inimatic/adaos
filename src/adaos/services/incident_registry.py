@@ -43,10 +43,45 @@ _PROCESS_ACTIVITY_HISTORY: deque[dict[str, Any]] = deque(maxlen=_PROCESS_ACTIVIT
 _PROCESS_ACTIVITY_PREVIOUS: dict[int, dict[str, Any]] = {}
 _PROCESS_ACTIVITY_PREVIOUS_SYSTEM: dict[str, int] = {}
 _PROCESS_ACTIVITY_PREVIOUS_AT: float | None = None
+_PROCESS_ACTIVITY_IDENTITY_CACHE: dict[int, dict[str, Any]] = {}
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(token|authorization|password|secret|key)=([^&\s]+)"),
     re.compile(r"(?i)(bearer\s+)[a-z0-9._~+/=-]+"),
+)
+_PROCESS_ACTIVITY_NAME_HINTS = (
+    "python",
+    "node",
+    "chrome",
+    "msedge",
+    "firefox",
+    "code",
+    "powershell",
+    "pwsh",
+    "cmd",
+    "curl",
+    "wget",
+    "aria",
+    "torrent",
+    "transmission",
+    "onedrive",
+    "rclone",
+    "rsync",
+    "ffmpeg",
+    "java",
+    "dotnet",
+    "docker",
+    "wsl",
+    "git",
+    "npm",
+    "yarn",
+    "pnpm",
+    "rasa",
+    "ollama",
+    "sing-box",
+    "openvpn",
+    "wireguard",
+    "system",
 )
 
 
@@ -222,6 +257,16 @@ def _read_pressure_file(name: str) -> dict[str, Any]:
     return parsed
 
 
+def _process_activity_name_relevant(name: Any, *, pid: int) -> bool:
+    if int(pid or 0) == os.getpid():
+        return True
+    token = str(name or "").strip().lower()
+    if any(hint in token for hint in _PROCESS_ACTIVITY_NAME_HINTS):
+        return True
+    extra = str(os.getenv("ADAOS_INCIDENT_PROCESS_NAME_HINTS") or "").strip().lower()
+    return any(hint.strip() and hint.strip() in token for hint in extra.split(","))
+
+
 def _process_rows() -> list[dict[str, Any]]:
     try:
         import psutil  # type: ignore
@@ -229,16 +274,38 @@ def _process_rows() -> list[dict[str, Any]]:
         return []
 
     rows: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "status", "memory_info", "cpu_times"]):
+    observed_pids: set[int] = set()
+    for proc in psutil.process_iter(["pid", "name", "create_time"]):
         try:
-            info = proc.info
-            cmdline_items = info.get("cmdline") or []
-            cmdline = " ".join(str(item) for item in cmdline_items)
-            if not cmdline:
-                cmdline = str(info.get("name") or "")
-            io = proc.io_counters() if hasattr(proc, "io_counters") else None
-            mem = info.get("memory_info")
-            cpu_times = info.get("cpu_times")
+            initial = proc.info
+            pid = int(initial.get("pid") or proc.pid)
+            name = str(initial.get("name") or "")
+            create_time = float(initial.get("create_time") or 0.0)
+            if not _process_activity_name_relevant(name, pid=pid):
+                continue
+            observed_pids.add(pid)
+            with _LOCK:
+                identity = dict(_PROCESS_ACTIVITY_IDENTITY_CACHE.get(pid) or {})
+            if (
+                str(identity.get("name") or "") != name
+                or float(identity.get("create_time") or 0.0) != create_time
+            ):
+                identity = {}
+            with proc.oneshot():
+                if not identity:
+                    cmdline_items = proc.cmdline() or []
+                    cmdline = " ".join(str(item) for item in cmdline_items) or name
+                    identity = {
+                        "name": name,
+                        "create_time": create_time,
+                        "cmdline": _redact_text(cmdline, limit=220),
+                        "domain": _domain_from_cmdline(cmdline),
+                    }
+                    with _LOCK:
+                        _PROCESS_ACTIVITY_IDENTITY_CACHE[pid] = dict(identity)
+                mem = proc.memory_info()
+                cpu_times = proc.cpu_times()
+                io = proc.io_counters() if hasattr(proc, "io_counters") else None
             rss = int(getattr(mem, "rss", 0) or 0)
             cpu_time_s = float(getattr(cpu_times, "user", 0.0) or 0.0) + float(
                 getattr(cpu_times, "system", 0.0) or 0.0
@@ -247,19 +314,21 @@ def _process_rows() -> list[dict[str, Any]]:
             write_bytes = int(getattr(io, "write_bytes", 0) or 0) if io is not None else 0
             rows.append(
                 {
-                    "pid": int(info.get("pid") or proc.pid),
-                    "name": _redact_text(info.get("name") or "", limit=80),
-                    "status": _redact_text(info.get("status") or "", limit=40),
+                    "pid": pid,
+                    "name": _redact_text(identity.get("name") or name, limit=80),
                     "rss_bytes": rss,
                     "cpu_time_s": round(cpu_time_s, 6),
                     "read_bytes": read_bytes,
                     "write_bytes": write_bytes,
-                    "domain": _domain_from_cmdline(cmdline),
-                    "cmdline": _redact_text(cmdline, limit=220),
+                    "domain": identity.get("domain") or "system.process",
+                    "cmdline": identity.get("cmdline") or name,
                 }
             )
         except Exception:
             continue
+    with _LOCK:
+        for stale_pid in set(_PROCESS_ACTIVITY_IDENTITY_CACHE) - observed_pids:
+            _PROCESS_ACTIVITY_IDENTITY_CACHE.pop(stale_pid, None)
     return rows
 
 
@@ -295,6 +364,7 @@ def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None
     """Build a sample while the public capture lock is held."""
 
     global _PROCESS_ACTIVITY_PREVIOUS_AT
+    capture_started = time.monotonic()
     now_ts = float(ts if ts is not None else _now())
     rows = _process_rows()
     system = _system_activity_counters()
@@ -385,6 +455,8 @@ def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None
             "ts": now_ts,
             "interval_s": round(interval_s, 3),
             "process_total": len(current_by_pid),
+            "process_scope": "relevant",
+            "capture_duration_ms": round((time.monotonic() - capture_started) * 1000.0, 3),
             "system_delta": system_delta,
             "top_activity": ranked[:bounded_limit],
         }
@@ -397,6 +469,11 @@ def _capture_process_activity_sample(*, limit: int = 10, ts: float | None = None
         _PROCESS_ACTIVITY_PREVIOUS_AT = now_ts
         _PROCESS_ACTIVITY_HISTORY.append(dict(sample))
     return dict(sample)
+
+
+def latest_process_activity_sample() -> dict[str, Any]:
+    with _LOCK:
+        return dict(_PROCESS_ACTIVITY_HISTORY[-1]) if _PROCESS_ACTIVITY_HISTORY else {}
 
 
 def process_activity_history_snapshot(*, limit: int = _PROCESS_ACTIVITY_HISTORY_DEFAULT_LIMIT) -> dict[str, Any]:
@@ -1235,6 +1312,7 @@ def reset_incident_registry() -> None:
         _PROCESS_ACTIVITY_HISTORY.clear()
         _PROCESS_ACTIVITY_PREVIOUS.clear()
         _PROCESS_ACTIVITY_PREVIOUS_SYSTEM.clear()
+        _PROCESS_ACTIVITY_IDENTITY_CACHE.clear()
         _PROCESS_ACTIVITY_PREVIOUS_AT = None
 
 
@@ -1245,6 +1323,7 @@ __all__ = [
     "incident_registry_snapshot",
     "is_yjs_thread_affinity_fault",
     "local_blocking_evidence",
+    "latest_process_activity_sample",
     "load_incident_registry",
     "persist_incident_registry",
     "process_io_delta_sample",
