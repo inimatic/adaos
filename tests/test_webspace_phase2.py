@@ -3110,9 +3110,92 @@ def test_materialization_cache_invalidation_without_scenario_drops_whole_webspac
 
     assert result["materialization"]["cache_drop_scope"] == "webspace"
     assert result["materialization"]["cache_dropped"] == {"memory": 2, "disk": 2}
+    assert result["materialization"]["disk_cache_drop_deferred"] is False
     assert webspace_runtime_module._RUNTIME.cache.materialized_webspace_count() == 0  # noqa: SLF001
     assert webspace_runtime_module._RUNTIME.cache.get_skill_source_fingerprint("workspace") is None  # noqa: SLF001
     assert not list(tmp_path.glob("*.json"))
+
+
+def test_skill_runtime_cache_invalidation_defers_disk_scan(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_WEBSPACE_MATERIALIZATION_DISK_CACHE", "1")
+    identity = {
+        "key_hash": "deferred-cache-key",
+        "key": "deferred-cache-key",
+        "webspace_id": "desktop-deferred-cache",
+        "scenario_id": "web_desktop",
+    }
+    value = {"identity": identity, "materialized_payload": {"scenario_id": "web_desktop"}}
+    webspace_runtime_module._RUNTIME.cache.put_materialized_webspace(  # noqa: SLF001
+        "deferred-cache-key",
+        value,
+        max_entries=8,
+        max_bytes=1024,
+    )
+    assert webspace_runtime_module._RUNTIME.disk_cache.store_record("deferred-cache-key", value) is True  # noqa: SLF001
+
+    result = webspace_runtime_module.invalidate_webspace_materialization_cache(
+        "desktop-deferred-cache",
+        reason="skill_activate:test",
+        action="skill_activation_sync",
+        source_of_truth="skill_runtime",
+        defer_disk=True,
+    )
+
+    assert result["materialization"]["cache_dropped"] == {"memory": 1, "disk": 0}
+    assert result["materialization"]["disk_cache_drop_deferred"] is True
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert (
+        webspace_runtime_module._drop_materialized_disk_cache_for_webspace(  # noqa: SLF001
+            "desktop-deferred-cache"
+        )
+        == 1
+    )
+    assert not list(tmp_path.glob("*.json"))
+
+
+def test_skill_runtime_rebuild_runs_deferred_disk_scan_off_owner_loop(monkeypatch) -> None:
+    webspace_id = "desktop-deferred-cache-worker"
+    owner_thread_id = threading.get_ident()
+    disk_thread_ids: list[int] = []
+    rebuilds: list[str] = []
+
+    monkeypatch.setattr(webspace_runtime_module, "_skill_runtime_rebuild_debounce_s", lambda: 0.0)
+    monkeypatch.setattr(
+        webspace_runtime_module,
+        "invalidate_webspace_materialization_cache",
+        lambda *_args, **_kwargs: {},
+    )
+
+    def _drop_disk(target: str, **_kwargs) -> int:
+        assert target == webspace_id
+        disk_thread_ids.append(threading.get_ident())
+        return 2
+
+    async def _rebuild(target: str, **_kwargs) -> None:
+        rebuilds.append(target)
+
+    monkeypatch.setattr(webspace_runtime_module, "_drop_materialized_disk_cache_for_webspace", _drop_disk)
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _rebuild)
+
+    async def _exercise() -> None:
+        webspace_runtime_module.schedule_skill_runtime_rebuild(
+            webspace_id=webspace_id,
+            action="skill_activation_sync",
+            source_of_truth="skill_runtime",
+            reason="weather_skill",
+        )
+        task = webspace_runtime_module._RUNTIME.tasks.active_task(  # noqa: SLF001
+            webspace_runtime_module._RUNTIME.tasks.SKILL_RUNTIME,  # noqa: SLF001
+            webspace_id,
+        )
+        assert task is not None
+        await task
+
+    asyncio.run(_exercise())
+
+    assert disk_thread_ids and disk_thread_ids[0] != owner_thread_id
+    assert rebuilds == [webspace_id]
 
 
 def test_switch_webspace_scenario_same_current_ready_rebuilds_mismatched_materialization(monkeypatch) -> None:

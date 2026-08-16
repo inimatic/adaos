@@ -81,6 +81,7 @@ def _is_control_flow_base_exception(exc: BaseException) -> bool:
 
 _TRANSPORT_LOCK = threading.RLock()
 _ACTIVE_YWS_LOCK = threading.RLock()
+_ACTIVE_EVENTS_WS_LOCK = threading.RLock()
 _YWS_STORM_LOCK = threading.RLock()
 _YWS_ATTEMPT_LOCK = threading.RLock()
 _WEBIO_CONTROL_DEDUPE_LOCK = threading.RLock()
@@ -116,6 +117,7 @@ _TRANSPORT_STATE: dict[str, dict[str, Any]] = {
 }
 _ACTIVE_YWS_CONNECTIONS: dict[str, list[WebSocket]] = {}
 _ACTIVE_YWS_CLIENTS: dict[str, dict[str, int]] = {}
+_ACTIVE_EVENTS_WS_WEBSPACES: dict[int, str] = {}
 _YWS_OPEN_HISTORY: deque[float] = deque(maxlen=512)
 _YWS_CLIENT_OPEN_HISTORY: dict[str, deque[float]] = {}
 _YWS_ATTEMPT_HISTORY: deque[float] = deque(maxlen=1024)
@@ -3103,11 +3105,19 @@ def _active_yws_connection_total_for_webspace(webspace_id: str) -> int:
         return len(_ACTIVE_YWS_CONNECTIONS.get(key) or [])
 
 
+def _active_events_ws_connection_total_for_webspace(webspace_id: str) -> int:
+    key = str(webspace_id or "").strip() or "default"
+    with _ACTIVE_EVENTS_WS_LOCK:
+        return sum(1 for value in _ACTIVE_EVENTS_WS_WEBSPACES.values() if value == key)
+
+
 def _webspace_has_live_transports(webspace_id: str) -> bool:
     key = str(webspace_id or "").strip() or "default"
     if _active_yws_connection_total_for_webspace(key) > 0:
         return True
-    return _active_webrtc_peer_total_for_webspace(key) > 0
+    if _active_webrtc_peer_total_for_webspace(key) > 0:
+        return True
+    return _active_events_ws_connection_total_for_webspace(key) > 0
 
 
 def _schedule_idle_room_reset(webspace_id: str, *, reason: str = "idle_room_eviction") -> bool:
@@ -3927,6 +3937,24 @@ def _track_yws_connection(webspace_id: str, websocket: WebSocket, *, device_id: 
             items.append(websocket)
         clients = _ACTIVE_YWS_CLIENTS.setdefault(key, {})
         clients[client_key] = int(clients.get(client_key) or 0) + 1
+
+
+def _track_events_ws_connection(webspace_id: str, websocket: WebSocket) -> None:
+    key = str(webspace_id or "").strip() or "default"
+    connection_key = id(websocket)
+    with _ACTIVE_EVENTS_WS_LOCK:
+        previous = _ACTIVE_EVENTS_WS_WEBSPACES.get(connection_key)
+        _ACTIVE_EVENTS_WS_WEBSPACES[connection_key] = key
+    _cancel_idle_room_reset(key)
+    if previous and previous != key and not _webspace_has_live_transports(previous):
+        _schedule_idle_room_reset(previous)
+
+
+def _untrack_events_ws_connection(websocket: WebSocket) -> None:
+    with _ACTIVE_EVENTS_WS_LOCK:
+        key = _ACTIVE_EVENTS_WS_WEBSPACES.pop(id(websocket), None)
+    if key and not _webspace_has_live_transports(key):
+        _schedule_idle_room_reset(key)
 
 
 def _next_yws_attempt_id(webspace_id: str, dev_id: str) -> str:
@@ -5532,6 +5560,17 @@ def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | Non
     client_quarantined = bool(quarantined_clients)
     planned_transition = _yws_guard_planned_transition_snapshot(now_ts=now)
     server_snapshot = _y_server_runtime_snapshot()
+    active_events_connections = _active_events_ws_connection_total_for_webspace(selected_webspace_id)
+    active_webrtc_peers = _active_webrtc_peer_total_for_webspace(selected_webspace_id)
+    room_details = server_snapshot.get("room_effective_branches")
+    room_present = isinstance(room_details, dict) and selected_webspace_id in room_details
+    retained_by = []
+    if active_connections > 0:
+        retained_by.append("yws")
+    if active_events_connections > 0:
+        retained_by.append("events_ws")
+    if active_webrtc_peers > 0:
+        retained_by.append("webrtc")
     direct_transport_enabled = _yws_direct_transport_enabled()
     state, reason = _yjs_balancer_state(
         server_ready=bool(server_snapshot.get("ready")),
@@ -5587,6 +5626,8 @@ def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | Non
             "active_client_sessions": active_client_rows,
             "active_webspaces": len(active_by_webspace),
             "active_connections_all_webspaces": sum(int(count or 0) for count in active_by_webspace.values()),
+            "active_events_ws_connections": active_events_connections,
+            "active_webrtc_peers": active_webrtc_peers,
         },
         "limits": {
             "max_active_per_webspace": active_connection_limit,
@@ -5634,6 +5675,12 @@ def yjs_balancer_snapshot(webspace_id: str | None = None, *, now_ts: float | Non
             "last_reject_dev_id": str(guard_diag.get("last_reject_dev_id") or ""),
         },
         "observed": {
+            "room_retention": {
+                "room_present": room_present,
+                "retained_by": retained_by,
+                "idle_eviction_eligible": bool(room_present and not retained_by),
+                "idle_eviction_delay_s": float(_IDLE_ROOM_EVICT_SEC),
+            },
             "hot_clients": hot_clients[:8],
             "active_by_webspace": active_by_webspace_rows[:16],
             "global_recent_open_10s": global_recent_open_10s,
@@ -6042,6 +6089,9 @@ def _y_server_runtime_snapshot() -> dict[str, Any]:
             cached_branches = getattr(room, "_diag_effective_branch_snapshot", None)
             room_effective_branches[room_key] = {
                 "client_total": client_total,
+                "active_events_ws": _active_events_ws_connection_total_for_webspace(room_key),
+                "active_yws": _active_yws_connection_total_for_webspace(room_key),
+                "active_webrtc": _active_webrtc_peer_total_for_webspace(room_key),
                 "branches": cached_branches if isinstance(cached_branches, dict) else {"ready": False, "error": "not_observed"},
             }
     error: str | None = None
@@ -10070,6 +10120,7 @@ async def events_ws(websocket: WebSocket):
 
     device_id: str | None = None
     webspace_id = _coerce_gateway_webspace_id(None)
+    _track_events_ws_connection(webspace_id, websocket)
     ws_loop = asyncio.get_running_loop()
 
     async def _ws_send(msg: dict[str, Any]) -> None:
@@ -10150,6 +10201,7 @@ async def events_ws(websocket: WebSocket):
                     if device_id is None and signal_device_id != "unknown":
                         device_id = signal_device_id
                     webspace_id = signal_webspace_id
+                    _track_events_ws_connection(webspace_id, websocket)
 
                     async def _send_ice_via_ws(candidate: dict[str, Any]) -> None:
                         try:
@@ -10199,6 +10251,7 @@ async def events_ws(websocket: WebSocket):
                         device_id = signal_device_id
                     if payload.get("webspace_id"):
                         webspace_id = _coerce_gateway_webspace_id(payload.get("webspace_id"))
+                        _track_events_ws_connection(webspace_id, websocket)
                     await handle_remote_ice(
                         signal_device_id,
                         payload.get("candidate"),
@@ -10224,10 +10277,12 @@ async def events_ws(websocket: WebSocket):
             # Update connection-scoped state when a command changed it.
             if new_ws is not None:
                 webspace_id = new_ws
+                _track_events_ws_connection(webspace_id, websocket)
             if kind == "device.register":
                 device_id = payload.get("device_id") or "dev-unknown"
     finally:
         _transport_mark_close("ws")
+        _untrack_events_ws_connection(websocket)
         _unregister_ws_event_subscriptions(websocket)
         _ = device_id
         if _ws_trace_enabled():

@@ -473,6 +473,7 @@ def _skill_runtime_rebuild_stats(webspace_id: str) -> Dict[str, Any]:
             "coalesced_total": 0,
             "completed_total": 0,
             "failed_total": 0,
+            "disk_cache_removed_total": 0,
         }
         _RUNTIME.tasks.put_record(_RUNTIME.tasks.SKILL_RUNTIME_STATS, key, stats)
     return stats
@@ -536,6 +537,7 @@ def schedule_skill_runtime_rebuild(
         reason=reason or action,
         action=action,
         source_of_truth=source_of_truth,
+        defer_disk=True,
     )
     stats = _skill_runtime_rebuild_stats(key)
     stats["requested_total"] = int(stats.get("requested_total") or 0) + 1
@@ -602,13 +604,33 @@ async def _run_skill_runtime_rebuild_coalesced(webspace_id: str) -> None:
             action = _coalesced_skill_runtime_action(actions)
             source_of_truth = str(pending.get("source_of_truth") or "skill_runtime").strip() or "skill_runtime"
             request_count = int(pending.get("request_count") or 0)
+            disk_drop_started = time.perf_counter()
+            try:
+                disk_removed = await asyncio.to_thread(
+                    _drop_materialized_disk_cache_for_webspace,
+                    key,
+                )
+            except Exception:
+                disk_removed = 0
+                stats["disk_cache_drop_failed_total"] = int(stats.get("disk_cache_drop_failed_total") or 0) + 1
+                _log.warning(
+                    "deferred materialization disk cache drop failed webspace=%s",
+                    key,
+                    exc_info=True,
+                )
+            stats["disk_cache_removed_total"] = int(stats.get("disk_cache_removed_total") or 0) + disk_removed
+            stats["last_disk_cache_removed"] = disk_removed
+            stats["last_disk_cache_drop_ms"] = _elapsed_ms(disk_drop_started)
             _log.info(
-                "running coalesced skill runtime rebuild webspace=%s action=%s requests=%s actions=%s reasons=%s",
+                "running coalesced skill runtime rebuild webspace=%s action=%s requests=%s actions=%s reasons=%s "
+                "disk_cache_removed=%s disk_cache_drop_ms=%.3f",
                 key,
                 action,
                 request_count,
                 ",".join(str(item) for item in actions) or "-",
                 ",".join(str(item) for item in reasons[:8]) or "-",
+                disk_removed,
+                stats["last_disk_cache_drop_ms"],
             )
             try:
                 await rebuild_webspace_from_sources(
@@ -3206,7 +3228,29 @@ def _materialized_cache_value_matches(
     return True
 
 
-def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str | None = None) -> dict[str, int]:
+def _drop_materialized_disk_cache_for_webspace(
+    webspace_id: str,
+    *,
+    scenario_id: str | None = None,
+) -> int:
+    target = str(webspace_id or "").strip()
+    if not target:
+        return 0
+    return _RUNTIME.disk_cache.discard_records(
+        lambda value: _materialized_cache_value_matches(
+            value,
+            webspace_id=target,
+            scenario_id=scenario_id,
+        )
+    )
+
+
+def _drop_materialized_cache_for_webspace(
+    webspace_id: str,
+    *,
+    scenario_id: str | None = None,
+    include_disk: bool = True,
+) -> dict[str, int]:
     target = str(webspace_id or "").strip()
     if not target:
         return {"memory": 0, "disk": 0}
@@ -3217,12 +3261,10 @@ def _drop_materialized_cache_for_webspace(webspace_id: str, *, scenario_id: str 
             scenario_id=scenario_id,
         )
     )
-    disk_removed = _RUNTIME.disk_cache.discard_records(
-        lambda value: _materialized_cache_value_matches(
-            value,
-            webspace_id=target,
-            scenario_id=scenario_id,
-        )
+    disk_removed = (
+        _drop_materialized_disk_cache_for_webspace(target, scenario_id=scenario_id)
+        if include_disk
+        else 0
     )
     return {"memory": memory_removed, "disk": disk_removed}
 
@@ -4577,6 +4619,7 @@ def invalidate_webspace_materialization_cache(
     action: str | None = None,
     source_of_truth: str | None = None,
     scenario_id: str | None = None,
+    defer_disk: bool = False,
 ) -> dict[str, Any]:
     target = str(webspace_id or "").strip() or default_webspace_id()
     current = dict(_RUNTIME.tasks.get_record(_RUNTIME.tasks.WEBSPACE_REBUILD_STATUS, target) or {})
@@ -4603,11 +4646,16 @@ def invalidate_webspace_materialization_cache(
     if current_materialization.get("observed_at") is not None:
         materialization["previous_observed_at"] = current_materialization.get("observed_at")
     explicit_scenario = str(scenario_id or "").strip() or None
-    dropped_cache = _drop_materialized_cache_for_webspace(target, scenario_id=explicit_scenario)
+    dropped_cache = _drop_materialized_cache_for_webspace(
+        target,
+        scenario_id=explicit_scenario,
+        include_disk=not defer_disk,
+    )
     _RUNTIME.cache.clear_skill_declarations()
     _RUNTIME.cache.clear_skill_source_fingerprints()
     materialization["desktop_scenario_cache_dropped"] = _RUNTIME.cache.clear_desktop_scenarios()
     materialization["cache_dropped"] = dropped_cache
+    materialization["disk_cache_drop_deferred"] = bool(defer_disk)
     materialization["cache_drop_scope"] = "scenario" if explicit_scenario else "webspace"
     return _set_webspace_rebuild_status(
         target,

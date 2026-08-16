@@ -2208,6 +2208,7 @@ def test_reset_live_webspace_room_releases_ydoc_on_owner_thread(monkeypatch) -> 
 def test_yws_tracking_cancels_pending_idle_room_reset(monkeypatch) -> None:
     gateway_module.y_server.rooms["idle-room"] = object()
     gateway_module._IDLE_ROOM_RESET_TASKS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
 
     reset_calls: list[tuple[str, str]] = []
 
@@ -2231,6 +2232,39 @@ def test_yws_tracking_cancels_pending_idle_room_reset(monkeypatch) -> None:
     assert reset_calls == []
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
+    gateway_module._IDLE_ROOM_RESET_TASKS.clear()
+    gateway_module.y_server.rooms.clear()
+
+
+def test_idle_room_reset_preserves_room_for_active_events_ws(monkeypatch) -> None:
+    webspace_id = "idle-room-events-ws"
+    websocket = object()
+    gateway_module.y_server.rooms[webspace_id] = object()
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
+    gateway_module._IDLE_ROOM_RESET_TASKS.clear()
+    reset_calls: list[str] = []
+
+    async def _fake_reset(target: str, **_kwargs) -> dict[str, object]:
+        reset_calls.append(target)
+        return {"ok": True}
+
+    monkeypatch.setattr(gateway_module, "_IDLE_ROOM_EVICT_SEC", 0.02)
+    monkeypatch.setattr(gateway_module, "reset_live_webspace_room", _fake_reset)
+    monkeypatch.setattr(gateway_module, "_active_webrtc_peer_total_for_webspace", lambda _webspace_id: 0)
+
+    async def _exercise() -> None:
+        gateway_module._track_events_ws_connection(webspace_id, websocket)
+        assert gateway_module._schedule_idle_room_reset(webspace_id) is True
+        await asyncio.sleep(0.06)
+
+    asyncio.run(_exercise())
+
+    assert reset_calls == []
+    assert gateway_module._active_events_ws_connection_total_for_webspace(webspace_id) == 1
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
     gateway_module._IDLE_ROOM_RESET_TASKS.clear()
     gateway_module.y_server.rooms.clear()
 
@@ -2239,6 +2273,7 @@ def test_idle_room_reset_evicts_without_prewarm_or_route_reset(monkeypatch) -> N
     gateway_module.y_server.rooms["idle-room-evict"] = object()
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
     gateway_module._IDLE_ROOM_RESET_TASKS.clear()
 
     reset_calls: list[dict[str, object]] = []
@@ -4419,6 +4454,36 @@ def test_yjs_balancer_snapshot_reports_limits_usage_and_guard(monkeypatch) -> No
     gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
     gateway_module._ACTIVE_YWS_CLIENTS.clear()
     _clear_yws_guard_state()
+
+
+def test_yjs_balancer_reports_events_ws_room_retention(monkeypatch) -> None:
+    gateway_module._ACTIVE_YWS_CONNECTIONS.clear()
+    gateway_module._ACTIVE_YWS_CLIENTS.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES[1] = "ops"
+    monkeypatch.setattr(gateway_module, "_active_webrtc_peer_total_for_webspace", lambda _webspace_id: 0)
+    monkeypatch.setattr(
+        gateway_module,
+        "_y_server_runtime_snapshot",
+        lambda: {
+            "ready": True,
+            "room_total": 1,
+            "room_effective_branches": {"ops": {"client_total": 0}},
+        },
+    )
+
+    snapshot = gateway_module.yjs_balancer_snapshot(webspace_id="ops")
+
+    assert snapshot["usage"]["active_connections"] == 0
+    assert snapshot["usage"]["active_events_ws_connections"] == 1
+    assert snapshot["usage"]["active_webrtc_peers"] == 0
+    assert snapshot["observed"]["room_retention"] == {
+        "room_present": True,
+        "retained_by": ["events_ws"],
+        "idle_eviction_eligible": False,
+        "idle_eviction_delay_s": float(gateway_module._IDLE_ROOM_EVICT_SEC),
+    }
+    gateway_module._ACTIVE_EVENTS_WS_WEBSPACES.clear()
 
 
 def test_yjs_balancer_reports_attempt_ids_for_their_exact_browser_session(monkeypatch) -> None:
