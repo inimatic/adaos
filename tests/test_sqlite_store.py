@@ -218,6 +218,7 @@ def test_sqlite_process_write_gate_serializes_runtime_writers(tmp_path: Path, mo
         assert waiting is not None
         assert waiting["current_statement_kind"] == "INSERT"
         assert waiting["thread_name"] == "sqlite-write-gate-contender"
+        time.sleep(0.03)
     finally:
         holder.rollback()
         holder.close()
