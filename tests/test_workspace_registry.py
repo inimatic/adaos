@@ -20,6 +20,7 @@ from adaos.domain.artifact_release import (
 from adaos.services import workspace_registry as workspace_registry_module
 from adaos.services import workspace_sync as workspace_sync_module
 from adaos.services.workspace_sync import (
+    audit_workspace_materialization,
     reconcile_workspace_db_to_materialized,
     resolve_scenario_requirements,
     runtime_required_scenario_refs,
@@ -1006,6 +1007,53 @@ def test_sparse_sync_keeps_runtime_scenarios_and_materializes_required_skills(tm
         "scenarios/web_desktop",
     ]
     assert git.pulls == 1
+
+
+def test_workspace_materialization_audit_is_read_only(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    scenario_dir = workspace / "scenarios" / "media_center"
+    scenario_dir.mkdir(parents=True)
+    (scenario_dir / "scenario.yaml").write_text(
+        "id: media_center\nversion: '0.1.0'\n",
+        encoding="utf-8",
+    )
+    write_workspace_registry(
+        workspace,
+        {
+            "version": 2,
+            "skills": [],
+            "scenarios": [
+                {
+                    "kind": "scenario",
+                    "id": "media_center",
+                    "name": "media_center",
+                    "install": {"kind": "scenario", "id": "media_center", "name": "media_center"},
+                },
+                {
+                    "kind": "scenario",
+                    "id": "web_desktop",
+                    "name": "web_desktop",
+                    "install": {"kind": "scenario", "id": "web_desktop", "name": "web_desktop"},
+                    "skills": {"required": ["web_desktop_skill"]},
+                },
+            ],
+        },
+    )
+    sql = _Sql(tmp_path / "adaos.db")
+    SqliteSkillRegistry(sql).register("database_only_skill", active_version="9.9.9")
+    SqliteScenarioRegistry(sql).register("database_only_scenario", active_version="9.9.9")
+    ctx = SimpleNamespace(paths=SimpleNamespace(workspace_dir=lambda: workspace), sql=sql)
+    monkeypatch.setattr(workspace_sync_module, "workspace_registry_is_git_tracked", lambda _root: True)
+    monkeypatch.setattr(workspace_sync_module, "runtime_required_scenario_refs", lambda: ["web_desktop"])
+
+    result = audit_workspace_materialization(ctx)
+
+    assert result["skills"] == []
+    assert result["scenarios"] == ["media_center"]
+    assert result["runtime_requirements"]["missing_scenarios"] == ["web_desktop"]
+    assert result["runtime_requirements"]["missing_skills"] == ["web_desktop_skill"]
+    assert [row.name for row in SqliteSkillRegistry(sql).list()] == ["database_only_skill"]
+    assert [row.name for row in SqliteScenarioRegistry(sql).list()] == ["database_only_scenario"]
 
 
 def test_reconcile_workspace_db_to_materialized_updates_sqlite(tmp_path: Path):

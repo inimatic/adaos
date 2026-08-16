@@ -760,10 +760,21 @@ class BootstrapBootCoordinator:
             pass
         try:
             from adaos.services.agent_context import get_ctx as _get_ctx
+            from adaos.services.workspace_sync import audit_workspace_materialization as _audit_workspace_materialization
             from adaos.services.workspace_sync import reconcile_workspace_db_to_materialized as _reconcile_workspace_db_to_materialized
 
-            _reconcile_started = _startup_stage_mark("bootstrap_reconcile_workspace_registry")
-            _reconcile_result = await asyncio.to_thread(_reconcile_workspace_db_to_materialized, _get_ctx())
+            _workspace_stage = (
+                "bootstrap_audit_workspace_registry"
+                if candidate_runtime_mode
+                else "bootstrap_reconcile_workspace_registry"
+            )
+            _reconcile_started = _startup_stage_mark(_workspace_stage)
+            _workspace_operation = (
+                _audit_workspace_materialization
+                if candidate_runtime_mode
+                else _reconcile_workspace_db_to_materialized
+            )
+            _reconcile_result = await asyncio.to_thread(_workspace_operation, _get_ctx())
             _runtime_requirements = (
                 _reconcile_result.get("runtime_requirements")
                 if isinstance(_reconcile_result, dict)
@@ -781,9 +792,9 @@ class BootstrapBootCoordinator:
                         _missing_skills,
                         _unresolved_scenarios,
                     )
-            _startup_stage_mark("bootstrap_reconcile_workspace_registry", started=_reconcile_started)
+            _startup_stage_mark(_workspace_stage, started=_reconcile_started)
         except Exception:
-            service._log.debug("failed to reconcile workspace sqlite registry on boot", exc_info=True)
+            service._log.debug("failed to inspect workspace registry on boot", exc_info=True)
         if conf.role == "hub":
             _hub_ready_started = _startup_stage_mark("bootstrap_emit_net_subnet_hub_ready")
             await operations.bus.emit("net.subnet.hub.ready", {"subnet_id": conf.subnet_id}, source="lifecycle", actor="system")

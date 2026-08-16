@@ -99,6 +99,64 @@ def resolve_scenario_requirements(
     return sorted(scenarios), sorted(required_skills), sorted(unresolved)
 
 
+def _runtime_requirement_status(
+    workspace_root: Path,
+    *,
+    materialized_skills: set[str],
+    materialized_scenarios: set[str],
+    registry_payload: dict[str, Any],
+) -> dict[str, Any]:
+    runtime_scenario_refs = runtime_required_scenario_refs()
+    runtime_scenarios, runtime_required_skills, unresolved_runtime_scenarios = resolve_scenario_requirements(
+        registry_payload,
+        runtime_scenario_refs,
+    )
+    return {
+        "scenario_refs": runtime_scenario_refs,
+        "scenarios": runtime_scenarios,
+        "scenario_skills": runtime_required_skills,
+        "unresolved_scenarios": unresolved_runtime_scenarios,
+        "missing_scenarios": sorted(set(runtime_scenarios) - materialized_scenarios),
+        "missing_skills": sorted(set(runtime_required_skills) - materialized_skills),
+        "workspace_root": str(workspace_root),
+    }
+
+
+def audit_workspace_materialization(ctx) -> dict[str, Any]:
+    """Inspect sparse runtime requirements without mutating SQLite or Git."""
+
+    workspace_root = Path(ctx.paths.workspace_dir())
+    materialized_payload = rebuild_workspace_registry(workspace_root)
+    materialized_skills = {
+        str(entry.get("name") or entry.get("id") or "").strip()
+        for entry in (materialized_payload.get("skills") or [])
+        if isinstance(entry, dict) and str(entry.get("name") or entry.get("id") or "").strip()
+    }
+    materialized_scenarios = {
+        str(entry.get("name") or entry.get("id") or "").strip()
+        for entry in (materialized_payload.get("scenarios") or [])
+        if isinstance(entry, dict) and str(entry.get("name") or entry.get("id") or "").strip()
+    }
+    registry_is_authoritative = workspace_registry_is_git_tracked(workspace_root)
+    registry_payload = (
+        load_workspace_registry(workspace_root, fallback_to_scan=False)
+        if registry_is_authoritative
+        else materialized_payload
+    )
+    return {
+        "ok": True,
+        "skills": sorted(materialized_skills),
+        "scenarios": sorted(materialized_scenarios),
+        "registry_authority": "git" if registry_is_authoritative else "materialized_workspace",
+        "runtime_requirements": _runtime_requirement_status(
+            workspace_root,
+            materialized_skills=materialized_skills,
+            materialized_scenarios=materialized_scenarios,
+            registry_payload=registry_payload,
+        ),
+    }
+
+
 def installed_names(rows: list[object]) -> list[str]:
     names: list[str] = []
     for row in rows:
@@ -196,18 +254,29 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
     for name in sorted(set(current_scenarios) - set(materialized_scenarios)):
         scenario_registry.unregister(name)
 
-    runtime_scenario_refs = runtime_required_scenario_refs()
-    runtime_scenarios: list[str] = []
-    runtime_required_skills: list[str] = []
-    unresolved_runtime_scenarios: list[str] = []
     try:
-        authoritative_registry = load_workspace_registry(workspace_root, fallback_to_scan=False)
-        runtime_scenarios, runtime_required_skills, unresolved_runtime_scenarios = resolve_scenario_requirements(
-            authoritative_registry,
-            runtime_scenario_refs,
+        authoritative_registry = (
+            load_workspace_registry(workspace_root, fallback_to_scan=False)
+            if registry_is_authoritative
+            else payload
+        )
+        runtime_requirements = _runtime_requirement_status(
+            workspace_root,
+            materialized_skills=set(materialized_skills),
+            materialized_scenarios=set(materialized_scenarios),
+            registry_payload=authoritative_registry,
         )
     except Exception:
         _LOG.warning("failed to evaluate materialized runtime requirements", exc_info=True)
+        runtime_requirements = {
+            "scenario_refs": list(_BOOTSTRAP_SCENARIOS),
+            "scenarios": [],
+            "scenario_skills": [],
+            "unresolved_scenarios": [],
+            "missing_scenarios": [],
+            "missing_skills": [],
+            "workspace_root": str(workspace_root),
+        }
 
     return {
         "ok": True,
@@ -218,14 +287,7 @@ def reconcile_workspace_db_to_materialized(ctx) -> dict[str, Any]:
         "registry_updated_at": payload.get("updated_at"),
         "registry_persisted": not registry_is_authoritative,
         "registry_authority": "git" if registry_is_authoritative else "materialized_workspace",
-        "runtime_requirements": {
-            "scenario_refs": runtime_scenario_refs,
-            "scenarios": runtime_scenarios,
-            "scenario_skills": runtime_required_skills,
-            "unresolved_scenarios": unresolved_runtime_scenarios,
-            "missing_scenarios": sorted(set(runtime_scenarios) - set(materialized_scenarios)),
-            "missing_skills": sorted(set(runtime_required_skills) - set(materialized_skills)),
-        },
+        "runtime_requirements": runtime_requirements,
     }
 
 
@@ -401,6 +463,7 @@ def sync_workspace_sparse_to_registry(ctx) -> dict[str, Any]:
 
 
 __all__ = [
+    "audit_workspace_materialization",
     "effective_registry_names",
     "installed_names",
     "reconcile_workspace_db_to_materialized",
