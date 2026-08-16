@@ -269,6 +269,15 @@ Success criteria:
   observes no sidecar/direct-WSS oscillation. The 2026-08-04 local incident was
   recovered manually and is covered by regression tests, but the patched
   runtime still requires deployed soak evidence.
+- [ ] `[must]` Repeat the incident log review after the reliability changes are
+  deployed on both the Windows development node and Linux stand `.30`. Preserve
+  a pre-failure window and correlate route-owner transitions, root/sidecar
+  sessions, browser first-sync/materialization state, sparse workspace runtime
+  requirements, skill action wall time, and process network/disk activity. The
+  acceptance record must distinguish a transport outage from a healthy
+  transport blocked by scenario or skill materialization, and identify any
+  skill/process that overlaps the interruption instead of attributing it from
+  timing alone.
 - [x] `[must]` Local managed-restart acceptance on 2026-08-04 closed remote
   session `rt-60c8c88921` with WebSocket `1000`, opened replacement session
   `rt-02f4d1481b`, restored route subscriptions on the next one-second sample,
