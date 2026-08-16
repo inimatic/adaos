@@ -6375,7 +6375,11 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             or str(workspace.get("effective_home_scenario") or "web_desktop")
                         )
                         prefer_manifest_home = bool(row_current_scenario or workspace.get("home_scenario"))
-                        room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
+                        # Loading and materialization happen before the room is
+                        # observable. Attaching y_py's transaction observer at
+                        # construction would enqueue the entire replay as a
+                        # fresh update and persist/broadcast it a second time.
+                        room = DiagnosticYRoom(ready=False, ystore=ystore, log=self.log)
                         room._webspace_id = webspace_id
                         room._thread_id = threading.get_ident()
                         room._loop = asyncio.get_running_loop()
@@ -6423,7 +6427,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                             # corrupt replay. Recreate the native owner before
                             # any projection/encoding and retry against the
                             # recovered durable base (or an empty store).
-                            room = DiagnosticYRoom(ready=self.rooms_ready, ystore=ystore, log=self.log)
+                            room = DiagnosticYRoom(ready=False, ystore=ystore, log=self.log)
                             room._webspace_id = webspace_id
                             room._thread_id = threading.get_ident()
                             room._loop = asyncio.get_running_loop()
@@ -6502,6 +6506,7 @@ class WorkspaceWebsocketServer(WebsocketServer):
                                 room=room,
                             ),
                         )
+                        room.ready = self.rooms_ready
                         self.rooms[name] = room
                         _mark_room_created(webspace_id, room)
                         _mark_room_bootstrap_finished(webspace_id, bootstrap_attempt_id, state="ready")
@@ -6889,7 +6894,28 @@ def _room_effective_top_level_ready(ydoc: Any) -> bool:
     if not _YROOM_EFFECTIVE_GUARD_TOP_LEVEL_CHECKS:
         return True
     try:
-        return _room_effective_branches_ready(ydoc)
+        if _room_materialization_mismatch(ydoc):
+            return False
+        root_keys: dict[str, set[str]] = {}
+        for path in _room_effective_required_branches(ydoc):
+            parts = [part for part in str(path or "").split(".") if part]
+            if len(parts) < 2:
+                return False
+            root_name, key = parts[:2]
+            keys = root_keys.get(root_name)
+            if keys is None:
+                keys = set(_room_branch_keys(ydoc.get_map(root_name)))
+                root_keys[root_name] = keys
+            if key not in keys:
+                return False
+        # Installed state is small and its arrays are part of the public
+        # desktop contract, so retain this shallow semantic check without
+        # decoding the large application/catalog branches.
+        if "data.installed" in _room_effective_required_branches(ydoc):
+            installed = ydoc.get_map("data").get("installed")
+            if not _room_effective_installed_ready(installed):
+                return False
+        return True
     except Exception:
         return False
 

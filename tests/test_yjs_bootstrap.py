@@ -244,6 +244,45 @@ def test_bootstrap_trusts_matching_ready_marker_without_reprojection(monkeypatch
     assert store.write_calls == 0
 
 
+def test_bootstrap_trusts_nested_required_paths_from_ready_marker(monkeypatch) -> None:
+    def _apply_state(ydoc: Y.YDoc) -> None:
+        required = [
+            "ui.application",
+            "ui.application.desktop.pageSchema",
+            "data.catalog",
+        ]
+        with ydoc.begin_transaction() as txn:
+            ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+            ydoc.get_map("ui").set(txn, "application", {"desktop": {"pageSchema": {}}})
+            ydoc.get_map("data").set(txn, "catalog", {"apps": [], "widgets": []})
+            ydoc.get_map("runtime").set(
+                txn,
+                "environment",
+                {"materialization": {"scenario_id": "web_desktop", "required_branches": required}},
+            )
+            ydoc.get_map("runtime").set(
+                txn,
+                bootstrap_module.BOOTSTRAP_RUNTIME_KEY,
+                {"scenario_id": "web_desktop", "state": "ready", "ready": True},
+            )
+
+    store = _FakeStore(apply_state=_apply_state)
+    monkeypatch.setattr(bootstrap_module, "runtime_environment_payload", lambda: {})
+
+    result = asyncio.run(
+        bootstrap_module.ensure_webspace_seeded_from_scenario(
+            store,
+            webspace_id="desktop",
+            default_scenario_id="web_desktop",
+            ydoc=Y.YDoc(),
+        )
+    )
+
+    assert result["mode"] == "persisted_effective_state"
+    assert result["persisted_effective_state_ready"] is True
+    assert store.write_calls == 0
+
+
 def test_bootstrap_requires_fresh_provided_doc_after_partial_apply_failure(monkeypatch) -> None:
     class _PanicAfterPartialApplyStore(_FakeStore):
         def __init__(self) -> None:

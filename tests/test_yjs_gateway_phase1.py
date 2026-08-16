@@ -997,6 +997,20 @@ def test_gateway_effective_guard_uses_declarative_runtime_required_branches(monk
     assert gateway_module._room_effective_top_level_ready(ready_doc) is True
 
 
+def test_room_bootstrap_updates_are_not_observed_before_room_is_ready() -> None:
+    room = gateway_module.DiagnosticYRoom(ready=False)
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "web_desktop")
+
+    assert room._update_send_stream.statistics().current_buffer_used == 0
+
+    room.ready = True
+    with room.ydoc.begin_transaction() as txn:
+        room.ydoc.get_map("ui").set(txn, "current_scenario", "builder")
+
+    assert room._update_send_stream.statistics().current_buffer_used > 0
+
+
 def test_browser_auth_response_marks_denial_as_terminal_login() -> None:
     payload = gateway_module._browser_auth_response_payload(
         dev_id="dev_tv",

@@ -295,9 +295,9 @@ def _persisted_effective_state_ready(ydoc: Y.YDoc, *, scenario_id: str) -> bool:
         root_keys: dict[str, set[str]] = {}
         for raw_path in required:
             parts = [part for part in str(raw_path or "").split(".") if part]
-            if len(parts) != 2:
+            if len(parts) < 2:
                 return False
-            root_name, key = parts
+            root_name, key = parts[:2]
             keys = root_keys.get(root_name)
             if keys is None:
                 keys = {str(item) for item in ydoc.get_map(root_name).keys()}
