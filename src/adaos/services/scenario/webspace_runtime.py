@@ -6198,10 +6198,12 @@ async def _sync_webspace_listing(
     SQLite plus its monotonic catalog version is authoritative. This
     compatibility projection must never open YDocs as a side effect.
     """
-    listing = _webspace_listing()
+    listing, catalog_version = await asyncio.to_thread(
+        lambda: (_webspace_listing(), workspace_index.workspace_catalog_version())
+    )
     payload = {
         "schema": "adaos.workspace_catalog.v1",
-        "version": workspace_index.workspace_catalog_version(),
+        "version": catalog_version,
         "items": listing,
     }
     if webspace_ids is None:

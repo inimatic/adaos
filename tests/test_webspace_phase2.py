@@ -3698,8 +3698,14 @@ def test_phase3_reload_target_preserves_manifest_home_before_current(monkeypatch
 def test_sync_webspace_listing_never_opens_non_live_documents(monkeypatch) -> None:
     listing = [{"id": "preview-live", "title": "Preview"}]
     mutated: list[str] = []
+    owner_thread_id = threading.get_ident()
+    listing_thread_ids: list[int] = []
 
-    monkeypatch.setattr(webspace_runtime_module, "_webspace_listing", lambda: listing)
+    def _listing() -> list[dict[str, str]]:
+        listing_thread_ids.append(threading.get_ident())
+        return listing
+
+    monkeypatch.setattr(webspace_runtime_module, "_webspace_listing", _listing)
     monkeypatch.setattr(
         webspace_runtime_module.workspace_index,
         "workspace_catalog_version",
@@ -3724,6 +3730,8 @@ def test_sync_webspace_listing_never_opens_non_live_documents(monkeypatch) -> No
     )
 
     assert mutated == ["preview-live"]
+    assert listing_thread_ids
+    assert all(worker_thread_id != owner_thread_id for worker_thread_id in listing_thread_ids)
     assert result["catalog_version"] == 7
     assert result["updated"] == ["preview-live"]
     assert result["skipped_not_live"] == ["stale-preview"]

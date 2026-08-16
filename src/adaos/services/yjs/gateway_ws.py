@@ -9357,7 +9357,9 @@ async def process_events_command(
 
                     room = y_server.rooms.get(captured_ws)
                     if room:
-                        listing = _webspace_listing()
+                        listing, catalog_version = await asyncio.to_thread(
+                            lambda: (_webspace_listing(), workspace_catalog_version())
+                        )
                         with ystore_write_metadata_sync(
                             root_names=["data"],
                             source="yjs.gateway_ws",
@@ -9371,7 +9373,7 @@ async def process_events_command(
                                     "webspaces",
                                     {
                                         "schema": "adaos.workspace_catalog.v1",
-                                        "version": workspace_catalog_version(),
+                                        "version": catalog_version,
                                         "items": listing,
                                     },
                                 )
