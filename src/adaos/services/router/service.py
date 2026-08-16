@@ -1911,7 +1911,11 @@ class RouterService:
                         _apply(ydoc, txn)
 
         async def _write_dialog_state(webspace_id: str, *, event: str = "snapshot") -> None:
-            snapshot = _dialog_channel_snapshot(webspace_id, event=event)
+            snapshot = await asyncio.to_thread(
+                _dialog_channel_snapshot,
+                webspace_id,
+                event=event,
+            )
 
             def _mutator(data_map: Any, txn: Any) -> None:
                 data_map.set(txn, "dialog", snapshot)
@@ -2555,7 +2559,8 @@ class RouterService:
             current = _voice_chat_stream_cache.get(cache_key) or {}
             raw_messages = current.get("messages") if isinstance(current, dict) else None
             messages = [dict(item) for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
-            resolved_conversation_id = _resolve_voice_chat_conversation_id(
+            resolved_conversation_id = await asyncio.to_thread(
+                _resolve_voice_chat_conversation_id,
                 webspace_id,
                 requested_conversation_id=conversation_id,
                 requested_channel_id=dialog_channel_id,

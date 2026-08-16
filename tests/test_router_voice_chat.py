@@ -831,6 +831,7 @@ async def test_voice_chat_open_projects_general_dialog_state(monkeypatch) -> Non
     )
 
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
     dialog = doc.get_map("data")["dialog"]
     assert dialog["active_channel_id"] == "general"
     assert dialog["active_agent"]["id"] == "agent:core:general"
@@ -879,7 +880,9 @@ async def test_dialog_projection_is_non_blocking_and_does_not_cancel_slow_ydoc(m
     )
 
     assert await bus.wait_for_idle(timeout=0.2)
-    await asyncio.wait_for(entered.wait(), timeout=0.2)
+    # Snapshot assembly now runs outside the owner loop and may wait for the
+    # serialized conversation-store worker before it reaches the YDoc write.
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
     await asyncio.sleep(0.08)
     assert exits == []
     assert any(not task.done() for task in router._dialog_state_tasks.values())
@@ -972,6 +975,7 @@ async def test_dialog_channel_select_conversational_activates_companion(monkeypa
     )
 
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
     dialog = doc.get_map("data")["dialog"]
     assert calls[0][0:2] == ("conversation_companions", "start")
     assert calls[0][2]["webspace_id"] == webspace_id
@@ -1023,6 +1027,7 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
     builder_state = dialog_runtime.get_active_channel(webspace_id)
     assert builder_state is not None
     assert builder_state.channel_id == "builder"
@@ -1047,6 +1052,7 @@ async def test_dialog_channel_select_supports_builder_and_persisted_skill_channe
         )
     )
     await bus.wait_for_idle(timeout=1.0)
+    await _drain_voice_chat_persist(router)
     research_state = dialog_runtime.get_active_channel(webspace_id)
     assert research_state is not None
     assert research_state.channel_id == "research"
@@ -3159,6 +3165,48 @@ async def test_voice_chat_snapshot_ledger_recovery_does_not_block_event_loop(mon
         router_service_module.conversation_store,
         "recover_projection_from_store",
         _slow_recovery,
+    )
+    router = RouterService(eventbus=bus, base_dir=Path("."))
+    await router.start()
+
+    started = time.perf_counter()
+    bus.publish(
+        Event(
+            type="webio.stream.snapshot.requested",
+            source="test",
+            ts=1.0,
+            payload={"receiver": "voice_chat.messages", "webspace_id": "desktop"},
+        )
+    )
+    await asyncio.sleep(0.02)
+
+    assert time.perf_counter() - started < 0.1
+    assert await bus.wait_for_idle(timeout=1.0)
+
+
+async def test_voice_chat_snapshot_identity_lookup_does_not_block_event_loop(monkeypatch) -> None:
+    bus = LocalEventBus()
+    monkeypatch.setattr(
+        router_service_module,
+        "get_ctx",
+        lambda: SimpleNamespace(config=SimpleNamespace(node_id="hub-node")),
+    )
+    monkeypatch.setattr(router_service_module, "load_rules", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(router_service_module, "watch_rules", lambda *_args, **_kwargs: (lambda: None))
+
+    def _slow_active_channel(*_args, **_kwargs):
+        time.sleep(0.2)
+        return None
+
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "get_active_dialog_channel",
+        _slow_active_channel,
+    )
+    monkeypatch.setattr(
+        router_service_module.conversation_store,
+        "recover_projection_from_store",
+        lambda *_args, **_kwargs: {"messages": [], "total_message_count": 0},
     )
     router = RouterService(eventbus=bus, base_dir=Path("."))
     await router.start()
