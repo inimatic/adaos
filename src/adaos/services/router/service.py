@@ -2130,6 +2130,18 @@ class RouterService:
             binding_topic = _builder_workbench_topic_id(webspace_id)
             return binding_topic or token
 
+        def _builder_topic_normalization_requires_io(webspace_id: str, topic_id: Any, *sources: Any) -> bool:
+            token = str(topic_id or "").strip()
+            legacy = token.startswith("thread.builder.") or token.startswith("builder:")
+            if token and not legacy:
+                return False
+            return legacy or _source_mentions_builder_dialog(webspace_id, *sources)
+
+        async def _normalize_builder_topic_id_async(webspace_id: str, topic_id: Any, *sources: Any) -> str:
+            if not _builder_topic_normalization_requires_io(webspace_id, topic_id, *sources):
+                return _normalize_builder_topic_id(webspace_id, topic_id, *sources)
+            return await asyncio.to_thread(_normalize_builder_topic_id, webspace_id, topic_id, *sources)
+
         def _voice_chat_projection_identity(messages: list[dict[str, Any]]) -> tuple[str, str, str]:
             for item in reversed([dict(entry) for entry in messages if isinstance(entry, dict)]):
                 conversation_id = str(item.get("conversation_id") or "").strip()
@@ -2571,7 +2583,7 @@ class RouterService:
                 {"thread_id": thread_id} if thread_id is not None else {},
                 {"conversation_topic_id": thread_id} if thread_id is not None else {},
             )
-            resolved_topic_id = _normalize_builder_topic_id(
+            resolved_topic_id = await _normalize_builder_topic_id_async(
                 webspace_id,
                 resolved_topic_id,
                 {
@@ -2771,7 +2783,8 @@ class RouterService:
             cached = _voice_chat_stream_cache.get(cache_key) or {}
             cached_raw = cached.get("messages") if isinstance(cached, dict) else None
             cached_messages = [dict(item) for item in cached_raw if isinstance(item, dict)] if isinstance(cached_raw, list) else []
-            resolved_conversation_id = _resolve_voice_chat_conversation_id(
+            resolved_conversation_id = await asyncio.to_thread(
+                _resolve_voice_chat_conversation_id,
                 webspace_id,
                 requested_conversation_id=conversation_id,
                 requested_channel_id=dialog_channel_id,
@@ -2781,7 +2794,7 @@ class RouterService:
             resolved_topic_id = _voice_chat_topic_id_from_sources(
                 {"thread_id": thread_id} if thread_id is not None else {},
             )
-            resolved_topic_id = _normalize_builder_topic_id(
+            resolved_topic_id = await _normalize_builder_topic_id_async(
                 webspace_id,
                 resolved_topic_id,
                 {

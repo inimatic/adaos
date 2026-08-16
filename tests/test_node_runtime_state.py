@@ -11,6 +11,18 @@ def test_pid_liveness_probe_keeps_current_process_alive() -> None:
     assert mod._pid_is_alive(os.getpid()) is True
 
 
+def test_runtime_state_paths_do_not_resolve_filesystem_links(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod, "current_state_dir", lambda: tmp_path)
+
+    def _unexpected_resolve(*_args, **_kwargs):
+        raise AssertionError("runtime state paths must remain lexical")
+
+    monkeypatch.setattr(Path, "resolve", _unexpected_resolve)
+
+    assert mod._state_path() == tmp_path / "node_runtime.json"
+    assert mod._lock_path() == tmp_path / "node_runtime.lock"
+
+
 def test_save_node_runtime_state_preserves_fields_across_concurrent_writers(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mod, "current_state_dir", lambda: tmp_path)
 

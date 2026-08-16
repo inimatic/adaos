@@ -1188,14 +1188,17 @@ async def _runtime_context(app: FastAPI):
                     pass
             if link_ok:
                 # install telegram IO into capacity and refresh directory snapshot for this node
-                install_io_in_capacity("telegram", ["text", "lang:ru", "lang:en"], priority=60)
-                try:
-                    from adaos.services.registry.subnet_directory import get_directory as _get_dir
+                def _install_telegram_capacity() -> None:
+                    install_io_in_capacity("telegram", ["text", "lang:ru", "lang:en"], priority=60)
+                    try:
+                        from adaos.services.registry.subnet_directory import get_directory as _get_dir
 
-                    cap = get_local_capacity()
-                    _get_dir().repo.replace_io_capacity(conf.node_id, cap.get("io") or [])
-                except Exception:
-                    pass
+                        cap = get_local_capacity()
+                        _get_dir().repo.replace_io_capacity(conf.node_id, cap.get("io") or [])
+                    except Exception:
+                        pass
+
+                await asyncio.to_thread(_install_telegram_capacity)
                 # Send greeting via Root
                 startup_notice_key = "subnet.restarted" if getattr(app.state, "restart_marker", None) else "subnet.started"
                 try:

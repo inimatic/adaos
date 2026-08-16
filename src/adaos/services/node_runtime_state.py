@@ -17,13 +17,13 @@ _RUNTIME_STATE_THREAD_LOCK = threading.RLock()
 
 
 def _state_path() -> Path:
-    path = (current_state_dir() / "node_runtime.json").resolve()
+    path = (current_state_dir() / "node_runtime.json").absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _lock_path() -> Path:
-    path = (_state_path().parent / "node_runtime.lock").resolve()
+    path = (_state_path().parent / "node_runtime.lock").absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

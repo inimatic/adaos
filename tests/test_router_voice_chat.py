@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import threading
 import time
 import types
 from uuid import uuid4
@@ -3311,9 +3312,12 @@ async def test_voice_chat_snapshot_request_uses_builder_workbench_topic_when_thr
     webspace_id = f"builder-topicless-history-ws-{suffix}"
     conversation_id = f"conv.skill.builder_skill.default.{webspace_id}"
     thread_id = f"prompt-project:scenario:prototype_{suffix}"
+    owner_thread_id = threading.get_ident()
+    binding_thread_ids: list[int] = []
 
     class _Workbench:
         def get_workspace_binding(self, _webspace_id: str) -> dict:
+            binding_thread_ids.append(threading.get_ident())
             return {
                 "dialog": {
                     "thread_id": thread_id,
@@ -3374,6 +3378,8 @@ async def test_voice_chat_snapshot_request_uses_builder_workbench_topic_when_thr
     assert recovered["conversation_id"] == conversation_id
     assert recovered["conversation_topic_id"] == thread_id
     assert recovered["message_count"] == 8
+    assert binding_thread_ids
+    assert all(worker_thread_id != owner_thread_id for worker_thread_id in binding_thread_ids)
     assert recovered["total_message_count"] == 10
     assert recovered["has_more_before"] is True
     assert recovered["messages"][0]["text"] == "builder turn 2"
