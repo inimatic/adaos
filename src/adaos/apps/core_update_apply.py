@@ -994,19 +994,83 @@ def _clone_repo(repo_url: str, target_rev: str, target_version: str, checkout_di
     _checkout_target_version(checkout_dir, target_rev=target_rev, target_version=target_version)
 
 
+def _bounded_exception_summary(exc: Exception, *, max_chars: int = 1200) -> str:
+    if isinstance(exc, shutil.Error):
+        failures = exc.args[0] if exc.args and isinstance(exc.args[0], list) else []
+        preview: list[str] = []
+        for item in failures[:3]:
+            if isinstance(item, tuple) and len(item) >= 3:
+                source, target, error = item[:3]
+                preview.append(f"{source!s} -> {target!s}: {error!s}")
+            else:
+                preview.append(str(item))
+        text = f"shutil.Error: {len(failures)} copy failure(s)"
+        if preview:
+            text += "; first failures: " + "; ".join(preview)
+    else:
+        text = f"{type(exc).__name__}: {exc}"
+    compact = " ".join(text.split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max(0, max_chars - 3)] + "..."
+
+
+def _local_repo_contains_target(source_repo_root: Path, target_version: str) -> bool:
+    target = str(target_version or "").strip()
+    if not _is_probably_git_sha(target):
+        return True
+    git = shutil.which("git")
+    if not git or not _is_git_repo(source_repo_root):
+        return False
+    try:
+        completed = subprocess.run(
+            [git, "-C", str(source_repo_root), "cat-file", "-e", f"{target}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
+
+
+def _clear_failed_checkout(checkout_dir: Path, *, stage: str) -> None:
+    if not checkout_dir.exists():
+        return
+    try:
+        _force_remove_tree(checkout_dir)
+    except Exception as exc:
+        raise RuntimeError(
+            f"cannot recover checkout after {stage}: cleanup failed for {checkout_dir}: "
+            f"{_bounded_exception_summary(exc)}"
+        ) from exc
+    if checkout_dir.exists():
+        raise RuntimeError(f"cannot recover checkout after {stage}: cleanup left destination present: {checkout_dir}")
+
+
 def _clone_local_repo(source_repo_root: Path, target_rev: str, target_version: str, checkout_dir: Path) -> None:
     git = shutil.which("git")
     git_dir = source_repo_root / ".git"
-    pinned_target = bool(str(target_rev or "").strip()) or _is_probably_git_sha(str(target_version or "").strip())
-    if git and git_dir.exists() and (pinned_target or not _git_worktree_has_changes(source_repo_root)):
+    immutable_target = _is_probably_git_sha(str(target_version or "").strip())
+    checkout_requested = bool(str(target_rev or "").strip()) or immutable_target
+    if git and git_dir.exists() and (checkout_requested or not _git_worktree_has_changes(source_repo_root)):
         try:
             _run([git, "clone", str(source_repo_root), str(checkout_dir)])
             if target_rev:
                 _run([git, "checkout", target_rev], cwd=checkout_dir)
             _checkout_target_version(checkout_dir, target_rev=target_rev, target_version=target_version)
             return
-        except Exception:
-            pass
+        except Exception as exc:
+            _clear_failed_checkout(checkout_dir, stage="local git clone")
+            if immutable_target:
+                raise RuntimeError(
+                    f"local git clone failed for immutable target {target_version}: "
+                    f"{_bounded_exception_summary(exc)}"
+                ) from exc
+    elif immutable_target:
+        raise RuntimeError(
+            f"local source cannot provide immutable target {target_version}: git checkout is unavailable"
+        )
     shutil.copytree(
         source_repo_root,
         checkout_dir,
@@ -1042,24 +1106,46 @@ def _prepare_checkout_repo(
     repo_url: str,
     target_rev: str,
     target_version: str,
-) -> str:
+) -> tuple[str, dict[str, object]]:
     git_available = bool(shutil.which("git"))
     source_exists = source_repo_dir is not None and source_repo_dir.exists()
     source_is_git = _is_git_repo(source_repo_dir)
     local_error: Exception | None = None
+    attempts: list[dict[str, object]] = []
 
     if source_exists and source_is_git and source_repo_dir is not None:
-        try:
-            _clone_local_repo(source_repo_dir, target_rev, target_version, checkout_dir)
-            _validate_checkout_target_version(
-                checkout_dir,
-                target_version=target_version,
-                source_label="local source repo",
+        if not _local_repo_contains_target(source_repo_dir, target_version):
+            local_error = RuntimeError(
+                f"local source repo does not contain requested target_version {target_version}"
             )
-            return "local_source_tree"
-        except Exception as exc:
-            local_error = exc
-            shutil.rmtree(checkout_dir, ignore_errors=True)
+            attempts.append(
+                {
+                    "source": "local_source_tree",
+                    "state": "skipped",
+                    "reason": "target_commit_missing",
+                    "target_version": target_version,
+                }
+            )
+        else:
+            try:
+                _clone_local_repo(source_repo_dir, target_rev, target_version, checkout_dir)
+                _validate_checkout_target_version(
+                    checkout_dir,
+                    target_version=target_version,
+                    source_label="local source repo",
+                )
+                attempts.append({"source": "local_source_tree", "state": "succeeded"})
+                return "local_source_tree", {"kind": "local_source_tree", "attempts": attempts}
+            except Exception as exc:
+                local_error = exc
+                attempts.append(
+                    {
+                        "source": "local_source_tree",
+                        "state": "failed",
+                        "error": _bounded_exception_summary(exc),
+                    }
+                )
+                _clear_failed_checkout(checkout_dir, stage="local source preparation")
 
     if git_available and repo_url:
         try:
@@ -1069,23 +1155,38 @@ def _prepare_checkout_repo(
                 target_version=target_version,
                 source_label="remote repo clone",
             )
-            return "remote_git_clone"
+            attempts.append({"source": "remote_git_clone", "state": "succeeded"})
+            return "remote_git_clone", {"kind": "remote_git_clone", "attempts": attempts}
         except Exception as exc:
+            attempts.append(
+                {
+                    "source": "remote_git_clone",
+                    "state": "failed",
+                    "error": _bounded_exception_summary(exc),
+                }
+            )
             if local_error is not None:
                 raise RuntimeError(
                     f"failed to prepare requested target_version {target_version or '<unspecified>'}: "
-                    f"local source repo failed ({local_error}); remote repo clone failed ({exc})"
+                    f"local source repo failed ({_bounded_exception_summary(local_error)}); "
+                    f"remote repo clone failed ({_bounded_exception_summary(exc)})"
                 ) from exc
             raise
 
     if source_exists and source_repo_dir is not None:
+        if _is_probably_git_sha(str(target_version or "").strip()):
+            reason = _bounded_exception_summary(local_error) if local_error is not None else "git checkout is unavailable"
+            raise RuntimeError(
+                f"cannot prepare immutable target_version {target_version} from a copied source tree: {reason}"
+            )
         _clone_local_repo(source_repo_dir, target_rev, target_version, checkout_dir)
         _validate_checkout_target_version(
             checkout_dir,
             target_version=target_version,
             source_label="copied local source tree",
         )
-        return "local_source_tree"
+        attempts.append({"source": "local_source_tree", "state": "succeeded", "mode": "copy"})
+        return "local_source_tree", {"kind": "local_source_tree", "attempts": attempts}
 
     _clone_repo(repo_url, target_rev, target_version, checkout_dir)
     _validate_checkout_target_version(
@@ -1093,7 +1194,8 @@ def _prepare_checkout_repo(
         target_version=target_version,
         source_label="remote repo clone",
     )
-    return "remote_git_clone"
+    attempts.append({"source": "remote_git_clone", "state": "succeeded"})
+    return "remote_git_clone", {"kind": "remote_git_clone", "attempts": attempts}
 
 
 def _strip_repo_vcs_metadata(repo_dir: Path) -> None:
@@ -1335,13 +1437,18 @@ def prepare_slot(
     prepared_slot.mkdir(parents=True, exist_ok=True)
     try:
         checkout_tmp = prepared_slot / "repo"
-        source_kind = _prepare_checkout_repo(
+        checkout_result = _prepare_checkout_repo(
             checkout_dir=checkout_tmp,
             source_repo_dir=source_repo_dir,
             repo_url=repo_url,
             target_rev=target_rev,
             target_version=target_version,
         )
+        if isinstance(checkout_result, tuple):
+            source_kind, source_checkout = checkout_result
+        else:
+            source_kind = str(checkout_result)
+            source_checkout = {"kind": source_kind, "attempts": []}
         venv_tmp = prepared_slot / "venv"
         venv_seed = _prepare_seed_venv(
             venv_dir=venv_tmp,
@@ -1379,6 +1486,7 @@ def prepare_slot(
             "target_resolution": "remote_branch_head" if resolved_target_version else "request",
             "root_repo_root": str(repo_root_dir) if repo_root_dir is not None else "",
             "source_kind": source_kind,
+            "source_checkout": source_checkout,
             "source_repo_root": str(source_repo_dir) if source_repo_dir is not None else "",
             "repo_url": repo_url,
             "repo_dir": str(final_repo_dir),

@@ -822,6 +822,37 @@ def test_clone_local_repo_copy_mode_when_worktree_dirty_and_target_unpinned(monk
     assert not (checkout_dir / ".git").exists()
 
 
+def test_clone_local_repo_does_not_copy_worktree_after_immutable_checkout_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    source_repo = tmp_path / "source"
+    checkout_dir = tmp_path / "checkout"
+    (source_repo / ".git").mkdir(parents=True, exist_ok=True)
+    (source_repo / "src").mkdir(parents=True, exist_ok=True)
+    (source_repo / "src" / "stale.py").write_text("stale\n", encoding="utf-8")
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+
+    def _failed_clone(*_args, **_kwargs):
+        checkout_dir.mkdir(parents=True, exist_ok=True)
+        (checkout_dir / "partial").write_text("partial\n", encoding="utf-8")
+        raise RuntimeError("target object is missing")
+
+    monkeypatch.setattr(mod, "_run", _failed_clone)
+
+    with pytest.raises(RuntimeError, match="local git clone failed for immutable target"):
+        mod._clone_local_repo(
+            source_repo,
+            target_rev="rev2026",
+            target_version="f7d14e92e38bb6b37f9068c2ee894de61710b92e",
+            checkout_dir=checkout_dir,
+        )
+
+    assert not checkout_dir.exists()
+
+
 def test_validate_checkout_target_version_rejects_mismatched_sha(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
@@ -867,6 +898,7 @@ def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_tar
     validate_calls: list[str] = []
 
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(mod, "_local_repo_contains_target", lambda *_args: True)
 
     def _fake_clone_local(_source_repo_root, _target_rev, _target_version, target_dir):
         clone_calls.append("local")
@@ -885,7 +917,7 @@ def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_tar
     monkeypatch.setattr(mod, "_clone_repo", _fake_clone_repo)
     monkeypatch.setattr(mod, "_validate_checkout_target_version", _fake_validate)
 
-    source_kind = mod._prepare_checkout_repo(
+    source_kind, diagnostics = mod._prepare_checkout_repo(
         checkout_dir=checkout_dir,
         source_repo_dir=source_repo,
         repo_url="https://github.com/inimatic/adaos.git",
@@ -896,6 +928,91 @@ def test_prepare_checkout_repo_falls_back_to_remote_when_local_source_misses_tar
     assert source_kind == "remote_git_clone"
     assert clone_calls == ["local", "remote"]
     assert validate_calls == ["local source repo", "remote repo clone"]
+    assert [item["state"] for item in diagnostics["attempts"]] == ["failed", "succeeded"]
+
+
+def test_prepare_checkout_repo_skips_stale_local_source_and_uses_clean_remote_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    target_version = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    source_repo = tmp_path / "source"
+    checkout_dir = tmp_path / "checkout"
+    (source_repo / ".git").mkdir(parents=True, exist_ok=True)
+    clone_calls: list[str] = []
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(mod, "_local_repo_contains_target", lambda *_args: False)
+    monkeypatch.setattr(
+        mod,
+        "_clone_local_repo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stale local source must be skipped")),
+    )
+
+    def _fake_clone_repo(_repo_url, _target_rev, _target_version, target_dir):
+        clone_calls.append("remote")
+        assert not target_dir.exists()
+        target_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(mod, "_clone_repo", _fake_clone_repo)
+    monkeypatch.setattr(mod, "_validate_checkout_target_version", lambda *_args, **_kwargs: None)
+
+    source_kind, diagnostics = mod._prepare_checkout_repo(
+        checkout_dir=checkout_dir,
+        source_repo_dir=source_repo,
+        repo_url="https://github.com/inimatic/adaos.git",
+        target_rev="rev2026",
+        target_version=target_version,
+    )
+
+    assert source_kind == "remote_git_clone"
+    assert clone_calls == ["remote"]
+    assert diagnostics["attempts"][0]["reason"] == "target_commit_missing"
+    assert diagnostics["attempts"][1] == {"source": "remote_git_clone", "state": "succeeded"}
+
+
+def test_prepare_checkout_repo_removes_partial_local_checkout_before_remote_fallback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    target_version = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    source_repo = tmp_path / "source"
+    checkout_dir = tmp_path / "checkout"
+    (source_repo / ".git").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "git")
+    monkeypatch.setattr(mod, "_local_repo_contains_target", lambda *_args: True)
+
+    def _fake_clone_local(_source_repo_root, _target_rev, _target_version, target_dir):
+        target_dir.mkdir(parents=True)
+        (target_dir / "partial-cache").write_text("partial", encoding="utf-8")
+        raise shutil.Error([("bad-source", "bad-target", "invalid cross-platform link")])
+
+    def _fake_clone_repo(_repo_url, _target_rev, _target_version, target_dir):
+        assert not target_dir.exists()
+        target_dir.mkdir(parents=True)
+        (target_dir / "remote").write_text("ok", encoding="utf-8")
+
+    monkeypatch.setattr(mod, "_clone_local_repo", _fake_clone_local)
+    monkeypatch.setattr(mod, "_clone_repo", _fake_clone_repo)
+    monkeypatch.setattr(mod, "_validate_checkout_target_version", lambda *_args, **_kwargs: None)
+
+    source_kind, diagnostics = mod._prepare_checkout_repo(
+        checkout_dir=checkout_dir,
+        source_repo_dir=source_repo,
+        repo_url="https://github.com/inimatic/adaos.git",
+        target_rev="rev2026",
+        target_version=target_version,
+    )
+
+    assert source_kind == "remote_git_clone"
+    assert (checkout_dir / "remote").read_text(encoding="utf-8") == "ok"
+    assert not (checkout_dir / "partial-cache").exists()
+    local_error = diagnostics["attempts"][0]["error"]
+    assert "1 copy failure(s)" in local_error
+    assert len(local_error) <= 1200
 
 
 def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: Path) -> None:
