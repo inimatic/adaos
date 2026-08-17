@@ -121,6 +121,10 @@ def test_root_drive_public_link_registers_and_streams_without_auth(monkeypatch, 
     assert journal["events"][0]["status"] == "completed"
     assert journal["events"][0]["action"] == "download"
     assert journal["events"][0]["guest_device_id"] == "guest-1"
+    download_root = tmp_path / "runtime" / "workspace" / "skills" / ".runtime" / "adaos_drive" / "v0.0" / "data" / "files" / "public_downloads"
+    assert (download_root / "events.jsonl").exists()
+    assert (download_root / "summaries.json").exists()
+    assert not (tmp_path / "runtime" / "state" / "drive_public_links" / "hub_downloads.json").exists()
 
 
 def test_root_drive_public_folder_lists_and_streams_children(monkeypatch, tmp_path: Path) -> None:

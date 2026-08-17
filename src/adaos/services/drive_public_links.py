@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -43,6 +44,9 @@ _DOWNLOAD_RECENT_MAX = 2000
 _DOWNLOAD_EVENT_TEXT_MAX = 240
 _DOWNLOAD_USER_AGENT_MAX = 240
 _DOWNLOAD_STORE_SCHEMA = "adaos.drive.public_downloads.v1"
+_DOWNLOAD_LEGACY_FILENAME = "hub_downloads.json"
+_DOWNLOAD_EVENTS_FILENAME = "events.jsonl"
+_DOWNLOAD_SUMMARIES_FILENAME = "summaries.json"
 _DOWNLOAD_LOCK = threading.Lock()
 
 
@@ -207,14 +211,67 @@ def _save_store(kind: str, data: Mapping[str, Any], ctx: AgentContext | None = N
     tmp.replace(path)
 
 
-def _download_store_path(ctx: AgentContext | None = None) -> Path:
+def _ctx_path_value(ctx: AgentContext | None, name: str) -> Path | None:
+    try:
+        paths = (ctx or get_ctx()).paths
+        raw = getattr(paths, name, None)
+        value = raw() if callable(raw) else raw
+        if value:
+            return Path(value).expanduser().resolve()
+    except Exception:
+        return None
+    return None
+
+
+def _download_legacy_store_path(ctx: AgentContext | None = None) -> Path:
     root = _base_dir(ctx) / "state" / "drive_public_links"
+    return root / _DOWNLOAD_LEGACY_FILENAME
+
+
+def _download_skill_root(ctx: AgentContext | None = None) -> Path:
+    override = str(os.getenv("ADAOS_DRIVE_PUBLIC_DOWNLOAD_DIR") or "").strip()
+    if override:
+        root = Path(override).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    memory_path = str(os.getenv("ADAOS_SKILL_MEMORY_PATH") or "").strip()
+    if memory_path:
+        base = Path(memory_path).expanduser().resolve()
+        data_root = base.parent.parent if base.name == "skill_env.json" and base.parent.name == "db" else (base if base.is_dir() else base.parent)
+        root = data_root / "files" / "public_downloads"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    for path_name in ("skills_dir", "dev_skills_dir", "skills_workspace_dir"):
+        skills_root = _ctx_path_value(ctx, path_name)
+        if not skills_root:
+            continue
+        try:
+            from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
+
+            root = SkillRuntimeEnvironment(skills_root=skills_root, skill_name=DRIVE_PUBLIC_LINK_SKILL).files_dir() / "public_downloads"
+            root.mkdir(parents=True, exist_ok=True)
+            return root
+        except Exception:
+            continue
+    root = _base_dir(ctx) / "workspace" / "skills" / ".runtime" / DRIVE_PUBLIC_LINK_SKILL / "v0.0" / "data" / "files" / "public_downloads"
     root.mkdir(parents=True, exist_ok=True)
-    return root / "hub_downloads.json"
+    return root
 
 
-def _load_download_store(ctx: AgentContext | None = None) -> dict[str, Any]:
-    path = _download_store_path(ctx)
+def _download_events_path(ctx: AgentContext | None = None) -> Path:
+    return _download_skill_root(ctx) / _DOWNLOAD_EVENTS_FILENAME
+
+
+def _download_summaries_path(ctx: AgentContext | None = None) -> Path:
+    return _download_skill_root(ctx) / _DOWNLOAD_SUMMARIES_FILENAME
+
+
+def _empty_download_summary_store() -> dict[str, Any]:
+    return {"schema": _DOWNLOAD_STORE_SCHEMA, "v": 1, "summaries": {}}
+
+
+def _load_legacy_download_store(ctx: AgentContext | None = None) -> dict[str, Any]:
+    path = _download_legacy_store_path(ctx)
     if not path.exists():
         return {"schema": _DOWNLOAD_STORE_SCHEMA, "v": 1, "summaries": {}, "events": []}
     try:
@@ -235,11 +292,68 @@ def _load_download_store(ctx: AgentContext | None = None) -> dict[str, Any]:
     return data
 
 
-def _save_download_store(data: Mapping[str, Any], ctx: AgentContext | None = None) -> None:
-    path = _download_store_path(ctx)
+def _load_download_summary_store(ctx: AgentContext | None = None) -> dict[str, Any]:
+    path = _download_summaries_path(ctx)
+    if not path.exists():
+        legacy = _load_legacy_download_store(ctx)
+        return {
+            "schema": _DOWNLOAD_STORE_SCHEMA,
+            "v": 1,
+            "summaries": dict(legacy.get("summaries") or {}),
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return _empty_download_summary_store()
+    if not isinstance(data, dict):
+        return _empty_download_summary_store()
+    data["schema"] = str(data.get("schema") or _DOWNLOAD_STORE_SCHEMA)
+    try:
+        data["v"] = int(data.get("v") or 1)
+    except Exception:
+        data["v"] = 1
+    if not isinstance(data.get("summaries"), dict):
+        data["summaries"] = {}
+    return data
+
+
+def _save_download_summary_store(data: Mapping[str, Any], ctx: AgentContext | None = None) -> None:
+    path = _download_summaries_path(ctx)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def _append_download_event(event: Mapping[str, Any], ctx: AgentContext | None = None) -> None:
+    path = _download_events_path(ctx)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(dict(event), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _read_recent_download_events(ctx: AgentContext | None = None, *, limit: int = _DOWNLOAD_RECENT_MAX) -> list[dict[str, Any]]:
+    max_lines = max(1, min(_DOWNLOAD_RECENT_MAX, int(limit or _DOWNLOAD_RECENT_MAX)))
+    path = _download_events_path(ctx)
+    if not path.exists():
+        legacy = _load_legacy_download_store(ctx)
+        return [dict(item) for item in list(legacy.get("events") or [])[:max_lines] if isinstance(item, Mapping)]
+    recent: deque[str] = deque(maxlen=max_lines)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if text:
+                    recent.append(text)
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in reversed(recent):
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, Mapping):
+            out.append(dict(item))
+    return out
 
 
 def _limited_text(value: Any, *, max_len: int = _DOWNLOAD_EVENT_TEXT_MAX) -> str:
@@ -810,7 +924,7 @@ def record_hub_public_download_event(
         "range": ctx0.get("range") or "",
     }
     with _DOWNLOAD_LOCK:
-        data = _load_download_store(ctx)
+        data = _load_download_summary_store(ctx)
         summaries = data.get("summaries") if isinstance(data.get("summaries"), dict) else {}
         summary = summaries.get(token_hash) if isinstance(summaries.get(token_hash), dict) else _download_summary_from_record(record)
         summary["public_token_hint"] = str(record.get("public_token_hint") or summary.get("public_token_hint") or "")
@@ -852,13 +966,11 @@ def record_hub_public_download_event(
         files[file_key] = file_summary
         summary["files"] = files
         summaries[token_hash] = summary
-        events = data.get("events") if isinstance(data.get("events"), list) else []
-        events.insert(0, event)
-        data["events"] = events[:_DOWNLOAD_RECENT_MAX]
         data["summaries"] = summaries
         data["schema"] = _DOWNLOAD_STORE_SCHEMA
         data["v"] = 1
-        _save_download_store(data, ctx)
+        _append_download_event(event, ctx)
+        _save_download_summary_store(data, ctx)
     return event
 
 
@@ -925,8 +1037,8 @@ def list_hub_public_download_events(
         record = _lookup_record("hub", public_token, ctx=ctx)
         token_hash = _download_public_token_hash(record)
     with _DOWNLOAD_LOCK:
-        data = _load_download_store(ctx)
-        events0 = data.get("events") if isinstance(data.get("events"), list) else []
+        data = _load_download_summary_store(ctx)
+        events0 = _read_recent_download_events(ctx, limit=_DOWNLOAD_RECENT_MAX)
         summaries = data.get("summaries") if isinstance(data.get("summaries"), dict) else {}
         if token_hash:
             events = [dict(item) for item in events0 if isinstance(item, Mapping) and str(item.get("public_token_hash") or "") == token_hash]
@@ -951,7 +1063,7 @@ def list_hub_public_download_events(
 
 def list_hub_public_links(*, ctx: AgentContext | None = None) -> list[dict[str, Any]]:
     data = _load_store("hub", ctx)
-    download_data = _load_download_store(ctx)
+    download_data = _load_download_summary_store(ctx)
     links = data.get("links") if isinstance(data.get("links"), dict) else {}
     out: list[dict[str, Any]] = []
     for record in links.values():
