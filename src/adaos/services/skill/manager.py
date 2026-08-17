@@ -2389,6 +2389,12 @@ class SkillManager:
         env.prepare_version(version)
         current_slot = env.read_active_slot(version)
         metadata = env.read_version_metadata(version)
+        restored_version, restored_slot = self._select_valid_rollback_runtime(
+            env=env,
+            name=name,
+            current_version=version,
+            current_slot=current_slot,
+        )
         current_paths = env.build_slot_paths(version, current_slot)
         current_manifest = self._read_json_dict(current_paths.resolved_manifest)
         lifecycle = self._slot_lifecycle_state(metadata=metadata, slot=current_slot)
@@ -2408,22 +2414,7 @@ class SkillManager:
         )
         metadata.setdefault("slots", {}).setdefault(current_slot, {})["lifecycle"] = dict(lifecycle)
         env.write_version_metadata(version, metadata)
-        previous_selection = env.read_runtime_selection(previous=True)
-        restored_version = str(previous_selection.get("version") or "").strip()
-        restored_slot = str(previous_selection.get("slot") or "").strip().upper()
-        if restored_version and restored_slot in {"A", "B"} and (
-            restored_version != version or restored_slot != current_slot
-        ):
-            env.prepare_version(restored_version)
-            env.set_active_slot(restored_version, restored_slot)
-        else:
-            restored_slot = env.rollback_slot(version)
-            restored_version = self._slot_version(
-                env=env,
-                metadata=metadata,
-                slot=restored_slot,
-                fallback=version,
-            )
+        env.set_active_slot(restored_version, restored_slot)
         env.active_version_marker().write_text(restored_version, encoding="utf-8")
         env.record_active_selection(
             restored_version,
@@ -2460,11 +2451,16 @@ class SkillManager:
         if not target_version or target_slot not in {"A", "B"}:
             raise ValueError("exact runtime restore requires version and slot")
         env = self._runtime_env(name)
-        env.prepare_version(target_version)
-        target_paths = env.build_slot_paths(target_version, target_slot)
-        if not target_paths.resolved_manifest.exists():
+        selection = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=target_version,
+            slot=target_slot,
+        )
+        if not selection["valid"]:
             raise RuntimeError(
-                f"cannot restore missing runtime selection skill={name} version={target_version} slot={target_slot}"
+                "cannot restore invalid runtime selection "
+                f"skill={name} version={target_version} slot={target_slot} reason={selection['reason']}"
             )
         result = self._restore_runtime_selection(
             env=env,
@@ -2497,24 +2493,14 @@ class SkillManager:
         if not version:
             raise RuntimeError("no active version")
         env.prepare_version(version)
-        metadata = env.read_version_metadata(version)
         current_slot = env.read_active_slot(version)
-        previous_selection = env.read_runtime_selection(previous=True)
-        restored_version = str(previous_selection.get("version") or "").strip()
-        restored_slot = str(previous_selection.get("slot") or "").strip().upper()
-        if restored_version and restored_slot in {"A", "B"} and (
-            restored_version != version or restored_slot != current_slot
-        ):
-            env.prepare_version(restored_version)
-            env.set_active_slot(restored_version, restored_slot)
-        else:
-            restored_slot = env.rollback_slot(version)
-            restored_version = self._slot_version(
-                env=env,
-                metadata=metadata,
-                slot=restored_slot,
-                fallback=version,
-            )
+        restored_version, restored_slot = self._select_valid_rollback_runtime(
+            env=env,
+            name=name,
+            current_version=version,
+            current_slot=current_slot,
+        )
+        env.set_active_slot(restored_version, restored_slot)
         env.active_version_marker().write_text(restored_version, encoding="utf-8")
         env.record_active_selection(
             restored_version,
@@ -2762,6 +2748,19 @@ class SkillManager:
         resolved_path = Path(slot_meta.get("resolved_manifest") or (slot_root / "resolved.manifest.json"))
         slot_source_root = slot_root / "src" / "skills" / name
         ready = resolved_path.exists() and slot_source_root.exists() and any(slot_source_root.iterdir())
+        active_selection = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=version,
+            slot=active_slot,
+        )
+        alternate_slot = "B" if active_slot == "A" else "A"
+        alternate = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=version,
+            slot=alternate_slot,
+        )
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
         deactivated = bool(deactivation.get("deactivated"))
@@ -2772,6 +2771,9 @@ class SkillManager:
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "ready": ready,
+            "active_selection_valid": bool(active_selection["valid"]),
+            "active_selection_reason": active_selection["reason"],
+            "recoverable_slot": alternate_slot if alternate["valid"] else None,
             "active": not deactivated,
             "deactivated": deactivated,
             "deactivation": deactivation,
@@ -2814,6 +2816,19 @@ class SkillManager:
         resolved_path = Path(slot_meta.get("resolved_manifest") or (slot_root / "resolved.manifest.json"))
         slot_source_root = slot_root / "src" / "skills" / name
         ready = resolved_path.exists() and slot_source_root.exists() and any(slot_source_root.iterdir())
+        active_selection = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=version,
+            slot=active_slot,
+        )
+        alternate_slot = "B" if active_slot == "A" else "A"
+        alternate = self._runtime_selection_evidence(
+            env=env,
+            name=name,
+            version=version,
+            slot=alternate_slot,
+        )
         history = metadata.get("history", {})
         deactivation = env.read_deactivation()
         deactivated = bool(deactivation.get("deactivated"))
@@ -2824,6 +2839,9 @@ class SkillManager:
             "active_slot": active_slot,
             "resolved_manifest": str(resolved_path),
             "ready": ready,
+            "active_selection_valid": bool(active_selection["valid"]),
+            "active_selection_reason": active_selection["reason"],
+            "recoverable_slot": alternate_slot if alternate["valid"] else None,
             "active": not deactivated,
             "deactivated": deactivated,
             "deactivation": deactivation,
@@ -4437,9 +4455,19 @@ class SkillManager:
         }
         try:
             if previous_active_version:
-                env.prepare_version(previous_active_version)
-                if previous_active_slot:
-                    env.set_active_slot(previous_active_version, previous_active_slot)
+                selection = self._runtime_selection_evidence(
+                    env=env,
+                    name=env.skill_name,
+                    version=previous_active_version,
+                    slot=previous_active_slot,
+                )
+                if not selection["valid"]:
+                    raise RuntimeError(
+                        "previous runtime selection is invalid: "
+                        f"version={previous_active_version} slot={previous_active_slot or '-'} "
+                        f"reason={selection['reason']}"
+                    )
+                env.set_active_slot(previous_active_version, str(previous_active_slot))
                 env.active_version_marker().write_text(previous_active_version, encoding="utf-8")
                 if previous_active_slot:
                     env.record_active_selection(previous_active_version, previous_active_slot)
@@ -4457,6 +4485,103 @@ class SkillManager:
             result["ok"] = False
             result["error"] = str(exc)
         return result
+
+    def _runtime_selection_evidence(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        name: str,
+        version: str | None,
+        slot: str | None,
+    ) -> dict[str, Any]:
+        selected_version = str(version or "").strip()
+        selected_slot = str(slot or "").strip().upper()
+        if not selected_version:
+            return {"valid": False, "reason": "missing_version", "version": "", "slot": selected_slot}
+        if selected_slot not in {"A", "B"}:
+            return {
+                "valid": False,
+                "reason": "invalid_slot",
+                "version": selected_version,
+                "slot": selected_slot,
+            }
+
+        paths = env.build_slot_paths(selected_version, selected_slot)
+        metadata = env.read_version_metadata(selected_version)
+        slot_meta = metadata.get("slots", {}).get(selected_slot, {})
+        manifest_path = Path(slot_meta.get("resolved_manifest") or paths.resolved_manifest)
+        source_root = paths.src_dir / "skills" / name
+        if not manifest_path.is_file():
+            reason = "resolved_manifest_missing"
+        elif not source_root.is_dir() or not any(source_root.iterdir()):
+            reason = "skill_source_missing"
+        else:
+            manifest = self._read_json_dict(manifest_path)
+            manifest_name = str(manifest.get("name") or "").strip()
+            manifest_version = str(manifest.get("version") or "").strip()
+            if manifest_name and manifest_name != name:
+                reason = "manifest_skill_mismatch"
+            elif manifest_version and manifest_version != selected_version:
+                reason = "manifest_version_mismatch"
+            else:
+                reason = "ready"
+        return {
+            "valid": reason == "ready",
+            "reason": reason,
+            "version": selected_version,
+            "slot": selected_slot,
+            "resolved_manifest": str(manifest_path),
+            "skill_source_root": str(source_root),
+        }
+
+    def _select_valid_rollback_runtime(
+        self,
+        *,
+        env: SkillRuntimeEnvironment,
+        name: str,
+        current_version: str,
+        current_slot: str,
+    ) -> tuple[str, str]:
+        candidates: list[tuple[str, str, str]] = []
+        previous_selection = env.read_runtime_selection(previous=True)
+        candidates.append(
+            (
+                str(previous_selection.get("version") or "").strip(),
+                str(previous_selection.get("slot") or "").strip().upper(),
+                "previous_selection",
+            )
+        )
+        previous_marker = env.previous_marker(current_version)
+        if previous_marker.exists():
+            candidates.append(
+                (
+                    current_version,
+                    previous_marker.read_text(encoding="utf-8").strip().upper(),
+                    "previous_slot_marker",
+                )
+            )
+
+        rejected: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for version, slot, source in candidates:
+            identity = (version, slot)
+            if not version or slot not in {"A", "B"} or identity == (current_version, current_slot) or identity in seen:
+                continue
+            seen.add(identity)
+            evidence = self._runtime_selection_evidence(
+                env=env,
+                name=name,
+                version=version,
+                slot=slot,
+            )
+            if evidence["valid"]:
+                return version, slot
+            rejected.append(f"{source}:{version}/{slot}:{evidence['reason']}")
+        detail = ",".join(rejected) or "no_recorded_previous_selection"
+        raise RuntimeError(
+            "no valid previous runtime selection for rollback; "
+            f"skill={name} active={current_version}/{current_slot} rejected={detail}"
+        )
 
     def _prepare_bucket_data(
         self,

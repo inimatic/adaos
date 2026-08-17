@@ -185,7 +185,13 @@ def test_exact_runtime_restore_selects_requested_version_and_slot(monkeypatch, t
     env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="weather_skill")
     env.prepare_version("2.6.18")
     target = env.build_slot_paths("2.6.18", "B")
-    target.resolved_manifest.write_text("{}\n", encoding="utf-8")
+    target.resolved_manifest.write_text(
+        '{"name":"weather_skill","version":"2.6.18"}\n',
+        encoding="utf-8",
+    )
+    target_source = target.src_dir / "skills" / "weather_skill"
+    target_source.mkdir(parents=True)
+    (target_source / "skill.yaml").write_text("name: weather_skill\nversion: 2.6.18\n", encoding="utf-8")
     env.prepare_version("2.6.19")
     env.set_active_slot("2.6.19", "A")
     env.active_version_marker().write_text("2.6.19", encoding="utf-8")
@@ -203,6 +209,22 @@ def test_exact_runtime_restore_selects_requested_version_and_slot(monkeypatch, t
     assert env.resolve_active_version() == "2.6.18"
     assert env.read_active_slot("2.6.18") == "B"
     assert env.read_deactivation() == {}
+
+
+def test_exact_runtime_restore_rejects_manifest_without_skill_source(monkeypatch, tmp_path: Path) -> None:
+    ctx = get_ctx()
+    mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=SimpleNamespace(require=lambda *_args, **_kwargs: None))
+    env = SkillRuntimeEnvironment(skills_root=tmp_path / "skills", skill_name="weather_skill")
+    env.prepare_version("2.6.18")
+    target = env.build_slot_paths("2.6.18", "B")
+    target.resolved_manifest.write_text(
+        '{"name":"weather_skill","version":"2.6.18"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mgr, "_runtime_env", lambda _name: env)
+
+    with pytest.raises(RuntimeError, match="reason=skill_source_missing"):
+        mgr.restore_runtime_selection_exact("weather_skill", version="2.6.18", slot="B")
 
 
 def test_light_service_skill_dependencies_install_into_runtime_vendor_for_inprocess_tools(

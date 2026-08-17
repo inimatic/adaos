@@ -1084,7 +1084,7 @@ def test_prepare_runtime_runs_reserved_data_migration_file(monkeypatch) -> None:
     assert (env.internal_root("2.1.0") / "migrated.txt").read_text(encoding="utf-8") == "v2.0->v2.1"
 
 
-def test_activate_and_rollback_runtime_keep_shared_bucket_data(monkeypatch) -> None:
+def test_rollback_runtime_refuses_unprepared_previous_slot(monkeypatch) -> None:
     ctx = get_ctx()
     mgr = SkillManager(git=ctx.git, paths=ctx.paths, caps=_Caps())
     skill_name = "internal_switch_skill"
@@ -1115,6 +1115,11 @@ def test_activate_and_rollback_runtime_keep_shared_bucket_data(monkeypatch) -> N
     )
     monkeypatch.setattr(skill_manager_module, "install_skill_in_capacity", lambda *args, **kwargs: None)
     monkeypatch.setattr(mgr, "_smoke_import", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mgr,
+        "_invoke_shutdown_hooks",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("invalid rollback must not stop the active slot")),
+    )
 
     mgr.prepare_runtime(skill_name, run_tests=False, preferred_slot="B")
     assert (env.internal_root("1.0.0") / "state.json").exists()
@@ -1122,9 +1127,16 @@ def test_activate_and_rollback_runtime_keep_shared_bucket_data(monkeypatch) -> N
     mgr.activate_runtime(skill_name, version="1.0.0", slot="B")
     assert (env.internal_root("1.0.0") / "state.json").exists()
 
-    restored = mgr.rollback_runtime(skill_name)
-    assert restored == "A"
+    with pytest.raises(RuntimeError, match="no valid previous runtime selection"):
+        mgr.rollback_runtime(skill_name)
+    assert env.read_active_slot("1.0.0") == "B"
     assert (env.internal_root("1.0.0") / "state.json").exists()
+
+    env.set_active_slot("1.0.0", "A")
+    invalid_status = mgr.runtime_status(skill_name)
+    assert invalid_status["active_selection_valid"] is False
+    assert invalid_status["active_selection_reason"] == "resolved_manifest_missing"
+    assert invalid_status["recoverable_slot"] == "B"
 
 
 def test_patch_runtime_uses_ab_slots_and_rollback_restores_slot_version(monkeypatch) -> None:
@@ -1655,7 +1667,7 @@ def test_failed_rehydrate_restores_previous_active_version(monkeypatch) -> None:
     env.record_active_selection("1.0.0", "A")
 
     def _fake_enrich_manifest(**kwargs):
-        version = kwargs["manifest"].get("version") or "0.0.0"
+        version = kwargs["slot"].version
         return {
             "name": skill_name,
             "version": version,
