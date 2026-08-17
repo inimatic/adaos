@@ -393,6 +393,7 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         context_members=[
             {"ref": "scenario:research_workbench", "relation": "presentation"},
             {"ref": "skill:research_orchestrator_skill", "relation": "dependency"},
+            {"ref": "skill:research_manager_skill", "relation": "contract-consumer"},
         ],
         prohibited_actions=["Do not run experiments."],
         base_release={"scope": "local", "source_tree": "sha256:" + "3" * 64},
@@ -405,6 +406,7 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         context_members=[
             {"ref": "scenario:research_workbench", "relation": "presentation"},
             {"ref": "skill:research_orchestrator_skill", "relation": "dependency"},
+            {"ref": "skill:research_manager_skill", "relation": "contract-consumer"},
         ],
         prohibited_actions=["Do not run experiments."],
         base_release={"scope": "local", "source_tree": "sha256:" + "3" * 64},

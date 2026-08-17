@@ -49,7 +49,7 @@
     },
     "contextMember": {
       "type": "object", "required": ["ref", "relation", "access", "context"],
-      "properties": {"ref": {"$ref": "#/$defs/componentRef"}, "relation": {"enum": ["presentation", "dependency", "project"]}, "access": {"const": "read-only"}, "context": {"enum": ["none", "contract", "docs", "paths", "full"]}, "paths": {"type": "array", "items": {"type": "string"}}},
+      "properties": {"ref": {"$ref": "#/$defs/componentRef"}, "relation": {"enum": ["presentation", "dependency", "project", "contract-consumer"]}, "access": {"const": "read-only"}, "context": {"enum": ["none", "contract", "docs", "paths", "full"]}, "paths": {"type": "array", "items": {"type": "string"}}},
       "additionalProperties": false
     },
     "artifactInput": {
