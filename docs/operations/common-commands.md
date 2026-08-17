@@ -216,6 +216,8 @@ adaos autostart update-cancel --json
 adaos autostart update-rollback --json
 ```
 
+A SHA passed as `--target-version` is immutable. Treat a different `resolved_target_version` as a failed rollout, not a branch update. If `update-start` reports retryable `skill_runtime_migration_active`, inspect `.adaos/state/skill_runtime_migration/status.json`; the worker diagnostics identify active `pip`, `pytest`, sync, and service children and the supervisor will admit core preparation after the shared lease is released.
+
 Recommended smoke order:
 
 ```bash

@@ -1439,10 +1439,17 @@ def prepare_slot(
         repo_url = str(repo_url).strip()
     requested_target_version = target_version
     resolved_target_version = ""
-    if target_rev and repo_url:
+    target_resolution = "request"
+    if _is_probably_git_sha(target_version):
+        # A SHA is an immutable rollout pin. Never replace it with the current
+        # branch head: doing so can install a different build than requested.
+        resolved_target_version = target_version
+        target_resolution = "pinned_commit"
+    elif target_rev and repo_url:
         resolved_target_version = _resolve_branch_head(repo_url, target_rev)
         if resolved_target_version:
             target_version = resolved_target_version
+            target_resolution = "remote_branch_head"
     source_repo_dir = Path(str(source_repo_root or "")).expanduser().resolve() if str(source_repo_root or "").strip() else None
     shared_dotenv = str(shared_dotenv_path or "").strip()
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"adaos-core-{slot_name.lower()}-", dir=str(slot_dir.parent)))
@@ -1496,7 +1503,7 @@ def prepare_slot(
             "target_version": str(target_version or "").strip(),
             "requested_target_version": str(requested_target_version or "").strip(),
             "resolved_target_version": str(resolved_target_version or "").strip(),
-            "target_resolution": "remote_branch_head" if resolved_target_version else "request",
+            "target_resolution": target_resolution,
             "root_repo_root": str(repo_root_dir) if repo_root_dir is not None else "",
             "source_kind": source_kind,
             "source_checkout": source_checkout,

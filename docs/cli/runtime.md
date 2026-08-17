@@ -63,8 +63,10 @@ In service mode the authoritative update surface is the supervisor, not the tran
 - production runtime is launched from the active slot manifest, not from the root checkout
 - `update-status` should remain inspectable through supervisor-backed state even while `:8777` is restarting
 - root/bootstrap code may be promoted after a successful slot validation, but the restarted production runtime still comes from slot `A|B`
+- a SHA-shaped `--target-version` is an immutable rollout pin; preparation must fail if that exact commit cannot be checked out and must never replace it with the current branch head
 - `update-status` may also include the compact Phase 1 supervisor memory summary so operators can see profiling intent/session state during the same rollout window
 - `prepare` has its own deadline (`ADAOS_SUPERVISOR_PREPARE_TIMEOUT_SEC`, default 900s) because slot build/pip work is heavier than restart/apply; if prepare times out or is cancelled, update status should include prepare lease revocation evidence so a late worker cannot replace an A/B slot after rollback
+- core preparation and post-boot skill migration share one cross-process admission lease. `update-start` returns retryable `skill_runtime_migration_active` while a migration owns it; retry after the reported worker completes instead of forcing concurrent `pip`/tests and slot preparation
 
 Current autostart-managed flow for bootstrap/self-update:
 
@@ -81,6 +83,8 @@ If the supervisor enforces a minimum interval between updates, `update-start` ma
 2. another update signal refreshes or annotates the queued plan instead of starting a second concurrent transition
 3. `adaos autostart update-defer --delay-sec <sec>` can move the scheduled window forward
 4. if a second signal arrives while a real transition is already active, supervisor records `subsequent transition: queued` and executes it once after the current transition finishes
+
+Skill migration status is persisted at `.adaos/state/skill_runtime_migration/status.json`. Its diagnostics include the isolated worker PID and redacted child-process command, CPU, RSS, and I/O counters so an active dependency install, test suite, sync, or service launch can be attributed without attaching an invasive process tracer.
 
 `update-promote-root` creates a backup snapshot of the replaced bootstrap-managed files before copying them from the validated active slot into the root checkout.
 `update-complete` is now primarily a retry/compatibility command:

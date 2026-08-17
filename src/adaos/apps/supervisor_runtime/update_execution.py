@@ -127,6 +127,7 @@ class SupervisorUpdateExecution:
                     }
                 )
         except asyncio.CancelledError:
+            manager._release_skill_runtime_migration_gate(reason="transition_cancelled")
             operations.clear_core_update_plan()
             cancel_mode = str(manager._update_task_cancel_mode or "").strip().lower()
             manager._update_task_cancel_mode = None
@@ -147,6 +148,7 @@ class SupervisorUpdateExecution:
                 operations.complete_update_attempt(state="cancelled", status=status, reason=reason)
             raise
         except Exception as exc:
+            manager._release_skill_runtime_migration_gate(reason=f"transition_failed:{type(exc).__name__}")
             operations.clear_core_update_plan()
             status = operations.write_core_update_status(
                 {
@@ -238,6 +240,7 @@ class SupervisorUpdateExecution:
                     status=status,
                     reason=str(prepare_result.get("message") or "prepare failed"),
                 )
+                manager._release_skill_runtime_migration_gate(reason="prepare_failed")
                 return
 
             prepared_plan = prepare_result.get("plan") if isinstance(prepare_result.get("plan"), dict) else {}
@@ -469,6 +472,7 @@ class SupervisorUpdateExecution:
                         status=status,
                         reason=f"{failure_reason}: automatic warm-switch deferrals exhausted",
                     )
+                    manager._release_skill_runtime_migration_gate(reason="candidate_deferrals_exhausted")
                     return
                 scheduled_for = time.time() + operations.warm_switch_defer_sec()
                 manager._schedule_planned_transition(
@@ -521,6 +525,7 @@ class SupervisorUpdateExecution:
                         "candidate_prewarm_max_deferrals": max_deferrals,
                     },
                 )
+                manager._release_skill_runtime_migration_gate(reason="candidate_prewarm_deferred")
                 return
 
             plan = {
@@ -677,6 +682,7 @@ class SupervisorUpdateExecution:
                                 "candidate_memory_guard": candidate_memory_guard,
                             },
                         )
+                        manager._release_skill_runtime_migration_gate(reason="candidate_cutover_deferred")
                         return
 
                     candidate_prewarm_state = "cutover_fallback"
@@ -897,6 +903,7 @@ class SupervisorUpdateExecution:
                 manager._desired_running = True
                 manager._persist_runtime_state()
         except asyncio.CancelledError:
+            manager._release_skill_runtime_migration_gate(reason="prepared_transition_cancelled")
             operations.clear_core_update_plan()
             prepare_lease_revocation = operations.revoke_prepare_lease(
                 status={
@@ -934,6 +941,9 @@ class SupervisorUpdateExecution:
                 operations.complete_update_attempt(state="cancelled", status=status, reason=reason)
             raise
         except Exception as exc:
+            manager._release_skill_runtime_migration_gate(
+                reason=f"prepared_transition_failed:{type(exc).__name__}"
+            )
             operations.clear_core_update_plan()
             prepare_lease_revocation = operations.revoke_prepare_lease(
                 status={

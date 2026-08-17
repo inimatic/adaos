@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 worker = importlib.import_module("adaos.services.skill.runtime_migration_worker")
@@ -34,6 +37,74 @@ class _FakeManager:
                 else {}
             ),
         }
+
+
+def test_global_migration_lease_serializes_runtime_processes(tmp_path) -> None:
+    ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: tmp_path))
+
+    first = worker._try_acquire_global_lease(ctx, operation_id="first")
+    assert first is not None
+    try:
+        assert worker._try_acquire_global_lease(ctx, operation_id="second") is None
+    finally:
+        worker._release_global_lease(first)
+
+    third = worker._try_acquire_global_lease(ctx, operation_id="third")
+    assert third is not None
+    worker._release_global_lease(third)
+
+
+def test_status_diagnostics_reports_worker_process_tree(tmp_path) -> None:
+    ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: tmp_path, workspace_dir=lambda: tmp_path))
+    payload = {
+        "state": "running",
+        "phase": "migrate",
+        "pending": True,
+        "worker_pid": os.getpid(),
+        "worker_mode": "subprocess",
+        "started_at": worker._now(),
+        "updated_at": worker._now(),
+    }
+
+    diagnostics = worker._status_diagnostics(ctx, payload)
+
+    process = diagnostics["worker_process"]
+    assert process["available"] is True
+    assert process["worker_pid"] == os.getpid()
+    assert any(item["kind"] == "migration_worker" for item in process["active_workloads"])
+
+
+def test_isolated_worker_entrypoint_records_terminal_status(tmp_path) -> None:
+    env = dict(os.environ)
+    env["ADAOS_BASE_DIR"] = str(tmp_path)
+    env["ADAOS_TESTING"] = "1"
+    env["ADAOS_SKILL_MIGRATION_WORKER_PROCESS"] = "1"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "adaos.services.skill.runtime_migration_worker",
+            "--operation-id",
+            "smoke-worker",
+            "--webspace-id",
+            "desktop",
+        ],
+        cwd=os.getcwd(),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    status = json.loads((tmp_path / "state" / "skill_runtime_migration" / "status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "succeeded"
+    assert status["phase"] == "complete"
+    assert status["pending"] is False
+    assert status["total"] == 0
+    assert status["worker_mode"] == "subprocess"
+    assert status["worker_pid"] > 0
 
 
 def test_migration_candidates_include_only_runtime_behind(monkeypatch, tmp_path):

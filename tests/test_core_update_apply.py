@@ -1069,11 +1069,10 @@ def test_prepare_slot_preserves_explicit_empty_repo_url(monkeypatch, tmp_path: P
     assert not (global_base / "state" / "core_slots" / "slots" / "A" / "manifest.json").exists()
 
 
-def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_slot_preserves_pinned_target_version(monkeypatch, tmp_path: Path) -> None:
     import adaos.apps.core_update_apply as mod
 
-    stale_sha = "d7d79d5d08eb12446a4f7bf6069246368df6d4d0"
-    head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    pinned_sha = "d7d79d5d08eb12446a4f7bf6069246368df6d4d0"
     captured: dict[str, object] = {}
     global_base = tmp_path / "global-base"
     monkeypatch.setenv("ADAOS_BASE_DIR", str(global_base))
@@ -1089,14 +1088,18 @@ def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: 
     def _fake_git_text(_repo_dir, *args):
         joined = " ".join(args)
         if "rev-parse HEAD" in joined:
-            return head_sha
+            return pinned_sha
         if "rev-parse --short HEAD" in joined:
-            return head_sha[:7]
+            return pinned_sha[:7]
         if "rev-parse --abbrev-ref HEAD" in joined:
             return "rev2026"
         return "value"
 
-    monkeypatch.setattr(mod, "_resolve_branch_head", lambda repo_url, target_rev: head_sha)
+    monkeypatch.setattr(
+        mod,
+        "_resolve_branch_head",
+        lambda *_args, **_kwargs: pytest.fail("pinned target must not resolve the mutable branch head"),
+    )
     monkeypatch.setattr(mod, "_prepare_checkout_repo", _fake_prepare_checkout_repo)
     monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True, "seeded": False})
     monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True, "installer": "test", "elapsed_s": 0.0})
@@ -1117,20 +1120,63 @@ def test_prepare_slot_resolves_target_rev_to_remote_head(monkeypatch, tmp_path: 
         repo_root=str(tmp_path / "repo-root"),
         source_repo_root=str(tmp_path / "source"),
         target_rev="rev2026",
-        target_version=stale_sha,
+        target_version=pinned_sha,
+        repo_url="https://github.com/inimatic/adaos.git",
+        migrate_skill_runtimes=False,
+    )
+
+    assert captured["target_version"] == pinned_sha
+    assert manifest["target_version"] == pinned_sha
+    assert manifest["requested_target_version"] == pinned_sha
+    assert manifest["resolved_target_version"] == pinned_sha
+    assert manifest["target_resolution"] == "pinned_commit"
+    assert manifest["git_commit"] == pinned_sha
+    persisted = json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert persisted["git_commit"] == pinned_sha
+    assert not (global_base / "state" / "core_slots" / "slots" / "B" / "manifest.json").exists()
+
+
+def test_prepare_slot_resolves_unpinned_target_rev_to_remote_head(monkeypatch, tmp_path: Path) -> None:
+    import adaos.apps.core_update_apply as mod
+
+    head_sha = "f7d14e92e38bb6b37f9068c2ee894de61710b92e"
+    captured: dict[str, object] = {}
+
+    def _fake_prepare_checkout_repo(**kwargs):
+        captured.update(kwargs)
+        checkout_dir = Path(kwargs["checkout_dir"])
+        apps_dir = checkout_dir / "src" / "adaos" / "apps"
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        (apps_dir / "__init__.py").write_text("", encoding="utf-8")
+        return "remote_git_clone"
+
+    monkeypatch.setattr(mod, "_resolve_branch_head", lambda *_args, **_kwargs: head_sha)
+    monkeypatch.setattr(mod, "_prepare_checkout_repo", _fake_prepare_checkout_repo)
+    monkeypatch.setattr(mod, "_prepare_seed_venv", lambda **_kwargs: {"ok": True, "seeded": False})
+    monkeypatch.setattr(mod, "_install_slot_project", lambda **_kwargs: {"ok": True, "installer": "test"})
+    monkeypatch.setattr(mod, "_strip_repo_vcs_metadata", lambda _repo_dir: None)
+    monkeypatch.setattr(mod, "_replace_slot_dir", lambda prepared_slot, slot_dir: shutil.move(str(prepared_slot), str(slot_dir)))
+    monkeypatch.setattr(mod, "_repair_moved_venv", lambda _venv_dir, **_kwargs: {"ok": True})
+    monkeypatch.setattr(mod, "_validate_prepared_slot_imports", lambda _python_bin: {"ok": True, "modules": []})
+    monkeypatch.setattr(mod, "_git_text", lambda _repo_dir, *args: head_sha if "rev-parse HEAD" in " ".join(args) else "value")
+    monkeypatch.setattr(mod, "_detect_bootstrap_promotion_requirement", lambda *_args, **_kwargs: {"required": False})
+    monkeypatch.setattr(mod, "_cleanup_stale_temp_slot_dirs", lambda *_args, **_kwargs: {"ok": True})
+
+    slot_dir = tmp_path / "slots" / "B"
+    manifest = mod.prepare_slot(
+        slot="B",
+        slot_dir_path=str(slot_dir),
+        target_rev="rev2026",
+        target_version="",
         repo_url="https://github.com/inimatic/adaos.git",
         migrate_skill_runtimes=False,
     )
 
     assert captured["target_version"] == head_sha
     assert manifest["target_version"] == head_sha
-    assert manifest["requested_target_version"] == stale_sha
+    assert manifest["requested_target_version"] == ""
     assert manifest["resolved_target_version"] == head_sha
     assert manifest["target_resolution"] == "remote_branch_head"
-    assert manifest["git_commit"] == head_sha
-    persisted = json.loads((slot_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert persisted["git_commit"] == head_sha
-    assert not (global_base / "state" / "core_slots" / "slots" / "B" / "manifest.json").exists()
 
 
 def test_detect_bootstrap_promotion_requirement_reports_changed_paths(tmp_path: Path) -> None:

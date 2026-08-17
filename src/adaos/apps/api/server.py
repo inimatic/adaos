@@ -427,6 +427,21 @@ def _runtime_boot_readiness_payload() -> dict[str, Any]:
     }
 
 
+def _post_boot_skill_migration_stabilize_sec(*, promoted: bool) -> float:
+    if truthy(os.getenv("ADAOS_TESTING")):
+        return 0.0
+    key = (
+        "ADAOS_SKILL_MIGRATION_POST_PROMOTION_STABILIZE_SEC"
+        if promoted
+        else "ADAOS_SKILL_MIGRATION_POST_BOOT_STABILIZE_SEC"
+    )
+    default = 45.0 if promoted else 20.0
+    try:
+        return max(0.0, min(300.0, float(str(os.getenv(key, default)).strip() or default)))
+    except Exception:
+        return default
+
+
 async def _start_post_boot_skill_runtime_migration(
     app: FastAPI,
     *,
@@ -445,6 +460,8 @@ async def _start_post_boot_skill_runtime_migration(
         return {"ok": True, "started": False, "reason": "candidate_deferred"}
     if bool(getattr(app.state, "skill_runtime_migration_started", False)):
         return {"ok": True, "started": False, "reason": "already_started"}
+    if bool(getattr(app.state, "skill_runtime_migration_starting", False)):
+        return {"ok": True, "started": False, "reason": "already_starting"}
 
     from adaos.services.core_slots import active_slot_manifest
     from adaos.services.skill.runtime_migration_worker import start_background_migration
@@ -458,24 +475,64 @@ async def _start_post_boot_skill_runtime_migration(
     )
     if not (bool(migration.get("background_required")) or bool(migration.get("deferred"))):
         return {"ok": True, "started": False, "reason": "not_required"}
-    app.state.skill_runtime_migration_started = True
-    app.state.skill_runtime_migration_deferred_for_promotion = False
+    app.state.skill_runtime_migration_starting = True
     try:
-        await start_background_migration(
-            get_ctx(),
-            reason=reason,
-            webspace_id=default_webspace_id(),
-            force=False,
-            run_tests=True,
-            # A completed core/release cutover has already materialized the
-            # authoritative WorkspaceLock. Re-running the legacy git sync can
-            # mistake release-owned files for local edits.
-            sync_workspace=False,
-        )
+        stabilize_sec = _post_boot_skill_migration_stabilize_sec(promoted=allow_promoted_candidate)
+        if stabilize_sec > 0.0:
+            _startup_log.info(
+                "stabilizing runtime before post-boot skill migration reason=%s delay_s=%.1f",
+                reason,
+                stabilize_sec,
+            )
+            await asyncio.sleep(stabilize_sec)
+            readiness = _runtime_boot_readiness_payload()
+            if not bool(readiness.get("ready")):
+                return {
+                    "ok": False,
+                    "started": False,
+                    "reason": "runtime_not_ready_after_stabilization",
+                    "stabilize_sec": stabilize_sec,
+                    "readiness": readiness,
+                }
+
+        deadline = time.monotonic() + (60.0 if allow_promoted_candidate else 0.0)
+        while True:
+            result = await start_background_migration(
+                get_ctx(),
+                reason=reason,
+                webspace_id=default_webspace_id(),
+                force=False,
+                run_tests=True,
+                # A completed core/release cutover has already materialized the
+                # authoritative WorkspaceLock. Re-running the legacy git sync can
+                # mistake release-owned files for local edits.
+                sync_workspace=False,
+            )
+            if bool(result.get("accepted")):
+                app.state.skill_runtime_migration_started = True
+                app.state.skill_runtime_migration_deferred_for_promotion = False
+                return {
+                    "ok": True,
+                    "started": True,
+                    "reason": reason,
+                    "stabilize_sec": stabilize_sec,
+                    "worker": result.get("status"),
+                }
+            if str(result.get("reason") or "") != "global_migration_running" or time.monotonic() >= deadline:
+                return {
+                    "ok": True,
+                    "started": False,
+                    "reason": str(result.get("reason") or "migration_not_started"),
+                    "retryable": bool(result.get("retryable")),
+                    "stabilize_sec": stabilize_sec,
+                    "worker": result.get("status"),
+                }
+            await asyncio.sleep(5.0)
     except Exception:
         app.state.skill_runtime_migration_started = False
         raise
-    return {"ok": True, "started": True, "reason": reason}
+    finally:
+        app.state.skill_runtime_migration_starting = False
 
 
 async def _run_post_boot_skill_runtime_migration(app: FastAPI, *, reason: str) -> None:

@@ -148,6 +148,45 @@ def test_candidate_defers_post_boot_migration_until_promotion(monkeypatch) -> No
     assert api_server.app.state.skill_runtime_migration_deferred_for_promotion is True
 
 
+def test_post_boot_migration_does_not_mark_rejected_worker_as_started(monkeypatch) -> None:
+    import adaos.services.core_slots as core_slots
+    import adaos.services.skill.runtime_migration_worker as migration_worker
+
+    monkeypatch.setenv("ADAOS_RUNTIME_TRANSITION_ROLE", "active")
+    monkeypatch.setenv("ADAOS_TESTING", "1")
+    monkeypatch.setattr(api_server.app.state, "runtime_boot_task", None, raising=False)
+    monkeypatch.setattr(
+        api_server.app.state,
+        "runtime_boot_readiness",
+        {"state": "ready", "ready": True, "started_at": 1.0, "completed_at": 2.0},
+        raising=False,
+    )
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_started", False, raising=False)
+    monkeypatch.setattr(api_server.app.state, "skill_runtime_migration_starting", False, raising=False)
+    monkeypatch.setattr(
+        core_slots,
+        "active_slot_manifest",
+        lambda: {"skill_runtime_migration": {"deferred": True, "background_required": True}},
+    )
+
+    async def _rejected(*_args, **_kwargs):
+        return {"ok": True, "accepted": False, "retryable": True, "reason": "global_migration_running"}
+
+    monkeypatch.setattr(migration_worker, "start_background_migration", _rejected)
+
+    payload = asyncio.run(
+        api_server._start_post_boot_skill_runtime_migration(
+            api_server.app,
+            reason="test.post_boot",
+        )
+    )
+
+    assert payload["started"] is False
+    assert payload["reason"] == "global_migration_running"
+    assert api_server.app.state.skill_runtime_migration_started is False
+    assert api_server.app.state.skill_runtime_migration_starting is False
+
+
 def test_background_boot_defaults_to_supervisor_or_autostart(monkeypatch) -> None:
     monkeypatch.delenv("ADAOS_RUNTIME_BACKGROUND_BOOT", raising=False)
     monkeypatch.delenv("ADAOS_SUPERVISOR_ENABLED", raising=False)

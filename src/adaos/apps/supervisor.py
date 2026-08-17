@@ -18,6 +18,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from string import Formatter
+from types import SimpleNamespace
 from typing import Any
 
 try:
@@ -245,6 +246,64 @@ def _supervisor_update_attempt_path() -> Path:
 
 def _update_transition_lock_path() -> Path:
     return (_supervisor_state_dir() / "update_transition.lock").resolve()
+
+
+def _active_skill_runtime_migration() -> dict[str, Any] | None:
+    status_path = (current_base_dir() / "state" / "skill_runtime_migration" / "status.json").resolve()
+    lease_path = status_path.with_name("worker.lock")
+    status: dict[str, Any] = {}
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            status = payload
+    except Exception:
+        pass
+    handle = None
+    locked_here = False
+    try:
+        lease_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lease_path.open("a+b")
+        if lease_path.stat().st_size == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                locked_here = True
+            except OSError:
+                locked_here = False
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked_here = True
+            except OSError:
+                locked_here = False
+    except Exception:
+        return status if bool(status.get("pending")) else None
+    finally:
+        if handle is not None:
+            if locked_here:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+            handle.close()
+    if locked_here:
+        return None
+    return status or {"pending": True, "state": "running", "phase": "unknown"}
 
 
 def _update_transition_thread_lock(path: Path) -> threading.Lock:
@@ -2116,6 +2175,7 @@ class SupervisorManager:
         self._member_hub_post_recovery_refresh_last_result: dict[str, Any] | None = None
         self._update_task: asyncio.Task[Any] | None = None
         self._update_task_cancel_mode: str | None = None
+        self._skill_runtime_migration_gate_lease: Any | None = None
         self._managed_runtime_instance_id: str | None = None
         self._managed_transition_role: str | None = None
         self._managed_slot: str | None = None
@@ -7391,6 +7451,33 @@ class SupervisorManager:
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
     def _begin_prepare_transition(self, request: dict[str, Any]) -> dict[str, Any]:
+        if not self._acquire_skill_runtime_migration_gate(request=request):
+            migration = _active_skill_runtime_migration() or {}
+            return {
+                "ok": True,
+                "accepted": False,
+                "deferred": True,
+                "retryable": True,
+                "retry_after_sec": 15.0,
+                "reason": "skill_runtime_migration_active",
+                "migration": {
+                    "operation_id": migration.get("operation_id"),
+                    "state": migration.get("state"),
+                    "phase": migration.get("phase"),
+                    "pending": bool(migration.get("pending", True)),
+                    "current": migration.get("current"),
+                    "worker_pid": migration.get("worker_pid"),
+                },
+                "status": read_core_update_status(),
+                "_served_by": "supervisor",
+            }
+        try:
+            return self._begin_prepare_transition_admitted(request)
+        except Exception:
+            self._release_skill_runtime_migration_gate(reason="prepare_admission_failed")
+            raise
+
+    def _begin_prepare_transition_admitted(self, request: dict[str, Any]) -> dict[str, Any]:
         started_at = time.time()
         try:
             candidate_prewarm_deferral_count = max(
@@ -7470,6 +7557,42 @@ class SupervisorManager:
             ),
         )
         return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
+
+    def _acquire_skill_runtime_migration_gate(self, *, request: dict[str, Any]) -> bool:
+        if self._skill_runtime_migration_gate_lease is not None:
+            return True
+        try:
+            from adaos.services.skill.runtime_migration_worker import _try_acquire_global_lease
+
+            operation_id = "core-update-" + uuid.uuid4().hex[:12]
+            lease_ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=current_base_dir))
+            lease = _try_acquire_global_lease(lease_ctx, operation_id=operation_id)
+        except Exception:
+            _LOG.warning("failed to acquire core/skill workload admission lease", exc_info=True)
+            return False
+        if lease is None:
+            return False
+        self._skill_runtime_migration_gate_lease = lease
+        _LOG.info(
+            "core update acquired skill migration gate action=%s target=%s",
+            str(request.get("action") or "update"),
+            str(request.get("target_version") or request.get("target_rev") or ""),
+        )
+        return True
+
+    def _release_skill_runtime_migration_gate(self, *, reason: str) -> None:
+        lease = self._skill_runtime_migration_gate_lease
+        if lease is None:
+            return
+        self._skill_runtime_migration_gate_lease = None
+        try:
+            from adaos.services.skill.runtime_migration_worker import _release_global_lease
+
+            _release_global_lease(lease)
+        except Exception:
+            _LOG.warning("failed to release core/skill workload admission lease", exc_info=True)
+        else:
+            _LOG.info("core update released skill migration gate reason=%s", reason)
 
     def _schedule_planned_transition(
         self,
@@ -7689,6 +7812,9 @@ class SupervisorManager:
         )
         status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
         attempt = payload.get("attempt") if isinstance(payload.get("attempt"), dict) else _read_update_attempt() or {}
+        status_state = str(status.get("state") or "").strip().lower()
+        if status_state in {"validated", "succeeded", "failed", "cancelled", "canceled"}:
+            self._release_skill_runtime_migration_gate(reason=f"update_status:{status_state}")
         if self._candidate_proc is not None and not _is_transition_in_progress(status, attempt):
             await self._cleanup_candidate_runtime(reason="supervisor.candidate.idle_cleanup")
             payload = _reconcile_update_status(
@@ -7865,6 +7991,27 @@ class SupervisorManager:
                 current_status=current_status,
                 current_attempt=current_attempt,
             )
+        if action == "update":
+            migration = await asyncio.to_thread(_active_skill_runtime_migration)
+            if migration is not None:
+                return {
+                    "ok": True,
+                    "accepted": False,
+                    "deferred": True,
+                    "retryable": True,
+                    "retry_after_sec": 15.0,
+                    "reason": "skill_runtime_migration_active",
+                    "migration": {
+                        "operation_id": migration.get("operation_id"),
+                        "state": migration.get("state"),
+                        "phase": migration.get("phase"),
+                        "pending": bool(migration.get("pending", True)),
+                        "current": migration.get("current"),
+                        "worker_pid": migration.get("worker_pid"),
+                    },
+                    "status": current_status,
+                    "_served_by": "supervisor",
+                }
         if _transition_request_matches_active_slot(request):
             if _planned_transition_active(current_status, current_attempt) and not (
                 _transition_request_same_target(request, current_attempt)
@@ -7927,6 +8074,7 @@ class SupervisorManager:
         current_attempt = _read_update_attempt() or {}
         current_status = read_core_update_status()
         if str(current_attempt.get("state") or "").strip().lower() == "planned":
+            self._release_skill_runtime_migration_gate(reason="planned_update_cancelled")
             status = write_core_update_status(
                 {
                     "state": "cancelled",
@@ -7940,6 +8088,7 @@ class SupervisorManager:
             return {"ok": True, "accepted": True, "status": status, "_served_by": "supervisor"}
 
         if task is None or task.done():
+            self._release_skill_runtime_migration_gate(reason="inactive_update_cancelled")
             current_phase = str(current_status.get("phase") or "").strip().lower() or "countdown"
             status = write_core_update_status(
                 {
@@ -7954,6 +8103,7 @@ class SupervisorManager:
             return {"ok": True, "accepted": False, "status": status, "_served_by": "supervisor"}
 
         await self._update_state_machine.cancel_task(mode="cancelled")
+        self._release_skill_runtime_migration_gate(reason="active_update_cancelled")
         current_phase = str((read_core_update_status() or {}).get("phase") or "").strip().lower() or "countdown"
         status = write_core_update_status(
             {

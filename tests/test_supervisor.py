@@ -2047,6 +2047,38 @@ def test_required_upstream_link_maintenance_throttles_runtime_snapshot_poll(monk
     assert calls == [100.0, 110.0]
 
 
+def test_active_skill_runtime_migration_uses_cross_process_lease(monkeypatch, tmp_path) -> None:
+    from adaos.apps import supervisor as supervisor_module
+    from adaos.services.skill import runtime_migration_worker
+
+    ctx = SimpleNamespace(paths=SimpleNamespace(base_dir=lambda: tmp_path))
+    monkeypatch.setattr(supervisor_module, "current_base_dir", lambda: tmp_path)
+    migration_dir = tmp_path / "state" / "skill_runtime_migration"
+    migration_dir.mkdir(parents=True)
+    (migration_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "state": "running",
+                "phase": "migrate",
+                "pending": True,
+                "operation_id": "skill-migrate-test",
+                "worker_pid": 123,
+            }
+        ),
+        encoding="utf-8",
+    )
+    lease = runtime_migration_worker._try_acquire_global_lease(ctx, operation_id="skill-migrate-test")
+    assert lease is not None
+    try:
+        active = supervisor_module._active_skill_runtime_migration()
+        assert active is not None
+        assert active["operation_id"] == "skill-migrate-test"
+    finally:
+        runtime_migration_worker._release_global_lease(lease)
+
+    assert supervisor_module._active_skill_runtime_migration() is None
+
+
 def test_supervisor_start_update_and_cancel(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
@@ -2085,6 +2117,43 @@ def test_supervisor_start_update_and_cancel(monkeypatch, tmp_path) -> None:
         attempt = supervisor._read_update_attempt()
         assert isinstance(attempt, dict)
         assert attempt["state"] == "cancelled"
+
+    asyncio.run(_exercise())
+
+
+def test_supervisor_defers_update_while_skill_migration_is_active(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
+    monkeypatch.setattr(
+        supervisor,
+        "_active_skill_runtime_migration",
+        lambda: {
+            "operation_id": "skill-migrate-active",
+            "state": "running",
+            "phase": "migrate",
+            "pending": True,
+            "current": {"skill": "slideshow_skill", "stage": "refresh_runtime"},
+            "worker_pid": 321,
+        },
+    )
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    async def _exercise() -> None:
+        result = await manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version="a" * 40,
+            reason="test.update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+        assert result["accepted"] is False
+        assert result["deferred"] is True
+        assert result["retryable"] is True
+        assert result["reason"] == "skill_runtime_migration_active"
+        assert result["migration"]["current"]["skill"] == "slideshow_skill"
+        assert manager._update_task is None
 
     asyncio.run(_exercise())
 

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import contextlib
 import json
 import logging
+import os
+import signal
 import shutil
+import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +26,9 @@ from adaos.services.workspace_registry import build_registry_entry, list_workspa
 
 _LOG = logging.getLogger("adaos.skill.runtime_migration")
 _TASK: asyncio.Task[Any] | None = None
+_PROCESS: asyncio.subprocess.Process | None = None
+_LEASE_HANDLE: Any | None = None
+_CANCELLING = False
 _LOCK = asyncio.Lock()
 _DEFAULT_STALE_AFTER_S = 300.0
 _STAGE_STALE_AFTER_S: dict[str, float] = {
@@ -43,6 +51,67 @@ def status_path(ctx: AgentContext) -> Path:
     return _status_dir(ctx) / "status.json"
 
 
+def _lease_path(ctx: AgentContext) -> Path:
+    return _status_dir(ctx) / "worker.lock"
+
+
+def _try_acquire_global_lease(ctx: AgentContext, *, operation_id: str) -> Any | None:
+    path = _lease_path(ctx)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+b")
+    try:
+        handle.seek(0)
+        if path.stat().st_size == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        handle.close()
+        return None
+    metadata = {
+        "schema": "adaos.skill_runtime_migration.lease.v1",
+        "operation_id": str(operation_id or ""),
+        "owner_pid": os.getpid(),
+        "acquired_at": _now(),
+    }
+    try:
+        handle.seek(1)
+        handle.truncate()
+        handle.write(json.dumps(metadata, ensure_ascii=False).encode("utf-8"))
+        handle.flush()
+    except Exception:
+        _release_global_lease(handle)
+        raise
+    return handle
+
+
+def _release_global_lease(handle: Any | None) -> None:
+    if handle is None:
+        return
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    with contextlib.suppress(Exception):
+        handle.close()
+
+
 def _now() -> float:
     return time.time()
 
@@ -58,6 +127,9 @@ def _default_webspace_id() -> str:
 
 def _write_status(ctx: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
     body = dict(payload)
+    if str(os.getenv("ADAOS_SKILL_MIGRATION_WORKER_PROCESS") or "").strip() == "1":
+        body.setdefault("worker_pid", os.getpid())
+        body.setdefault("worker_mode", "subprocess")
     body["updated_at"] = _now()
     path = status_path(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +257,138 @@ def _classify_status_blocker(payload: dict[str, Any], *, stale: bool, stage: str
     return None
 
 
+def _workload_kind(command: list[str]) -> str:
+    text = " ".join(command).lower()
+    if "pytest" in text:
+        return "skill_tests"
+    if " pip " in f" {text} " and "install" in text:
+        return "dependency_install"
+    if "uv" in text and "install" in text:
+        return "dependency_install"
+    if "git" in text and any(token in text for token in ("clone", "fetch", "pull", "checkout")):
+        return "workspace_sync"
+    if "handlers.service" in text:
+        return "skill_service"
+    return "skill_worker_child"
+
+
+def _redacted_command(command: list[str]) -> list[str]:
+    result: list[str] = []
+    redact_next = False
+    for raw in command[:24]:
+        value = str(raw)
+        lowered = value.lower()
+        if redact_next:
+            result.append("***")
+            redact_next = False
+            continue
+        if lowered in {"--token", "--password", "--secret", "--api-key", "--key"}:
+            result.append(value)
+            redact_next = True
+            continue
+        if any(marker in lowered for marker in ("token=", "password=", "secret=", "api_key=", "apikey=")):
+            key, sep, _value = value.partition("=")
+            result.append(f"{key}{sep}***")
+            continue
+        if "://" in value and "@" in value:
+            scheme, _, remainder = value.partition("://")
+            result.append(f"{scheme}://***@{remainder.rsplit('@', 1)[-1]}")
+            continue
+        result.append(value[:500])
+    return result
+
+
+def _worker_process_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        worker_pid = int(payload.get("worker_pid") or 0)
+    except Exception:
+        worker_pid = 0
+    if worker_pid <= 0:
+        return {"available": False, "worker_pid": None, "active_workloads": []}
+    try:
+        import psutil
+
+        worker = psutil.Process(worker_pid)
+        processes = [worker, *worker.children(recursive=True)]
+    except Exception as exc:
+        return {
+            "available": False,
+            "worker_pid": worker_pid,
+            "alive": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "active_workloads": [],
+        }
+    rows: list[dict[str, Any]] = []
+    for proc in processes[:24]:
+        try:
+            with proc.oneshot():
+                command = list(proc.cmdline() or [])
+                memory = proc.memory_info()
+                cpu = proc.cpu_times()
+                try:
+                    io = proc.io_counters()
+                except Exception:
+                    io = None
+                row = {
+                    "pid": int(proc.pid),
+                    "ppid": int(proc.ppid()),
+                    "name": str(proc.name() or ""),
+                    "kind": "migration_worker" if int(proc.pid) == worker_pid else _workload_kind(command),
+                    "age_s": round(max(0.0, _now() - float(proc.create_time())), 3),
+                    "cpu_total_s": round(float(cpu.user) + float(cpu.system), 3),
+                    "rss_bytes": int(memory.rss),
+                    "read_bytes": int(getattr(io, "read_bytes", 0) or 0) if io is not None else None,
+                    "write_bytes": int(getattr(io, "write_bytes", 0) or 0) if io is not None else None,
+                    "command": _redacted_command(command),
+                }
+        except Exception:
+            continue
+        rows.append(row)
+    return {
+        "available": True,
+        "worker_pid": worker_pid,
+        "alive": bool(rows),
+        "worker_mode": str(payload.get("worker_mode") or "").strip() or None,
+        "active_workloads": rows,
+    }
+
+
+def _core_update_migration_blocker(*, reason: str) -> dict[str, Any] | None:
+    if str(reason or "").strip() == "core_update_post_promotion":
+        return None
+    try:
+        from adaos.services.core_update import read_core_update_status
+
+        status = read_core_update_status()
+    except Exception:
+        return None
+    state = str(status.get("state") or "").strip().lower()
+    if state not in {"planned", "countdown", "preparing", "restarting"}:
+        return None
+    return {
+        "state": state,
+        "phase": str(status.get("phase") or "").strip() or None,
+        "target_version": str(status.get("target_version") or "").strip() or None,
+    }
+
+
+def _background_worker_command(command: list[str]) -> tuple[list[str], str]:
+    result = [str(item) for item in command]
+    mode = str(os.getenv("ADAOS_SKILL_MIGRATION_RESOURCE_PRIORITY", "below_normal") or "").strip().lower()
+    if mode in {"", "0", "off", "none", "disabled", "normal"}:
+        return result, "normal"
+    if os.name == "nt":
+        return result, "below_normal"
+    nice = shutil.which("nice")
+    if nice:
+        result = [nice, "-n", "10", *result]
+    if sys.platform.startswith("linux"):
+        ionice = shutil.which("ionice")
+        if ionice:
+            result = [ionice, "-c", "2", "-n", "7", "--", *result]
+    return result, "below_normal" if result != command else "normal"
+
+
 def _status_diagnostics(ctx: AgentContext, payload: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
     ts = _now() if now is None else float(now)
     state = _clean_text(payload.get("state")) or "unknown"
@@ -198,7 +402,17 @@ def _status_diagnostics(ctx: AgentContext, payload: dict[str, Any], *, now: floa
     pending = bool(payload.get("pending"))
     stale = bool(pending and updated_age_s is not None and updated_age_s >= stale_after_s)
     host_pressure = _io_pressure_snapshot(ctx, payload)
+    process_snapshot = _worker_process_snapshot(payload)
     suspected_blocker = _classify_status_blocker(payload, stale=stale, stage=stage, candidate=candidate)
+    workload_kinds = {
+        str(item.get("kind") or "")
+        for item in list(process_snapshot.get("active_workloads") or [])
+        if isinstance(item, dict)
+    }
+    if suspected_blocker is None and "dependency_install" in workload_kinds:
+        suspected_blocker = "dependency_install_in_progress"
+    if suspected_blocker is None and "skill_tests" in workload_kinds:
+        suspected_blocker = "skill_tests_in_progress"
     if suspected_blocker is None and stale and bool(host_pressure.get("pressure")):
         suspected_blocker = "host_io_or_disk_pressure"
     recommendations: list[str] = []
@@ -221,6 +435,7 @@ def _status_diagnostics(ctx: AgentContext, payload: dict[str, Any], *, now: floa
         "current_index": current.get("index") if current else None,
         "suspected_blocker": suspected_blocker,
         "host_pressure": host_pressure,
+        "worker_process": process_snapshot,
         "recommendations": recommendations,
     }
 
@@ -786,17 +1001,92 @@ async def _run_background(
     name: str | None,
     sync_workspace: bool,
 ) -> None:
-    try:
-        await asyncio.to_thread(
-            _run_migration_sync,
-            ctx,
-            operation_id=operation_id,
-            webspace_id=webspace_id,
-            force=force,
-            run_tests=run_tests,
-            name=name,
-            sync_workspace=sync_workspace,
+    global _PROCESS, _LEASE_HANDLE, _CANCELLING
+    command = [
+        sys.executable,
+        "-m",
+        "adaos.services.skill.runtime_migration_worker",
+        "--operation-id",
+        operation_id,
+        "--webspace-id",
+        webspace_id,
+    ]
+    if force:
+        command.append("--force")
+    if run_tests:
+        command.append("--run-tests")
+    if name:
+        command.extend(["--name", name])
+    if sync_workspace:
+        command.append("--sync-workspace")
+    command, worker_priority = _background_worker_command(command)
+    env = dict(os.environ)
+    env["ADAOS_SKILL_MIGRATION_WORKER_PROCESS"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+    popen_kwargs: dict[str, Any] = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": env,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = (
+            int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            | (0x00004000 if worker_priority == "below_normal" else 0)  # BELOW_NORMAL_PRIORITY_CLASS
         )
+    else:
+        popen_kwargs["start_new_session"] = True
+    try:
+        proc = await asyncio.create_subprocess_exec(*command, **popen_kwargs)
+        _PROCESS = proc
+        current = read_status(ctx)
+        _write_status(
+            ctx,
+            {
+                **current,
+                "worker_pid": int(proc.pid),
+                "worker_mode": "subprocess",
+                "worker_priority": worker_priority,
+            },
+        )
+        stdout, stderr = await proc.communicate()
+        if int(proc.returncode or 0) != 0:
+            if _CANCELLING:
+                _write_status(
+                    ctx,
+                    {
+                        "ok": False,
+                        "state": "cancelled",
+                        "phase": "cancel",
+                        "message": "skill runtime migration worker cancelled",
+                        "pending": False,
+                        "operation_id": operation_id,
+                        "worker_pid": int(proc.pid),
+                        "returncode": int(proc.returncode or 0),
+                        "finished_at": _now(),
+                    },
+                )
+            else:
+                details = (stderr or stdout or b"").decode("utf-8", errors="replace")[-4000:]
+                raise RuntimeError(f"worker exited rc={int(proc.returncode or 0)}: {details}")
+    except asyncio.CancelledError:
+        _CANCELLING = True
+        if _PROCESS is not None and _PROCESS.returncode is None:
+            await _terminate_worker_process(_PROCESS)
+        _write_status(
+            ctx,
+            {
+                "ok": False,
+                "state": "cancelled",
+                "phase": "shutdown",
+                "message": "skill runtime migration stopped with the owning runtime",
+                "pending": False,
+                "operation_id": operation_id,
+                "worker_pid": int(_PROCESS.pid) if _PROCESS is not None else None,
+                "finished_at": _now(),
+            },
+        )
+        raise
     except Exception as exc:
         _LOG.exception("background skill runtime migration failed")
         _write_status(
@@ -813,6 +1103,42 @@ async def _run_background(
                 "finished_at": _now(),
             },
         )
+    finally:
+        _PROCESS = None
+        _release_global_lease(_LEASE_HANDLE)
+        _LEASE_HANDLE = None
+        _CANCELLING = False
+
+
+async def _terminate_worker_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    if os.name == "nt":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(proc.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+            )
+            await asyncio.wait_for(killer.wait(), timeout=10.0)
+        except Exception:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(int(proc.pid), signal.SIGTERM)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except Exception:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(int(proc.pid), signal.SIGKILL)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
 
 
 async def start_background_migration(
@@ -825,53 +1151,137 @@ async def start_background_migration(
     run_tests: bool = True,
     sync_workspace: bool = True,
 ) -> dict[str, Any]:
-    global _TASK
+    global _TASK, _LEASE_HANDLE
     async with _LOCK:
         if _TASK is not None and not _TASK.done():
             status = read_status(ctx)
             return {"ok": True, "accepted": False, "reason": "already_running", "status": status}
-        operation_id = f"skill-migrate-{uuid.uuid4().hex[:10]}"
-        target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
-        initial = _write_status(
-            ctx,
-            {
+        update_blocker = _core_update_migration_blocker(reason=reason)
+        if update_blocker is not None:
+            return {
                 "ok": True,
-                "state": "scheduled",
-                "phase": "schedule",
-                "message": "skill runtime migration scheduled",
-                "pending": True,
-                "operation_id": operation_id,
-                "reason": str(reason or "manual"),
-                "webspace_id": target_webspace,
-                "name": str(name or "").strip() or None,
-                "force": bool(force),
-                "run_tests": bool(run_tests),
-                "sync_workspace": bool(sync_workspace),
-                "scheduled_at": _now(),
-            },
-        )
-        _TASK = asyncio.create_task(
-            _run_background(
+                "accepted": False,
+                "retryable": True,
+                "reason": "core_update_active",
+                "core_update": update_blocker,
+                "status": read_status(ctx),
+            }
+        operation_id = f"skill-migrate-{uuid.uuid4().hex[:10]}"
+        lease = _try_acquire_global_lease(ctx, operation_id=operation_id)
+        if lease is None:
+            return {
+                "ok": True,
+                "accepted": False,
+                "retryable": True,
+                "reason": "global_migration_running",
+                "status": read_status(ctx),
+            }
+        _LEASE_HANDLE = lease
+        target_webspace = str(webspace_id or "").strip() or _default_webspace_id()
+        try:
+            initial = _write_status(
                 ctx,
-                operation_id=operation_id,
-                webspace_id=target_webspace,
-                force=force,
-                run_tests=run_tests,
-                name=name,
-                sync_workspace=sync_workspace,
-            ),
-            name=f"skill-runtime-migration:{operation_id}",
-        )
+                {
+                    "ok": True,
+                    "state": "scheduled",
+                    "phase": "schedule",
+                    "message": "skill runtime migration scheduled",
+                    "pending": True,
+                    "operation_id": operation_id,
+                    "reason": str(reason or "manual"),
+                    "webspace_id": target_webspace,
+                    "name": str(name or "").strip() or None,
+                    "force": bool(force),
+                    "run_tests": bool(run_tests),
+                    "sync_workspace": bool(sync_workspace),
+                    "worker_mode": "subprocess",
+                    "lease_path": str(_lease_path(ctx)),
+                    "scheduled_at": _now(),
+                },
+            )
+            _TASK = asyncio.create_task(
+                _run_background(
+                    ctx,
+                    operation_id=operation_id,
+                    webspace_id=target_webspace,
+                    force=force,
+                    run_tests=run_tests,
+                    name=name,
+                    sync_workspace=sync_workspace,
+                ),
+                name=f"skill-runtime-migration:{operation_id}",
+            )
+        except Exception:
+            _release_global_lease(_LEASE_HANDLE)
+            _LEASE_HANDLE = None
+            raise
         return {"ok": True, "accepted": True, "status": initial}
 
 
 async def cancel_background_migration() -> None:
-    global _TASK
+    global _TASK, _CANCELLING
     task = _TASK
     if task is None:
         return
     if not task.done():
-        task.cancel()
+        _CANCELLING = True
+        if _PROCESS is not None and _PROCESS.returncode is None:
+            await _terminate_worker_process(_PROCESS)
         with contextlib.suppress(BaseException):
             await task
     _TASK = None
+
+
+def _parse_worker_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run an isolated AdaOS skill runtime migration")
+    parser.add_argument("--operation-id", required=True)
+    parser.add_argument("--webspace-id", required=True)
+    parser.add_argument("--name", default="")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--run-tests", action="store_true")
+    parser.add_argument("--sync-workspace", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _worker_main(argv: list[str] | None = None) -> int:
+    args = _parse_worker_args(argv)
+    from adaos.apps.bootstrap import init_ctx
+    from adaos.services.agent_context import get_ctx
+
+    init_ctx()
+    ctx = get_ctx()
+    try:
+        result = _run_migration_sync(
+            ctx,
+            operation_id=str(args.operation_id),
+            webspace_id=str(args.webspace_id),
+            force=bool(args.force),
+            run_tests=bool(args.run_tests),
+            name=str(args.name or "").strip() or None,
+            sync_workspace=bool(args.sync_workspace),
+        )
+    except Exception as exc:
+        _LOG.exception("isolated skill runtime migration failed")
+        _write_status(
+            ctx,
+            {
+                "ok": False,
+                "state": "failed",
+                "phase": "worker",
+                "message": f"isolated skill runtime migration failed: {exc}",
+                "pending": False,
+                "operation_id": str(args.operation_id),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "finished_at": _now(),
+            },
+        )
+        return 1
+    # Candidate failures are represented in the structured status and are not
+    # worker-process failures. Keep the process exit code for infrastructure
+    # failures so the parent does not overwrite per-skill diagnostics.
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_worker_main())
