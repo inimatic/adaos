@@ -588,13 +588,26 @@ def extract_text(
     }
 
 
-def source_bundle(skill_id: str) -> dict[str, Any]:
-    """Compatibility projection for formulation code; files remain skill-owned."""
+def source_bundle(skill_id: str, *, audience: str | None = None) -> dict[str, Any]:
+    """Project manifested sources, optionally restricted to an exact audience."""
 
     selected_groups = groups(skill_id)
     sources = []
+    excluded = []
+    audience_token = _safe_audience(audience) if audience else None
     for group in selected_groups:
         for item in group["items"]:
+            if audience_token:
+                admitted, reason = _admitted(item, audience_token)
+                if not admitted:
+                    excluded.append(
+                        {
+                            "artifact_id": item["artifact_id"],
+                            "group_id": group["group_id"],
+                            "reason": reason,
+                        }
+                    )
+                    continue
             sources.append(
                 {
                     "source_id": item["artifact_id"],
@@ -606,6 +619,7 @@ def source_bundle(skill_id: str) -> dict[str, Any]:
                     "origin": item["origin"],
                     "artifact_ref": f"artifact://skill/{skill_id}/{group['group_id']}/{item['artifact_id']}",
                     "group_id": group["group_id"],
+                    "context_policy": item.get("context_policy"),
                 }
             )
     identity = {
@@ -613,6 +627,8 @@ def source_bundle(skill_id: str) -> dict[str, Any]:
         "skill_ref": f"skill:{skill_id}",
         "groups": [{"group_id": group["group_id"], "digest": group["digest"], "generation": group["generation"]} for group in selected_groups],
         "sources": sources,
+        "audience": audience_token,
+        "excluded": excluded,
     }
     return {
         **identity,

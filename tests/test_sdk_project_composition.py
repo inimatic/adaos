@@ -181,6 +181,18 @@ def test_artifact_context_materializes_digest_bound_audience_views(project_space
     ]
     assert implementation["digest"] != evaluation["digest"]
     assert Path(implementation["manifest_path"]).parent != Path(implementation["root_path"])
+    formulation_bundle = artifact_context.source_bundle(
+        "tlp_direction", audience="research.formulation"
+    )
+    evaluation_bundle = artifact_context.source_bundle(
+        "tlp_direction", audience="research.evaluation"
+    )
+    assert [item["name"] for item in formulation_bundle["sources"]] == ["experiment.ipynb"]
+    assert sorted(item["name"] for item in evaluation_bundle["sources"]) == [
+        "experiment.ipynb",
+        "initial-review.md",
+    ]
+    assert formulation_bundle["excluded"][0]["artifact_id"] == hidden["artifact"]["artifact_id"]
 
 
 def test_artifact_context_policy_can_be_revised_without_replacing_content(project_space, tmp_path: Path) -> None:
