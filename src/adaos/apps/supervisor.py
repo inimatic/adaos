@@ -2297,6 +2297,14 @@ class SupervisorManager:
         self._sidecar_launch_cwd: str | None = None
         self._sidecar_last_start_reason: str | None = None
         self._sidecar_last_restart_reason: str | None = None
+        self._sidecar_transition_in_progress = False
+        self._sidecar_transition_id: str | None = None
+        self._sidecar_transition_source: str | None = None
+        self._sidecar_transition_reason: str | None = None
+        self._sidecar_transition_started_at: float | None = None
+        self._sidecar_transition_completed_at: float | None = None
+        self._sidecar_transition_outcome: str | None = None
+        self._sidecar_transition_error: str | None = None
         self._sidecar_last_probe_at: float | None = None
         self._sidecar_last_probe_ok: bool | None = None
         self._sidecar_last_probe_error: str | None = None
@@ -4531,6 +4539,7 @@ class SupervisorManager:
                 "launch_cwd": self._sidecar_launch_cwd,
                 "last_start_reason": self._sidecar_last_start_reason,
                 "last_restart_reason": self._sidecar_last_restart_reason,
+                "transition": self._sidecar_transition_payload(),
                 "restart_policy": self._sidecar_restart_policy_state(),
                 "sync": {
                     "last_sync_at": self._sidecar_last_sync_at,
@@ -4566,7 +4575,63 @@ class SupervisorManager:
             "launch_cwd": self._sidecar_launch_cwd,
             "last_start_reason": self._sidecar_last_start_reason,
             "last_restart_reason": self._sidecar_last_restart_reason,
+            "transition": process["transition"],
         }
+
+    def _sidecar_transition_payload(self) -> dict[str, Any]:
+        return {
+            "in_progress": bool(self._sidecar_transition_in_progress),
+            "transition_id": self._sidecar_transition_id,
+            "source": self._sidecar_transition_source,
+            "reason": self._sidecar_transition_reason,
+            "started_at": self._sidecar_transition_started_at,
+            "completed_at": self._sidecar_transition_completed_at,
+            "outcome": self._sidecar_transition_outcome,
+            "error": self._sidecar_transition_error,
+        }
+
+    def _begin_sidecar_transition(
+        self,
+        *,
+        source: str,
+        reason: str,
+        reject_if_active: bool,
+    ) -> str | None:
+        if self._sidecar_transition_in_progress:
+            if reject_if_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "sidecar_transition_in_progress",
+                        "message": "another sidecar lifecycle transition is already in progress",
+                        "transition": self._sidecar_transition_payload(),
+                    },
+                )
+            return None
+        transition_id = f"sidecar-{uuid.uuid4().hex[:12]}"
+        self._sidecar_transition_in_progress = True
+        self._sidecar_transition_id = transition_id
+        self._sidecar_transition_source = str(source or "supervisor").strip() or "supervisor"
+        self._sidecar_transition_reason = str(reason or "supervisor.sidecar.restart").strip()
+        self._sidecar_transition_started_at = time.time()
+        self._sidecar_transition_completed_at = None
+        self._sidecar_transition_outcome = "in_progress"
+        self._sidecar_transition_error = None
+        return transition_id
+
+    def _finish_sidecar_transition(
+        self,
+        transition_id: str,
+        *,
+        outcome: str,
+        error: str | None = None,
+    ) -> None:
+        if str(self._sidecar_transition_id or "") != str(transition_id or ""):
+            return
+        self._sidecar_transition_in_progress = False
+        self._sidecar_transition_completed_at = time.time()
+        self._sidecar_transition_outcome = str(outcome or "completed").strip() or "completed"
+        self._sidecar_transition_error = str(error or "").strip() or None
 
     def _runtime_request_json(
         self,
@@ -7489,52 +7554,86 @@ class SupervisorManager:
                     "channel": active_channel,
                 },
             )
-        async with self._lock:
-            # A validated slot may contain newer sidecar-controlled files than
-            # root. Sync before launch so one operator request produces one
-            # process generation and the monitor has nothing left to restart.
-            self._sync_sidecar_controlled_files_from_validated_slot()
-            try:
-                new_proc, restart_result = await restart_realtime_sidecar_subprocess(
-                    proc=self._sidecar_proc,
-                    role=self._sidecar_role(),
-                    repo_root=str(self._sidecar_repo_root() or "").strip() or None,
+        transition_id = self._begin_sidecar_transition(
+            source="operator",
+            reason="supervisor.sidecar.restart",
+            reject_if_active=True,
+        )
+        assert transition_id is not None
+        self._persist_runtime_state()
+        transition_error: str | None = None
+        transition_outcome = "failed"
+        response: dict[str, Any] | None = None
+        try:
+            async with self._lock:
+                # A validated slot may contain newer sidecar-controlled files than
+                # root. Sync before launch so one operator request produces one
+                # process generation and the monitor has nothing left to restart.
+                self._sync_sidecar_controlled_files_from_validated_slot()
+                try:
+                    new_proc, restart_result = await restart_realtime_sidecar_subprocess(
+                        proc=self._sidecar_proc,
+                        role=self._sidecar_role(),
+                        repo_root=str(self._sidecar_repo_root() or "").strip() or None,
+                    )
+                except TypeError:
+                    new_proc, restart_result = await restart_realtime_sidecar_subprocess(
+                        proc=self._sidecar_proc,
+                        role=self._sidecar_role(),
+                    )
+                self._process_supervisor.track_sidecar(new_proc)
+                code_state = self._sidecar_code_state()
+                self._sidecar_launch_cwd = str(
+                    code_state.get("repo_root") or code_state.get("launch_cwd") or ""
+                ) or None
+                self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
+                self._sidecar_code_fingerprint_updated_at = time.time() if self._sidecar_code_fingerprint else None
+                self._sidecar_code_change_pending_fingerprint = None
+                self._sidecar_code_change_pending_since = None
+                self._sidecar_last_start_reason = "supervisor.sidecar.restart"
+                self._sidecar_last_restart_reason = str(restart_result.get("reason") or "restarted")
+                self._sidecar_last_probe_at = None
+                self._sidecar_last_probe_ok = None
+                self._sidecar_last_probe_error = None
+                self._sidecar_consecutive_probe_failures = 0
+                self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
+                self._persist_runtime_state()
+            reconnect_result: dict[str, Any] | None = None
+            if reconnect_hub_root:
+                reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
+            restart_ok = bool(restart_result.get("ok", restart_result.get("accepted", True)))
+            reconnect_ok = reconnect_result is None or bool(reconnect_result.get("ok"))
+            transition_outcome = "completed" if restart_ok and reconnect_ok else "failed"
+            if transition_outcome == "failed":
+                transition_error = str(
+                    (reconnect_result or {}).get("error")
+                    or restart_result.get("error")
+                    or "sidecar channel recovery did not complete"
                 )
-            except TypeError:
-                new_proc, restart_result = await restart_realtime_sidecar_subprocess(
-                    proc=self._sidecar_proc,
-                    role=self._sidecar_role(),
-                )
-            self._process_supervisor.track_sidecar(new_proc)
-            code_state = self._sidecar_code_state()
-            self._sidecar_launch_cwd = str(code_state.get("repo_root") or code_state.get("launch_cwd") or "") or None
-            self._sidecar_code_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
-            self._sidecar_code_fingerprint_updated_at = time.time() if self._sidecar_code_fingerprint else None
-            self._sidecar_code_change_pending_fingerprint = None
-            self._sidecar_code_change_pending_since = None
-            self._sidecar_last_start_reason = "supervisor.sidecar.restart"
-            self._sidecar_last_restart_reason = str(restart_result.get("reason") or "restarted")
-            self._sidecar_last_probe_at = None
-            self._sidecar_last_probe_ok = None
-            self._sidecar_last_probe_error = None
-            self._sidecar_consecutive_probe_failures = 0
-            self._record_sidecar_restart_attempt(reason=self._sidecar_last_restart_reason)
+            response = {
+                "ok": restart_ok and reconnect_ok,
+                "process_restarted": restart_ok,
+                "channel_recovered": reconnect_ok,
+                "active_channel_disruption_allowed": bool(allow_active_channel_disruption),
+                "transition_id": transition_id,
+                "restart": restart_result,
+                "reconnect": reconnect_result,
+                "runtime": self._runtime_sidecar_runtime_payload(),
+            }
+        except Exception as exc:
+            transition_error = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            self._finish_sidecar_transition(
+                transition_id,
+                outcome=transition_outcome,
+                error=transition_error,
+            )
             self._persist_runtime_state()
-        reconnect_result: dict[str, Any] | None = None
-        if reconnect_hub_root:
-            reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
-        restart_ok = bool(restart_result.get("ok", restart_result.get("accepted", True)))
-        reconnect_ok = reconnect_result is None or bool(reconnect_result.get("ok"))
-        return {
-            "ok": restart_ok and reconnect_ok,
-            "process_restarted": restart_ok,
-            "channel_recovered": reconnect_ok,
-            "active_channel_disruption_allowed": bool(allow_active_channel_disruption),
-            "restart": restart_result,
-            "reconnect": reconnect_result,
-            "runtime": self._runtime_sidecar_runtime_payload(),
-            "process": self._sidecar_status_payload().get("process"),
-        }
+        assert response is not None
+        response["transition"] = self._sidecar_transition_payload()
+        response["process"] = self._sidecar_status_payload().get("process")
+        return response
 
     async def start_candidate_runtime(
         self,

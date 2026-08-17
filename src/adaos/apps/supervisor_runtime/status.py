@@ -122,6 +122,7 @@ class SupervisorStatusService:
         health = sidecar.get("health") if isinstance(sidecar.get("health"), dict) else {}
         restart_policy = sidecar.get("restart_policy") if isinstance(sidecar.get("restart_policy"), dict) else {}
         sync = sidecar.get("sync") if isinstance(sidecar.get("sync"), dict) else {}
+        transition = sidecar.get("transition") if isinstance(sidecar.get("transition"), dict) else {}
         compact_process = self._select_fields(
             process,
             (
@@ -203,6 +204,19 @@ class SupervisorStatusService:
             "health": compact_health,
             "restart_policy": compact_restart_policy,
             "sync": compact_sync,
+            "transition": self._select_fields(
+                transition,
+                (
+                    "in_progress",
+                    "transition_id",
+                    "source",
+                    "reason",
+                    "started_at",
+                    "completed_at",
+                    "outcome",
+                    "error",
+                ),
+            ),
         }
         if isinstance(source.get("managed_cmdline"), list):
             source["managed_cmdline"] = source["managed_cmdline"][:16]

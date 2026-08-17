@@ -1005,9 +1005,13 @@ virtual-environment launcher can own a child CPython process that binds the
 listener. Listener ownership therefore accepts verified descendant lineage and
 reports the relationship explicitly instead of classifying that child as an
 adopted competing process.
-The monitor rechecks the code fingerprint while holding the lifecycle lock so a
-validated-slot sync detected before an operator restart cannot produce a second
-restart after that request completes.
+Every operator or monitor initiated sidecar replacement is an explicit lifecycle
+transition. Its ID, source, reason, timing, outcome, and bounded error are exposed
+in supervisor status. The transition remains active until channel recovery has
+been checked. Concurrent replacements are rejected or coalesced, and the monitor
+rechecks both the observed process identity and transition state while holding
+the lifecycle lock. A stale process, health, or code snapshot therefore cannot
+replace the generation started by a concurrent transition.
 
 The settle window defaults to 3 seconds and is bounded by
 `ADAOS_SUPERVISOR_SIDECAR_RECOVERY_SETTLE_TIMEOUT_SEC`.

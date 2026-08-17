@@ -26,13 +26,27 @@ class SupervisorMonitoringService:
         while True:
             await asyncio.sleep(1.0)
             manager._monitor_last_iteration_at = time.time()
-            reconnect_hub_root_after_sidecar_restart = False
             sidecar_proc = manager._sidecar_proc
-            if sidecar_proc is not None and sidecar_proc.poll() is not None:
-                manager._sidecar_last_restart_reason = "supervisor.sidecar.exited"
-                manager._process_supervisor.track_sidecar(None)
-                manager._persist_runtime_state()
-            if operations.realtime_sidecar_enabled(role=manager._sidecar_role()) and not manager._stopping:
+            if (
+                not manager._sidecar_transition_in_progress
+                and sidecar_proc is not None
+                and sidecar_proc.poll() is not None
+            ):
+                async with manager._lock:
+                    if (
+                        not manager._sidecar_transition_in_progress
+                        and manager._sidecar_proc is sidecar_proc
+                        and sidecar_proc.poll() is not None
+                    ):
+                        manager._sidecar_last_restart_reason = "supervisor.sidecar.exited"
+                        manager._process_supervisor.track_sidecar(None)
+                        manager._persist_runtime_state()
+                        sidecar_proc = None
+            if (
+                operations.realtime_sidecar_enabled(role=manager._sidecar_role())
+                and not manager._stopping
+                and not manager._sidecar_transition_in_progress
+            ):
                 sync_result = await asyncio.to_thread(manager._sync_sidecar_controlled_files_from_validated_slot)
                 if bool(sync_result.get("changed")):
                     manager._persist_runtime_state()
@@ -110,18 +124,37 @@ class SupervisorMonitoringService:
                                         )
                             continue
                     if should_restart_sidecar:
+                        transition_id: str | None = None
+                        transition_error: str | None = None
+                        transition_outcome = "failed"
+                        reconnect_hub_root_after_sidecar_restart = False
                         try:
                             async with manager._lock:
                                 if manager._stopping:
                                     pass
+                                elif manager._sidecar_transition_in_progress:
+                                    pass
+                                elif manager._sidecar_proc is not sidecar_proc:
+                                    pass
                                 elif manager._sidecar_proc is None and restart_reason == "supervisor.sidecar.missing":
+                                    transition_id = manager._begin_sidecar_transition(
+                                        source="monitor",
+                                        reason=restart_reason,
+                                        reject_if_active=False,
+                                    )
                                     manager._sidecar_last_restart_reason = restart_reason
                                     await manager._spawn_sidecar_locked(reason=restart_reason)
+                                    manager._persist_runtime_state()
                                     reconnect_hub_root_after_sidecar_restart = True
                                 else:
+                                    transition_id = manager._begin_sidecar_transition(
+                                        source="monitor",
+                                        reason=str(restart_reason or "supervisor.sidecar.restart"),
+                                        reject_if_active=False,
+                                    )
                                     manager._sidecar_last_restart_reason = str(restart_reason or "supervisor.sidecar.restart")
                                     new_proc, restart_result = await operations.restart_realtime_sidecar_subprocess(
-                                        proc=manager._sidecar_proc,
+                                        proc=sidecar_proc,
                                         role=manager._sidecar_role(),
                                         repo_root=str(manager._sidecar_repo_root() or "").strip() or None,
                                     )
@@ -140,15 +173,27 @@ class SupervisorMonitoringService:
                                     manager._record_sidecar_restart_attempt(reason=manager._sidecar_last_restart_reason)
                                     manager._persist_runtime_state()
                                     reconnect_hub_root_after_sidecar_restart = True
-                        except Exception:
+                            if transition_id and reconnect_hub_root_after_sidecar_restart:
+                                reconnect_result = await manager._reconnect_hub_root_after_sidecar_restart()
+                                if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
+                                    transition_error = str(reconnect_result.get("error") or reconnect_result)
+                                    operations.logger.warning(
+                                        "failed to reconnect hub-root after sidecar restart: %s",
+                                        transition_error,
+                                    )
+                                else:
+                                    transition_outcome = "completed"
+                        except Exception as exc:
+                            transition_error = f"{type(exc).__name__}: {exc}"
                             operations.logger.warning("failed to restart adaos-realtime sidecar", exc_info=True)
-                if reconnect_hub_root_after_sidecar_restart:
-                    reconnect_result = await manager._reconnect_hub_root_after_sidecar_restart()
-                    if isinstance(reconnect_result, dict) and not bool(reconnect_result.get("ok")):
-                        operations.logger.warning(
-                            "failed to reconnect hub-root after sidecar restart: %s",
-                            reconnect_result.get("error") or reconnect_result,
-                        )
+                        finally:
+                            if transition_id:
+                                manager._finish_sidecar_transition(
+                                    transition_id,
+                                    outcome=transition_outcome,
+                                    error=transition_error,
+                                )
+                                manager._persist_runtime_state()
             await manager._maybe_resume_or_continue_transition()
             candidate_proc = manager._candidate_proc
             if candidate_proc is not None:
