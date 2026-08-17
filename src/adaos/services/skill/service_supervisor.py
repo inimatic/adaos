@@ -24,6 +24,7 @@ import yaml
 
 from adaos.services.agent_context import get_ctx
 from adaos.services.eventbus import emit
+from adaos.services.runtime_identity import runtime_instance_id, runtime_transition_role
 from adaos.services.skill.dependency_disk_guard import ensure_dependency_disk_budget
 from adaos.services.skill.dependency_requirements import resolve_skill_dependency_args
 from adaos.services.skill.runtime_env import SkillRuntimeEnvironment
@@ -457,11 +458,72 @@ def _service_listener_snapshot(spec: ServiceSpec) -> dict[str, Any]:
             snapshot["cwd"] = cwd
             snapshot["cmdline"] = proc.cmdline()
             snapshot["workdir_matches"] = Path(cwd).expanduser().resolve() == spec.workdir.expanduser().resolve()
+            snapshot["ppid"] = int(proc.ppid())
+            snapshot["create_time"] = float(proc.create_time())
+
+            process_env: Mapping[str, str] = {}
+            try:
+                process_env = proc.environ()
+            except Exception as exc:
+                snapshot["environment_error"] = f"{type(exc).__name__}: {exc}"
+            owner_instance_id = str(process_env.get("ADAOS_RUNTIME_INSTANCE_ID") or "").strip() or None
+            owner_service_skill = str(process_env.get("ADAOS_SERVICE_SKILL") or "").strip() or None
+            expected_instance_id = runtime_instance_id()
+            snapshot["owner_runtime_instance_id"] = owner_instance_id
+            snapshot["expected_runtime_instance_id"] = expected_instance_id
+            snapshot["owner_service_skill"] = owner_service_skill
+            snapshot["runtime_instance_matches"] = bool(
+                owner_instance_id and owner_instance_id == expected_instance_id
+            )
+            snapshot["service_skill_matches"] = bool(owner_service_skill and owner_service_skill == spec.skill)
+
+            runtime_descendant = int(pid) == os.getpid()
+            ancestor_pids: list[int] = []
+            parent = proc
+            for _ in range(64):
+                parent_pid = int(parent.ppid())
+                if parent_pid <= 0 or parent_pid == int(parent.pid):
+                    break
+                ancestor_pids.append(parent_pid)
+                if parent_pid == os.getpid():
+                    runtime_descendant = True
+                    break
+                try:
+                    parent = psutil.Process(parent_pid)
+                except Exception:
+                    break
+            snapshot["ancestor_pids"] = ancestor_pids
+            snapshot["runtime_descendant"] = runtime_descendant
+            snapshot["orphaned"] = int(snapshot["ppid"]) in {0, 1}
+            snapshot["ownership_verified"] = bool(
+                snapshot["runtime_instance_matches"] or runtime_descendant
+            )
+            snapshot["ownership_basis"] = (
+                "runtime_instance"
+                if snapshot["runtime_instance_matches"]
+                else "runtime_process_tree"
+                if runtime_descendant
+                else "runtime_instance_mismatch"
+                if owner_instance_id
+                else "unverified"
+            )
         except Exception as exc:
             snapshot["error"] = f"{type(exc).__name__}: {exc}"
             snapshot["workdir_matches"] = False
         return snapshot
     return {"pid": None, "error": "listener_not_found"}
+
+
+def _listener_owned_by_current_runtime(listener: Mapping[str, Any]) -> bool:
+    return bool(listener.get("ownership_verified"))
+
+
+def _listener_is_managed_service(listener: Mapping[str, Any]) -> bool:
+    return bool(
+        listener.get("service_skill_matches")
+        or listener.get("owner_runtime_instance_id")
+        or listener.get("workdir_matches")
+    )
 
 
 def _terminate_process_tree(pid: int, *, timeout_s: float = 3.0) -> bool:
@@ -815,6 +877,9 @@ class ServiceSkillSupervisor:
         env["ADAOS_SERVICE_PORT"] = str(spec.port)
         env["ADAOS_SERVICE_ROOT"] = str(spec.skill_root)
         env["ADAOS_SERVICE_WORKDIR"] = str(spec.workdir)
+        env["ADAOS_SERVICE_OWNER_PID"] = str(os.getpid())
+        env["ADAOS_RUNTIME_INSTANCE_ID"] = runtime_instance_id()
+        env["ADAOS_RUNTIME_TRANSITION_ROLE"] = runtime_transition_role()
         bucket_root = _infer_runtime_bucket_root(spec.skill_root, name)
         if bucket_root is not None:
             skill_env_path = bucket_root / "data" / "db" / "skill_env.json"
@@ -903,6 +968,12 @@ class ServiceSkillSupervisor:
             "cooloff_until": self._cooloff_until.get(name),
             "external_ready": external_ready,
             "external_ready_at": self._external_ready_at.get(name) if external_ready else None,
+            "runtime_owner": {
+                "runtime_instance_id": runtime_instance_id(),
+                "runtime_pid": os.getpid(),
+                "transition_role": runtime_transition_role(),
+                "basis": "tracked_process" if running else "verified_listener" if external_ready else None,
+            },
         }
 
         if check_health:
@@ -911,7 +982,7 @@ class ServiceSkillSupervisor:
             if ok and not running:
                 listener = _service_listener_snapshot(spec)
                 payload["external_listener"] = listener
-                if bool(listener.get("workdir_matches")) or external_ready:
+                if _listener_owned_by_current_runtime(listener):
                     self._external_ready_specs[name] = spec_key
                     if not external_ready:
                         self._external_ready_at[name] = time.time()
@@ -919,6 +990,11 @@ class ServiceSkillSupervisor:
                         self._external_ready_at.setdefault(name, time.time())
                     payload["external_ready"] = True
                     payload["external_ready_at"] = self._external_ready_at.get(name)
+                else:
+                    self._external_ready_specs.pop(name, None)
+                    self._external_ready_at.pop(name, None)
+                    payload["external_ready"] = False
+                    payload["external_ready_at"] = None
             elif not ok:
                 self._external_ready_specs.pop(name, None)
                 self._external_ready_at.pop(name, None)
@@ -1091,7 +1167,7 @@ class ServiceSkillSupervisor:
         endpoint_healthy = await asyncio.to_thread(_service_health_ok, spec)
         if endpoint_healthy:
             listener = await asyncio.to_thread(_service_listener_snapshot, spec)
-            if bool(listener.get("workdir_matches")) or external_already_marked:
+            if _listener_owned_by_current_runtime(listener):
                 self._external_ready_specs[name] = spec_key
                 if not external_already_marked:
                     self._external_ready_at[name] = time.time()
@@ -1108,15 +1184,22 @@ class ServiceSkillSupervisor:
                 return
 
             stale_pid = int(listener.get("pid") or 0)
-            if stale_pid > 0:
+            if stale_pid > 0 and _listener_is_managed_service(listener):
                 await self._record_issue(
                     name,
                     issue_type="stale_service_endpoint",
-                    message="service endpoint is healthy but belongs to a different runtime location; restarting it",
+                    message="service endpoint is healthy but is not owned by the current runtime; restarting it",
                     severity="warning",
                     details={
                         "pid": stale_pid,
                         "cwd": listener.get("cwd"),
+                        "ppid": listener.get("ppid"),
+                        "create_time": listener.get("create_time"),
+                        "owner_runtime_instance_id": listener.get("owner_runtime_instance_id"),
+                        "expected_runtime_instance_id": listener.get("expected_runtime_instance_id"),
+                        "ownership_basis": listener.get("ownership_basis"),
+                        "runtime_descendant": listener.get("runtime_descendant"),
+                        "orphaned": listener.get("orphaned"),
                         "expected_workdir": str(spec.workdir),
                         "host": spec.host,
                         "port": spec.port,
@@ -1198,17 +1281,27 @@ class ServiceSkillSupervisor:
 
         await self._wait_ready(spec)
         if proc.poll() is not None and await asyncio.to_thread(_service_health_ok, spec):
-            self._procs.pop(name, None)
-            self._proc_specs.pop(name, None)
-            self._external_ready_specs[name] = spec_key
-            self._external_ready_at.setdefault(name, time.time())
-            emit(
-                self._ctx.bus,
-                "skill.service.ready",
-                {"skill": name, "pid": None, "external": True},
-                source="skill.service",
+            listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+            if _listener_owned_by_current_runtime(listener):
+                self._procs.pop(name, None)
+                self._proc_specs.pop(name, None)
+                self._external_ready_specs[name] = spec_key
+                self._external_ready_at.setdefault(name, time.time())
+                emit(
+                    self._ctx.bus,
+                    "skill.service.ready",
+                    {"skill": name, "pid": listener.get("pid"), "external": True},
+                    source="skill.service",
+                )
+                self._ensure_failure_counts.pop(name, None)
+                return
+            await self._record_issue(
+                name,
+                issue_type="service_endpoint_owner_unverified_after_start",
+                message="service launcher exited but the healthy endpoint is not owned by the current runtime",
+                severity="error",
+                details={"listener": listener, "expected_workdir": str(spec.workdir)},
             )
-            self._ensure_failure_counts.pop(name, None)
             return
         emit(self._ctx.bus, "skill.service.ready", {"skill": name, "pid": proc.pid}, source="skill.service")
         self._ensure_failure_counts.pop(name, None)

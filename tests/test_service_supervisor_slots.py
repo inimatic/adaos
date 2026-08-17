@@ -537,6 +537,8 @@ def test_service_supervisor_overrides_foreign_skill_scope(monkeypatch, tmp_path)
     assert captured["ADAOS_SKILL_NAME"] == name
     assert captured["ADAOS_SKILL_ROOT"] == str(skill_root)
     assert captured["ADAOS_SKILL_ENV_PATH"] == str(bucket / "data" / "db" / "skill_env.json")
+    assert captured["ADAOS_RUNTIME_INSTANCE_ID"] == mod.runtime_instance_id()
+    assert captured["ADAOS_SERVICE_OWNER_PID"] == str(os.getpid())
 
 
 def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
@@ -590,6 +592,9 @@ def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
             "pid": 4242,
             "cwd": str(service_spec.workdir),
             "workdir_matches": True,
+            "ownership_verified": True,
+            "runtime_instance_matches": True,
+            "ownership_basis": "runtime_instance",
         },
     )
     monkeypatch.setattr(mod.subprocess, "Popen", _popen_should_not_run)
@@ -607,6 +612,25 @@ def test_service_supervisor_adopts_healthy_untracked_endpoint(monkeypatch):
     assert status["pid"] is None
     assert status["health_ok"] is True
     assert status["external_ready"] is True
+
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda service_spec: {
+            "pid": 4343,
+            "cwd": str(service_spec.workdir),
+            "workdir_matches": True,
+            "owner_runtime_instance_id": "rt-a-previous",
+            "expected_runtime_instance_id": "rt-a-current",
+            "service_skill_matches": True,
+            "ownership_verified": False,
+            "ownership_basis": "runtime_instance_mismatch",
+        },
+    )
+    replaced_status = supervisor.status(spec.skill, check_health=True)
+    assert replaced_status is not None
+    assert replaced_status["external_ready"] is False
+    assert replaced_status["external_listener"]["pid"] == 4343
 
 
 def test_service_supervisor_stop_terminates_owned_process_tree(monkeypatch):
@@ -793,15 +817,13 @@ def test_service_supervisor_prepares_launch_plan_off_event_loop(monkeypatch, tmp
     assert asyncio.run(_run()) is True
 
 
-def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(monkeypatch):
+def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_instance(monkeypatch):
     from adaos.services.agent_context import get_ctx
     from adaos.services.skill import service_supervisor as mod
 
     ctx = get_ctx()
     root = Path(ctx.paths.skills_dir()) / ".runtime" / "rasa_nlu_service_skill" / "v0.2" / "slots" / "B" / "src" / "skills" / "rasa_nlu_service_skill"
     root.mkdir(parents=True, exist_ok=True)
-    old_root = Path(ctx.paths.skills_dir()) / ".runtime" / "rasa_nlu_service_skill" / "v0.1" / "slots" / "A" / "src" / "skills" / "rasa_nlu_service_skill"
-    old_root.mkdir(parents=True, exist_ok=True)
     spec = mod.ServiceSpec(
         skill="rasa_nlu_service_skill",
         skill_root=root,
@@ -860,8 +882,13 @@ def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(mo
         "_service_listener_snapshot",
         lambda _spec: {
             "pid": 4242,
-            "cwd": str(old_root),
-            "workdir_matches": False,
+            "cwd": str(root),
+            "workdir_matches": True,
+            "owner_runtime_instance_id": "rt-a-old",
+            "expected_runtime_instance_id": "rt-a-current",
+            "service_skill_matches": True,
+            "ownership_verified": False,
+            "ownership_basis": "runtime_instance_mismatch",
         },
     )
     monkeypatch.setattr(mod, "_terminate_process_tree", _terminate)
@@ -877,6 +904,11 @@ def test_service_supervisor_restarts_stale_endpoint_from_old_runtime_location(mo
     assert terminated == [4242]
     assert spawned
     assert supervisor.status(spec.skill)["running"] is True
+    issues = supervisor.issues(spec.skill)
+    assert issues[-1]["type"] == "stale_service_endpoint"
+    assert issues[-1]["details"]["owner_runtime_instance_id"] == "rt-a-old"
+    assert issues[-1]["details"]["expected_runtime_instance_id"] == "rt-a-current"
+    assert issues[-1]["details"]["ownership_basis"] == "runtime_instance_mismatch"
 
 
 def test_service_supervisor_refuses_duplicate_start_when_unhealthy_listener_exists(monkeypatch):
