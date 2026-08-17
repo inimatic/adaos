@@ -1019,10 +1019,13 @@ def test_android_member_join_reconnect_and_node_owned_yjs_projection(tmp_path: P
                 timeout=2,
             ) as response:
                 snapshot = json.load(response)["snapshot"]
+            with urllib.request.urlopen(f"{base_url}/api/node/status", timeout=2) as response:
+                status = json.load(response)
             return bool(
                 evidence.snapshot()["yjs_node_state_total"] >= 2
                 and evidence.snapshot()["last_node_label"] == "Linked Android"
                 and "member_hub_probe" not in snapshot.get("runtime", {})
+                and int(status.get("runtime", {}).get("member_link", {}).get("ignored_hub_yjs_total") or 0) >= 1
             )
 
         _wait_until(converged)
