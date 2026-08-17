@@ -319,14 +319,21 @@ class ProcessSupervisor:
             headers = {"Accept": "application/json"}
             if manager.token:
                 headers["X-AdaOS-Token"] = manager.token
-            try:
-                with operations.requests_module.get(runtime_url + "/api/status", headers=headers, timeout=2.0) as response:
-                    response.raise_for_status()
-                    payload = response.json()
-                if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
-                    identity = dict(payload["runtime"])
-            except Exception:
-                identity = {}
+            for identity_path in ("/api/ping", "/api/status"):
+                try:
+                    with operations.requests_module.get(
+                        runtime_url + identity_path,
+                        headers=headers,
+                        timeout=2.0,
+                    ) as response:
+                        response.raise_for_status()
+                        payload = response.json()
+                    if isinstance(payload, dict) and isinstance(payload.get("runtime"), dict):
+                        identity = dict(payload["runtime"])
+                    if identity:
+                        break
+                except Exception:
+                    continue
         else:
             managed = operations.proc_details(adopted, cwd_hint=str(adopted.cwd or "").strip() or None)
             expected_executable, expected_cwd, matches_active_slot = manager._managed_runtime_slot_expectations(
@@ -382,6 +389,14 @@ class ProcessSupervisor:
         manager._managed_runtime_base_url = runtime_url
         manager._managed_runtime_cwd = str(adopted.cwd or "").strip() or None
         manager._managed_start_reason = str(reason or "supervisor.adopt.active_listener")
+        manager._managed_runtime_api_identity_verified = bool(
+            api_ready
+            and reported_slot
+            and current_slot
+            and reported_slot == current_slot
+            and reported_role == "active"
+            and str(identity.get("runtime_instance_id") or "").strip()
+        )
         manager._last_start_at = float(getattr(adopted, "_created_at", time.time()))
         manager._last_error = None
         manager._runtime_unhealthy_since = None

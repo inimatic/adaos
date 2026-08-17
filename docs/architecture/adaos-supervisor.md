@@ -394,6 +394,7 @@ Always available while the node is booted:
 
 - `GET /api/supervisor/status`
 - `GET /api/supervisor/update/status`
+- `POST /api/supervisor/service/restart`
 - `POST /api/supervisor/update/start`
 - `POST /api/supervisor/update/cancel`
 - `POST /api/supervisor/update/defer`

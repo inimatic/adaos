@@ -119,6 +119,25 @@ def test_windows_status_distinguishes_running_task_from_enabled_state(monkeypatc
     assert payload["scheduled_task_state"] == "enabled"
 
 
+def test_windows_status_uses_live_bind_when_task_output_is_localized(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        autostart,
+        "_run",
+        lambda _argv: SimpleNamespace(returncode=0, stdout="\ufffd\ufffd\ufffd\ufffd\ufffd: \ufffd\ufffd\ufffd\ufffd\ufffd\ufffd\n"),
+    )
+    monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda _host, _port: ("127.0.0.1", 8777))
+    monkeypatch.setattr(autostart, "_attach_server_owner", lambda _payload: None)
+
+    payload = status(_FakeCtx(tmp_path))
+
+    assert payload["active"] is True
+    assert payload["active_basis"] == "live_control_bind"
+    assert payload["listening"] is True
+
+
 def test_default_autostart_spec_deduplicates_root_and_rejects_slot_pythonpath(
     monkeypatch,
     tmp_path: Path,
@@ -565,6 +584,113 @@ def test_restart_service_uses_unit_name_on_linux(monkeypatch, tmp_path: Path) ->
     assert payload["service_main_pid"] == 222
     assert payload["listening"] is True
     assert payload["url"] == "http://127.0.0.1:8778"
+
+
+def test_restart_service_restarts_windows_task_and_waits_for_new_worker(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "bin" / "adaos-autostart.ps1"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("# test\n", encoding="utf-8")
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        autostart,
+        "status",
+        lambda ctx: {
+            "platform": "windows",
+            "active": True,
+            "task": "AdaOS",
+            "wrapper": str(wrapper),
+            "base_dir": str(tmp_path),
+            "host": "127.0.0.1",
+            "port": 8777,
+            "supervisor_url": "http://127.0.0.1:8776",
+            "wrapper_env": {
+                "ADAOS_AUTOSTART_SELF_RESTART": "1",
+                "ADAOS_TOKEN": "dev-token",
+            },
+        },
+    )
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True, "accepted": True}
+
+    posted: dict[str, object] = {}
+
+    def _post(self, url, **kwargs):
+        posted["url"] = url
+        posted.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(autostart.requests.Session, "post", _post)
+    monkeypatch.setattr(
+        autostart,
+        "_find_live_autostart_worker_roots",
+        lambda **kwargs: [{"pid": 222, "kind": "wrapper"}],
+    )
+    monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: (host, port))
+    monkeypatch.setattr(autostart, "_tcp_probe", lambda host, port, timeout: True)
+    listener_pids = iter([111, 222])
+    monkeypatch.setattr(autostart, "_find_listening_pid", lambda host, port: next(listener_pids))
+
+    payload = autostart.restart_service(_FakeCtx(tmp_path))
+
+    assert posted["url"] == "http://127.0.0.1:8776/api/supervisor/service/restart"
+    assert posted["headers"]["X-AdaOS-Token"] == "dev-token"
+    assert payload["previous_supervisor_pid"] == 111
+    assert payload["worker_pids"] == [222]
+    assert payload["supervisor_pid"] == 222
+    assert payload["supervisor_listening"] is True
+    assert payload["url"] == "http://127.0.0.1:8777"
+
+
+def test_restart_service_reconciles_windows_response_reset(monkeypatch, tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "bin" / "adaos-autostart.ps1"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("# test\n", encoding="utf-8")
+    monkeypatch.setattr(autostart, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        autostart,
+        "status",
+        lambda ctx: {
+            "platform": "windows",
+            "active": True,
+            "task": "AdaOS",
+            "wrapper": str(wrapper),
+            "base_dir": str(tmp_path),
+            "host": "127.0.0.1",
+            "port": 8777,
+            "supervisor_url": "http://127.0.0.1:8776",
+            "wrapper_env": {"ADAOS_AUTOSTART_SELF_RESTART": "1", "ADAOS_TOKEN": "dev-token"},
+        },
+    )
+    monkeypatch.setattr(
+        autostart.requests.Session,
+        "post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(autostart.requests.ConnectionError("response reset")),
+    )
+    monkeypatch.setattr(
+        autostart,
+        "_find_live_autostart_worker_roots",
+        lambda **kwargs: [{"pid": 222, "kind": "wrapper"}],
+    )
+    monkeypatch.setattr(autostart, "_discover_live_control_bind", lambda host, port: (host, port))
+    monkeypatch.setattr(autostart, "_tcp_probe", lambda host, port, timeout: True)
+    listener_pids = iter([111, 222])
+    monkeypatch.setattr(autostart, "_find_listening_pid", lambda host, port: next(listener_pids))
+
+    payload = autostart.restart_service(_FakeCtx(tmp_path))
+
+    assert payload["ok"] is True
+    assert payload["request_acknowledged"] is False
+    assert payload["request_error"] == "ConnectionError: response reset"
+    assert payload["supervisor_pid"] == 222
 
 
 def test_linux_enable_without_user_bus_raises_helpful_error(monkeypatch, tmp_path: Path) -> None:

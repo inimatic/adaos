@@ -4,6 +4,7 @@ import json
 import sys
 import types
 
+import pytest
 from typer.testing import CliRunner
 
 if "y_py" not in sys.modules:
@@ -26,6 +27,14 @@ if "ypy_websocket" not in sys.modules:
 from adaos.apps.cli.commands.setup import autostart_app
 from adaos.apps.cli.commands import setup as setup_cmd
 from requests import ConnectionError as RequestsConnectionError
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_supervisor(monkeypatch) -> None:
+    def _unavailable(path, *, token=None):
+        raise RuntimeError("supervisor API is isolated for CLI unit tests")
+
+    monkeypatch.setattr(setup_cmd, "_autostart_supervisor_get", _unavailable)
 
 
 def test_autostart_admin_base_url_prefers_local_control_on_member(monkeypatch) -> None:
@@ -809,6 +818,7 @@ def test_autostart_update_status_reports_service_unavailable(monkeypatch) -> Non
         )
 
     monkeypatch.setattr(setup_cmd, "_autostart_admin_get", _boom)
+    monkeypatch.setattr(setup_cmd, "_local_autostart_update_payload", lambda: None)
 
     result = runner.invoke(autostart_app, ["update-status"])
 

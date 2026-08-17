@@ -348,11 +348,16 @@ class SupervisorStatusService:
             runtime_state = "starting"
         elif managed_alive:
             runtime_state = "spawned"
-        expected_executable, expected_cwd, managed_matches_active_slot = manager._managed_runtime_slot_expectations(
+        expected_executable, expected_cwd, managed_process_matches_active_slot = manager._managed_runtime_slot_expectations(
             manifest=active_manifest,
             managed_executable=managed_executable,
             managed_cwd=managed_cwd,
         )
+        managed_matches_active_slot = managed_process_matches_active_slot
+        managed_slot_match_basis = "process_paths" if expected_executable or expected_cwd else "unavailable"
+        if manager._verified_adopted_runtime_matches_active_slot(current_slot=current_slot, api_ready=api_ready):
+            managed_matches_active_slot = True
+            managed_slot_match_basis = "runtime_api_identity"
         warm_switch = manager._warm_switch_state(
             current_slot=current_slot,
             update_status=update_status,
@@ -442,6 +447,8 @@ class SupervisorStatusService:
             "expected_managed_executable": expected_executable,
             "expected_managed_cwd": expected_cwd,
             "managed_matches_active_slot": managed_matches_active_slot,
+            "managed_process_matches_active_slot": managed_process_matches_active_slot,
+            "managed_slot_match_basis": managed_slot_match_basis,
             **warm_switch,
             "candidate_slot": candidate_slot,
             "candidate_runtime_url": candidate_runtime_url,

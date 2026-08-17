@@ -2211,6 +2211,7 @@ class SupervisorManager:
         self._managed_runtime_base_url: str | None = None
         self._managed_runtime_cwd: str | None = None
         self._managed_start_reason: str | None = None
+        self._managed_runtime_api_identity_verified = False
         self._last_stop_reason: str | None = None
         self._candidate_slot: str | None = None
         self._candidate_runtime_instance_id: str | None = None
@@ -3617,6 +3618,26 @@ class SupervisorManager:
             "mode": "self_exit",
             "delay_sec": delay_sec,
             "wrapper_refresh": wrapper_refresh,
+        }
+
+    def restart_service(self, *, reason: str) -> dict[str, Any]:
+        if self._update_task is not None and not self._update_task.done():
+            return {
+                "ok": False,
+                "accepted": False,
+                "reason": "core_update_active",
+                "message": "supervisor service restart is blocked while a core update is active",
+            }
+        restart = self._schedule_service_restart(reason=reason)
+        requested = bool(restart.get("requested"))
+        return {
+            "ok": bool(restart.get("ok")) and requested,
+            "accepted": requested,
+            "reason": str(reason or "supervisor.service.restart"),
+            "supervisor_pid": os.getpid(),
+            "managed_runtime_pid": getattr(self._proc, "pid", None),
+            "managed_sidecar_pid": getattr(self._sidecar_proc, "pid", None),
+            "restart": restart,
         }
 
     def _schedule_managed_handoff_reaper(self) -> dict[str, Any]:
@@ -5626,6 +5647,21 @@ class SupervisorManager:
                 matches_active_slot = False
         return expected_executable, expected_cwd, matches_active_slot
 
+    def _verified_adopted_runtime_matches_active_slot(
+        self,
+        *,
+        current_slot: str | None,
+        api_ready: bool,
+    ) -> bool:
+        return bool(
+            self._managed_runtime_api_identity_verified
+            and api_ready
+            and current_slot
+            and str(self._managed_slot or "").strip().upper() == str(current_slot).strip().upper()
+            and str(self._managed_transition_role or "").strip().lower() == "active"
+            and str(self._managed_runtime_instance_id or "").strip()
+        )
+
     def _persist_runtime_state(self) -> None:
         with contextlib.suppress(Exception):
             _write_json(_supervisor_runtime_state_path(), self._runtime_state_payload())
@@ -6262,6 +6298,8 @@ class SupervisorManager:
         runtime_url = self.slot_runtime_base_url(current_slot)
         listener_running = _listener_running(self.runtime_host, runtime_port)
         api_ready = bool(listener_running and _runtime_api_ready(runtime_url, token=self.token))
+        if self._verified_adopted_runtime_matches_active_slot(current_slot=current_slot, api_ready=api_ready):
+            managed_matches_active_slot = True
         current_time = time.time() if now is None else float(now)
         evaluation = self._recovery_policy.evaluate(
             RuntimeRecoveryFacts(
@@ -6354,6 +6392,7 @@ class SupervisorManager:
         self._managed_runtime_base_url = f"http://{self.runtime_host}:{int(managed_port)}"
         self._managed_runtime_cwd = str(cwd or os.getcwd())
         self._managed_start_reason = str(reason or "supervisor.start")
+        self._managed_runtime_api_identity_verified = False
         self._memory_profile_mode = profile_mode
         self._memory_profile_current_trigger_source = str(profile_trigger_source or "").strip().lower() or None
         self._reset_memory_baseline_scope(managed_pid=getattr(proc, "pid", None))
@@ -7255,6 +7294,7 @@ class SupervisorManager:
         self._managed_runtime_port = self.slot_runtime_port(resolved_slot)
         self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
         self._managed_runtime_cwd = self._candidate_runtime_cwd
+        self._managed_runtime_api_identity_verified = False
         self._process_supervisor.track_candidate(None)
         self._candidate_slot = None
         self._candidate_runtime_instance_id = None

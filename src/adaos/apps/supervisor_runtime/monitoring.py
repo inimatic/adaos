@@ -254,6 +254,7 @@ class SupervisorMonitoringService:
             manager._managed_runtime_port = None
             manager._managed_runtime_base_url = None
             manager._managed_runtime_cwd = None
+            manager._managed_runtime_api_identity_verified = False
             manager._runtime_unhealthy_since = None
             manager._runtime_unhealthy_kind = None
             manager._memory_profile_mode = "normal"

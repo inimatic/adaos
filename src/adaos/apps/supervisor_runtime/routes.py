@@ -66,6 +66,11 @@ def runtime_routes(handlers: Mapping[str, Callable[..., Any]]) -> tuple[Supervis
     return (
         SupervisorRoute("/api/supervisor/sidecar/status", _handler(handlers, "supervisor_sidecar_status")),
         SupervisorRoute(
+            "/api/supervisor/service/restart",
+            _handler(handlers, "supervisor_service_restart"),
+            method="POST",
+        ),
+        SupervisorRoute(
             "/api/supervisor/runtime/restart",
             _handler(handlers, "supervisor_runtime_restart"),
             method="POST",

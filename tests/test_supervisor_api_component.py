@@ -80,6 +80,7 @@ def test_supervisor_route_groups_preserve_public_and_post_routes() -> None:
         "supervisor_memory_profile_retry": handler,
         "supervisor_memory_publish": handler,
         "supervisor_sidecar_status": handler,
+        "supervisor_service_restart": handler,
         "supervisor_runtime_restart": handler,
         "supervisor_runtime_candidate_start": handler,
         "supervisor_runtime_candidate_stop": handler,
@@ -97,11 +98,12 @@ def test_supervisor_route_groups_preserve_public_and_post_routes() -> None:
     routes = create_supervisor_routes(handlers)
     by_path = {route.path: route for route in routes}
 
-    assert len(routes) == 26
+    assert len(routes) == 27
     assert by_path["/api/ping"].protected is False
     assert by_path["/api/supervisor/public/update-status"].protected is False
     assert by_path["/api/supervisor/update/start"].method == "POST"
     assert by_path["/api/supervisor/runtime/candidate/stop"].method == "POST"
+    assert by_path["/api/supervisor/service/restart"].method == "POST"
 
 
 def test_supervisor_api_adapter_delegates_and_validates_payloads() -> None:
@@ -116,6 +118,18 @@ def test_supervisor_api_adapter_delegates_and_validates_payloads() -> None:
     assert result["action"] == "update"
     assert result["target_rev"] == "rev-a"
     assert result["countdown_sec"] == 60.0
+
+
+def test_supervisor_api_adapter_requests_managed_service_restart() -> None:
+    class _Manager:
+        def restart_service(self, *, reason: str):
+            return {"ok": True, "accepted": True, "reason": reason}
+
+    adapter = SupervisorApiAdapter(lambda: _Manager())
+
+    result = asyncio.run(adapter.supervisor_service_restart({"reason": "test.operator"}))
+
+    assert result == {"ok": True, "accepted": True, "reason": "test.operator"}
 
 
 def test_supervisor_api_status_does_not_block_event_loop() -> None:

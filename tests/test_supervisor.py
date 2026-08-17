@@ -4963,6 +4963,45 @@ def test_runtime_state_payload_reports_slot_mismatch(monkeypatch, tmp_path) -> N
     assert payload["managed_matches_active_slot"] is False
 
 
+def test_runtime_state_payload_reports_verified_adoption_identity_basis(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 32123
+        args = ["/uv/python", "-m", "adaos.apps.autostart_runner"]
+        cwd = "/slots/A/repo"
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    manager._managed_runtime_instance_id = "rt-a-a-existing"
+    manager._managed_transition_role = "active"
+    manager._managed_slot = "A"
+    manager._managed_runtime_api_identity_verified = True
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "A", "argv": ["/slots/A/venv/bin/python"], "cwd": "/slots/A/repo"},
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "validate_slot_structure",
+        lambda slot: {"slot": slot, "ok": True, "issues": []},
+    )
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
+
+    payload = manager.status()
+
+    assert payload["managed_process_matches_active_slot"] is False
+    assert payload["managed_matches_active_slot"] is True
+    assert payload["managed_slot_match_basis"] == "runtime_api_identity"
+
+
 def test_runtime_state_payload_uses_supervisor_recorded_cwd_when_subprocess_hides_it(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -6106,6 +6145,51 @@ def test_runtime_self_heal_decision_restarts_slot_mismatch_even_when_apply_statu
     assert payload["expected_managed_executable"] == "/slots/A/venv/bin/python"
 
 
+def test_runtime_self_heal_trusts_verified_adopted_runtime_identity_on_windows(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 32123
+        args = ["/uv/python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    manager._desired_running = True
+    manager._managed_runtime_cwd = "/slots/A/repo"
+    manager._managed_runtime_instance_id = "rt-a-a-existing"
+    manager._managed_transition_role = "active"
+    manager._managed_slot = "A"
+    manager._managed_runtime_api_identity_verified = True
+    manager._last_start_at = 100.0
+
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {"state": "succeeded", "phase": "validate"})
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "A", "argv": ["/slots/A/venv/bin/python"], "cwd": "/slots/A/repo"},
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_proc_details",
+        lambda proc, cwd_hint=None: {
+            "managed_pid": 32123,
+            "managed_alive": True,
+            "managed_cmdline": ["/uv/python", "-m", "adaos.apps.autostart_runner"],
+            "managed_executable": "/uv/python",
+            "managed_cwd": "/slots/A/repo",
+        },
+    )
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
+
+    assert manager._runtime_self_heal_decision(now=200.0) is None
+
+
 def test_runtime_state_payload_surfaces_warm_switch_admission(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -6600,6 +6684,24 @@ def test_supervisor_schedule_service_restart_requests_self_exit(monkeypatch, tmp
     assert payload["wrapper_refresh"] == {"ok": True, "reason": "test.root_restart"}
     assert sleeps == [0.1]
     assert kills == [(4321, supervisor.signal.SIGTERM)]
+
+
+def test_supervisor_service_restart_rejects_active_core_update(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _ActiveTask:
+        @staticmethod
+        def done() -> bool:
+            return False
+
+    manager._update_task = _ActiveTask()
+
+    payload = manager.restart_service(reason="test.operator_restart")
+
+    assert payload["ok"] is False
+    assert payload["accepted"] is False
+    assert payload["reason"] == "core_update_active"
 
 
 def test_supervisor_restart_keeps_candidate_generated_wrapper(monkeypatch, tmp_path) -> None:
@@ -7845,6 +7947,68 @@ def test_supervisor_adopts_slot_matched_listener_before_runtime_api_is_ready(mon
     assert manager._proc.pid == 4242
     assert manager._managed_runtime_instance_id == "rt-b-c-existing"
     assert manager._managed_start_reason == "supervisor.start"
+
+
+def test_supervisor_verifies_inherited_runtime_with_lightweight_ping(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _ExistingProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.args = ["/uv/python", "-m", "adaos.apps.autostart_runner", "--port", "8777"]
+            self.cwd = "/slots/A/repo"
+            self._created_at = 123.0
+
+        @staticmethod
+        def poll():
+            return None
+
+    class _Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "runtime": {
+                    "runtime_instance_id": "rt-a-a-existing",
+                    "transition_role": "active",
+                    "slot": "A",
+                }
+            }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    requested: list[str] = []
+
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "A", "argv": ["/slots/A/venv/bin/python"], "cwd": "/slots/A/repo"},
+    )
+    monkeypatch.setattr(supervisor, "_listener_owner_pid", lambda host, port: 4242)
+    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(supervisor, "_AdoptedProcess", _ExistingProc)
+    monkeypatch.setattr(
+        supervisor.requests,
+        "get",
+        lambda url, **kwargs: requested.append(url) or _Response(),
+    )
+    monkeypatch.setattr(manager, "_reset_memory_baseline_scope", lambda **_kwargs: None)
+
+    adopted = manager._adopt_active_runtime_listener(reason="supervisor.start")
+
+    assert adopted is True
+    assert requested == ["http://127.0.0.1:8777/api/ping"]
+    assert manager._managed_runtime_instance_id == "rt-a-a-existing"
+    assert manager._managed_runtime_api_identity_verified is True
 
 
 def test_supervisor_refuses_pre_ready_listener_from_wrong_slot(monkeypatch, tmp_path) -> None:

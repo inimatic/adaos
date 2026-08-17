@@ -138,6 +138,15 @@ class SupervisorApiAdapter:
     async def supervisor_sidecar_status(self) -> dict[str, Any]:
         return await asyncio.to_thread(self._manager().sidecar_status)
 
+    async def supervisor_service_restart(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        body = payload if isinstance(payload, dict) else {}
+        result = self._manager().restart_service(
+            reason=str(body.get("reason") or "supervisor.service.restart")
+        )
+        if not bool(result.get("accepted")):
+            raise HTTPException(status_code=409, detail=result)
+        return result
+
     async def supervisor_runtime_restart(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         body = payload if isinstance(payload, dict) else {}
         status = await self._manager().restart_runtime(
@@ -229,6 +238,7 @@ class SupervisorApiAdapter:
                 "supervisor_memory_profile_retry",
                 "supervisor_memory_publish",
                 "supervisor_sidecar_status",
+                "supervisor_service_restart",
                 "supervisor_runtime_restart",
                 "supervisor_runtime_candidate_start",
                 "supervisor_runtime_candidate_stop",

@@ -1300,6 +1300,72 @@ def _linux_wait_for_restart_ready(
     )
 
 
+def _windows_wait_for_restart_ready(
+    *,
+    task_name: str,
+    base_dir: Path,
+    wrapper: Path,
+    configured_host: str,
+    configured_port: int,
+    supervisor_host: str | None,
+    supervisor_port: int | None,
+    previous_supervisor_pid: int | None,
+    timeout: float = 120.0,
+    poll_interval: float = 0.5,
+) -> dict[str, object]:
+    deadline = time.monotonic() + max(timeout, 1.0)
+    last_root_pids: list[int] = []
+    last_supervisor_pid: int | None = None
+    last_listening = False
+    last_supervisor_listening = False
+
+    while time.monotonic() < deadline:
+        roots = _find_live_autostart_worker_roots(base_dir=base_dir, wrapper=wrapper)
+        last_root_pids = sorted(int(item.get("pid") or 0) for item in roots if int(item.get("pid") or 0) > 0)
+        live_host_port = _discover_live_control_bind(configured_host, configured_port)
+        last_listening = live_host_port is not None
+        if supervisor_host and supervisor_port:
+            last_supervisor_listening = _tcp_probe(supervisor_host, supervisor_port, timeout=0.2)
+            last_supervisor_pid = _find_listening_pid(supervisor_host, supervisor_port)
+        else:
+            last_supervisor_listening = True
+            last_supervisor_pid = None
+        new_supervisor = bool(
+            last_supervisor_listening
+            and (
+                previous_supervisor_pid is None
+                or (last_supervisor_pid is not None and last_supervisor_pid != previous_supervisor_pid)
+            )
+        )
+
+        if (
+            new_supervisor
+            and last_listening
+            and last_root_pids
+        ):
+            host, port = live_host_port or (configured_host, configured_port)
+            return {
+                "active": True,
+                "listening": True,
+                "supervisor_listening": bool(last_supervisor_listening),
+                "supervisor_pid": last_supervisor_pid,
+                "worker_pids": last_root_pids,
+                "host": host,
+                "port": int(port),
+                "url": f"http://{host}:{int(port)}",
+            }
+        time.sleep(max(poll_interval, 0.05))
+
+    raise RuntimeError(
+        f"timed out waiting for scheduled task {task_name} to restart\n"
+        f"worker pids: {last_root_pids or 'none'}\n"
+        f"supervisor pid: {last_supervisor_pid or 'unknown'} "
+        f"(previous: {previous_supervisor_pid or 'unknown'})\n"
+        f"runtime listening: {last_listening}\n"
+        f"supervisor listening: {last_supervisor_listening}"
+    )
+
+
 def _parse_wrapper_host_port(wrapper: Path) -> tuple[str, int] | None:
     """
     Best-effort extract `--host` / `--port` from our generated wrapper scripts.
@@ -2055,13 +2121,18 @@ def status(ctx: AgentContext) -> dict:
         active = proc.returncode == 0 and run_state_raw in {"running"}
         host_port = _parse_wrapper_host_port(wrapper) if wrapper.exists() else None
         configured_host, configured_port = host_port or (DEFAULT_LOOPBACK_HOST, DEFAULT_RUNTIME_PORT)
-        live_host_port = _discover_live_control_bind(configured_host, configured_port) if active else None
+        live_host_port = _discover_live_control_bind(configured_host, configured_port) if proc.returncode == 0 else None
+        active_basis = "scheduled_task_status"
+        if live_host_port is not None and not active:
+            active = True
+            active_basis = "live_control_bind"
         host, port = live_host_port or (configured_host, configured_port)
         listening = bool(live_host_port) if active else False
         payload = {
             "platform": "windows",
             "enabled": enabled,
             "active": active,
+            "active_basis": active_basis,
             "listening": listening,
             "host": host,
             "port": port,
@@ -2285,6 +2356,83 @@ def restart_service(ctx: AgentContext) -> dict[str, object]:
     scope = str(info.get("scope") or "").strip().lower()
     service_ref = str(info.get("service") or "adaos.service").strip() or "adaos.service"
     service_name = Path(service_ref).name or "adaos.service"
+    if _is_windows() and not sys.platform.startswith("linux"):
+        task_name = str(info.get("task") or _windows_task_name()).strip() or _windows_task_name()
+        wrapper = Path(
+            str(info.get("wrapper") or (ctx.paths.base_dir() / "bin" / "adaos-autostart.ps1"))
+        ).expanduser().resolve()
+        base_dir = Path(str(info.get("base_dir") or ctx.paths.base_dir())).expanduser().resolve()
+        configured_host = str(info.get("configured_host") or info.get("host") or DEFAULT_LOOPBACK_HOST).strip()
+        configured_port = int(info.get("configured_port") or info.get("port") or DEFAULT_RUNTIME_PORT)
+        supervisor_url = str(info.get("supervisor_url") or "").strip()
+        supervisor_parsed = urlparse(supervisor_url) if supervisor_url else None
+        supervisor_host = supervisor_parsed.hostname if supervisor_parsed is not None else None
+        supervisor_port = supervisor_parsed.port if supervisor_parsed is not None else None
+        wrapper_env = info.get("wrapper_env") if isinstance(info.get("wrapper_env"), dict) else {}
+        restartable = str(wrapper_env.get("ADAOS_AUTOSTART_SELF_RESTART") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not restartable or not supervisor_host or not supervisor_port:
+            raise RuntimeError(
+                "managed Windows supervisor restart requires an active restartable wrapper; "
+                "run `adaos autostart enable` first"
+            )
+        previous_supervisor_pid = _find_listening_pid(supervisor_host, supervisor_port)
+        if previous_supervisor_pid is None:
+            raise RuntimeError("managed supervisor listener is unavailable; refusing destructive task restart")
+        token = str(wrapper_env.get("ADAOS_TOKEN") or _default_control_token() or "").strip()
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            headers["X-AdaOS-Token"] = token
+        session = requests.Session()
+        session.trust_env = False
+        request_payload: dict[str, object] = {}
+        request_acknowledged = True
+        request_error: str | None = None
+        try:
+            response = session.post(
+                f"http://{supervisor_host}:{int(supervisor_port)}/api/supervisor/service/restart",
+                headers=headers,
+                json={"reason": "cli.autostart.restart"},
+                timeout=(1.0, 5.0),
+            )
+            response.raise_for_status()
+            raw_payload = response.json()
+            request_payload = raw_payload if isinstance(raw_payload, dict) else {}
+        except requests.HTTPError as exc:
+            raise RuntimeError(f"failed to request managed supervisor restart: {type(exc).__name__}: {exc}") from exc
+        except requests.RequestException as exc:
+            request_acknowledged = False
+            request_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            session.close()
+        payload: dict[str, object] = {
+            "ok": True,
+            "platform": "windows",
+            "task": task_name,
+            "wrapper": str(wrapper),
+            "previous_supervisor_pid": previous_supervisor_pid,
+            "request_acknowledged": request_acknowledged,
+            "request": request_payload,
+        }
+        if request_error:
+            payload["request_error"] = request_error
+        payload.update(
+            _windows_wait_for_restart_ready(
+                task_name=task_name,
+                base_dir=base_dir,
+                wrapper=wrapper,
+                configured_host=configured_host,
+                configured_port=configured_port,
+                supervisor_host=supervisor_host,
+                supervisor_port=supervisor_port,
+                previous_supervisor_pid=previous_supervisor_pid,
+            )
+        )
+        return payload
     if sys.platform.startswith("linux"):
         if scope not in {"system", "user"}:
             raise RuntimeError(f"unsupported autostart scope for restart: {scope or 'unknown'}")
