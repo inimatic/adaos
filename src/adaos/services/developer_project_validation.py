@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -19,6 +21,7 @@ import yaml
 
 from adaos.services.skill.tests_runner import run_tests
 from adaos.services.skill.validation import SkillValidationService
+from adaos.domain.execution import ExecutionSpec
 
 
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -193,4 +196,165 @@ def invoke_dev_skill(
     )
 
 
-__all__ = ["activate_dev_skill", "invoke_dev_skill", "validate_dev_skill"]
+def execute_dev_spec(
+    ctx: Any,
+    project_id: str,
+    value: dict[str, Any],
+    *,
+    idempotency_key: str,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Execute one candidate-produced smoke spec as non-hostile DEV trial evidence."""
+
+    source_root = _root(ctx, project_id)
+    key = str(idempotency_key or "").strip()
+    if not _PROJECT_ID.fullmatch(key):
+        raise ValueError("idempotency_key contains unsupported characters")
+    spec = ExecutionSpec.from_dict(dict(value))
+    if spec.owner_ref != f"skill:{project_id}":
+        raise PermissionError("execution spec owner differs from the evaluated project")
+    if spec.network.mode != "offline":
+        raise ValueError("developer trial execution requires an offline-intent spec")
+    if spec.resources.gpu_count:
+        raise ValueError("developer trial execution does not admit GPU allocation")
+    command = [str(item) for item in spec.command]
+    if len(command) < 2 or Path(command[0]).resolve() != Path(sys.executable).resolve():
+        raise ValueError("developer trial execution requires the active AdaOS Python interpreter")
+    script = Path(command[1]).resolve()
+    manager = _manager(ctx)
+    status = manager.dev_runtime_status(str(project_id))
+    manifest_path = Path(str(status.get("resolved_manifest") or "")).resolve()
+    runtime_root = manifest_path.parent if manifest_path.is_file() else source_root
+    if not any(_under(script, root) for root in (source_root, runtime_root)):
+        raise PermissionError("developer trial command is outside evaluated skill sources")
+    if not script.is_file() or script.suffix.lower() != ".py":
+        raise ValueError("developer trial command must reference a Python source file")
+    identity = {"project_ref": f"skill:{project_id}", "spec_digest": spec.digest, "key": key}
+    receipt_digest = _digest(identity)
+    output_root = (
+        Path(ctx.paths.state_dir()).resolve()
+        / "developer_validation"
+        / str(project_id)
+        / "executions"
+        / receipt_digest.removeprefix("sha256:")
+    )
+    receipt_path = output_root / "receipt.json"
+    if receipt_path.is_file():
+        restored = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+        if restored.get("spec_digest") != spec.digest:
+            raise ValueError("trial receipt is already bound to another execution spec")
+        return restored
+    output_root.mkdir(parents=True, exist_ok=False)
+    stdout_path = output_root / "stdout.log"
+    stderr_path = output_root / "stderr.log"
+    maximum = min(
+        float(timeout or spec.resources.wall_time_s or 300),
+        float(spec.resources.wall_time_s or timeout or 300),
+        3600.0,
+    )
+    environment = {
+        key_name: value_text
+        for key_name, value_text in os.environ.items()
+        if key_name.upper()
+        in {
+            "PATH",
+            "SYSTEMROOT",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+        }
+    }
+    environment.update(
+        {
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "ADAOS_SKILL_NAME": str(project_id),
+            "ADAOS_SKILL_ROOT": str(runtime_root),
+            "PYTHONPATH": os.pathsep.join((str(runtime_root), str(ctx.paths.package_path()))),
+        }
+    )
+    try:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            completed = subprocess.run(
+                command,
+                cwd=str(output_root),
+                env=environment,
+                stdout=stdout,
+                stderr=stderr,
+                timeout=maximum,
+                check=False,
+            )
+        status_name = "succeeded" if completed.returncode == 0 else "failed"
+        exit_code = int(completed.returncode)
+        failure = None if exit_code == 0 else "process_exit_nonzero"
+    except subprocess.TimeoutExpired:
+        status_name = "failed"
+        exit_code = None
+        failure = "wall_time_exceeded"
+    outputs = []
+    documents: dict[str, Any] = {}
+    for path in sorted(item for item in output_root.rglob("*") if item.is_file()):
+        if path in {receipt_path, stdout_path, stderr_path}:
+            continue
+        relative = path.relative_to(output_root).as_posix()
+        raw = path.read_bytes()
+        outputs.append(
+            {
+                "path": relative,
+                "size_bytes": len(raw),
+                "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                "ref": f"developer-validation://skill/{project_id}/execution/{receipt_digest.removeprefix('sha256:')}/{relative}",
+            }
+        )
+        if len(raw) <= 1_048_576 and path.suffix.lower() == ".json":
+            try:
+                documents[relative] = json.loads(raw.decode("utf-8-sig"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+        elif len(raw) <= 131_072 and path.suffix.lower() in {".md", ".txt", ".jsonl"}:
+            documents[relative] = raw.decode("utf-8", errors="replace")
+    missing = sorted(set(spec.expected_outputs) - {item["path"] for item in outputs})
+    receipt_identity = {
+        "schema": "adaos.developer.trial_execution.v1",
+        "project_ref": f"skill:{project_id}",
+        "spec_digest": spec.digest,
+        "status": status_name,
+        "exit_code": exit_code,
+        "failure": failure,
+        "provider": {
+            "id": "developer.local_process",
+            "hostile_isolation": False,
+            "network_intent": spec.network.mode,
+            "network_enforced": False,
+        },
+        "expected_outputs": list(spec.expected_outputs),
+        "missing_outputs": missing,
+        "outputs": outputs,
+        "documents": documents,
+    }
+    receipt = {**receipt_identity, "ok": status_name == "succeeded" and not missing}
+    receipt["digest"] = _digest(receipt_identity)
+    receipt_path.write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return receipt
+
+
+def _under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+__all__ = [
+    "activate_dev_skill",
+    "execute_dev_spec",
+    "invoke_dev_skill",
+    "validate_dev_skill",
+]

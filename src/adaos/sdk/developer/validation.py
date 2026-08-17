@@ -56,4 +56,24 @@ def invoke_skill(
     )
 
 
-__all__ = ["activate_skill", "invoke_skill", "validate_skill"]
+def execute_spec(
+    project_id: str,
+    value: dict[str, Any],
+    *,
+    idempotency_key: str,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    ctx = require_ctx("sdk.developer.validation.execute_spec")
+    require_skill_capability(ctx, "builder.project_validation")
+    from adaos.services.developer_project_validation import execute_dev_spec
+
+    return execute_dev_spec(
+        ctx,
+        project_id,
+        dict(value),
+        idempotency_key=idempotency_key,
+        timeout=timeout,
+    )
+
+
+__all__ = ["activate_skill", "execute_spec", "invoke_skill", "validate_skill"]

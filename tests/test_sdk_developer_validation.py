@@ -62,3 +62,35 @@ def test_developer_invocation_reuses_the_same_narrow_capability(monkeypatch) -> 
     assert activated["ok"] is True
     assert invoked["operation_id"] == "smoke"
     assert admitted == ["builder.project_validation", "builder.project_validation"]
+
+
+def test_developer_trial_execution_is_capability_gated(monkeypatch) -> None:
+    ctx = SimpleNamespace()
+    admitted: list[str] = []
+    monkeypatch.setattr(validation, "require_ctx", lambda _operation: ctx)
+    monkeypatch.setattr(
+        validation,
+        "require_skill_capability",
+        lambda _ctx, capability: admitted.append(capability),
+    )
+    monkeypatch.setattr(
+        "adaos.services.developer_project_validation.execute_dev_spec",
+        lambda context, project_id, value, *, idempotency_key, timeout=None: {
+            "ok": context is ctx,
+            "project_id": project_id,
+            "value": value,
+            "key": idempotency_key,
+            "timeout": timeout,
+        },
+    )
+
+    result = validation.execute_spec(
+        "candidate",
+        {"schema": "adaos.execution.spec.v1"},
+        idempotency_key="smoke-17",
+        timeout=60,
+    )
+
+    assert result["ok"] is True
+    assert result["key"] == "smoke-17"
+    assert admitted == ["builder.project_validation"]
