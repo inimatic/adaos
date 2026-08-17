@@ -7015,8 +7015,13 @@ def test_supervisor_root_promotion_does_not_block_event_loop(monkeypatch, tmp_pa
         lambda _manifest: (True, {"required": True, "effective_required": True}),
     )
 
+    promotion_started = threading.Event()
+    allow_promotion_to_finish = threading.Event()
+
     def _slow_promotion(**kwargs):
-        time.sleep(0.2)
+        promotion_started.set()
+        if not allow_promotion_to_finish.wait(timeout=5.0):
+            raise TimeoutError("test did not release root promotion worker")
         return {"ok": True, "slot": kwargs["slot"], "required": True, "restart_required": True}
 
     monkeypatch.setattr(supervisor, "_promote_root_with_validated_candidate", _slow_promotion)
@@ -7025,16 +7030,21 @@ def test_supervisor_root_promotion_does_not_block_event_loop(monkeypatch, tmp_pa
 
     async def _exercise() -> dict[str, object]:
         task = asyncio.create_task(manager.promote_root(reason="test.nonblocking"))
-        started = asyncio.get_running_loop().time()
-        await asyncio.sleep(0.03)
-        assert asyncio.get_running_loop().time() - started < 0.12
-        assert not task.done()
-        assert read_status()["state"] == "applying"
-        assert read_status()["phase"] == "root_promotion"
-        attempt = supervisor._read_update_attempt()
-        assert isinstance(attempt, dict)
-        assert attempt["state"] == "active"
-        assert attempt["last_status"]["phase"] == "root_promotion"
+        try:
+            for _ in range(500):
+                if promotion_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert promotion_started.is_set()
+            assert not task.done()
+            assert read_status()["state"] == "applying"
+            assert read_status()["phase"] == "root_promotion"
+            attempt = supervisor._read_update_attempt()
+            assert isinstance(attempt, dict)
+            assert attempt["state"] == "active"
+            assert attempt["last_status"]["phase"] == "root_promotion"
+        finally:
+            allow_promotion_to_finish.set()
         return await task
 
     payload = asyncio.run(_exercise())
