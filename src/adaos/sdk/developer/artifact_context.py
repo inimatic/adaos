@@ -622,17 +622,57 @@ def source_bundle(skill_id: str, *, audience: str | None = None) -> dict[str, An
                     "context_policy": item.get("context_policy"),
                 }
             )
+    if audience_token:
+        group_identities = []
+        for group in selected_groups:
+            admitted_items = [
+                {
+                    "artifact_id": item["artifact_id"],
+                    "digest": item["digest"],
+                    "context_policy": item.get("context_policy"),
+                }
+                for item in group["items"]
+                if _admitted(item, audience_token)[0]
+            ]
+            filtered_identity = {
+                "group_id": group["group_id"],
+                "audience": audience_token,
+                "items": admitted_items,
+            }
+            group_identities.append(
+                {
+                    "group_id": group["group_id"],
+                    "digest": _digest_bytes(_canonical(filtered_identity)),
+                }
+            )
+    else:
+        group_identities = [
+            {
+                "group_id": group["group_id"],
+                "digest": group["digest"],
+                "generation": group["generation"],
+            }
+            for group in selected_groups
+        ]
     identity = {
         "schema": "adaos.research.artifact_set.v1",
         "skill_ref": f"skill:{skill_id}",
-        "groups": [{"group_id": group["group_id"], "digest": group["digest"], "generation": group["generation"]} for group in selected_groups],
+        "groups": group_identities,
         "sources": sources,
         "audience": audience_token,
-        "excluded": excluded,
     }
     return {
         **identity,
         "generation": sum(int(group["generation"]) for group in selected_groups),
+        "source_manifests": [
+            {
+                "group_id": group["group_id"],
+                "digest": group["digest"],
+                "generation": group["generation"],
+            }
+            for group in selected_groups
+        ],
+        "excluded": excluded,
         "digest": _digest_bytes(_canonical(identity)),
     }
 

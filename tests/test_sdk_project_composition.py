@@ -193,6 +193,23 @@ def test_artifact_context_materializes_digest_bound_audience_views(project_space
         "initial-review.md",
     ]
     assert formulation_bundle["excluded"][0]["artifact_id"] == hidden["artifact"]["artifact_id"]
+    formulation_digest = formulation_bundle["digest"]
+    review.write_text("Changed evaluator-only oracle", encoding="utf-8")
+    artifact_context.add_path(
+        "tlp_direction",
+        "part0",
+        review,
+        context_policy={
+            "default": "deny",
+            "allow": ["research.evaluation"],
+            "deny": [],
+            "reason": "hidden evaluator oracle",
+        },
+        replace_existing=True,
+    )
+    assert artifact_context.source_bundle(
+        "tlp_direction", audience="research.formulation"
+    )["digest"] == formulation_digest
 
 
 def test_artifact_context_policy_can_be_revised_without_replacing_content(project_space, tmp_path: Path) -> None:
