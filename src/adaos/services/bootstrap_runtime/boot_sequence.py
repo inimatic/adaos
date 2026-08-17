@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from adaos.domain import Event
 from adaos.domain.node_identity import node_identities_match
 
 
@@ -151,6 +152,24 @@ class BootstrapBootCoordinator:
             # Let the ASGI lifespan return and bind the listener before any
             # external process discovery competes for CPU or disk.
             await asyncio.sleep(_deferred_service_skills_delay_s())
+            install_started_at = time.time()
+            app.state.managed_nlu_install_status = {
+                "state": "running",
+                "started_at": install_started_at,
+                "updated_at": install_started_at,
+            }
+            install_result = await asyncio.to_thread(operations.ensure_managed_nlu_service_skills, service._log)
+            install_payload = install_result if isinstance(install_result, dict) else {"ok": True}
+            app.state.managed_nlu_install_status = {
+                "state": "ready" if bool(install_payload.get("ok")) else "failed",
+                "started_at": install_started_at,
+                "completed_at": time.time(),
+                "elapsed_s": round(max(0.0, time.time() - install_started_at), 3),
+                "enabled": install_payload.get("enabled"),
+                "installed": install_payload.get("installed"),
+                "error_type": install_payload.get("error_type"),
+                "updated_at": time.time(),
+            }
             await _start_service_skills("post_ready_start_service_skills")
 
         async def _run_release_validation_autorun(trigger: str) -> None:
@@ -276,9 +295,11 @@ class BootstrapBootCoordinator:
         await operations.bus.emit("sys.boot.start", {"role": conf.role, "node_id": conf.node_id, "subnet_id": conf.subnet_id}, source="lifecycle", actor="system")
         _startup_stage_mark("bootstrap_emit_sys_boot_start", started=_boot_event_started)
         if not candidate_runtime_mode:
-            _managed_nlu_started = _startup_stage_mark("bootstrap_ensure_managed_nlu_skills")
-            await asyncio.to_thread(operations.ensure_managed_nlu_service_skills, service._log)
-            _startup_stage_mark("bootstrap_ensure_managed_nlu_skills", started=_managed_nlu_started)
+            app.state.managed_nlu_install_status = {
+                "state": "deferred_until_core_channel_ready",
+                "updated_at": time.time(),
+            }
+            service._log.info("deferring managed NLU skill installation until core channel setup completes")
         _handler_import_started = _startup_stage_mark("bootstrap_import_skill_handlers")
         await service.skills_loader.import_all_handlers(service.ctx.paths.skills_dir())
         _startup_stage_mark("bootstrap_import_skill_handlers", started=_handler_import_started)
@@ -921,7 +942,7 @@ class BootstrapBootCoordinator:
             startup_stage_mark=_startup_stage_mark,
             report_control_lifecycle=_report_control_lifecycle,
         )
-        if defer_service_skill_startup:
+        if not candidate_runtime_mode:
             service._start_boot_task_once(
                 "adaos-service-skills-startup",
                 _start_deferred_service_skills,

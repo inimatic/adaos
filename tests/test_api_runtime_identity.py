@@ -949,6 +949,7 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
         call_order.append((event_type, payload, kwargs))
 
     monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+    monkeypatch.setattr(api_server, "_read_core_update_status_async", lambda: asyncio.sleep(0, result={"state": "idle"}))
     monkeypatch.setattr(api_server.sdk_data_bus, "emit", _emit)
     monkeypatch.setattr(
         api_server,
@@ -964,6 +965,52 @@ def test_candidate_promotion_runs_deferred_sys_ready_after_service_start(monkeyp
     assert payload["promoted"] is True
     assert payload["reason"] == "test.cutover"
     assert kwargs == {"source": "lifecycle.promotion", "actor": "system"}
+
+
+def test_candidate_promotion_defers_service_start_until_core_update_finishes(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_RUNTIME_PROMOTION_READY_EVENT_DELAY_S", "0")
+    statuses = iter(
+        [
+            {"state": "restarting", "phase": "launch"},
+            {"state": "applying", "phase": "root_promotion"},
+            {"state": "failed", "phase": "root_promotion"},
+        ]
+    )
+    calls: list[str] = []
+
+    class _ServiceSupervisor:
+        async def start_all(self) -> None:
+            calls.append("services")
+
+    async def _read_status() -> dict[str, str]:
+        value = next(statuses)
+        calls.append(f"status:{value['state']}:{value['phase']}")
+        return value
+
+    async def _sleep(_delay: float) -> None:
+        calls.append("wait")
+
+    async def _emit(*_args, **_kwargs) -> None:
+        calls.append("ready")
+
+    monkeypatch.setattr(api_server, "get_service_supervisor", lambda: _ServiceSupervisor())
+    monkeypatch.setattr(api_server, "_read_core_update_status_async", _read_status)
+    monkeypatch.setattr(api_server.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(api_server.sdk_data_bus, "emit", _emit)
+
+    asyncio.run(api_server._start_service_skills_after_promotion("test.cutover"))
+
+    assert calls == [
+        "status:restarting:launch",
+        "wait",
+        "status:applying:root_promotion",
+        "wait",
+        "status:failed:root_promotion",
+        "services",
+        "ready",
+    ]
+    assert api_server._promoted_service_start_status_payload()["state"] == "ready"
+    assert api_server._promoted_service_start_status_payload()["update_state"] == "failed"
 
 
 def test_promote_active_is_idempotent_for_active_runtime(monkeypatch) -> None:

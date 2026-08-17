@@ -72,14 +72,26 @@ from adaos.integrations.telegram.sender import TelegramSender
 
 
 
-def _ensure_managed_nlu_service_skills(log: logging.Logger) -> None:
+def _ensure_managed_nlu_service_skills(log: logging.Logger) -> dict[str, Any]:
     try:
         from adaos.services.nlu.rasa_skill_installer import ensure_rasa_service_skill_installed, is_rasa_nlu_enabled
 
-        if is_rasa_nlu_enabled():
-            ensure_rasa_service_skill_installed()
-    except Exception:
+        if not is_rasa_nlu_enabled():
+            return {"ok": True, "enabled": False, "installed": False}
+        installed_path = ensure_rasa_service_skill_installed()
+        return {
+            "ok": installed_path is not None,
+            "enabled": True,
+            "installed": installed_path is not None,
+        }
+    except Exception as exc:
         log.warning("failed to ensure managed NLU service skills", exc_info=True)
+        return {
+            "ok": False,
+            "enabled": True,
+            "installed": False,
+            "error_type": type(exc).__name__,
+        }
 
 
 

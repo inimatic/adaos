@@ -427,6 +427,49 @@ def _runtime_boot_readiness_payload() -> dict[str, Any]:
     }
 
 
+def _promoted_service_start_status_payload() -> dict[str, Any]:
+    source = getattr(app.state, "promoted_service_start_status", None)
+    if not isinstance(source, dict):
+        return {
+            "state": "idle",
+            "reason": None,
+            "update_state": None,
+            "update_phase": None,
+            "updated_at": None,
+        }
+    return {
+        "state": str(source.get("state") or "unknown"),
+        "reason": str(source.get("reason") or "").strip() or None,
+        "update_state": str(source.get("update_state") or "").strip() or None,
+        "update_phase": str(source.get("update_phase") or "").strip() or None,
+        "wait_elapsed_s": source.get("wait_elapsed_s"),
+        "service_start_elapsed_s": source.get("service_start_elapsed_s"),
+        "error_type": str(source.get("error_type") or "").strip() or None,
+        "updated_at": source.get("updated_at"),
+    }
+
+
+def _managed_nlu_install_status_payload() -> dict[str, Any]:
+    source = getattr(app.state, "managed_nlu_install_status", None)
+    if not isinstance(source, dict):
+        return {
+            "state": "idle",
+            "elapsed_s": None,
+            "enabled": None,
+            "installed": None,
+            "error_type": None,
+            "updated_at": None,
+        }
+    return {
+        "state": str(source.get("state") or "unknown"),
+        "elapsed_s": source.get("elapsed_s"),
+        "enabled": source.get("enabled"),
+        "installed": source.get("installed"),
+        "error_type": str(source.get("error_type") or "").strip() or None,
+        "updated_at": source.get("updated_at"),
+    }
+
+
 def _post_boot_skill_migration_stabilize_sec(*, promoted: bool) -> float:
     if truthy(os.getenv("ADAOS_TESTING")):
         return 0.0
@@ -1657,6 +1700,10 @@ async def ping():
         "service": "adaos-runtime",
         "runtime": _runtime_identity_public_payload(),
         "readiness": _runtime_boot_readiness_payload(),
+        "workload_admission": {
+            "promoted_service_start": _promoted_service_start_status_payload(),
+            "managed_nlu_install": _managed_nlu_install_status_payload(),
+        },
     }
 
 
@@ -1784,6 +1831,84 @@ class RuntimePromoteActiveRequest(BaseModel):
     reconnect_hub_root: bool = Field(default=True)
 
 
+def _core_update_blocks_promoted_service_start(status: dict[str, Any] | None) -> bool:
+    payload = status if isinstance(status, dict) else {}
+    state = str(payload.get("state") or "").strip().lower()
+    phase = str(payload.get("phase") or "").strip().lower()
+    if state in {"preparing", "prepared", "countdown", "draining", "stopping", "restarting", "applying", "validated"}:
+        return True
+    return state == "succeeded" and phase == "root_promoted"
+
+
+def _promoted_service_start_wait_timeout_s() -> float:
+    try:
+        return max(
+            30.0,
+            min(900.0, float(os.getenv("ADAOS_PROMOTED_SERVICE_START_WAIT_TIMEOUT_SEC", "300") or "300")),
+        )
+    except Exception:
+        return 300.0
+
+
+async def _wait_for_promoted_service_start_admission(reason: str) -> dict[str, Any]:
+    started_at = time.time()
+    timeout_s = _promoted_service_start_wait_timeout_s()
+    waiting_logged = False
+    while True:
+        status = await _read_core_update_status_async()
+        state = str(status.get("state") or "").strip().lower() or None
+        phase = str(status.get("phase") or "").strip().lower() or None
+        elapsed_s = max(0.0, time.time() - started_at)
+        if not _core_update_blocks_promoted_service_start(status):
+            payload = {
+                "state": "admitted",
+                "reason": str(reason or "supervisor.fast_cutover"),
+                "update_state": state,
+                "update_phase": phase,
+                "wait_elapsed_s": round(elapsed_s, 3),
+                "updated_at": time.time(),
+            }
+            app.state.promoted_service_start_status = payload
+            return payload
+        if elapsed_s >= timeout_s:
+            payload = {
+                "state": "admission_timeout",
+                "reason": str(reason or "supervisor.fast_cutover"),
+                "update_state": state,
+                "update_phase": phase,
+                "wait_elapsed_s": round(elapsed_s, 3),
+                "updated_at": time.time(),
+            }
+            app.state.promoted_service_start_status = payload
+            logging.getLogger("adaos.runtime").warning(
+                "promoted service skill start admission timed out reason=%s update_state=%s update_phase=%s "
+                "elapsed_s=%.3f",
+                reason,
+                state,
+                phase,
+                elapsed_s,
+            )
+            return payload
+        app.state.promoted_service_start_status = {
+            "state": "waiting_core_update",
+            "reason": str(reason or "supervisor.fast_cutover"),
+            "update_state": state,
+            "update_phase": phase,
+            "wait_elapsed_s": round(elapsed_s, 3),
+            "updated_at": time.time(),
+        }
+        if not waiting_logged:
+            waiting_logged = True
+            logging.getLogger("adaos.runtime").info(
+                "deferring promoted service skill start until core update completes reason=%s "
+                "update_state=%s update_phase=%s",
+                reason,
+                state,
+                phase,
+            )
+        await asyncio.sleep(1.0)
+
+
 async def _start_service_skills_after_promotion(reason: str) -> None:
     router_service = getattr(app.state, "router_service", None)
     activate_router = getattr(router_service, "activate_after_promotion", None)
@@ -1796,14 +1921,35 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
                 reason,
                 exc_info=True,
             )
+    admission = await _wait_for_promoted_service_start_admission(reason)
+    service_start_started_at = time.time()
+    app.state.promoted_service_start_status = {
+        **admission,
+        "state": "starting",
+        "updated_at": service_start_started_at,
+    }
     try:
         await get_service_supervisor().start_all()
-    except Exception:
+    except Exception as exc:
+        app.state.promoted_service_start_status = {
+            **admission,
+            "state": "failed",
+            "service_start_elapsed_s": round(max(0.0, time.time() - service_start_started_at), 3),
+            "error_type": type(exc).__name__,
+            "updated_at": time.time(),
+        }
         logging.getLogger("adaos.runtime").warning(
             "failed to start service skills after candidate promotion reason=%s",
             reason,
             exc_info=True,
         )
+    else:
+        app.state.promoted_service_start_status = {
+            **admission,
+            "state": "ready",
+            "service_start_elapsed_s": round(max(0.0, time.time() - service_start_started_at), 3),
+            "updated_at": time.time(),
+        }
     try:
         delay_s = max(
             0.0,
@@ -1833,6 +1979,13 @@ async def _start_service_skills_after_promotion(reason: str) -> None:
 
 
 def _schedule_promoted_runtime_service_start(reason: str) -> dict[str, Any]:
+    app.state.promoted_service_start_status = {
+        "state": "queued",
+        "reason": str(reason or "supervisor.fast_cutover"),
+        "update_state": None,
+        "update_phase": None,
+        "updated_at": time.time(),
+    }
     try:
         task = asyncio.create_task(
             _start_service_skills_after_promotion(reason),
