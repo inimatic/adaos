@@ -30,3 +30,35 @@ def test_developer_validation_requires_narrow_capability_and_calls_service(monke
     assert result["ok"] is True
     assert admitted == ["builder.project_validation"]
     assert calls == [(ctx, "candidate", True, True, False)]
+
+
+def test_developer_invocation_reuses_the_same_narrow_capability(monkeypatch) -> None:
+    ctx = SimpleNamespace()
+    admitted: list[str] = []
+    monkeypatch.setattr(validation, "require_ctx", lambda _operation: ctx)
+    monkeypatch.setattr(
+        validation,
+        "require_skill_capability",
+        lambda _ctx, capability: admitted.append(capability),
+    )
+    monkeypatch.setattr(
+        "adaos.services.developer_project_validation.activate_dev_skill",
+        lambda context, project_id: {"ok": context is ctx, "project_ref": f"skill:{project_id}"},
+    )
+    monkeypatch.setattr(
+        "adaos.services.developer_project_validation.invoke_dev_skill",
+        lambda context, project_id, operation_id, arguments, timeout=None: {
+            "ok": context is ctx,
+            "project_id": project_id,
+            "operation_id": operation_id,
+            "arguments": arguments,
+            "timeout": timeout,
+        },
+    )
+
+    activated = validation.activate_skill("candidate")
+    invoked = validation.invoke_skill("candidate", "smoke", {"seed": 17}, timeout=30)
+
+    assert activated["ok"] is True
+    assert invoked["operation_id"] == "smoke"
+    assert admitted == ["builder.project_validation", "builder.project_validation"]

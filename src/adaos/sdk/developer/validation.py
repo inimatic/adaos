@@ -28,4 +28,32 @@ def validate_skill(
     )
 
 
-__all__ = ["validate_skill"]
+def activate_skill(project_id: str) -> dict[str, Any]:
+    ctx = require_ctx("sdk.developer.validation.activate_skill")
+    require_skill_capability(ctx, "builder.project_validation")
+    from adaos.services.developer_project_validation import activate_dev_skill
+
+    return activate_dev_skill(ctx, project_id)
+
+
+def invoke_skill(
+    project_id: str,
+    operation_id: str,
+    arguments: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    ctx = require_ctx("sdk.developer.validation.invoke_skill")
+    require_skill_capability(ctx, "builder.project_validation")
+    from adaos.services.developer_project_validation import invoke_dev_skill
+
+    return invoke_dev_skill(
+        ctx,
+        project_id,
+        operation_id,
+        dict(arguments),
+        timeout=timeout,
+    )
+
+
+__all__ = ["activate_skill", "invoke_skill", "validate_skill"]

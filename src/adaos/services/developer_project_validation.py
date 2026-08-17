@@ -139,4 +139,58 @@ def validate_dev_skill(
     return {**identity, "ok": bool(validation.ok) and (tests_ok or not run_packaged_tests), "digest": _digest(identity)}
 
 
-__all__ = ["validate_dev_skill"]
+def _manager(ctx: Any):
+    from adaos.adapters.db import SqliteSkillRegistry
+    from adaos.services.skill.manager import SkillManager
+
+    return SkillManager(
+        repo=ctx.skills_repo,
+        registry=SqliteSkillRegistry(ctx.sql),
+        git=ctx.git,
+        paths=ctx.paths,
+        bus=getattr(ctx, "bus", None),
+        caps=ctx.caps,
+    )
+
+
+def activate_dev_skill(ctx: Any, project_id: str) -> dict[str, Any]:
+    """Prepare and activate a validated DEV skill in its disposable DEV runtime."""
+
+    root = _root(ctx, project_id)
+    manifest = yaml.safe_load((root / "skill.yaml").read_text(encoding="utf-8-sig")) or {}
+    version = str(manifest.get("version") or "dev")
+    slot = _manager(ctx).activate_for_space(
+        str(project_id),
+        space="dev",
+        version=version,
+        webspace_id="developer-validation",
+        defer_webspace_rebuild=True,
+    )
+    return {
+        "ok": True,
+        "project_ref": f"skill:{project_id}",
+        "version": version,
+        "slot": slot,
+    }
+
+
+def invoke_dev_skill(
+    ctx: Any,
+    project_id: str,
+    operation_id: str,
+    arguments: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> Any:
+    """Invoke one exported DEV operation after explicit activation."""
+
+    _root(ctx, project_id)
+    return _manager(ctx).run_dev_tool(
+        str(project_id),
+        str(operation_id),
+        dict(arguments),
+        timeout=timeout,
+    )
+
+
+__all__ = ["activate_dev_skill", "invoke_dev_skill", "validate_dev_skill"]
