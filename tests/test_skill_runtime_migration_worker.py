@@ -79,6 +79,7 @@ def test_isolated_worker_entrypoint_records_terminal_status(tmp_path) -> None:
     env["ADAOS_BASE_DIR"] = str(tmp_path)
     env["ADAOS_TESTING"] = "1"
     env["ADAOS_SKILL_MIGRATION_WORKER_PROCESS"] = "1"
+    env.pop("ADAOS_SKILL_MIGRATION_WORKER_PRIORITY", None)
 
     completed = subprocess.run(
         [
@@ -104,6 +105,7 @@ def test_isolated_worker_entrypoint_records_terminal_status(tmp_path) -> None:
     assert status["pending"] is False
     assert status["total"] == 0
     assert status["worker_mode"] == "subprocess"
+    assert status["worker_priority"] == "normal"
     assert status["worker_pid"] > 0
 
 

@@ -2158,6 +2158,20 @@ def test_supervisor_defers_update_while_skill_migration_is_active(monkeypatch, t
     asyncio.run(_exercise())
 
 
+def test_supervisor_status_exposes_core_skill_workload_gate(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(supervisor, "current_base_dir", lambda: tmp_path)
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_runtime_state_payload", lambda **_kwargs: {"ok": True})
+
+    status = manager.status()
+    assert status["workload_admission"]["core_update_holds_skill_migration_gate"] is False
+
+    manager._skill_runtime_migration_gate_lease = object()
+    status = manager.status()
+    assert status["workload_admission"]["core_update_holds_skill_migration_gate"] is True
+    assert status["workload_admission"]["skill_migration_lease_path"].endswith("worker.lock")
+
+
 def test_supervisor_prepare_failure_does_not_request_runtime_shutdown(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")

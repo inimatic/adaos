@@ -7276,6 +7276,7 @@ class SupervisorManager:
     async def close(self) -> None:
         self._stopping = True
         await self._update_state_machine.cancel_task(mode="cancelled")
+        self._release_skill_runtime_migration_gate(reason="supervisor_close")
         await self._process_supervisor.stop_monitor()
         preserve_managed_children = self._service_restart_pending or _autostart_self_restart_supported()
         if preserve_managed_children:
@@ -7304,6 +7305,12 @@ class SupervisorManager:
         payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
         payload["update_attempt"] = _read_update_attempt()
         payload["update_task_running"] = self._update_state_machine.task_running()
+        payload["workload_admission"] = {
+            "core_update_holds_skill_migration_gate": self._skill_runtime_migration_gate_lease is not None,
+            "skill_migration_lease_path": str(
+                (current_base_dir() / "state" / "skill_runtime_migration" / "worker.lock").resolve()
+            ),
+        }
         return payload
 
     def supervisor_update_status(self) -> dict[str, Any]:

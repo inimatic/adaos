@@ -130,6 +130,10 @@ def _write_status(ctx: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
     if str(os.getenv("ADAOS_SKILL_MIGRATION_WORKER_PROCESS") or "").strip() == "1":
         body.setdefault("worker_pid", os.getpid())
         body.setdefault("worker_mode", "subprocess")
+        body.setdefault(
+            "worker_priority",
+            str(os.getenv("ADAOS_SKILL_MIGRATION_WORKER_PRIORITY") or "").strip() or "normal",
+        )
     body["updated_at"] = _now()
     path = status_path(ctx)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1022,6 +1026,7 @@ async def _run_background(
     command, worker_priority = _background_worker_command(command)
     env = dict(os.environ)
     env["ADAOS_SKILL_MIGRATION_WORKER_PROCESS"] = "1"
+    env["ADAOS_SKILL_MIGRATION_WORKER_PRIORITY"] = worker_priority
     env["PYTHONUNBUFFERED"] = "1"
     popen_kwargs: dict[str, Any] = {
         "stdout": asyncio.subprocess.PIPE,
