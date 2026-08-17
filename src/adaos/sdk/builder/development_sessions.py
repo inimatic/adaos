@@ -582,6 +582,7 @@ def create(
     artifact_audience: str | None = None,
     artifact_sources: Sequence[Mapping[str, Any]] = (),
     request: str | None = None,
+    execution_budget: Mapping[str, Any] | None = None,
     primary_targets: Sequence[str] | None = None,
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
@@ -666,6 +667,17 @@ def create(
         value.setdefault("access", "read-only")
         value.setdefault("context", "contract")
         normalized_context.append(value)
+    normalized_budget = None
+    if execution_budget is not None:
+        normalized_budget = {
+            "budget_view": str(execution_budget.get("budget_view") or "default").strip(),
+            "max_wall_seconds": int(execution_budget.get("max_wall_seconds") or 0),
+            "max_model_tokens": int(execution_budget.get("max_model_tokens") or 0),
+            "max_attempts": int(execution_budget.get("max_attempts") or 0),
+            "max_human_interventions": int(
+                execution_budget.get("max_human_interventions") or 0
+            ),
+        }
     payload = {
         "schema": "adaos.builder.development_session.v1",
         "session_id": token,
@@ -684,6 +696,7 @@ def create(
             "research_prototype_digest": str(research_prototype_digest),
             "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
             **({"request": str(request).strip()} if str(request or "").strip() else {}),
+            **({"execution_budget": normalized_budget} if normalized_budget else {}),
             "prohibited_actions": [str(item) for item in prohibited_actions if str(item).strip()],
         },
         "status": "ready",

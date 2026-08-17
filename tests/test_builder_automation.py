@@ -177,6 +177,13 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
             "research_prototype_digest": "sha256:" + "4" * 64,
             "artifact_manifest_digests": ["sha256:" + "1" * 64],
             "request": "Implement the frozen calibration request.",
+            "execution_budget": {
+                "budget_view": "fixed_downstream",
+                "max_wall_seconds": 7200,
+                "max_model_tokens": 80000,
+                "max_attempts": 1,
+                "max_human_interventions": 0,
+            },
             "prohibited_actions": ["Do not inspect undeclared evaluator material."],
         },
         "status": "ready",
@@ -202,9 +209,12 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     receipt = task["realize_request"]["artifacts"]["development_context"]
     assert receipt["session_id"] == session_id
     assert receipt["request"] == "Implement the frozen calibration request."
+    assert receipt["execution_budget"]["max_model_tokens"] == 80000
     assert receipt["artifact_inputs"][0]["path"].startswith(".adaos_context/")
     assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
     assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
+    assert task["timeout_seconds"] == 7200
+    assert task["realize_request"]["artifacts"]["execution_budget"]["budget_view"] == "fixed_downstream"
     attachments = task["forge"]["source_snapshot"]["attachments"]
     assert {item["name"] for item in attachments} >= {
         "development_artifact_00",

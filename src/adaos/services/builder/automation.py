@@ -280,6 +280,7 @@ class BuilderAutomationService:
             "project_ref": session["project_ref"],
             "target_ref": target_ref,
             "request": session["handoff"].get("request"),
+            "execution_budget": copy.deepcopy(session["handoff"].get("execution_budget")),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
             "prohibited_actions": list(session["handoff"]["prohibited_actions"]),
@@ -1762,6 +1763,15 @@ class BuilderAutomationService:
                 ) or None,
             },
         }
+        execution_budget = (
+            development_context.get("execution_budget")
+            if isinstance(development_context, Mapping)
+            and isinstance(development_context.get("execution_budget"), Mapping)
+            else None
+        )
+        if execution_budget:
+            request["timeout_seconds"] = int(execution_budget["max_wall_seconds"])
+            request["artifacts"]["execution_budget"] = copy.deepcopy(execution_budget)
         return self.factory.submit_realize_request(request)
 
     def _launch_worker(self, session_id: str) -> None:

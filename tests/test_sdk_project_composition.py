@@ -630,6 +630,13 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
         automation_brief_digest="sha256:" + "1" * 64,
         research_prototype_digest="sha256:" + "2" * 64,
         artifact_groups=[],
+        execution_budget={
+            "budget_view": "fixed_downstream",
+            "max_wall_seconds": 7200,
+            "max_model_tokens": 80000,
+            "max_attempts": 1,
+            "max_human_interventions": 0,
+        },
         artifact_sources=[
             {
                 "skill_id": "source_direction",
@@ -643,6 +650,7 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
     admitted = created["session"]["artifact_inputs"][0]
     assert admitted["ref"] == "artifact://skill/source_direction/part0"
     assert admitted["audience"] == "research.calibration.c0_raw"
+    assert created["session"]["handoff"]["execution_budget"]["max_wall_seconds"] == 7200
     assert [path.name for path in Path(admitted["root_path"]).iterdir()] == ["notebook.ipynb"]
 
 
