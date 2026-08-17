@@ -264,6 +264,20 @@ Supervisor responsibilities:
 - apply restart/rollback only on critical limits, cooldown, and policy checks
 - avoid automatic profiling loops that can become their own overload source
 
+Host-wide low memory is an incident signal, not sufficient evidence that the
+runtime is the source. After the critical duration, the supervisor compares a
+fresh runtime-family RSS sample and baseline growth with host-scaled anomaly
+thresholds. It may restart the runtime only when that attribution selects
+`runtime_family`. A service-skill process above the same host-scaled threshold
+selects `skill_runtime` instead: the supervisor asks the runtime service
+lifecycle to revalidate ownership, stop the owned process tree, record a skill
+issue, and hold that skill in bounded cooloff. Unattributed pressure reports
+`external_or_system` and keeps the runtime and channel alive. Every decision
+captures the largest host processes with cumulative I/O, runtime-family
+membership, and skill-runtime identity. Detailed host process data belongs in
+the bounded incident evidence file; public status only exposes the decision,
+owner, and timestamp.
+
 The same source rule applies to the future watchdog process. If watchdog is
 re-enabled as a separate always-on guard, it must launch from the stable root
 checkout and root `.venv`, not from `state/core_slots/slots/<A|B>`. Watchdog may

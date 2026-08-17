@@ -669,6 +669,191 @@ def test_service_supervisor_stop_terminates_owned_process_tree(monkeypatch):
     assert "nested_service" not in supervisor._proc_specs
 
 
+def test_service_supervisor_stop_terminates_verified_external_listener(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    terminated: list[tuple[int, float]] = []
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4242,
+            "ownership_verified": True,
+            "owner_runtime_instance_id": "rt-a-current",
+            "service_skill_matches": True,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_terminate_process_tree",
+        lambda pid, *, timeout_s: terminated.append((pid, timeout_s)) or True,
+    )
+    supervisor = mod.ServiceSkillSupervisor()
+
+    class _Spec:
+        self_managed_enabled = False
+        doctor_enabled = False
+
+    spec = _Spec()
+    supervisor._specs["external_service"] = spec
+    supervisor._spec_key = lambda _spec: ("external",)  # type: ignore[method-assign]
+    supervisor._external_ready_specs["external_service"] = ("external",)
+    supervisor._external_ready_at["external_service"] = 10.0
+
+    asyncio.run(supervisor.stop("external_service", timeout_s=1.5))
+
+    assert terminated == [(4242, 1.5)]
+    assert "external_service" not in supervisor._external_ready_specs
+    assert "external_service" not in supervisor._external_ready_at
+
+
+def test_service_supervisor_stop_refuses_unverified_external_listener(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4343,
+            "ownership_verified": False,
+            "ownership_basis": "runtime_instance_mismatch",
+            "service_skill_matches": True,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_terminate_process_tree",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unverified listener must not be terminated")),
+    )
+    supervisor = mod.ServiceSkillSupervisor()
+
+    class _Spec:
+        self_managed_enabled = False
+        doctor_enabled = False
+
+    spec = _Spec()
+    supervisor._specs["external_service"] = spec
+    supervisor._spec_key = lambda _spec: ("external",)  # type: ignore[method-assign]
+    supervisor._external_ready_specs["external_service"] = ("external",)
+
+    asyncio.run(supervisor.stop("external_service"))
+
+    assert supervisor._external_ready_specs["external_service"] == ("external",)
+    assert supervisor._issues_cache["external_service"][-1]["type"] == "service_stop_owner_unverified"
+
+
+def test_service_supervisor_resource_pressure_quarantines_verified_external_listener(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4545,
+            "ownership_verified": True,
+            "owner_runtime_instance_id": "rt-a-current",
+            "service_skill_matches": True,
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_terminate_process_tree",
+        lambda pid, *, timeout_s: terminated.append(pid) or True,
+    )
+    monkeypatch.setattr(mod, "_process_tree_pids", lambda pid: {int(pid)})
+    supervisor = mod.ServiceSkillSupervisor()
+
+    class _Spec:
+        self_managed_enabled = False
+
+    spec = _Spec()
+    supervisor._specs["external_service"] = spec
+    supervisor._spec_key = lambda _spec: ("external",)  # type: ignore[method-assign]
+    supervisor._external_ready_specs["external_service"] = ("external",)
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    async def _refresh_discovered(*args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.status = lambda name, check_health=False: {  # type: ignore[method-assign]
+        "name": name,
+        "running": False,
+        "external_ready": name in supervisor._external_ready_specs,
+    }
+
+    result = asyncio.run(
+        supervisor.quarantine_resource_pressure(
+            "external_service",
+            reason="supervisor.memory.skill_pressure",
+            pressure={"skill_rss_bytes": 3 * 1024 * 1024 * 1024, "observed_pids": [4545]},
+            cooloff_s=90.0,
+        )
+    )
+
+    assert terminated == [4545]
+    assert result["ok"] is True
+    assert result["stopped"] is True
+    assert result["cooloff_until"] > time.time() + 80.0
+    assert result["matched_pids"] == [4545]
+    assert supervisor.issues("external_service")[-1]["type"] == "memory_resource_pressure"
+
+
+def test_service_supervisor_resource_pressure_refuses_stale_same_name_process(monkeypatch):
+    from adaos.services.skill import service_supervisor as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_service_listener_snapshot",
+        lambda _spec: {
+            "pid": 4545,
+            "ownership_verified": True,
+            "owner_runtime_instance_id": "rt-a-current",
+            "service_skill_matches": True,
+        },
+    )
+    monkeypatch.setattr(mod, "_process_tree_pids", lambda pid: {4545, 4546})
+    monkeypatch.setattr(
+        mod,
+        "_terminate_process_tree",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mismatched process must not stop service")),
+    )
+    supervisor = mod.ServiceSkillSupervisor()
+
+    class _Spec:
+        self_managed_enabled = False
+        doctor_enabled = False
+
+    spec = _Spec()
+    supervisor._specs["external_service"] = spec
+    supervisor._spec_key = lambda _spec: ("external",)  # type: ignore[method-assign]
+    supervisor._external_ready_specs["external_service"] = ("external",)
+    supervisor.ensure_discovered = lambda *args, **kwargs: None  # type: ignore[method-assign]
+
+    async def _refresh_discovered(*args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    supervisor.refresh_discovered = _refresh_discovered  # type: ignore[method-assign]
+    supervisor.status = lambda name, check_health=False: {  # type: ignore[method-assign]
+        "name": name,
+        "running": False,
+        "external_ready": True,
+    }
+
+    result = asyncio.run(
+        supervisor.quarantine_resource_pressure(
+            "external_service",
+            reason="supervisor.memory.skill_pressure",
+            pressure={"skill_rss_bytes": 3 * 1024 * 1024 * 1024, "observed_pids": [9999]},
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "observed_process_owner_mismatch"
+    assert supervisor._issues_cache["external_service"][-1]["type"] == "memory_resource_pressure_owner_mismatch"
+
+
 def test_service_supervisor_serializes_concurrent_starts(monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

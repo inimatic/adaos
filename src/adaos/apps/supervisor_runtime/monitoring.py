@@ -177,14 +177,61 @@ class SupervisorMonitoringService:
             if rc is None:
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(manager._sample_memory_telemetry)
-                critical_memory_decision = await asyncio.to_thread(manager._memory_critical_restart_decision)
+                critical_memory_decision = await asyncio.to_thread(manager._memory_critical_pressure_decision)
                 if critical_memory_decision is not None:
+                    critical_action = str(critical_memory_decision.get("action") or "").strip().lower()
+                    evidence_stage = (
+                        "memory_critical_restart"
+                        if critical_action == "restart_runtime"
+                        else "memory_critical_skill_quarantine"
+                        if critical_action == "quarantine_skill_runtime"
+                        else "memory_critical_observation"
+                    )
+                    captured_evidence = None
                     with contextlib.suppress(Exception):
-                        critical_memory_decision["pre_restart_evidence"] = manager._capture_runtime_stop_evidence(
+                        captured_evidence = manager._capture_runtime_stop_evidence(
                             reason=str(critical_memory_decision.get("reason") or "supervisor.memory.critical_pressure"),
-                            stage="memory_critical_restart",
+                            stage=evidence_stage,
                             decision=dict(critical_memory_decision),
                         )
+                    evidence = captured_evidence if isinstance(captured_evidence, dict) else {}
+                    manager._memory_critical_last_evidence = (
+                        {
+                            "captured_at": evidence.get("captured_at"),
+                            "reason": evidence.get("reason"),
+                            "stage": evidence.get("stage"),
+                            "evidence_path": evidence.get("evidence_path"),
+                            "evidence_error": evidence.get("evidence_error"),
+                        }
+                        if isinstance(evidence, dict)
+                        else {}
+                    )
+                    if critical_action == "quarantine_skill_runtime":
+                        critical_memory_decision["skill_quarantine"] = await manager._quarantine_skill_memory_pressure(
+                            critical_memory_decision
+                        )
+                    compact_decision = {
+                        key: value
+                        for key, value in critical_memory_decision.items()
+                        if key != "system_process_snapshot"
+                    }
+                    compact_decision["evidence"] = dict(manager._memory_critical_last_evidence)
+                    manager._memory_critical_last_decision = compact_decision
+                    if critical_action != "restart_runtime":
+                        manager._memory_critical_observation_last_at = time.time()
+                        if critical_action == "quarantine_skill_runtime":
+                            operations.logger.warning(
+                                "critical skill memory pressure handled without runtime restart: %s result=%s",
+                                critical_memory_decision.get("message") or critical_memory_decision,
+                                critical_memory_decision.get("skill_quarantine"),
+                            )
+                        else:
+                            operations.logger.warning(
+                                "critical external memory pressure observed without runtime restart: %s",
+                                critical_memory_decision.get("message") or critical_memory_decision,
+                            )
+                        manager._persist_runtime_state()
+                        continue
                     manager._last_error = str(
                         critical_memory_decision.get("message") or "runtime restart requested due to critical memory pressure"
                     )

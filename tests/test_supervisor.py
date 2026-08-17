@@ -7920,7 +7920,7 @@ def test_policy_memory_profile_restart_is_blocked_by_connected_to_subnet_alias(m
 def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
-    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES", "64")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES", str(64 * 1024 * 1024))
     monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC", "20")
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 
@@ -7935,8 +7935,14 @@ def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeyp
     manager._proc = _Proc()  # type: ignore[assignment]
     manager._desired_running = True
     manager._stopping = False
-    manager._memory_last_available_bytes = 32
-    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024)
+    manager._memory_last_available_bytes = 32 * 1024 * 1024
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024 * 1024 * 1024)
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (100 * 1024 * 1024, 300 * 1024 * 1024),
+    )
+    monkeypatch.setattr(supervisor, "_system_process_memory_snapshot", lambda pid: {"available": True})
     monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
     monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
     monkeypatch.setattr(
@@ -7954,8 +7960,145 @@ def test_critical_memory_restart_is_allowed_while_live_subnet_is_present(monkeyp
     assert first is None
     assert second is not None
     assert second["reason"] == "supervisor.memory.critical_pressure"
+    assert second["action"] == "restart_runtime"
+    assert second["pressure_owner"] == "runtime_family"
     assert second["subnet_live"] is True
     assert second["subnet_reason"] == "subnet_members_connected:2"
+
+
+def test_critical_external_memory_pressure_preserves_runtime_and_records_attribution(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_BYTES", str(64 * 1024 * 1024))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC", "20")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 9988
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._desired_running = True
+    manager._stopping = False
+    manager._memory_last_available_bytes = 32 * 1024 * 1024
+    manager._memory_baseline_family_rss_bytes = 120 * 1024 * 1024
+    manager._memory_last_growth_bytes = 8 * 1024 * 1024
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024 * 1024 * 1024)
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (64 * 1024 * 1024, 128 * 1024 * 1024),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_system_process_memory_snapshot",
+        lambda pid: {
+            "available": True,
+            "top_external_by_rss": [{"pid": 777, "name": "node", "rss_bytes": 700 * 1024 * 1024}],
+        },
+    )
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
+    monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
+
+    assert manager._memory_critical_pressure_decision(now=100.0) is None
+    decision = manager._memory_critical_pressure_decision(now=121.0)
+
+    assert decision is not None
+    assert decision["reason"] == "supervisor.memory.external_pressure"
+    assert decision["action"] == "observe_external_pressure"
+    assert decision["pressure_owner"] == "external_or_system"
+    assert decision["attribution"]["family_rss_bytes"] == 128 * 1024 * 1024
+    assert decision["system_process_snapshot"]["top_external_by_rss"][0]["name"] == "node"
+    assert manager._memory_critical_restart_decision(now=122.0) is None
+
+
+def test_critical_skill_memory_pressure_selects_targeted_quarantine(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_AVAILABLE_PERCENT", "5")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MEMORY_CRITICAL_DURATION_SEC", "20")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 9988
+        args = ["python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()  # type: ignore[assignment]
+    manager._memory_last_available_bytes = 32 * 1024 * 1024
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024 * 1024 * 1024)
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (64 * 1024 * 1024, 128 * 1024 * 1024),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_system_process_memory_snapshot",
+        lambda pid: {
+            "available": True,
+            "skill_runtime_totals": [
+                {
+                    "skill_runtime": "runaway_skill",
+                    "rss_bytes": 300 * 1024 * 1024,
+                    "process_total": 1,
+                    "pids": [777],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
+    monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
+
+    assert manager._memory_critical_pressure_decision(now=100.0) is None
+    decision = manager._memory_critical_pressure_decision(now=121.0)
+
+    assert decision is not None
+    assert decision["reason"] == "supervisor.memory.skill_pressure"
+    assert decision["action"] == "quarantine_skill_runtime"
+    assert decision["pressure_owner"] == "skill_runtime"
+    assert decision["attribution"]["skill_target"]["skill_runtime"] == "runaway_skill"
+    assert manager._memory_critical_restart_decision(now=122.0) is None
+
+
+def test_skill_memory_pressure_quarantine_uses_runtime_lifecycle_api(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        manager,
+        "_runtime_request_json",
+        lambda **kwargs: calls.append(dict(kwargs)) or {"ok": True, "stopped": True},
+    )
+    decision = {
+        "reason": "supervisor.memory.skill_pressure",
+        "restart_cooldown_sec": 120.0,
+        "available_memory_bytes": 64 * 1024 * 1024,
+        "available_memory_percent": 4.0,
+        "critical_for_sec": 21.0,
+        "attribution": {
+            "skill_indicators": ["skill_rss_threshold"],
+            "skill_target": {
+                "skill_runtime": "runaway skill",
+                "rss_bytes": 3 * 1024 * 1024 * 1024,
+                "process_total": 2,
+                "pids": [777, 778],
+            },
+        },
+    }
+
+    result = asyncio.run(manager._quarantine_skill_memory_pressure(decision))
+
+    assert result == {"ok": True, "stopped": True}
+    assert calls[0]["path"] == "/api/services/runaway%20skill/resource-pressure"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["payload"]["pressure"]["observed_pids"] == [777, 778]
 
 
 def test_critical_memory_restart_runs_once_per_continuous_pressure_episode(monkeypatch, tmp_path) -> None:
@@ -7977,8 +8120,14 @@ def test_critical_memory_restart_runs_once_per_continuous_pressure_episode(monke
     manager._proc = _Proc()  # type: ignore[assignment]
     manager._desired_running = True
     manager._stopping = False
-    manager._memory_last_available_bytes = 32
-    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024)
+    manager._memory_last_available_bytes = 32 * 1024 * 1024
+    monkeypatch.setattr(supervisor, "_total_memory_bytes", lambda: 1024 * 1024 * 1024)
+    monkeypatch.setattr(
+        supervisor,
+        "_process_family_rss_bytes",
+        lambda pid: (100 * 1024 * 1024, 300 * 1024 * 1024),
+    )
+    monkeypatch.setattr(supervisor, "_system_process_memory_snapshot", lambda pid: {"available": True})
     monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {})
     monkeypatch.setattr(supervisor, "_read_update_attempt", lambda: {})
 
@@ -7987,9 +8136,9 @@ def test_critical_memory_restart_runs_once_per_continuous_pressure_episode(monke
     manager._memory_critical_restart_last_at = 121.0
     assert manager._memory_critical_restart_decision(now=300.0) is None
 
-    manager._memory_last_available_bytes = 128
+    manager._memory_last_available_bytes = 128 * 1024 * 1024
     assert manager._memory_critical_restart_decision(now=301.0) is None
-    manager._memory_last_available_bytes = 32
+    manager._memory_last_available_bytes = 32 * 1024 * 1024
     assert manager._memory_critical_restart_decision(now=400.0) is None
     assert manager._memory_critical_restart_decision(now=421.0) is not None
 

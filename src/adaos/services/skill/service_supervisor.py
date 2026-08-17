@@ -558,6 +558,23 @@ def _terminate_process_tree(pid: int, *, timeout_s: float = 3.0) -> bool:
     return True
 
 
+def _process_tree_pids(pid: int | None) -> set[int]:
+    if int(pid or 0) <= 0:
+        return set()
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(int(pid))
+    except Exception:
+        return set()
+    pids = {int(proc.pid)}
+    try:
+        pids.update(int(child.pid) for child in proc.children(recursive=True))
+    except Exception:
+        pass
+    return pids
+
+
 def _path_value(value: Any) -> Path:
     resolved = value() if callable(value) else value
     return Path(resolved).expanduser().resolve()
@@ -1016,11 +1033,55 @@ class ServiceSkillSupervisor:
             await self._stop_owned(name, timeout_s=timeout_s)
 
     async def _stop_owned(self, name: str, *, timeout_s: float = 3.0) -> None:
-        self._external_ready_specs.pop(name, None)
-        self._external_ready_at.pop(name, None)
         proc = self._procs.get(name)
         if not proc:
+            spec = self._specs.get(name)
+            external_ready = bool(spec and self._external_ready_specs.get(name) == self._spec_key(spec))
+            if not external_ready or spec is None:
+                self._external_ready_specs.pop(name, None)
+                self._external_ready_at.pop(name, None)
+                return
+            listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+            listener_pid = int(listener.get("pid") or 0)
+            if (
+                listener_pid <= 0
+                or not _listener_owned_by_current_runtime(listener)
+                or not _listener_is_managed_service(listener)
+            ):
+                await self._record_issue(
+                    name,
+                    issue_type="service_stop_owner_unverified",
+                    message="refusing to stop an external service listener whose current runtime ownership is not verified",
+                    severity="error",
+                    details={"listener": listener, "timeout_s": timeout_s},
+                )
+                return
+            terminated = await asyncio.to_thread(
+                _terminate_process_tree,
+                listener_pid,
+                timeout_s=timeout_s,
+            )
+            if not terminated:
+                await self._record_issue(
+                    name,
+                    issue_type="service_stop_failed",
+                    message="failed to terminate the verified external service listener",
+                    severity="error",
+                    details={"listener": listener, "timeout_s": timeout_s},
+                )
+                return
+            self._external_ready_specs.pop(name, None)
+            self._external_ready_at.pop(name, None)
+            emit(
+                self._ctx.bus,
+                "skill.service.stopped",
+                {"skill": name, "pid": listener_pid, "external": True},
+                source="skill.service",
+            )
             return
+
+        self._external_ready_specs.pop(name, None)
+        self._external_ready_at.pop(name, None)
 
         if proc.poll() is None:
             # Service entrypoints may supervise their own child process (for
@@ -1064,6 +1125,97 @@ class ServiceSkillSupervisor:
             await self._stop_owned(name)
             await self._ensure_started_owned(name, spec, force=True)
         self._ensure_background_tasks()
+
+    async def quarantine_resource_pressure(
+        self,
+        name: str,
+        *,
+        reason: str,
+        pressure: dict[str, Any] | None = None,
+        cooloff_s: float = 120.0,
+    ) -> dict[str, Any]:
+        await self.refresh_discovered()
+        spec = self._specs.get(name)
+        if not spec:
+            raise KeyError(name)
+        bounded_cooloff = max(30.0, min(float(cooloff_s or 120.0), 3600.0))
+        async with self._operation_lock(name):
+            before = self.status(name, check_health=False) or {"name": name}
+            observed_pids = {
+                int(pid)
+                for pid in (pressure or {}).get("observed_pids", [])
+                if str(pid or "").strip().isdigit() and int(pid) > 0
+            }
+            proc = self._procs.get(name)
+            owner_pid = int(proc.pid) if proc and proc.poll() is None else None
+            owner_basis = "tracked_process" if owner_pid else None
+            listener: dict[str, Any] = {}
+            if owner_pid is None and self._external_ready_specs.get(name) == self._spec_key(spec):
+                listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+                if _listener_owned_by_current_runtime(listener) and _listener_is_managed_service(listener):
+                    owner_pid = int(listener.get("pid") or 0) or None
+                    owner_basis = "verified_listener"
+            owner_pids = await asyncio.to_thread(_process_tree_pids, owner_pid)
+            matched_pids = sorted(observed_pids & owner_pids)
+            if not observed_pids or not matched_pids:
+                issue = await self._record_issue(
+                    name,
+                    issue_type="memory_resource_pressure_owner_mismatch",
+                    message="refusing skill memory quarantine because observed processes are not in the current owned tree",
+                    severity="error",
+                    details={
+                        "reason": str(reason or "supervisor.memory.skill_pressure"),
+                        "pressure": dict(pressure or {}),
+                        "observed_pids": sorted(observed_pids),
+                        "owner_pid": owner_pid,
+                        "owner_pids": sorted(owner_pids),
+                        "owner_basis": owner_basis,
+                        "listener": listener,
+                    },
+                )
+                return {
+                    "ok": False,
+                    "skill": name,
+                    "action": "quarantine_resource_pressure",
+                    "stopped": False,
+                    "error": "observed_process_owner_mismatch",
+                    "issue_id": issue.get("id"),
+                    "observed_pids": sorted(observed_pids),
+                    "owner_pid": owner_pid,
+                    "owner_pids": sorted(owner_pids),
+                }
+            issue = await self._record_issue(
+                name,
+                issue_type="memory_resource_pressure",
+                message="service skill quarantined after attributed critical host memory pressure",
+                severity="error",
+                details={
+                    "reason": str(reason or "supervisor.memory.skill_pressure"),
+                    "pressure": dict(pressure or {}),
+                    "cooloff_s": bounded_cooloff,
+                    "owner_basis": owner_basis,
+                    "matched_pids": matched_pids,
+                    "service": before,
+                },
+            )
+            self._cooloff_until[name] = time.time() + bounded_cooloff
+            await self._stop_owned(name, timeout_s=min(10.0, max(3.0, bounded_cooloff / 10.0)))
+            after = self.status(name, check_health=False) or {"name": name}
+            stopped = not bool(after.get("running")) and not bool(after.get("external_ready"))
+            result = {
+                "ok": stopped,
+                "skill": name,
+                "action": "quarantine_resource_pressure",
+                "stopped": stopped,
+                "cooloff_until": self._cooloff_until.get(name),
+                "issue_id": issue.get("id"),
+                "owner_basis": owner_basis,
+                "matched_pids": matched_pids,
+                "before": before,
+                "after": after,
+            }
+            emit(self._ctx.bus, "skill.service.resource_pressure", result, source="skill.service")
+            return result
 
     async def start_all(self) -> None:
         if self._shutdown_requested:

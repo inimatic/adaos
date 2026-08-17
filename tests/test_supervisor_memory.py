@@ -209,6 +209,90 @@ def test_supervisor_manager_memory_status_reports_live_rss(monkeypatch, tmp_path
     assert payload["operation_log_contract_version"] == "1"
 
 
+def test_system_process_memory_snapshot_attributes_runtime_skills_and_external_processes() -> None:
+    class _Info:
+        def __init__(self, rss: int) -> None:
+            self.rss = rss
+
+    class _Io:
+        def __init__(self, read_bytes: int, write_bytes: int) -> None:
+            self.read_bytes = read_bytes
+            self.write_bytes = write_bytes
+
+    class _Process:
+        def __init__(self, pid: int, ppid: int, name: str, rss: int, cmdline: list[str]) -> None:
+            self.pid = pid
+            self._ppid = ppid
+            self._name = name
+            self._rss = rss
+            self._cmdline = cmdline
+            self._children: list[_Process] = []
+
+        def ppid(self) -> int:
+            return self._ppid
+
+        def name(self) -> str:
+            return self._name
+
+        def memory_info(self) -> _Info:
+            return _Info(self._rss)
+
+        def cmdline(self) -> list[str]:
+            return self._cmdline
+
+        def io_counters(self) -> _Io:
+            return _Io(self.pid * 10, self.pid * 20)
+
+        def children(self, *, recursive: bool) -> list[_Process]:
+            assert recursive is True
+            return list(self._children)
+
+    root = _Process(100, 1, "python", 100, ["python", "-m", "adaos.apps.autostart_runner"])
+    skill = _Process(
+        101,
+        100,
+        "python",
+        300,
+        ["C:/node/.adaos/skills/.runtime/weather_skill/python.exe", "-m", "handlers.main"],
+    )
+    external = _Process(200, 1, "node", 900, ["node", "ng", "build"])
+    root._children = [skill]
+    processes = {item.pid: item for item in (root, skill, external)}
+
+    class _Psutil:
+        @staticmethod
+        def Process(pid: int) -> _Process:
+            return processes[pid]
+
+        @staticmethod
+        def process_iter():
+            return iter(processes.values())
+
+    snapshot = supervisor._MEMORY_PROFILING.system_process_memory_snapshot(
+        root.pid,
+        psutil_module=_Psutil,
+    )
+
+    assert snapshot["available"] is True
+    assert snapshot["top_by_rss"][0]["name"] == "node"
+    assert snapshot["top_external_by_rss"][0]["pid"] == external.pid
+    assert snapshot["skill_runtimes_by_rss"][0]["skill_runtime"] == "weather_skill"
+    assert snapshot["skill_runtimes_by_rss"][0]["runtime_family"] is True
+    assert snapshot["top_by_rss"][0]["io_write_bytes"] == external.pid * 20
+    assert snapshot["skill_runtime_totals"] == [
+        {
+            "skill_runtime": "weather_skill",
+            "rss_bytes": 300,
+            "process_total": 1,
+            "runtime_family_process_total": 1,
+            "io_read_bytes": skill.pid * 10,
+            "io_write_bytes": skill.pid * 20,
+            "pids": [skill.pid],
+            "top_process": snapshot["skill_runtimes_by_rss"][0],
+        }
+    ]
+
+
 def test_public_memory_status_exposes_current_rss_and_top_children(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
@@ -688,6 +772,7 @@ def test_supervisor_manager_marks_absolute_family_rss_threshold_as_suspected(mon
     monkeypatch.setattr(supervisor, "_available_memory_bytes", lambda: 1024)
     monkeypatch.setattr(supervisor.time, "time", lambda: next(times, 999.0))
     monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(manager, "_memory_policy_auto_profile_guard", lambda now: (True, None))
 
     first = manager._sample_memory_telemetry()
     second = manager._sample_memory_telemetry()

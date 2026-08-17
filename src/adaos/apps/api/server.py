@@ -2715,6 +2715,26 @@ async def restart_service(name: str) -> dict:
     return {"ok": True}
 
 
+class ServiceResourcePressureRequest(BaseModel):
+    reason: str
+    pressure: dict | None = None
+    cooloff_s: float = 120.0
+
+
+@app.post("/api/services/{name}/resource-pressure", dependencies=[Depends(require_token)])
+async def quarantine_service_resource_pressure(name: str, body: ServiceResourcePressureRequest) -> dict:
+    supervisor = get_service_supervisor()
+    try:
+        return await supervisor.quarantine_resource_pressure(
+            name,
+            reason=body.reason,
+            pressure=body.pressure,
+            cooloff_s=body.cooloff_s,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="service not found")
+
+
 class ServiceIssueRequest(BaseModel):
     type: str
     message: str

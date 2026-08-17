@@ -21,6 +21,7 @@ from pathlib import Path
 from string import Formatter
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import quote
 
 try:
     import psutil  # type: ignore
@@ -1879,6 +1880,14 @@ def _process_family_memory_snapshot(pid: int | None, *, max_children: int = 12) 
     )
 
 
+def _system_process_memory_snapshot(pid: int | None, *, max_processes: int = 12) -> dict[str, Any]:
+    return _MEMORY_PROFILING.system_process_memory_snapshot(
+        pid,
+        psutil_module=psutil,
+        max_processes=max_processes,
+    )
+
+
 def _parse_linux_memory_stat(text: str) -> dict[str, int]:
     return _MEMORY_PROFILING.parse_linux_memory_stat(text)
 
@@ -2158,7 +2167,13 @@ class SupervisorManager:
     _memory_auto_profile_last_block_at = _owned_field("_memory_profiling", "auto_profile_last_block_at")
     _memory_critical_since = _owned_field("_memory_profiling", "critical_since")
     _memory_critical_reason = _owned_field("_memory_profiling", "critical_reason")
+    _memory_critical_pressure_owner = _owned_field("_memory_profiling", "critical_pressure_owner")
+    _memory_critical_action = _owned_field("_memory_profiling", "critical_action")
+    _memory_critical_attribution = _owned_field("_memory_profiling", "critical_attribution")
+    _memory_critical_observation_last_at = _owned_field("_memory_profiling", "critical_observation_last_at")
     _memory_critical_restart_last_at = _owned_field("_memory_profiling", "critical_restart_last_at")
+    _memory_critical_last_decision = _owned_field("_memory_profiling", "critical_last_decision")
+    _memory_critical_last_evidence = _owned_field("_memory_profiling", "critical_last_evidence")
 
     def __init__(self, *, runtime_host: str, runtime_port: int, token: str | None) -> None:
         self.runtime_host = str(runtime_host or "127.0.0.1").strip() or "127.0.0.1"
@@ -2272,7 +2287,13 @@ class SupervisorManager:
         self._memory_auto_profile_last_block_at: float | None = None
         self._memory_critical_since: float | None = None
         self._memory_critical_reason: str | None = None
+        self._memory_critical_pressure_owner: str | None = None
+        self._memory_critical_action: str | None = None
+        self._memory_critical_attribution: dict[str, Any] = {}
+        self._memory_critical_observation_last_at: float | None = None
         self._memory_critical_restart_last_at: float | None = None
+        self._memory_critical_last_decision: dict[str, Any] = {}
+        self._memory_critical_last_evidence: dict[str, Any] = {}
         self._sidecar_launch_cwd: str | None = None
         self._sidecar_last_start_reason: str | None = None
         self._sidecar_last_restart_reason: str | None = None
@@ -3331,24 +3352,27 @@ class SupervisorManager:
             return False, f"auto_profile_min_uptime:{observed}<{min_uptime_sec:.1f}s"
         return self._memory_profile_subnet_guard()
 
-    def _memory_critical_restart_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
+    def _reset_memory_critical_episode(self) -> None:
+        self._memory_critical_since = None
+        self._memory_critical_reason = None
+        self._memory_critical_pressure_owner = None
+        self._memory_critical_action = None
+        self._memory_critical_attribution = {}
+
+    def _memory_critical_pressure_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
         if self._stopping or not self._desired_running:
-            self._memory_critical_since = None
-            self._memory_critical_reason = None
+            self._reset_memory_critical_episode()
             return None
         if self._proc is None or self._proc.poll() is not None:
-            self._memory_critical_since = None
-            self._memory_critical_reason = None
+            self._reset_memory_critical_episode()
             return None
         if _is_transition_in_progress(read_core_update_status(), _read_update_attempt()):
-            self._memory_critical_since = None
-            self._memory_critical_reason = None
+            self._reset_memory_critical_episode()
             return None
         available_bytes = self._memory_last_available_bytes
         total_bytes = _total_memory_bytes()
         if available_bytes is None or total_bytes is None or total_bytes <= 0:
-            self._memory_critical_since = None
-            self._memory_critical_reason = None
+            self._reset_memory_critical_episode()
             return None
         available_percent = (float(available_bytes) / float(total_bytes)) * 100.0
         self._memory_last_available_percent = available_percent
@@ -3360,8 +3384,7 @@ class SupervisorManager:
         if int(available_bytes) <= int(threshold_bytes):
             reasons.append(f"available_bytes<={int(threshold_bytes)}")
         if not reasons:
-            self._memory_critical_since = None
-            self._memory_critical_reason = None
+            self._reset_memory_critical_episode()
             return None
         current_time = time.time() if now is None else float(now)
         reason = ",".join(reasons)
@@ -3373,34 +3396,195 @@ class SupervisorManager:
         duration_sec = _memory_critical_duration_sec()
         if (current_time - critical_since) < duration_sec:
             return None
+        managed = _proc_details(self._proc, cwd_hint=self._managed_runtime_cwd)
+        managed_pid = _positive_int_or_none(managed.get("managed_pid"))
+        process_rss_bytes, family_rss_bytes = _process_family_rss_bytes(managed_pid)
+        family_rss_bytes = _positive_int_or_none(family_rss_bytes)
+        if family_rss_bytes is None:
+            telemetry_tail = read_memory_telemetry_tail(limit=1)
+            latest_telemetry = telemetry_tail[-1] if telemetry_tail else {}
+            if str(latest_telemetry.get("runtime_instance_id") or "") == str(
+                self._managed_runtime_instance_id or ""
+            ):
+                family_rss_bytes = _positive_int_or_none(latest_telemetry.get("family_rss_bytes"))
+        baseline_rss_bytes = _positive_int_or_none(self._memory_baseline_family_rss_bytes)
+        growth_bytes = max(
+            0,
+            int(
+                self._memory_last_growth_bytes
+                if self._memory_last_growth_bytes is not None
+                else (
+                    max(0, int(family_rss_bytes) - int(baseline_rss_bytes))
+                    if family_rss_bytes is not None and baseline_rss_bytes is not None
+                    else 0
+                )
+            ),
+        )
+        configured_family_threshold = _memory_suspicion_family_rss_threshold_bytes()
+        dynamic_family_threshold = max(256 * 1024 * 1024, int(float(total_bytes) * 0.20))
+        effective_family_threshold = (
+            min(int(configured_family_threshold), dynamic_family_threshold)
+            if configured_family_threshold is not None
+            else None
+        )
+        growth_threshold = _memory_suspicion_growth_threshold_bytes()
+        system_process_snapshot = _system_process_memory_snapshot(managed_pid)
+        skill_runtime_totals = (
+            system_process_snapshot.get("skill_runtime_totals", [])
+            if isinstance(system_process_snapshot.get("skill_runtime_totals"), list)
+            else []
+        )
+        skill_rss_bytes = sum(
+            int(item.get("rss_bytes") or 0)
+            for item in skill_runtime_totals
+            if isinstance(item, dict)
+        )
+        skill_target = next(
+            (item for item in skill_runtime_totals if isinstance(item, dict) and item.get("skill_runtime")),
+            None,
+        )
+        skill_indicators: list[str] = []
+        if (
+            skill_target is not None
+            and effective_family_threshold is not None
+            and int(skill_target.get("rss_bytes") or 0) >= int(effective_family_threshold)
+        ):
+            skill_indicators.append("skill_rss_threshold")
+        elif (
+            skill_target is not None
+            and effective_family_threshold is not None
+            and skill_rss_bytes >= int(effective_family_threshold)
+        ):
+            skill_indicators.append("combined_skill_rss_threshold")
+        runtime_indicators: list[str] = []
+        if (
+            family_rss_bytes is not None
+            and effective_family_threshold is not None
+            and int(family_rss_bytes) >= int(effective_family_threshold)
+        ):
+            runtime_indicators.append("family_rss_threshold")
+        if growth_bytes >= int(growth_threshold):
+            runtime_indicators.append("growth_threshold")
+        if skill_indicators:
+            pressure_owner = "skill_runtime"
+            action = "quarantine_skill_runtime"
+        elif runtime_indicators:
+            pressure_owner = "runtime_family"
+            action = "restart_runtime"
+        else:
+            pressure_owner = "external_or_system"
+            action = "observe_external_pressure"
+        attribution = {
+            "managed_pid": managed_pid,
+            "process_rss_bytes": process_rss_bytes,
+            "family_rss_bytes": family_rss_bytes,
+            "baseline_family_rss_bytes": baseline_rss_bytes,
+            "growth_bytes": growth_bytes,
+            "effective_family_rss_threshold_bytes": effective_family_threshold,
+            "growth_threshold_bytes": int(growth_threshold),
+            "runtime_indicators": runtime_indicators,
+            "skill_rss_bytes": skill_rss_bytes,
+            "skill_indicators": skill_indicators,
+            "skill_target": skill_target,
+        }
+        self._memory_critical_pressure_owner = pressure_owner
+        self._memory_critical_action = action
+        self._memory_critical_attribution = attribution
         cooldown_sec = _memory_critical_restart_cooldown_sec()
-        last_restart_at = float(self._memory_critical_restart_last_at or 0.0)
-        if last_restart_at > 0.0 and (current_time - last_restart_at) < cooldown_sec:
-            return None
-        if last_restart_at >= critical_since:
-            # A restart already happened during this uninterrupted low-memory
-            # episode. Repeating it cannot reclaim memory owned by other
-            # processes and causes an avoidable Hub recovery loop. A healthy
-            # sample clears ``critical_since`` above, allowing one new restart
-            # if a later, distinct episode occurs.
+        if action == "restart_runtime":
+            last_action_at = float(self._memory_critical_restart_last_at or 0.0)
+            if last_action_at > 0.0 and (current_time - last_action_at) < cooldown_sec:
+                return None
+        else:
+            last_action_at = float(self._memory_critical_observation_last_at or 0.0)
+        if action == "quarantine_skill_runtime":
+            if last_action_at >= critical_since and (current_time - last_action_at) < cooldown_sec:
+                return None
+        elif last_action_at >= critical_since:
             return None
         subnet_live, subnet_reason = self._memory_live_subnet_state()
-        return {
-            "reason": "supervisor.memory.critical_pressure",
-            "message": (
+        if action == "restart_runtime":
+            message = (
                 "runtime restart requested because free memory stayed below the critical threshold"
-                f" for {duration_sec:.0f}s (available={int(available_bytes)}B, total={int(total_bytes)}B)"
-            ),
+                f" for {duration_sec:.0f}s and runtime-family memory was anomalous"
+                f" (family={family_rss_bytes}B, available={int(available_bytes)}B)"
+            )
+            decision_reason = "supervisor.memory.critical_pressure"
+        elif action == "quarantine_skill_runtime":
+            skill_name = str((skill_target or {}).get("skill_runtime") or "").strip()
+            skill_bytes = int((skill_target or {}).get("rss_bytes") or 0)
+            message = (
+                "skill runtime quarantine requested because host memory stayed critical and the skill"
+                f" was the largest attributed AdaOS workload (skill={skill_name}, rss={skill_bytes}B,"
+                f" available={int(available_bytes)}B)"
+            )
+            decision_reason = "supervisor.memory.skill_pressure"
+        else:
+            message = (
+                "critical system memory pressure observed, but runtime restart was suppressed because"
+                f" runtime-family memory was not anomalous (family={family_rss_bytes}B,"
+                f" available={int(available_bytes)}B)"
+            )
+            decision_reason = "supervisor.memory.external_pressure"
+        return {
+            "reason": decision_reason,
+            "message": message,
+            "action": action,
+            "pressure_owner": pressure_owner,
+            "recorded_at": current_time,
             "available_memory_bytes": int(available_bytes),
             "available_memory_percent": round(available_percent, 3),
+            "total_memory_bytes": int(total_bytes),
             "threshold_percent": float(threshold_percent),
             "threshold_bytes": int(threshold_bytes),
             "critical_for_sec": max(0.0, current_time - critical_since),
             "restart_cooldown_sec": float(cooldown_sec),
             "critical_reason": reason,
+            "attribution": attribution,
+            "system_process_snapshot": system_process_snapshot,
             "subnet_live": bool(subnet_live),
             "subnet_reason": subnet_reason,
         }
+
+    def _memory_critical_restart_decision(self, *, now: float | None = None) -> dict[str, Any] | None:
+        decision = self._memory_critical_pressure_decision(now=now)
+        if decision is None or decision.get("action") != "restart_runtime":
+            return None
+        return decision
+
+    async def _quarantine_skill_memory_pressure(self, decision: dict[str, Any]) -> dict[str, Any]:
+        attribution = decision.get("attribution") if isinstance(decision.get("attribution"), dict) else {}
+        target = attribution.get("skill_target") if isinstance(attribution.get("skill_target"), dict) else {}
+        skill_name = str(target.get("skill_runtime") or "").strip()
+        if not skill_name:
+            return {"ok": False, "error": "skill_runtime_target_missing"}
+        payload = {
+            "reason": str(decision.get("reason") or "supervisor.memory.skill_pressure"),
+            "cooloff_s": float(decision.get("restart_cooldown_sec") or 120.0),
+            "pressure": {
+                "available_memory_bytes": decision.get("available_memory_bytes"),
+                "available_memory_percent": decision.get("available_memory_percent"),
+                "critical_for_sec": decision.get("critical_for_sec"),
+                "skill_rss_bytes": target.get("rss_bytes"),
+                "skill_process_total": target.get("process_total"),
+                "observed_pids": target.get("pids") if isinstance(target.get("pids"), list) else [],
+                "indicators": attribution.get("skill_indicators"),
+            },
+        }
+        try:
+            return await asyncio.to_thread(
+                self._runtime_request_json,
+                path=f"/api/services/{quote(skill_name, safe='')}/resource-pressure",
+                method="POST",
+                payload=payload,
+                timeout=15.0,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "skill": skill_name,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     def _record_memory_auto_profile_block(self, reason: str | None, *, now: float | None = None) -> None:
         reason_text = str(reason or "").strip()

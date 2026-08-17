@@ -86,7 +86,13 @@ class MemoryProfilingService:
         self.auto_profile_last_block_at: float | None = None
         self.critical_since: float | None = None
         self.critical_reason: str | None = None
+        self.critical_pressure_owner: str | None = None
+        self.critical_action: str | None = None
+        self.critical_attribution: dict[str, Any] = {}
+        self.critical_observation_last_at: float | None = None
         self.critical_restart_last_at: float | None = None
+        self.critical_last_decision: dict[str, Any] = {}
+        self.critical_last_evidence: dict[str, Any] = {}
 
     @staticmethod
     def profiler_adapter(default_adapter: str) -> str:
@@ -381,6 +387,13 @@ class MemoryProfilingService:
             cmdline = [str(item) for item in proc.cmdline() if str(item or "").strip()]
         except Exception:
             cmdline = []
+        try:
+            io_counters = proc.io_counters()
+            io_read_bytes = int(getattr(io_counters, "read_bytes", 0) or 0)
+            io_write_bytes = int(getattr(io_counters, "write_bytes", 0) or 0)
+        except Exception:
+            io_read_bytes = None
+            io_write_bytes = None
         return {
             "pid": pid,
             "ppid": ppid,
@@ -388,7 +401,84 @@ class MemoryProfilingService:
             "rss_bytes": rss_bytes,
             "cmdline_label": self.cmdline_label(cmdline),
             "skill_runtime": self.skill_runtime_name(cmdline),
+            "io_read_bytes": io_read_bytes,
+            "io_write_bytes": io_write_bytes,
         }
+
+    def system_process_memory_snapshot(
+        self,
+        managed_pid: int | None,
+        *,
+        psutil_module: Any | None,
+        max_processes: int = 12,
+    ) -> dict[str, Any]:
+        if psutil_module is None:
+            return {"available": False, "reason": "psutil_unavailable"}
+        runtime_pids: set[int] = set()
+        if managed_pid:
+            runtime_pids.add(int(managed_pid))
+            try:
+                children = psutil_module.Process(int(managed_pid)).children(recursive=True)
+                runtime_pids.update(int(child.pid) for child in children)
+            except Exception:
+                pass
+        items: list[dict[str, Any]] = []
+        try:
+            processes = psutil_module.process_iter()
+        except Exception as exc:
+            return {"available": False, "reason": f"process_iter_failed:{type(exc).__name__}"}
+        for proc in processes:
+            item = self.process_item(proc)
+            if item is None:
+                continue
+            item["runtime_family"] = int(item.get("pid") or 0) in runtime_pids
+            items.append(item)
+        items.sort(key=lambda item: int(item.get("rss_bytes") or 0), reverse=True)
+        limit = max(1, min(int(max_processes or 0), 32))
+        skill_items = [item for item in items if item.get("skill_runtime")]
+        external_items = [item for item in items if not item.get("runtime_family")]
+        skill_totals: dict[str, dict[str, Any]] = {}
+        for item in skill_items:
+            skill_name = str(item.get("skill_runtime") or "").strip()
+            if not skill_name:
+                continue
+            aggregate = skill_totals.setdefault(
+                skill_name,
+                {
+                    "skill_runtime": skill_name,
+                    "rss_bytes": 0,
+                    "process_total": 0,
+                    "runtime_family_process_total": 0,
+                    "io_read_bytes": 0,
+                    "io_write_bytes": 0,
+                    "pids": [],
+                    "top_process": item,
+                },
+            )
+            aggregate["rss_bytes"] += int(item.get("rss_bytes") or 0)
+            aggregate["process_total"] += 1
+            aggregate["runtime_family_process_total"] += int(bool(item.get("runtime_family")))
+            aggregate["io_read_bytes"] += int(item.get("io_read_bytes") or 0)
+            aggregate["io_write_bytes"] += int(item.get("io_write_bytes") or 0)
+            if len(aggregate["pids"]) < 16:
+                aggregate["pids"].append(item.get("pid"))
+        skill_runtime_totals = sorted(
+            skill_totals.values(),
+            key=lambda item: int(item.get("rss_bytes") or 0),
+            reverse=True,
+        )
+        return {
+            "available": True,
+            "captured_at": time.time(),
+            "managed_pid": int(managed_pid) if managed_pid else None,
+            "processes_scanned": len(items),
+            "runtime_family_processes": len(runtime_pids),
+            "top_by_rss": items[:limit],
+            "top_external_by_rss": external_items[:limit],
+            "skill_runtimes_by_rss": skill_items[:limit],
+            "skill_runtime_totals": skill_runtime_totals[:limit],
+        }
+
     def process_family_snapshot(
         self,
         pid: int | None,
@@ -764,7 +854,13 @@ class MemoryProfilingService:
             "critical_state": "critical" if manager._memory_critical_since is not None else "normal",
             "critical_reason": manager._memory_critical_reason,
             "critical_since": manager._memory_critical_since,
+            "critical_pressure_owner": manager._memory_critical_pressure_owner,
+            "critical_action": manager._memory_critical_action,
+            "critical_attribution": manager._memory_critical_attribution,
+            "critical_observation_last_at": manager._memory_critical_observation_last_at,
             "critical_restart_last_at": manager._memory_critical_restart_last_at,
+            "critical_last_decision": manager._memory_critical_last_decision,
+            "critical_last_evidence": manager._memory_critical_last_evidence,
             "telemetry_path": str(operations.supervisor_memory_telemetry_path()),
             "sessions_index_path": str(operations.supervisor_memory_sessions_index_path()),
             "implemented_operation_events": list(operations.top_level_operation_events),
@@ -914,7 +1010,32 @@ class MemoryProfilingService:
                 "critical_state": str(runtime.get("critical_state") or "normal"),
                 "critical_reason": str(runtime.get("critical_reason") or "").strip() or None,
                 "critical_since": runtime.get("critical_since"),
+                "critical_pressure_owner": str(runtime.get("critical_pressure_owner") or "").strip() or None,
+                "critical_action": str(runtime.get("critical_action") or "").strip() or None,
+                "critical_observation_last_at": runtime.get("critical_observation_last_at"),
                 "critical_restart_last_at": runtime.get("critical_restart_last_at"),
+                "critical_last_decision": {
+                    "recorded_at": (
+                        runtime.get("critical_last_decision", {}).get("recorded_at")
+                        if isinstance(runtime.get("critical_last_decision"), dict)
+                        else None
+                    ),
+                    "pressure_owner": (
+                        runtime.get("critical_last_decision", {}).get("pressure_owner")
+                        if isinstance(runtime.get("critical_last_decision"), dict)
+                        else None
+                    ),
+                    "action": (
+                        runtime.get("critical_last_decision", {}).get("action")
+                        if isinstance(runtime.get("critical_last_decision"), dict)
+                        else None
+                    ),
+                    "reason": (
+                        runtime.get("critical_last_decision", {}).get("reason")
+                        if isinstance(runtime.get("critical_last_decision"), dict)
+                        else None
+                    ),
+                },
                 "selected_profiler_adapter": str(runtime.get("selected_profiler_adapter") or operations.default_profiler_adapter),
                 "sessions_total": int(runtime.get("sessions_total") or 0),
                 "last_session": compact_session,
