@@ -135,6 +135,7 @@ class SupervisorStatusService:
                 "listener_pid",
                 "listener_running",
                 "listener_liveness_basis",
+                "listener_process_relationship",
                 "listener_matches_managed",
                 "adopted_listener",
                 "enablement_policy",

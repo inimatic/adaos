@@ -1474,6 +1474,42 @@ def _find_realtime_listener_pid(host: str, port: int) -> int | None:
     return None
 
 
+def _listener_process_relationship(
+    listener_pid: int | None,
+    managed_pid: int | None,
+    *,
+    max_depth: int = 16,
+) -> str:
+    """Classify listener ownership across launcher/shim process boundaries."""
+
+    if not isinstance(listener_pid, int) or listener_pid <= 0:
+        return "unverified"
+    if not isinstance(managed_pid, int) or managed_pid <= 0:
+        return "external"
+    if listener_pid == managed_pid:
+        return "managed_process"
+    try:
+        import psutil
+    except Exception:
+        return "unverified"
+    current_pid = listener_pid
+    visited: set[int] = set()
+    for _ in range(max(1, int(max_depth))):
+        if current_pid in visited or current_pid <= 0:
+            return "unverified"
+        visited.add(current_pid)
+        try:
+            parent_pid = int(psutil.Process(current_pid).ppid() or 0)
+        except psutil.Error:
+            return "unverified"
+        if parent_pid == managed_pid:
+            return "managed_descendant"
+        if parent_pid <= 0:
+            return "external"
+        current_pid = parent_pid
+    return "unverified"
+
+
 def _is_realtime_sidecar_control_ready_sync(
     host: str,
     control_port: int,
@@ -2102,15 +2138,19 @@ def _realtime_sidecar_listener_snapshot(
         listener_running = _cached_realtime_sidecar_control_ready(host, control_port)
         if listener_running:
             listener_liveness_basis = "control_ready"
-    listener_matches_managed = bool(
-        listener_running
-        and isinstance(listener_pid, int)
-        and listener_pid > 0
-        and isinstance(managed_pid, int)
-        and managed_pid > 0
-        and listener_pid == managed_pid
+    listener_process_relationship = (
+        _listener_process_relationship(listener_pid, managed_pid)
+        if listener_running
+        else "not_running"
     )
-    adopted_listener = bool(listener_running and not listener_matches_managed)
+    listener_matches_managed = listener_process_relationship in {
+        "managed_process",
+        "managed_descendant",
+    }
+    adopted_listener = bool(
+        listener_running
+        and listener_process_relationship == "external"
+    )
     payload = {
         "host": host,
         "port": int(port),
@@ -2124,6 +2164,7 @@ def _realtime_sidecar_listener_snapshot(
         "listener_pid": int(listener_pid) if isinstance(listener_pid, int) and listener_pid > 0 else None,
         "listener_running": listener_running,
         "listener_liveness_basis": listener_liveness_basis,
+        "listener_process_relationship": listener_process_relationship,
         "listener_matches_managed": listener_matches_managed,
         "adopted_listener": adopted_listener,
         "enablement_policy": enablement_policy,
@@ -2193,8 +2234,9 @@ def realtime_sidecar_listener_snapshot(
             "listener_pid": None,
             "listener_running": bool(listener_running),
             "listener_liveness_basis": "control_ready" if listener_running else None,
+            "listener_process_relationship": "unverified" if listener_running else "not_running",
             "listener_matches_managed": False,
-            "adopted_listener": bool(listener_running),
+            "adopted_listener": False,
             "enablement_policy": enablement_policy,
             "route_tunnel_contract": {},
             "media_proxy_contract": {},

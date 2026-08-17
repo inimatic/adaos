@@ -5759,6 +5759,7 @@ class SupervisorManager:
                 "listener_pid",
                 "listener_running",
                 "listener_liveness_basis",
+                "listener_process_relationship",
                 "listener_matches_managed",
                 "adopted_listener",
                 "enablement_policy",
@@ -7115,33 +7116,15 @@ class SupervisorManager:
     async def _reconnect_hub_root_after_sidecar_restart(self) -> dict[str, Any] | None:
         if str(self._sidecar_role() or "").strip().lower() != "hub":
             return None
-        deadline = time.monotonic() + _sidecar_recovery_settle_timeout_sec()
-        ready_since: float | None = None
-        last_channel: dict[str, Any] = {}
-        await asyncio.sleep(0.25)
-        while time.monotonic() < deadline:
-            try:
-                channel = await asyncio.to_thread(
-                    self._runtime_request_json,
-                    path="/api/node/reliability/supervisor-channel",
-                    timeout=0.75,
-                )
-            except Exception:
-                channel = {}
-            last_channel = channel if isinstance(channel, dict) else {}
-            runtime = last_channel.get("runtime") if isinstance(last_channel.get("runtime"), dict) else {}
+
+        def _live_failback_state(channel: Any) -> dict[str, Any]:
+            snapshot = channel if isinstance(channel, dict) else {}
+            runtime = snapshot.get("runtime") if isinstance(snapshot.get("runtime"), dict) else {}
             readiness = runtime.get("readiness_tree") if isinstance(runtime.get("readiness_tree"), dict) else {}
-            root_control = readiness.get("root_control") if isinstance(readiness.get("root_control"), dict) else {}
             overview = runtime.get("channel_overview") if isinstance(runtime.get("channel_overview"), dict) else {}
-            hub_root = overview.get("hub_root") if isinstance(overview.get("hub_root"), dict) else {}
             diagnostics = (
                 runtime.get("channel_diagnostics")
                 if isinstance(runtime.get("channel_diagnostics"), dict)
-                else {}
-            )
-            root_diagnostics = (
-                diagnostics.get("root_control")
-                if isinstance(diagnostics.get("root_control"), dict)
                 else {}
             )
             sidecar = runtime.get("sidecar_runtime") if isinstance(runtime.get("sidecar_runtime"), dict) else {}
@@ -7150,6 +7133,19 @@ class SupervisorManager:
                 if isinstance(runtime.get("hub_root_transport_strategy"), dict)
                 else {}
             )
+
+            def _current_status(name: str, overview_name: str) -> str:
+                diagnostic = diagnostics.get(name) if isinstance(diagnostics.get(name), dict) else {}
+                status = str(diagnostic.get("status") or "").strip().lower()
+                if status:
+                    return status
+                readiness_item = readiness.get(name) if isinstance(readiness.get(name), dict) else {}
+                status = str(readiness_item.get("status") or "").strip().lower()
+                if status:
+                    return status
+                overview_item = overview.get(overview_name) if isinstance(overview.get(overview_name), dict) else {}
+                return str(overview_item.get("effective_status") or "").strip().lower()
+
             selected_server = str(strategy.get("selected_server") or "").strip().rstrip("/")
             local_sidecar_url = str(realtime_sidecar_local_url() or "").strip().rstrip("/")
             sidecar_transport_confirmed = (
@@ -7159,46 +7155,109 @@ class SupervisorManager:
                     or bool(selected_server and local_sidecar_url and selected_server == local_sidecar_url)
                 )
             )
-            current_root_status = str(root_diagnostics.get("status") or "").strip().lower()
-            if current_root_status:
-                root_currently_ready = current_root_status == "ready"
-            else:
-                root_currently_ready = (
-                    str(root_control.get("status") or "").strip().lower() == "ready"
-                    and str(hub_root.get("effective_status") or "").strip().lower() == "ready"
-                )
-            channel_ready = (
-                root_currently_ready and sidecar_transport_confirmed
-            )
-            now = time.monotonic()
-            if channel_ready:
-                ready_since = ready_since or now
-                if now - ready_since >= 0.25:
+            root_status = _current_status("root_control", "hub_root")
+            route_status = _current_status("route", "hub_root_browser")
+            return {
+                "ready": bool(
+                    root_status == "ready"
+                    and route_status == "ready"
+                    and sidecar_transport_confirmed
+                ),
+                "root_control_status": root_status or None,
+                "route_status": route_status or None,
+                "transport_owner": str(sidecar.get("transport_owner") or "").strip().lower() or None,
+                "transport_ready": bool(sidecar.get("transport_ready")),
+                "selected_server": selected_server or None,
+                "local_sidecar_url": local_sidecar_url or None,
+                "sidecar_transport_confirmed": sidecar_transport_confirmed,
+            }
+
+        async def _wait_for_live_failback(timeout_sec: float) -> dict[str, Any]:
+            deadline = time.monotonic() + max(0.0, float(timeout_sec))
+            ready_since: float | None = None
+            attempts = 0
+            last_channel: dict[str, Any] = {}
+            last_state: dict[str, Any] = {}
+            while True:
+                attempts += 1
+                try:
+                    channel = await asyncio.to_thread(
+                        self._runtime_request_json,
+                        path="/api/node/reliability/supervisor-channel",
+                        timeout=0.75,
+                    )
+                except Exception:
+                    channel = {}
+                last_channel = channel if isinstance(channel, dict) else {}
+                last_state = _live_failback_state(last_channel)
+                now = time.monotonic()
+                if bool(last_state.get("ready")):
+                    ready_since = ready_since or now
+                    if now - ready_since >= 0.25:
+                        return {
+                            "ok": True,
+                            "state": "ready",
+                            "attempts": attempts,
+                            "channel_state": last_state,
+                            "channel": last_channel,
+                        }
+                else:
+                    ready_since = None
+                if now >= deadline:
                     return {
-                        "ok": True,
-                        "skipped": True,
-                        "reason": "hub_root_already_reconnected",
+                        "ok": False,
+                        "state": "not_ready",
+                        "attempts": attempts,
+                        "channel_state": last_state,
                         "channel": last_channel,
                     }
-            else:
-                ready_since = None
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
+
+        await asyncio.sleep(0.25)
+        initial_verification = await _wait_for_live_failback(
+            _sidecar_recovery_settle_timeout_sec()
+        )
+        if bool(initial_verification.get("ok")):
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "hub_root_already_reconnected",
+                "verification": initial_verification,
+                "channel": initial_verification.get("channel"),
+            }
         try:
-            result = await asyncio.to_thread(
+            reconnect = await asyncio.to_thread(
                 self._runtime_request_json,
                 path="/api/node/hub-root/reconnect",
                 method="POST",
                 payload={},
                 timeout=5.0,
             )
+        except Exception as exc:
             return {
-                **(result if isinstance(result, dict) else {}),
+                "ok": False,
                 "forced": True,
                 "reason": "hub_root_sidecar_failback_required",
-                "channel_before_force": last_channel,
+                "error": f"{type(exc).__name__}: {exc}",
+                "verification_before_force": initial_verification,
             }
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        verification = await _wait_for_live_failback(
+            _hub_root_watchdog_verify_timeout_sec()
+        )
+        reconnect_payload = reconnect if isinstance(reconnect, dict) else {}
+        return {
+            **reconnect_payload,
+            "ok": bool(reconnect_payload.get("ok", True)) and bool(verification.get("ok")),
+            "forced": True,
+            "reason": "hub_root_sidecar_failback_required",
+            "verification_before_force": initial_verification,
+            "verification": verification,
+            "error": (
+                None
+                if bool(verification.get("ok"))
+                else "hub-root did not converge to a live sidecar-owned root and route channel"
+            ),
+        }
 
     def _active_sidecar_channel_evidence(self) -> dict[str, Any] | None:
         if str(self._sidecar_role() or "").strip().lower() != "hub":
@@ -7280,8 +7339,12 @@ class SupervisorManager:
         reconnect_result: dict[str, Any] | None = None
         if reconnect_hub_root:
             reconnect_result = await self._reconnect_hub_root_after_sidecar_restart()
+        restart_ok = bool(restart_result.get("ok", restart_result.get("accepted", True)))
+        reconnect_ok = reconnect_result is None or bool(reconnect_result.get("ok"))
         return {
-            "ok": True,
+            "ok": restart_ok and reconnect_ok,
+            "process_restarted": restart_ok,
+            "channel_recovered": reconnect_ok,
             "active_channel_disruption_allowed": bool(allow_active_channel_disruption),
             "restart": restart_result,
             "reconnect": reconnect_result,

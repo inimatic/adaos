@@ -1549,6 +1549,64 @@ def test_hub_root_watchdog_resets_browser_route_when_root_control_is_ready(monke
     assert manager._hub_root_watchdog_last_result["decision"]["hub_root_browser_status"] == "degraded"
 
 
+def test_hub_root_watchdog_resets_route_without_restarting_healthy_sidecar(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_ROUTE_DEGRADED_RESET", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_TIMEOUT_SEC", "0")
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+
+    class _Proc:
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(
+        manager,
+        "_runtime_reliability_payload",
+        lambda timeout=1.5: {
+            "readiness_tree": {
+                "root_control": {"status": "ready"},
+                "route": {"status": "degraded"},
+            },
+            "channel_overview": {
+                "hub_root": {"effective_status": "ready", "effective_state": "stable"},
+                "hub_root_browser": {"effective_status": "degraded", "effective_state": "flapping"},
+            },
+            "required_upstream_link": {
+                "kind": "hub_root",
+                "state": "degraded",
+                "current_owner": "sidecar",
+                "sidecar_enabled": True,
+            },
+        },
+    )
+    requests: list[dict[str, object]] = []
+    sidecar_restarts: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        manager,
+        "_runtime_request_json",
+        lambda **kwargs: requests.append(dict(kwargs)) or {"ok": True},
+    )
+
+    async def _restart_sidecar(**kwargs):
+        sidecar_restarts.append(dict(kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(manager, "restart_sidecar", _restart_sidecar)
+
+    asyncio.run(manager._maybe_reconnect_hub_root_from_watchdog())
+
+    assert sidecar_restarts == []
+    assert requests[0]["path"] == "/api/node/hub-root/route-reset"
+    assert manager._hub_root_watchdog_last_result["action"] == "runtime_route_reset"
+
+
 def test_hub_root_watchdog_preserves_runtime_route_on_degraded_browser_route_by_default(monkeypatch) -> None:
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "0")
     monkeypatch.delenv("ADAOS_SUPERVISOR_HUB_ROOT_ROUTE_DEGRADED_RESET", raising=False)
@@ -2229,6 +2287,7 @@ def test_supervisor_status_reads_compact_in_memory_projection_without_io(monkeyp
                 "process": {
                     "managed_pid": 22,
                     "listener_running": True,
+                    "listener_process_relationship": "managed_descendant",
                     "route_tunnel_contract": {"large": "x" * 1000},
                 },
                 "health": {"last_probe_ok": True, "consecutive_failures": 0},
@@ -2264,6 +2323,7 @@ def test_supervisor_status_reads_compact_in_memory_projection_without_io(monkeyp
     assert "env" not in first["active_manifest"]
     assert len(first["bootstrap_update"]["changed_paths"]) == 16
     assert first["bootstrap_update"]["changed_paths_total"] == 100
+    assert first["sidecar"]["process"]["listener_process_relationship"] == "managed_descendant"
     assert "route_tunnel_contract" not in first["sidecar"]["process"]
     assert "observed_status" not in first["update_attempt"]
     assert len(json.dumps(first)) < 12_000
@@ -5179,9 +5239,13 @@ def test_supervisor_restart_sidecar_updates_process_and_optionally_reconnects_ru
             return {
                 "ok": True,
                 "runtime": {
-                    "readiness_tree": {"root_control": {"status": "ready"}},
-                    "channel_overview": {"hub_root": {"effective_status": "ready"}},
-                    "sidecar_runtime": {"transport_owner": "sidecar", "transport_ready": True},
+                "readiness_tree": {"root_control": {"status": "ready"}},
+                "channel_overview": {"hub_root": {"effective_status": "ready"}},
+                "channel_diagnostics": {
+                    "root_control": {"status": "ready"},
+                    "route": {"status": "ready"},
+                },
+                "sidecar_runtime": {"transport_owner": "sidecar", "transport_ready": True},
                 },
             }
         raise AssertionError(f"unexpected forced reconnect: {path}")
@@ -5233,7 +5297,8 @@ def test_sidecar_restart_waits_for_actual_failback_from_direct_transport(monkeyp
                 "readiness_tree": {"root_control": {"status": "degraded"}},
                 "channel_overview": {"hub_root": {"effective_status": "degraded"}},
                 "channel_diagnostics": {
-                    "root_control": {"status": "down" if owner == "runtime" else "ready"}
+                    "root_control": {"status": "down" if owner == "runtime" else "ready"},
+                    "route": {"status": "down" if owner == "runtime" else "ready"},
                 },
                 "sidecar_runtime": {"transport_owner": owner, "transport_ready": False},
                 "hub_root_transport_strategy": {"selected_server": selected_server},
@@ -5259,11 +5324,29 @@ def test_sidecar_restart_forces_single_failback_when_direct_transport_persists(m
     )
     requests: list[str] = []
 
+    forced = False
+
     def _runtime_request(**kwargs):
+        nonlocal forced
         path = str(kwargs.get("path") or "")
         requests.append(path)
         if path == "/api/node/hub-root/reconnect":
+            forced = True
             return {"ok": True, "accepted": True}
+        if forced:
+            return {
+                "ok": True,
+                "runtime": {
+                    "channel_diagnostics": {
+                        "root_control": {"status": "ready"},
+                        "route": {"status": "ready"},
+                    },
+                    "sidecar_runtime": {"transport_owner": "sidecar", "transport_ready": True},
+                    "hub_root_transport_strategy": {
+                        "selected_server": "nats://127.0.0.1:7422"
+                    },
+                },
+            }
         return {
             "ok": True,
             "runtime": {
@@ -5282,6 +5365,7 @@ def test_sidecar_restart_forces_single_failback_when_direct_transport_persists(m
     monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
     monkeypatch.setattr(manager, "_runtime_request_json", _runtime_request)
     monkeypatch.setattr(supervisor, "_sidecar_recovery_settle_timeout_sec", lambda: 0.01)
+    monkeypatch.setattr(supervisor, "_hub_root_watchdog_verify_timeout_sec", lambda: 0.5)
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
     result = asyncio.run(manager._reconnect_hub_root_after_sidecar_restart())
@@ -5289,8 +5373,84 @@ def test_sidecar_restart_forces_single_failback_when_direct_transport_persists(m
     assert result["ok"] is True
     assert result["forced"] is True
     assert result["reason"] == "hub_root_sidecar_failback_required"
+    assert result["verification"]["ok"] is True
     assert requests.count("/api/node/hub-root/reconnect") == 1
     assert requests.count("/api/node/reliability/supervisor-channel") >= 1
+
+
+def test_sidecar_restart_reports_failed_failback_when_forced_reconnect_does_not_converge(monkeypatch) -> None:
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+
+    def _runtime_request(**kwargs):
+        if kwargs.get("path") == "/api/node/hub-root/reconnect":
+            return {"ok": True, "accepted": True}
+        return {
+            "ok": True,
+            "runtime": {
+                "channel_diagnostics": {
+                    "root_control": {"status": "ready"},
+                    "route": {"status": "degraded"},
+                },
+                "sidecar_runtime": {"transport_owner": "sidecar", "transport_ready": True},
+                "hub_root_transport_strategy": {
+                    "selected_server": "nats://127.0.0.1:7422"
+                },
+            },
+        }
+
+    async def _no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_runtime_request_json", _runtime_request)
+    monkeypatch.setattr(supervisor, "_sidecar_recovery_settle_timeout_sec", lambda: 0.001)
+    monkeypatch.setattr(supervisor, "_hub_root_watchdog_verify_timeout_sec", lambda: 0.001)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    result = asyncio.run(manager._reconnect_hub_root_after_sidecar_restart())
+
+    assert result["ok"] is False
+    assert result["forced"] is True
+    assert result["verification"]["state"] == "not_ready"
+    assert result["verification"]["channel_state"]["route_status"] == "degraded"
+    assert "did not converge" in result["error"]
+
+
+def test_supervisor_restart_sidecar_propagates_channel_recovery_failure(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(
+        runtime_host="127.0.0.1",
+        runtime_port=8777,
+        token="dev-local-token",
+    )
+    manager._sidecar_proc = "old-proc"
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+    monkeypatch.setattr(manager, "_active_sidecar_channel_evidence", lambda: None)
+    monkeypatch.setattr(manager, "_sync_sidecar_controlled_files_from_validated_slot", lambda: {})
+    monkeypatch.setattr(manager, "_sidecar_code_state", lambda: {})
+    monkeypatch.setattr(manager, "_persist_runtime_state", lambda: None)
+    monkeypatch.setattr(manager, "_runtime_sidecar_runtime_payload", lambda: {})
+    monkeypatch.setattr(manager, "_sidecar_status_payload", lambda: {"process": {}})
+
+    async def _restart(**_kwargs):
+        return "new-proc", {"ok": True, "accepted": True, "reason": "restarted"}
+
+    async def _reconnect():
+        return {"ok": False, "error": "channel did not converge"}
+
+    monkeypatch.setattr(supervisor, "restart_realtime_sidecar_subprocess", _restart)
+    monkeypatch.setattr(manager, "_reconnect_hub_root_after_sidecar_restart", _reconnect)
+
+    result = asyncio.run(manager.restart_sidecar())
+
+    assert result["ok"] is False
+    assert result["process_restarted"] is True
+    assert result["channel_recovered"] is False
+    assert result["reconnect"]["error"] == "channel did not converge"
 
 
 def test_supervisor_restart_sidecar_refuses_to_disrupt_active_channel(monkeypatch, tmp_path) -> None:

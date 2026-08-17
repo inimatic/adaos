@@ -725,9 +725,47 @@ def test_realtime_sidecar_listener_snapshot_handles_managed_process_when_pid_sca
     assert snapshot["listener_running"] is True
     assert snapshot["listener_liveness_basis"] == "managed_process"
     assert snapshot["listener_pid"] is None
+    assert snapshot["listener_process_relationship"] == "unverified"
     assert snapshot["listener_matches_managed"] is False
-    assert snapshot["adopted_listener"] is True
+    assert snapshot["adopted_listener"] is False
     assert snapshot["listener_pid_unavailable_reason"] == "y_py_loaded"
+
+
+def test_realtime_sidecar_listener_snapshot_accepts_managed_launcher_descendant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ManagedProcess:
+        pid = 25644
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    class _Process:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def ppid(self) -> int:
+            return {14248: 25644, 25644: 26748}.get(self.pid, 0)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(Process=_Process, Error=Exception),
+    )
+    monkeypatch.setattr(realtime_sidecar_mod, "_skip_realtime_listener_pid_scan", lambda: False)
+    monkeypatch.setattr(realtime_sidecar_mod, "_find_realtime_listener_pid", lambda _host, _port: 14248)
+
+    snapshot = realtime_sidecar_mod.realtime_sidecar_listener_snapshot(
+        _ManagedProcess(),
+        role="hub",
+    )
+
+    assert snapshot["managed_pid"] == 25644
+    assert snapshot["listener_pid"] == 14248
+    assert snapshot["listener_process_relationship"] == "managed_descendant"
+    assert snapshot["listener_matches_managed"] is True
+    assert snapshot["adopted_listener"] is False
 
 
 def test_realtime_sidecar_listener_snapshot_reports_internal_diagnostic_failure(

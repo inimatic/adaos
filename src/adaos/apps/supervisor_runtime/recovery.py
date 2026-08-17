@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -184,9 +185,11 @@ class RuntimeRecoveryPolicy:
         )
         root_probe_state = str(root_probe.get("state") or "").strip().lower()
         action = (
-            "sidecar_restart"
+            "runtime_route_reset"
+            if route_degraded and not root_down
+            else "sidecar_restart"
             if transport_owner == "sidecar"
-            else ("runtime_reconnect" if root_down else "runtime_route_reset")
+            else "runtime_reconnect"
         )
 
         if (

@@ -988,15 +988,23 @@ process operation. The supervisor first synchronizes sidecar-controlled files
 from the validated active slot, starts exactly one new process generation, and
 then allows the active runtime's built-in NATS reconnect supervisor to recover.
 It samples the bounded supervisor-channel contract until `root_control` and
-`hub_root` remain ready through a transport-ready sidecar owner across
+`route` diagnostics remain ready through a transport-ready sidecar owner across
 consecutive observations. A ready direct fallback is not mistaken for completed
-failback; an explicit reconnect is issued when that recovery window expires.
+failback; an explicit reconnect is issued when that recovery window expires and
+the operation remains failed until the same live contract converges afterward.
 The sidecar path is confirmed either by current sidecar diagnostics or by a
 ready root-control session whose selected server is the exact local sidecar URL;
 the latter prevents diagnostic publication lag from causing a second reconnect.
 The settle decision reads current `channel_diagnostics`, not the high-level
 readiness quality projection: recent expected disruption may remain visible as
 `flapping` without being mistaken for a currently broken transport.
+When root control is live but only the browser route is degraded, the watchdog
+may reset route runtime when that policy is enabled; it must not restart a
+healthy sidecar merely because the sidecar owns the transport. On Windows, a
+virtual-environment launcher can own a child CPython process that binds the
+listener. Listener ownership therefore accepts verified descendant lineage and
+reports the relationship explicitly instead of classifying that child as an
+adopted competing process.
 The monitor rechecks the code fingerprint while holding the lifecycle lock so a
 validated-slot sync detected before an operator restart cannot produce a second
 restart after that request completes.
