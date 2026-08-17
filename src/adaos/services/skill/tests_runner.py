@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
@@ -177,7 +178,9 @@ def _run_pytest_suite(
     env: Mapping[str, str],
 ) -> TestResult | None:
     # Запуск из каталога тестов, цель "."; расширяем правило поиска файлов
-    local_cfg = tests_dir / "pytest.dev.ini"
+    config_fd, config_name = tempfile.mkstemp(prefix="adaos-pytest-", suffix=".ini")
+    os.close(config_fd)
+    local_cfg = Path(config_name)
     try:
         local_cfg.write_text(
             "[pytest]\n" "testpaths = .\n" "python_files = test_*.py *_test.py *.spec.py\n" "addopts = -q -vv -s --maxfail=1\n" "log_cli = false\n",
@@ -199,16 +202,19 @@ def _run_pytest_suite(
         f"ENV.ADAOS_DEV_SKILL_DIR={env.get('ADAOS_DEV_SKILL_DIR')}\n"
         f"ENV.PYTHONPATH={env.get('PYTHONPATH','')}\n\n"
     )
-    proc = subprocess.run(
-        cmd,
-        cwd=str(tests_dir),
-        stdout=log,
-        stderr=log,
-        env=dict(env),
-        timeout=timeout,
-        check=False,
-        text=False,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(tests_dir),
+            stdout=log,
+            stderr=log,
+            env=dict(env),
+            timeout=timeout,
+            check=False,
+            text=False,
+        )
+    finally:
+        local_cfg.unlink(missing_ok=True)
     if proc.returncode == 0:
         return TestResult(name=suite_name, status="passed", detail=None)
     if proc.returncode == 5:
