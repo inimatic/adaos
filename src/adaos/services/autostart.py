@@ -386,20 +386,23 @@ def _sh_quote(value: str) -> str:
 
 
 def _write_wrapper_windows(path: Path, *, argv: Sequence[str], env: Mapping[str, str]) -> None:
-    # Keep script simple: set env vars and exec python in foreground.
     def _ps_quote(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
     lines = []
     for k, v in env.items():
         lines.append(f"$env:{k} = {_ps_quote(str(v))}")
+    lines.append("$env:ADAOS_AUTOSTART_SELF_RESTART = '1'")
     py = str(argv[0])
     lines.append(f"$py = {_ps_quote(py)}")
     lines.append("$args = @(")
     for arg in argv[1:]:
         lines.append(f"  {_ps_quote(str(arg))}")
     lines.append(")")
-    lines.append("& $py @args")
+    lines.append("while ($true) {")
+    lines.append("  & $py @args")
+    lines.append("  Start-Sleep -Seconds 2")
+    lines.append("}")
     _write_text(path, "\r\n".join(lines) + "\r\n")
 
 

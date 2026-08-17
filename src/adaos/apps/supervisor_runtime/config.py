@@ -68,6 +68,10 @@ class SupervisorRuntimeConfig:
 
     @staticmethod
     def autostart_self_restart_supported() -> bool:
+        if os.name == "nt":
+            managed = str(os.getenv("ADAOS_AUTOSTART_MANAGED") or "").strip().lower()
+            restart_loop = str(os.getenv("ADAOS_AUTOSTART_SELF_RESTART") or "").strip().lower()
+            return managed in TRUE_VALUES and restart_loop in TRUE_VALUES
         if not sys.platform.startswith("linux"):
             return False
         raw = os.getenv("ADAOS_AUTOSTART_MANAGED")

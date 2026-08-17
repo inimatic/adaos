@@ -73,6 +73,22 @@ def test_default_autostart_spec_passes_explicit_dev_update_permission(monkeypatc
     assert "ADAOS_UNRELATED_RUNTIME_FLAG" not in spec.env
 
 
+def test_windows_wrapper_keeps_managed_supervisor_restartable(tmp_path: Path) -> None:
+    import adaos.services.autostart as autostart
+
+    wrapper = tmp_path / "adaos-autostart.ps1"
+    autostart._write_wrapper_windows(
+        wrapper,
+        argv=("C:\\adaos\\python.exe", "-m", "adaos.apps.supervisor"),
+        env={"ADAOS_AUTOSTART_MANAGED": "1"},
+    )
+
+    text = wrapper.read_text(encoding="utf-8")
+    assert "$env:ADAOS_AUTOSTART_SELF_RESTART = '1'" in text
+    assert "while ($true)" in text
+    assert "Start-Sleep -Seconds 2" in text
+
+
 def test_windows_status_distinguishes_running_task_from_enabled_state(monkeypatch, tmp_path: Path) -> None:
     import adaos.services.autostart as autostart
 

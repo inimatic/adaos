@@ -1201,6 +1201,52 @@ def test_autostart_runner_preserves_root_promotion_pending_status_on_boot(monkey
     assert not any(str(item.get("state") or "").strip().lower() == "idle" for item in writes)
 
 
+def test_autostart_runner_does_not_overwrite_supervisor_prepare_status(monkeypatch, tmp_path: Path) -> None:
+    writes: list[dict] = []
+
+    monkeypatch.setattr(
+        autostart_runner,
+        "_parse_args",
+        lambda: type("Args", (), {"host": "127.0.0.1", "port": 8777, "token": None})(),
+    )
+    monkeypatch.setattr(autostart_runner, "init_ctx", lambda: None)
+    monkeypatch.setattr(autostart_runner, "read_plan", lambda: None)
+    monkeypatch.setattr(autostart_runner, "load_config", lambda: None)
+    monkeypatch.setattr(
+        autostart_runner,
+        "read_status",
+        lambda: {
+            "state": "preparing",
+            "phase": "prepare",
+            "target_version": "b5cbb1d5",
+            "prepare_lease_token": "lease-1",
+        },
+    )
+    monkeypatch.setattr(autostart_runner, "finalize_runtime_boot_status", lambda: None)
+    monkeypatch.setattr(autostart_runner, "write_status", lambda payload: writes.append(dict(payload)))
+    monkeypatch.setattr(autostart_runner, "_resolve_bind", lambda conf, host, port: (host, port))
+    monkeypatch.setattr(autostart_runner, "_advertise_base", lambda host, port: f"http://{host}:{port}")
+    monkeypatch.setattr(autostart_runner, "_stop_previous_server", lambda host, port: None)
+    monkeypatch.setattr(autostart_runner, "_pidfile_path", lambda host, port: tmp_path / "serve.json")
+    monkeypatch.setattr(
+        autostart_runner,
+        "_write_pidfile",
+        lambda path, **kwargs: path.write_text("{}", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        autostart_runner,
+        "_launch_active_slot_if_needed",
+        lambda *args, **kwargs: (_ for _ in ()).throw(SystemExit(0)),
+    )
+
+    try:
+        autostart_runner.main()
+    except SystemExit:
+        pass
+
+    assert writes == []
+
+
 def test_autostart_runner_marks_interrupted_restarting_without_plan_failed(monkeypatch, tmp_path: Path) -> None:
     captured: list[dict] = []
 

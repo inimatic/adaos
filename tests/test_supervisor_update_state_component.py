@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from adaos.apps.supervisor_runtime import UpdateStateMachine
+from adaos.apps.supervisor_runtime.config import SupervisorRuntimeConfig
 
 
 def test_update_state_machine_keeps_root_promotion_non_terminal() -> None:
@@ -34,6 +35,17 @@ def test_update_state_machine_recognizes_resolved_target() -> None:
     assert machine.transition_request_has_resolved_target({"action": "update", "target_version": "abc1234"})
     assert not machine.transition_request_has_resolved_target({"action": "update", "target_version": "latest"})
     assert machine.transition_request_has_resolved_target({"action": "rollback"})
+
+
+def test_windows_self_restart_requires_managed_restartable_wrapper(monkeypatch) -> None:
+    monkeypatch.setattr("adaos.apps.supervisor_runtime.config.os.name", "nt")
+    monkeypatch.setenv("ADAOS_AUTOSTART_MANAGED", "1")
+    monkeypatch.delenv("ADAOS_AUTOSTART_SELF_RESTART", raising=False)
+
+    assert SupervisorRuntimeConfig.autostart_self_restart_supported() is False
+
+    monkeypatch.setenv("ADAOS_AUTOSTART_SELF_RESTART", "1")
+    assert SupervisorRuntimeConfig.autostart_self_restart_supported() is True
 
 
 @pytest.mark.anyio

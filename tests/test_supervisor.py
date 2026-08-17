@@ -7904,6 +7904,40 @@ def test_supervisor_schedules_retired_runtime_cleanup_across_self_restart(monkey
 
     assert result == {"ok": True, "scheduled": True, "cleanup_pid": 4545, "pids": [4444]}
     assert "pids = [4444]" in captured["args"][2]
+    if supervisor.os.name == "nt":
+        assert "os.killpg" not in captured["args"][2]
+
+
+def test_windows_handoff_reaper_waits_for_replacement_supervisor(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    captured: dict[str, object] = {}
+
+    class _Proc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+    class _ReaperProc:
+        pid = 4546
+
+    manager._proc = _Proc(4444)
+    manager._sidecar_proc = _Proc(4445)
+
+    def _popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _ReaperProc()
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", _popen)
+    monkeypatch.setattr(supervisor.os, "name", "nt")
+
+    result = manager._schedule_managed_handoff_reaper()
+
+    assert result["scheduled"] is True
+    assert result["pids"] == [4444, 4445]
+    code = captured["args"][2]
+    assert "socket.create_connection" in code
+    assert "systemctl" not in code
 
 
 def test_stop_candidate_runtime_persists_last_stop_reason_after_candidate_clears(monkeypatch, tmp_path) -> None:

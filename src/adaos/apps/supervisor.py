@@ -3634,28 +3634,46 @@ class SupervisorManager:
             return {"ok": True, "scheduled": False, "reason": "no_managed_children"}
         service_name = str(os.getenv("ADAOS_AUTOSTART_SERVICE") or "adaos.service").strip() or "adaos.service"
         supervisor_port = _supervisor_port()
-        code = "\n".join(
+        lines = [
+            "import os, signal, socket, subprocess, time",
+            f"pids = {pids!r}",
+            f"service_name = {service_name!r}",
+            f"supervisor_port = {supervisor_port!r}",
+            "time.sleep(4.0)",
+        ]
+        if os.name == "nt":
+            lines.extend(
+                [
+                    "for _ in range(24):",
+                    "    try:",
+                    "        with socket.create_connection(('127.0.0.1', supervisor_port), timeout=0.5):",
+                    "            raise SystemExit(0)",
+                    "    except OSError:",
+                    "        time.sleep(1.0)",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "inactive_total = 0",
+                    "for _ in range(24):",
+                    "    active = subprocess.run(['systemctl', 'is-active', '--quiet', service_name], check=False).returncode == 0",
+                    "    if active:",
+                    "        inactive_total = 0",
+                    "        try:",
+                    "            with socket.create_connection(('127.0.0.1', supervisor_port), timeout=0.5):",
+                    "                raise SystemExit(0)",
+                    "        except OSError:",
+                    "            pass",
+                    "    else:",
+                    "        inactive_total += 1",
+                    "        if inactive_total >= 3:",
+                    "            break",
+                    "    time.sleep(1.0)",
+                ]
+            )
+        lines.extend(
             [
-                "import os, signal, socket, subprocess, time",
-                f"pids = {pids!r}",
-                f"service_name = {service_name!r}",
-                f"supervisor_port = {supervisor_port!r}",
-                "time.sleep(4.0)",
-                "inactive_total = 0",
-                "for _ in range(24):",
-                "    active = subprocess.run(['systemctl', 'is-active', '--quiet', service_name], check=False).returncode == 0",
-                "    if active:",
-                "        inactive_total = 0",
-                "        try:",
-                "            with socket.create_connection(('127.0.0.1', supervisor_port), timeout=0.5):",
-                "                raise SystemExit(0)",
-                "        except OSError:",
-                "            pass",
-                "    else:",
-                "        inactive_total += 1",
-                "        if inactive_total >= 3:",
-                "            break",
-                "    time.sleep(1.0)",
                 "for pid in pids:",
                 "    try:",
                 "        os.kill(pid, signal.SIGTERM)",
@@ -3673,6 +3691,7 @@ class SupervisorManager:
                 "        pass",
             ]
         )
+        code = "\n".join(lines)
         try:
             reaper = subprocess.Popen(
                 [sys.executable, "-c", code],
@@ -3707,10 +3726,16 @@ class SupervisorManager:
         )
         if not pids:
             return {"ok": True, "scheduled": False, "reason": "no_retired_runtimes"}
-        code = "\n".join(
+        send_lines = (
             [
-                "import os, signal, time",
-                f"pids = {pids!r}",
+                "def send(pid, sig):",
+                "    try:",
+                "        os.kill(pid, sig)",
+                "    except ProcessLookupError:",
+                "        pass",
+            ]
+            if os.name == "nt"
+            else [
                 "def send(pid, sig):",
                 "    try:",
                 "        os.killpg(os.getpgid(pid), sig)",
@@ -3719,6 +3744,11 @@ class SupervisorManager:
                 "            os.kill(pid, sig)",
                 "        except ProcessLookupError:",
                 "            pass",
+            ]
+        )
+        code = "\n".join(
+            ["import os, signal, time", f"pids = {pids!r}", *send_lines]
+            + [
                 "time.sleep(1.0)",
                 "for pid in pids:",
                 "    send(pid, signal.SIGTERM)",

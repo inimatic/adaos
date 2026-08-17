@@ -317,6 +317,13 @@ def _reconcile_interrupted_update_transition(current: dict[str, Any], *, plan: d
     return payload
 
 
+def _idle_boot_status(current: dict[str, Any]) -> dict[str, Any] | None:
+    state = str(current.get("state") or "").strip().lower()
+    if state not in {"", "idle"}:
+        return None
+    return {"state": "idle", "message": "autostart runner boot", "updated_at": time.time()}
+
+
 def _resume_post_apply_update_transition(current: dict[str, Any], *, plan: dict[str, Any] | None) -> bool:
     if not isinstance(plan, dict) or not plan:
         return False
@@ -1269,7 +1276,9 @@ def main() -> None:
                 else:
                     finalized = finalize_runtime_boot_status()
                     if finalized is None:
-                        write_status({"state": "idle", "message": "autostart runner boot", "updated_at": time.time()})
+                        idle_status = _idle_boot_status(current_status)
+                        if idle_status is not None:
+                            write_status(idle_status)
 
         phase = "resolve_bind"
         host, port = _resolve_bind(conf, args.host, args.port)
