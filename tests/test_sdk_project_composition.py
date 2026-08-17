@@ -24,6 +24,7 @@ def project_space(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     monkeypatch.setattr(compositions, "_root_parent", lambda: roots["projects"])
     monkeypatch.setattr(projects, "_roots", lambda: (roots["skills"], roots["scenarios"]))
     monkeypatch.setattr(development_sessions, "_state_root", lambda: roots["state"] / "builder" / "development_sessions")
+    monkeypatch.setattr(artifact_context, "_context_view_root", lambda: roots["state"] / "artifact_context" / "views")
     return roots
 
 
@@ -134,6 +135,70 @@ def test_local_artifact_group_copies_files_and_detects_tampering(project_space, 
     Path(resolved["native_path"]).write_text("tampered", encoding="utf-8")
     with pytest.raises(artifact_context.ArtifactContextError, match="no longer matches"):
         artifact_context.resolve("tlp_direction", "part0", first["artifact"]["artifact_id"])
+
+
+def test_artifact_context_materializes_digest_bound_audience_views(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    notebook = tmp_path / "experiment.ipynb"
+    notebook.write_text('{"cells": []}', encoding="utf-8")
+    review = tmp_path / "initial-review.md"
+    review.write_text("Evaluator-only oracle", encoding="utf-8")
+    artifact_context.add_path(
+        "tlp_direction",
+        "part0",
+        notebook,
+        context_policy={"default": "allow", "allow": [], "deny": []},
+    )
+    hidden = artifact_context.add_path(
+        "tlp_direction",
+        "part0",
+        review,
+        role="review",
+        context_policy={
+            "default": "deny",
+            "allow": ["research.evaluation"],
+            "deny": [],
+            "reason": "hidden evaluator oracle",
+        },
+    )
+
+    implementation = artifact_context.materialize_context(
+        "tlp_direction", "part0", "research.implementation"
+    )
+    evaluation = artifact_context.materialize_context(
+        "tlp_direction", "part0", "research.evaluation"
+    )
+
+    assert sorted(path.name for path in Path(implementation["root_path"]).iterdir()) == [
+        "experiment.ipynb"
+    ]
+    assert sorted(path.name for path in Path(evaluation["root_path"]).iterdir()) == [
+        "experiment.ipynb",
+        "initial-review.md",
+    ]
+    assert implementation["excluded"] == [
+        {"artifact_id": hidden["artifact"]["artifact_id"], "reason": "hidden evaluator oracle"}
+    ]
+    assert implementation["digest"] != evaluation["digest"]
+    assert Path(implementation["manifest_path"]).parent != Path(implementation["root_path"])
+
+
+def test_artifact_context_policy_can_be_revised_without_replacing_content(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    source = tmp_path / "review.md"
+    source.write_text("A careful review", encoding="utf-8")
+    added = artifact_context.add_path("tlp_direction", "part0", source)
+
+    revised = artifact_context.set_context_policy(
+        "tlp_direction",
+        "part0",
+        added["artifact"]["artifact_id"],
+        {"default": "deny", "allow": ["evaluator"], "deny": []},
+    )
+
+    assert revised["idempotent"] is False
+    assert revised["group"]["schema_version"] == "1.1.0"
+    assert revised["artifact"]["context_policy"]["allow"] == ["evaluator"]
 
 
 def test_artifact_context_builds_a_semantic_notebook_digest_and_bounds_untrusted_outputs(project_space, tmp_path: Path) -> None:
@@ -390,6 +455,36 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
         session_id="dev_0000_lexically_earlier",
     )
     assert development_sessions.list_sessions(project_id="tlp_research")[-1]["session_id"] == later["session"]["session_id"]
+
+
+def test_development_session_uses_filtered_artifact_view_for_agent_audience(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "tlp_direction")
+    compositions.create(_project("tlp_research", "tlp_direction"))
+    visible = tmp_path / "notebook.md"
+    visible.write_text("Visible source", encoding="utf-8")
+    hidden = tmp_path / "oracle.md"
+    hidden.write_text("Hidden answer", encoding="utf-8")
+    artifact_context.add_path("tlp_direction", "part0", visible)
+    artifact_context.add_path(
+        "tlp_direction",
+        "part0",
+        hidden,
+        context_policy={"default": "deny", "allow": ["research.evaluation"], "deny": []},
+    )
+
+    created = development_sessions.create(
+        "tlp_research",
+        automation_brief_digest="sha256:" + "1" * 64,
+        research_prototype_digest="sha256:" + "2" * 64,
+        artifact_groups=["part0"],
+        artifact_audience="research.implementation",
+        prohibited_actions=["No hidden evaluator access"],
+    )
+
+    artifact_input = created["session"]["artifact_inputs"][0]
+    assert artifact_input["audience"] == "research.implementation"
+    assert artifact_input["context_digest"].startswith("sha256:")
+    assert sorted(path.name for path in Path(artifact_input["root_path"]).iterdir()) == ["notebook.md"]
 
 
 def test_development_session_rejects_instruction_digest_drift(project_space, tmp_path: Path) -> None:

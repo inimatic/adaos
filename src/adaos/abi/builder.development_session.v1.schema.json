@@ -54,7 +54,14 @@
     },
     "artifactInput": {
       "type": "object", "required": ["ref", "access", "manifest_digest", "root_path"],
-      "properties": {"ref": {"type": "string", "pattern": "^artifact://skill/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"}, "access": {"const": "read-only"}, "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "root_path": {"type": "string", "minLength": 1}},
+      "properties": {
+        "ref": {"type": "string", "pattern": "^artifact://skill/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "access": {"const": "read-only"},
+        "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "root_path": {"type": "string", "minLength": 1},
+        "audience": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+        "context_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
       "additionalProperties": false
     },
     "instructionInput": {

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.traceability.graph.v1",
+  "type": "object",
+  "required": ["schema", "graph_id", "revision", "nodes", "edges", "digest"],
+  "properties": {
+    "schema": {"const": "adaos.traceability.graph.v1"},
+    "graph_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"},
+    "revision": {"type": "integer", "minimum": 1},
+    "nodes": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/node"}
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": {"$ref": "#/$defs/edge"}
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["node_id", "kind"],
+      "properties": {
+        "node_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,299}$"},
+        "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,99}$"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 500},
+        "ref": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "metadata": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "edge": {
+      "type": "object",
+      "required": ["edge_id", "source", "target", "relation"],
+      "properties": {
+        "edge_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,299}$"},
+        "source": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,299}$"},
+        "target": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:#/-]{0,299}$"},
+        "relation": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,99}$"},
+        "metadata": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

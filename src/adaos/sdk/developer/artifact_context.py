@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import projects
 from adaos.sdk.developer.source_preprocessing import prepare_notebook_units, query_digest, select_units
@@ -23,6 +24,7 @@ from adaos.services.builder.sources import _source_analysis
 
 _GROUP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _ARTIFACT_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+_AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MAX_BYTES = 128 * 1024 * 1024
 _DETERMINISTIC_MEDIA_TYPES = {
     ".ipynb": "application/x-ipynb+json",
@@ -67,6 +69,42 @@ def _safe_name(value: str) -> str:
     if any(ord(char) < 32 for char in name):
         raise ArtifactContextError("artifact name contains control characters")
     return name[:240]
+
+
+def _safe_audience(value: str) -> str:
+    token = str(value or "").strip()
+    if not _AUDIENCE_RE.fullmatch(token):
+        raise ArtifactContextError("audience contains unsupported characters")
+    return token
+
+
+def _context_policy(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ArtifactContextError("context_policy must be an object")
+    default = str(value.get("default") or "allow").strip().lower()
+    if default not in {"allow", "deny"}:
+        raise ArtifactContextError("context_policy.default must be allow or deny")
+    allow = sorted({_safe_audience(item) for item in value.get("allow") or []})
+    deny = sorted({_safe_audience(item) for item in value.get("deny") or []})
+    overlap = sorted(set(allow) & set(deny))
+    if overlap:
+        raise ArtifactContextError(f"context_policy allow and deny overlap: {overlap}")
+    reason = " ".join(str(value.get("reason") or "").split()).strip() or None
+    return {"default": default, "allow": allow, "deny": deny, "reason": reason}
+
+
+def _admitted(item: Mapping[str, Any], audience: str) -> tuple[bool, str]:
+    policy = item.get("context_policy")
+    if not isinstance(policy, Mapping):
+        return True, "legacy_default_allow"
+    if audience in set(policy.get("deny") or []):
+        return False, str(policy.get("reason") or "audience_denied")
+    if audience in set(policy.get("allow") or []):
+        return True, "audience_allowed"
+    admitted = str(policy.get("default") or "allow") == "allow"
+    return admitted, "default_allow" if admitted else str(policy.get("reason") or "default_deny")
 
 
 def media_type_for_name(name: str, declared: str | None = None) -> str:
@@ -187,6 +225,7 @@ def add_path(
     sensitivity: str = "unknown",
     license_id: str | None = None,
     publication: str = "private",
+    context_policy: Mapping[str, Any] | None = None,
     replace_existing: bool = False,
 ) -> dict[str, Any]:
     source = Path(source_path).expanduser().resolve()
@@ -204,6 +243,7 @@ def add_path(
     if not _ARTIFACT_RE.fullmatch(artifact_id):
         raise ArtifactContextError("generated artifact id is invalid")
     media = media_type_for_name(safe_name, media_type)
+    normalized_policy = _context_policy(context_policy)
     item = {
         "artifact_id": artifact_id,
         "path": safe_name,
@@ -218,14 +258,20 @@ def add_path(
         "publication": str(publication),
         "analysis": _source_analysis(safe_name, media, payload),
     }
+    if normalized_policy is not None:
+        item["context_policy"] = normalized_policy
     root = _root(skill_id, token)
     lock_path = root / ".mutation.lock"
     with mutation_lock(lock_path):
         manifest = _read(skill_id, token)
         existing_digest = next((entry for entry in manifest["items"] if entry["digest"] == digest), None)
-        if existing_digest:
+        if existing_digest and (
+            normalized_policy is None or existing_digest.get("context_policy") == normalized_policy
+        ):
             return {"ok": True, "idempotent": True, "artifact": dict(existing_digest), "group": get_group(skill_id, token)}
         existing_path = next((entry for entry in manifest["items"] if entry["path"] == safe_name), None)
+        if existing_digest:
+            existing_path = existing_digest
         if existing_path and not replace_existing:
             raise ArtifactContextError(f"artifact path {safe_name!r} already exists with different content")
         root.mkdir(parents=True, exist_ok=True)
@@ -233,6 +279,7 @@ def add_path(
         atomic_write_bytes(root / safe_name, payload)
         updated = {
             **manifest,
+            "schema_version": "1.1.0" if normalized_policy is not None else manifest["schema_version"],
             "generation": int(manifest["generation"]) + 1,
             "items": [
                 item if existing_path and entry["path"] == safe_name else entry
@@ -258,6 +305,147 @@ def add_path(
         "previous_artifact": dict(existing_path) if existing_path else None,
         "artifact": item,
         "group": get_group(skill_id, token),
+    }
+
+
+def set_context_policy(
+    skill_id: str,
+    group_id: str,
+    artifact_id: str,
+    policy: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Set a generic consumer policy without assigning domain meaning to audiences."""
+
+    token = _safe_group(group_id)
+    normalized = _context_policy(policy)
+    root = _root(skill_id, token)
+    with mutation_lock(root / ".mutation.lock"):
+        manifest = _read(skill_id, token, required=True)
+        previous = next(
+            (dict(item) for item in manifest["items"] if item["artifact_id"] == artifact_id),
+            None,
+        )
+        if not previous:
+            raise ArtifactContextError(f"artifact {artifact_id!r} was not found")
+        current = previous.get("context_policy")
+        if current == normalized or (normalized is None and current is None):
+            return {"ok": True, "idempotent": True, "artifact": previous, "group": get_group(skill_id, token)}
+        replacement = dict(previous)
+        if normalized is None:
+            replacement.pop("context_policy", None)
+        else:
+            replacement["context_policy"] = normalized
+        updated = {
+            **manifest,
+            "schema_version": "1.1.0",
+            "generation": int(manifest["generation"]) + 1,
+            "items": [
+                replacement if item["artifact_id"] == artifact_id else item
+                for item in manifest["items"]
+            ],
+            "updated_at": _now(),
+        }
+        updated.pop("digest", None)
+        updated["digest"] = _digest_bytes(_canonical(updated))
+        _write(root / "manifest.yaml", updated)
+    return {"ok": True, "idempotent": False, "artifact": replacement, "group": get_group(skill_id, token)}
+
+
+def _context_view_root() -> Path:
+    ctx = require_ctx("sdk.developer.artifact_context")
+    return (Path(ctx.paths.state_dir()).resolve() / "artifact_context" / "views").resolve()
+
+
+def _context_view_schema_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "abi" / "artifact.context_view.v1.schema.json"
+
+
+def _validate_context_view(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(value)
+    schema = json.loads(_context_view_schema_path().read_text(encoding="utf-8"))
+    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.absolute_path))
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "$"
+        raise ArtifactContextError(f"context view invalid at {location}: {error.message}")
+    expected = _digest_bytes(_canonical({key: item for key, item in payload.items() if key != "digest"}))
+    if payload["digest"] != expected:
+        raise ArtifactContextError("context view digest does not match its content")
+    return payload
+
+
+def materialize_context(skill_id: str, group_id: str, audience: str) -> dict[str, Any]:
+    """Create an immutable filesystem view containing only audience-admitted files.
+
+    Filtering a prompt is not an isolation boundary when an agent can read the
+    source tree.  A materialized view makes the declared policy match the files
+    that are physically visible to that consumer and binds the result by digest.
+    """
+
+    audience_token = _safe_audience(audience)
+    group = get_group(skill_id, group_id)
+    source_root = Path(str(group["root_path"])).resolve()
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
+    contents: dict[str, bytes] = {}
+    for item in sorted(group["items"], key=lambda entry: str(entry["path"]).casefold()):
+        allowed, reason = _admitted(item, audience_token)
+        if not allowed:
+            excluded.append({"artifact_id": str(item["artifact_id"]), "reason": reason})
+            continue
+        path = (source_root / str(item["path"])).resolve()
+        if path.parent != source_root or not path.is_file():
+            raise ArtifactContextError("artifact file is missing or outside its group")
+        content = path.read_bytes()
+        if _digest_bytes(content) != item["digest"]:
+            raise ArtifactContextError("artifact file digest no longer matches manifest")
+        contents[str(item["path"])] = content
+        included.append(
+            {
+                "artifact_id": str(item["artifact_id"]),
+                "path": str(item["path"]),
+                "digest": str(item["digest"]),
+                "size_bytes": int(item["size_bytes"]),
+            }
+        )
+    identity: dict[str, Any] = {
+        "schema": "adaos.artifact.context_view.v1",
+        "audience": audience_token,
+        "source_ref": str(group["ref"]),
+        "source_manifest_digest": str(group["digest"]),
+        "items": included,
+        "excluded": excluded,
+    }
+    identity["digest"] = _digest_bytes(_canonical(identity))
+    view = _validate_context_view(identity)
+    view_token = str(view["digest"]).removeprefix("sha256:")
+    root = (_context_view_root() / view_token).resolve()
+    if root.parent != _context_view_root():
+        raise ArtifactContextError("context view path escapes state root")
+    files_root = (root / "files").resolve()
+    manifest_path = (root / "context-view.json").resolve()
+    with mutation_lock(root / ".mutation.lock"):
+        files_root.mkdir(parents=True, exist_ok=True)
+        expected_names = set(contents)
+        unexpected = [path.name for path in files_root.iterdir() if path.name not in expected_names]
+        if unexpected:
+            raise ArtifactContextError(f"context view contains unexpected files: {sorted(unexpected)}")
+        for name, content in contents.items():
+            destination = (files_root / name).resolve()
+            if destination.parent != files_root:
+                raise ArtifactContextError("context view artifact path escapes files root")
+            if not destination.is_file() or _digest_bytes(destination.read_bytes()) != _digest_bytes(content):
+                atomic_write_bytes(destination, content)
+        if manifest_path.is_file():
+            persisted = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(persisted, Mapping) or _validate_context_view(persisted) != view:
+                raise ArtifactContextError("persisted context view does not match its immutable identity")
+        else:
+            atomic_write_bytes(manifest_path, json.dumps(view, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"))
+    return {
+        **view,
+        "root_path": str(files_root),
+        "manifest_path": str(manifest_path),
     }
 
 
@@ -433,4 +621,15 @@ def source_bundle(skill_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["ArtifactContextError", "add_path", "extract_text", "get_group", "groups", "read_text", "resolve", "source_bundle"]
+__all__ = [
+    "ArtifactContextError",
+    "add_path",
+    "extract_text",
+    "get_group",
+    "groups",
+    "materialize_context",
+    "read_text",
+    "resolve",
+    "set_context_policy",
+    "source_bundle",
+]

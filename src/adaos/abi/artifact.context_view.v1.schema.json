@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.artifact.context_view.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "audience",
+    "source_ref",
+    "source_manifest_digest",
+    "items",
+    "excluded",
+    "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.artifact.context_view.v1"},
+    "audience": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+    "source_ref": {"type": "string", "pattern": "^artifact://skill/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "source_manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["artifact_id", "path", "digest", "size_bytes"],
+        "properties": {
+          "artifact_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+          "path": {"type": "string", "pattern": "^[^/\\\\]+$"},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": ["artifact_id", "reason"],
+        "properties": {
+          "artifact_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 500}
+        },
+        "additionalProperties": false
+      }
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

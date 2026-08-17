@@ -368,6 +368,7 @@ def create(
     automation_brief_digest: str,
     research_prototype_digest: str,
     artifact_groups: Sequence[str],
+    artifact_audience: str | None = None,
     primary_targets: Sequence[str] | None = None,
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
@@ -402,14 +403,22 @@ def create(
     artifact_inputs = []
     for group_id in artifact_groups:
         group = artifact_context.get_group(primary_skill, group_id)
-        artifact_inputs.append(
-            {
-                "ref": f"artifact://skill/{primary_skill}/{group_id}",
-                "access": "read-only",
-                "manifest_digest": group["digest"],
-                "root_path": group["root_path"],
-            }
-        )
+        descriptor = {
+            "ref": f"artifact://skill/{primary_skill}/{group_id}",
+            "access": "read-only",
+            "manifest_digest": group["digest"],
+            "root_path": group["root_path"],
+        }
+        if artifact_audience:
+            view = artifact_context.materialize_context(primary_skill, group_id, artifact_audience)
+            descriptor.update(
+                {
+                    "root_path": view["root_path"],
+                    "audience": view["audience"],
+                    "context_digest": view["digest"],
+                }
+            )
+        artifact_inputs.append(descriptor)
     if not artifact_inputs:
         raise DevelopmentSessionError("at least one exact artifact group is required")
 
@@ -457,6 +466,7 @@ def create(
                 and previous["handoff"] == payload["handoff"]
                 and previous["targets"] == payload["targets"]
                 and previous["base_release"] == payload["base_release"]
+                and previous["artifact_inputs"] == payload["artifact_inputs"]
             ):
                 return {"ok": True, "idempotent": True, "session": previous}
             raise DevelopmentSessionError(f"development session {token!r} already exists with another scope")

@@ -75,6 +75,11 @@ context formerly stored directly by Prompt IDE handlers:
 - expose dependencies as `contract`, `docs`, bounded paths, or no source;
 - admit local artifact groups read-only and return explicit scope-expansion
   requests when a run needs to mutate another component.
+- materialize digest-bound audience views for artifact groups so hidden files
+  are absent from an agent's filesystem root, not merely omitted from prompt
+  text;
+- retain both the source-manifest digest and filtered context-view digest in
+  the Development Session.
 
 ### Builder preview
 

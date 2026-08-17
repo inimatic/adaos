@@ -243,6 +243,9 @@ context_members:
 artifact_inputs:
   - ref: artifact://skill/tlp_research_skill/part0
     access: read-only
+    audience: research.implementation
+    manifest_digest: sha256:<source-manifest>
+    context_digest: sha256:<filtered-view>
 
 scratch:
   owner: session
@@ -289,6 +292,22 @@ state, decisions, and public contracts rather than all implementation source.
 Codex receives full target source, read-only artifacts, and contract/docs views
 of dependencies; additional source is hydrated on demand. This reduces context
 load without hiding the exact objects and revisions on which the task depends.
+
+An artifact group may contain material for different consumers. Each item may
+therefore declare a generic `context_policy` with `default`, exact `allow` and
+`deny` audiences, and an operator-readable reason. The SDK materializes an
+immutable audience view under CTX state, verifies every admitted file digest,
+and gives Builder only the view's `files` root. Filtering extracted prompt text
+alone is not an isolation boundary because a filesystem-capable agent could
+otherwise read a hidden sibling file. The source-manifest digest and filtered
+view digest are both retained in the Development Session.
+
+Audience names and their meaning are consumer-owned. Core enforces exact
+membership and materialization but does not know what
+`research.formulation`, `research.implementation`, or
+`research.evaluation` mean. Legacy items without a policy remain visible for
+compatibility; a clean evaluation must assign explicit policies before its
+frozen receipt is admitted.
 
 ### Contract and scientific-system projection
 
@@ -357,6 +376,11 @@ policy when known, and publication policy. Notebook outputs and retrieved text
 remain untrusted inputs; they are never promoted to scientific evidence merely
 because a model can read them.
 
+The optional `context_policy` is independent of `role`, trust, sensitivity,
+and publication. A role describes what an item is; an audience policy controls
+which bounded consumer context can see it. Domain skills may offer convenient
+profiles, but enforcement and filesystem materialization remain SDK behavior.
+
 The Skill SDK owns a neutral interface such as:
 
 ```text
@@ -381,6 +405,22 @@ A later `additional_artifacts` binding, object-store provider, or MCP resource
 adapter may resolve the same ref. That extension must not force the local
 first milestone to duplicate files in a new database or require Codex to
 discover an undocumented MCP server.
+
+## Digest-Bound Traceability
+
+`adaos.traceability.graph.v1` is a domain-neutral graph for connecting exact
+inputs, decisions, implementation tasks, executions, observations, artifacts,
+and acceptance decisions. Nodes and edges are immutable references with a
+canonical graph digest. The core validator checks uniqueness, endpoint
+integrity, self-references, and digest drift. Its path evaluator accepts
+domain-supplied source, target, and ordered node-kind requirements; it does not
+embed research-stage names in the platform.
+
+The research compiler uses this primitive to require a chain from source
+material through scientific and engineering decisions to observations and
+acceptance. Other skills can use the same primitive for operational evidence,
+release provenance, or governed content generation without inheriting research
+semantics.
 
 ### Private pre-Codex checkpoint
 

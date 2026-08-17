@@ -450,6 +450,13 @@ machine-discoverable reference tables; retain their digest/reference so Codex
 can inspect them on demand. The prompt is an execution view, not a second copy
 of the entire control plane.
 
+When some source artifacts are withheld from a stage, use artifact item
+`context_policy` and request an audience-scoped Development Session. Do not
+rely on a prompt instruction such as "ignore initial-review.md" while exposing
+the containing directory: a filesystem-capable coding agent can still read it.
+Freeze the resulting `context_digest` with the run or evaluation receipt and
+fail the clean-arm claim if an explicit policy was not applied.
+
 Make decision resolution explicit. Early discovery questions are not
 necessarily automation blockers. A later decision must classify a choice as
 source-derived, policy-default, proposed, or unresolved; only `unresolved` may

@@ -5,7 +5,7 @@
   "required": ["schema", "schema_version", "skill_ref", "group_id", "generation", "items", "digest", "updated_at"],
   "properties": {
     "schema": {"const": "adaos.skill.artifact_group.v1"},
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
     "skill_ref": {"type": "string", "pattern": "^skill:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
     "group_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$"},
     "generation": {"type": "integer", "minimum": 0},
@@ -26,13 +26,37 @@
           "sensitivity": {"enum": ["unknown", "public", "internal", "confidential", "restricted"]},
           "license": {"type": ["string", "null"], "maxLength": 300},
           "publication": {"enum": ["private", "project", "redistributable"]},
-          "analysis": {"type": "object"}
+          "analysis": {"type": "object"},
+          "context_policy": {"$ref": "#/$defs/contextPolicy"}
         },
         "additionalProperties": false
       }
     },
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "contextPolicy": {
+      "type": "object",
+      "required": ["default", "allow", "deny"],
+      "properties": {
+        "default": {"enum": ["allow", "deny"]},
+        "allow": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"}
+        },
+        "deny": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"}
+        },
+        "reason": {"type": ["string", "null"], "maxLength": 500}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }
