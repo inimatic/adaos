@@ -75,7 +75,8 @@ The snapshot includes:
 
 - semantic `state` and `reason`;
 - normalized `outage.kind` and `outage.planned`;
-- `transition` with update/restart phase and target version;
+- `transition` with update/restart phase, action, target version, and the compact
+  branch fields needed to distinguish rollback and warm-switch presentation;
 - root transport and route readiness;
 - runtime, control, and runtime-owned YWS readiness;
 - `server_capabilities` for `accept_commands`, `accept_mutations`,
@@ -192,6 +193,14 @@ is sampled once after a meaningful lifecycle or transport change; it has no
 independent degraded-state heartbeat. Supervisor/update presentation is
 derived from the lifecycle stream, not from periodic runtime or supervisor
 requests.
+
+The browser does not consume authenticated `/api/supervisor/status`. That
+operator read model remains available to CLI/autostart and diagnostics. The
+public update-status route is limited to unauthenticated local A/B runtime
+discovery; it is not a lifecycle retry clock. Lifecycle carries only fields
+that select a browser-visible transition variant: `action`, `planned_reason`,
+`attempt_state`, `transition_mode`, `candidate_prewarm_state`, and
+`warm_switch_allowed`, in addition to state, phase, message, and target version.
 
 UI diagnostics use the same lifecycle gate. While a routed Root path is
 unavailable, events remain in a bounded local queue and no diagnostics POST is

@@ -43,11 +43,13 @@ def test_sidecar_lifecycle_report_compacts_durable_state_and_transport(tmp_path:
     (tmp_path / "state" / "supervisor" / "runtime.json").write_text(
         '{"runtime_state":"ready","runtime_api_ready":true,"managed_alive":true,'
         '"desired_running":true,"runtime_instance_id":"runtime-a",'
+        '"transition_mode":"warm_switch","warm_switch_allowed":true,'
         '"runtime_url":"http://127.0.0.1:8777","secret":"must-not-leak"}',
         encoding="utf-8",
     )
     (tmp_path / "state" / "supervisor" / "update_attempt.json").write_text(
-        '{"state":"active","target_version":"next","private":"drop"}',
+        '{"state":"active","target_version":"next","planned_reason":"minimum_update_period",'
+        '"candidate_prewarm_state":"starting","private":"drop"}',
         encoding="utf-8",
     )
     (tmp_path / "state" / "core_update" / "status.json").write_text(
@@ -75,6 +77,10 @@ def test_sidecar_lifecycle_report_compacts_durable_state_and_transport(tmp_path:
     assert payload["transport"]["ready"] is True
     assert payload["supervisor"]["runtime"]["runtime_api_ready"] is True
     assert payload["supervisor"]["runtime"]["runtime_instance_id"] == "runtime-a"
+    assert payload["supervisor"]["runtime"]["transition_mode"] == "warm_switch"
+    assert payload["supervisor"]["runtime"]["warm_switch_allowed"] is True
+    assert payload["supervisor"]["attempt"]["planned_reason"] == "minimum_update_period"
+    assert payload["supervisor"]["attempt"]["candidate_prewarm_state"] == "starting"
     assert "secret" not in payload["supervisor"]["runtime"]
     assert "private" not in payload["supervisor"]["status"]
     assert "private" not in payload["supervisor"]["attempt"]

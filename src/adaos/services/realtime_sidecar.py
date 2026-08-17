@@ -150,6 +150,9 @@ _LIFECYCLE_RUNTIME_FIELDS = (
     "managed_slot",
     "runtime_url",
     "runtime_port",
+    "transition_mode",
+    "warm_switch_allowed",
+    "warm_switch_reason",
     "last_error",
 )
 _LIFECYCLE_UPDATE_FIELDS = (
@@ -161,6 +164,8 @@ _LIFECYCLE_UPDATE_FIELDS = (
     "target_rev",
     "target_version",
     "target_slot",
+    "planned_reason",
+    "candidate_prewarm_state",
     "scheduled_for",
     "started_at",
     "finished_at",
@@ -173,6 +178,8 @@ _LIFECYCLE_ATTEMPT_FIELDS = (
     "target_rev",
     "target_version",
     "target_slot",
+    "planned_reason",
+    "candidate_prewarm_state",
     "completion_reason",
     "requested_at",
     "started_at",
