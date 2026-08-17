@@ -108,6 +108,7 @@ class ServiceSpec:
     ui_max_request_bytes: int = 1024 * 1024
     storage_relational: Mapping[str, Any] | None = None
     storage_blob: Mapping[str, Any] | None = None
+    resource_budget: Mapping[str, Any] | None = None
 
     @property
     def base_url(self) -> str:
@@ -344,6 +345,15 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
 
     storage_relational = storage_binding("relational", "storage.relational")
     storage_blob = storage_binding("blob", "storage.blob")
+    memory_budget = manifest.get("memory_budget") or {}
+    if not isinstance(memory_budget, Mapping):
+        memory_budget = {}
+    process_budget = memory_budget.get("process") or {}
+    if not isinstance(process_budget, Mapping):
+        process_budget = {}
+    resource_budget = dict(process_budget)
+    if memory_budget.get("expected_rss_mb") is not None:
+        resource_budget["expected_rss_mb"] = memory_budget.get("expected_rss_mb")
 
     return ServiceSpec(
         skill=skill_name,
@@ -381,6 +391,7 @@ def _resolve_service_spec(skill_name: str, skill_root: Path, manifest: Mapping[s
         ui_max_request_bytes=ui_max_request_bytes,
         storage_relational=storage_relational,
         storage_blob=storage_blob,
+        resource_budget=resource_budget,
     )
 
 
@@ -575,6 +586,84 @@ def _process_tree_pids(pid: int | None) -> set[int]:
     return pids
 
 
+def _process_tree_resource_counters(pid: int | None) -> dict[str, Any]:
+    observed_at = time.time()
+    if int(pid or 0) <= 0:
+        return {"available": False, "reason": "pid_unavailable", "observed_at": observed_at}
+    try:
+        import psutil  # type: ignore
+
+        owner = psutil.Process(int(pid))
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": f"process_unavailable:{type(exc).__name__}",
+            "observed_at": observed_at,
+            "owner_pid": int(pid or 0) or None,
+        }
+
+    processes = [owner]
+    try:
+        processes.extend(owner.children(recursive=True))
+    except Exception:
+        pass
+    rss_bytes = 0
+    read_bytes = 0
+    write_bytes = 0
+    thread_total = 0
+    open_handle_total = 0
+    handle_kind = "unavailable"
+    identities: list[str] = []
+    pids: list[int] = []
+    for proc in processes:
+        try:
+            proc_pid = int(proc.pid)
+            created_at = float(proc.create_time())
+        except Exception:
+            continue
+        identities.append(f"{proc_pid}:{created_at:.6f}")
+        pids.append(proc_pid)
+        try:
+            rss_bytes += int(proc.memory_info().rss or 0)
+        except Exception:
+            pass
+        try:
+            counters = proc.io_counters()
+            read_bytes += int(getattr(counters, "read_bytes", 0) or 0)
+            write_bytes += int(getattr(counters, "write_bytes", 0) or 0)
+        except Exception:
+            pass
+        try:
+            thread_total += int(proc.num_threads() or 0)
+        except Exception:
+            pass
+        try:
+            if hasattr(proc, "num_fds"):
+                open_handle_total += int(proc.num_fds() or 0)
+                handle_kind = "file_descriptors"
+            elif hasattr(proc, "num_handles"):
+                open_handle_total += int(proc.num_handles() or 0)
+                handle_kind = "windows_handles"
+        except Exception:
+            pass
+    return {
+        "schema": "adaos.skill_service_resource_counters.v1",
+        "available": bool(identities),
+        "reason": "sampled" if identities else "process_tree_unavailable",
+        "observed_at": observed_at,
+        "owner_pid": int(pid),
+        "generation": hashlib.sha256("|".join(sorted(identities)).encode("utf-8")).hexdigest()[:16],
+        "process_total": len(identities),
+        "pids": sorted(pids)[:32],
+        "rss_bytes": rss_bytes,
+        "read_bytes": read_bytes,
+        "write_bytes": write_bytes,
+        "thread_total": thread_total,
+        "open_handle_total": open_handle_total,
+        "open_handle_kind": handle_kind,
+    }
+
+
 def _path_value(value: Any) -> Path:
     resolved = value() if callable(value) else value
     return Path(resolved).expanduser().resolve()
@@ -690,6 +779,11 @@ class ServiceSkillSupervisor:
         self._cooloff_until: dict[str, float] = {}
         self._health_failures: dict[str, int] = {}
         self._next_health_check_at: dict[str, float] = {}
+        self._next_resource_sample_at: dict[str, float] = {}
+        self._resource_counters: dict[str, dict[str, Any]] = {}
+        self._resource_activity: dict[str, dict[str, Any]] = {}
+        self._resource_violation_counts: dict[str, dict[str, int]] = {}
+        self._resource_issue_last_at: dict[str, float] = {}
         self._doctor_cooldown_until: dict[str, float] = {}
         self._doctor_requests_cache: dict[str, list[dict[str, Any]]] = {}
         self._external_ready_specs: dict[str, tuple[Any, ...]] = {}
@@ -948,6 +1042,18 @@ class ServiceSkillSupervisor:
         code = None if running else (proc.poll() if proc else None)
         spec_key = self._spec_key(spec)
         external_ready = self._external_ready_specs.get(name) == spec_key and not running
+        resource_activity = dict(
+            self._resource_activity.get(name)
+            or {
+                "schema": "adaos.skill_service_resource_activity.v1",
+                "available": False,
+                "reason": "awaiting_sample" if running else "service_not_running",
+                "budget": dict(spec.resource_budget or {}),
+            }
+        )
+        if not running and not external_ready:
+            resource_activity["available"] = False
+            resource_activity["reason"] = "service_not_running"
 
         payload: dict[str, Any] = {
             "name": name,
@@ -991,6 +1097,7 @@ class ServiceSkillSupervisor:
                 "transition_role": runtime_transition_role(),
                 "basis": "tracked_process" if running else "verified_listener" if external_ready else None,
             },
+            "resource_activity": resource_activity,
         }
 
         if check_health:
@@ -1883,6 +1990,90 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
                 await asyncio.sleep(0.25)
         _log.warning("service skill=%s did not become ready in time (%s)", spec.skill, url)
 
+    def _record_resource_sample(
+        self,
+        name: str,
+        spec: ServiceSpec,
+        sample: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        current = dict(sample)
+        previous = self._resource_counters.get(name) or {}
+        budget = dict(spec.resource_budget or {})
+        elapsed_s = max(0.0, float(current.get("observed_at") or 0.0) - float(previous.get("observed_at") or 0.0))
+        same_generation = bool(
+            current.get("generation")
+            and current.get("generation") == previous.get("generation")
+            and elapsed_s > 0.0
+        )
+
+        def rate(field: str) -> float | None:
+            if not same_generation:
+                return None
+            delta = max(0, int(current.get(field) or 0) - int(previous.get(field) or 0))
+            return round(delta / elapsed_s, 3)
+
+        write_rate = rate("write_bytes")
+        read_rate = rate("read_bytes")
+        checks: tuple[tuple[str, float | int | None, str, float], ...] = (
+            ("write_bytes_per_second", write_rate, "max_write_bytes_per_second", 1.0),
+            ("read_bytes_per_second", read_rate, "max_read_bytes_per_second", 1.0),
+            ("open_handles", int(current.get("open_handle_total") or 0), "max_open_handles", 1.0),
+            ("threads", int(current.get("thread_total") or 0), "max_threads", 1.0),
+            ("rss_bytes", int(current.get("rss_bytes") or 0), "max_rss_mb", 1024.0 * 1024.0),
+        )
+        violations: list[dict[str, Any]] = []
+        counts = self._resource_violation_counts.setdefault(name, {})
+        active_metrics: set[str] = set()
+        sustained_samples = max(1, min(int(budget.get("sustained_samples") or 3), 30))
+        for metric, observed, budget_key, multiplier in checks:
+            try:
+                limit = float(budget.get(budget_key) or 0) * multiplier
+            except Exception:
+                limit = 0.0
+            if observed is None or limit <= 0 or float(observed) <= limit:
+                counts[metric] = 0
+                continue
+            active_metrics.add(metric)
+            counts[metric] = int(counts.get(metric) or 0) + 1
+            violations.append(
+                {
+                    "metric": metric,
+                    "observed": observed,
+                    "limit": int(limit),
+                    "samples": counts[metric],
+                    "sustained": counts[metric] >= sustained_samples,
+                }
+            )
+        for metric in list(counts):
+            if metric not in active_metrics:
+                counts[metric] = 0
+        sustained = [item for item in violations if item.get("sustained")]
+        activity = {
+            "schema": "adaos.skill_service_resource_activity.v1",
+            "available": bool(current.get("available")),
+            "reason": current.get("reason"),
+            "observed_at": current.get("observed_at"),
+            "sample_interval_seconds": round(elapsed_s, 3) if same_generation else None,
+            "owner_pid": current.get("owner_pid"),
+            "generation": current.get("generation"),
+            "process_total": int(current.get("process_total") or 0),
+            "pids": list(current.get("pids") or []),
+            "rss_bytes": int(current.get("rss_bytes") or 0),
+            "read_bytes": int(current.get("read_bytes") or 0),
+            "write_bytes": int(current.get("write_bytes") or 0),
+            "read_bytes_per_second": read_rate,
+            "write_bytes_per_second": write_rate,
+            "thread_total": int(current.get("thread_total") or 0),
+            "open_handle_total": int(current.get("open_handle_total") or 0),
+            "open_handle_kind": current.get("open_handle_kind"),
+            "budget": budget,
+            "violations": violations,
+            "pressure": "sustained" if sustained else "observed" if violations else "none",
+        }
+        self._resource_counters[name] = current
+        self._resource_activity[name] = activity
+        return sustained
+
     async def _watchdog_loop(self) -> None:
         while True:
             await asyncio.sleep(2.0)
@@ -1960,6 +2151,40 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
             for name, spec in list(self._specs.items()):
                 if self._shutdown_requested:
                     return
+                budget = dict(spec.resource_budget or {})
+                try:
+                    resource_interval_s = float(budget.get("sample_interval_seconds") or 10.0)
+                except Exception:
+                    resource_interval_s = 10.0
+                resource_interval_s = max(2.0, min(resource_interval_s, 300.0))
+                resource_next_at = float(self._next_resource_sample_at.get(name) or 0.0)
+                if now >= resource_next_at:
+                    self._next_resource_sample_at[name] = now + resource_interval_s
+                    proc = self._procs.get(name)
+                    owner_pid = int(proc.pid) if proc and proc.poll() is None else None
+                    if owner_pid is None and self._external_ready_specs.get(name) == self._spec_key(spec):
+                        listener = await asyncio.to_thread(_service_listener_snapshot, spec)
+                        if _listener_owned_by_current_runtime(listener):
+                            owner_pid = int(listener.get("pid") or 0) or None
+                    sample = await asyncio.to_thread(_process_tree_resource_counters, owner_pid)
+                    sustained = self._record_resource_sample(name, spec, sample)
+                    issue_cooldown_s = max(60.0, resource_interval_s * 6.0)
+                    if sustained and now - float(self._resource_issue_last_at.get(name) or 0.0) >= issue_cooldown_s:
+                        self._resource_issue_last_at[name] = now
+                        activity = dict(self._resource_activity.get(name) or {})
+                        issue = await self._record_issue(
+                            name,
+                            issue_type="service_resource_budget_exceeded",
+                            message="service process exceeded its declared sustained resource budget",
+                            severity="warning",
+                            details={"activity": activity, "violations": sustained},
+                        )
+                        emit(
+                            self._ctx.bus,
+                            "skill.service.resource_budget_exceeded",
+                            {"skill": name, "issue_id": issue.get("id"), "activity": activity},
+                            source="skill.service",
+                        )
                 if not spec.self_managed_enabled:
                     continue
 

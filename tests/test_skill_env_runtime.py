@@ -527,6 +527,66 @@ def test_async_skill_env_operations_remain_supported(tmp_path: Path, monkeypatch
             ctx.skill_ctx.set(previous.name, previous.path)
 
 
+def test_skill_env_does_not_rewrite_merged_legacy_state_on_every_read(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
+    env_path = tmp_path / "runtime" / "data" / "db" / "skill_env.json"
+    legacy_path = env_path.parent / ".skill_env.json"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text(json.dumps({"current": 2}), encoding="utf-8")
+    legacy_path.write_text(json.dumps({"legacy": 1}), encoding="utf-8")
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
+    skill_env_module.reset_skill_env_io_guard_runtime()
+
+    try:
+        first = skill_env_module.read_env()
+        first_inode = env_path.stat().st_ino
+        second = skill_env_module.read_env()
+        second_inode = env_path.stat().st_ino
+        snapshot = skill_env_module.skill_env_io_guard_snapshot()
+    finally:
+        skill_env_module.reset_skill_env_io_guard_runtime()
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+    assert first == second == {"legacy": 1, "current": 2}
+    assert first_inode == second_inode
+    assert snapshot["read_total"] == 2
+    assert snapshot["write_total"] == 1
+    assert snapshot["legacy_merge_total"] == 1
+
+
+def test_skill_env_skips_semantically_identical_writes(tmp_path: Path, monkeypatch) -> None:
+    ctx = get_ctx()
+    previous = ctx.skill_ctx.get()
+    ctx.skill_ctx.clear()
+    env_path = tmp_path / "skill_env.json"
+    monkeypatch.setenv("ADAOS_SKILL_ENV_PATH", str(env_path))
+    skill_env_module.reset_skill_env_io_guard_runtime()
+
+    try:
+        skill_env_module.write_env({"state": {"ready": True}})
+        first_inode = env_path.stat().st_ino
+        skill_env_module.write_env({"state": {"ready": True}})
+        skill_env_module.set_env("state", {"ready": True})
+        second_inode = env_path.stat().st_ino
+        snapshot = skill_env_module.skill_env_io_guard_snapshot()
+    finally:
+        skill_env_module.reset_skill_env_io_guard_runtime()
+        if previous is None:
+            ctx.skill_ctx.clear()
+        else:
+            ctx.skill_ctx.set(previous.name, previous.path)
+
+    assert first_inode == second_inode
+    assert snapshot["write_total"] == 1
+    assert snapshot["write_skipped_total"] == 2
+    assert snapshot["write_bytes_total"] > 0
+
+
 def test_skill_memory_concurrent_writes_share_atomic_store(tmp_path: Path, monkeypatch) -> None:
     ctx = get_ctx()
     previous = ctx.skill_ctx.get()

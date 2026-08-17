@@ -854,6 +854,105 @@ def test_service_supervisor_resource_pressure_refuses_stale_same_name_process(mo
     assert supervisor._issues_cache["external_service"][-1]["type"] == "memory_resource_pressure_owner_mismatch"
 
 
+def test_service_resource_activity_reports_sustained_declared_io_pressure(tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "observed_service"
+    skill_root.mkdir(parents=True)
+    manifest = {
+        "runtime": {"kind": "service"},
+        "service": {"port": 18140, "command": ["-m", "handlers.service"]},
+        "memory_budget": {
+            "expected_rss_mb": 64,
+            "process": {
+                "sustained_samples": 2,
+                "max_write_bytes_per_second": 100,
+                "max_open_handles": 8,
+            },
+        },
+    }
+    spec = mod._resolve_service_spec("observed_service", skill_root, manifest)
+    assert spec is not None
+    assert spec.resource_budget == {
+        "sustained_samples": 2,
+        "max_write_bytes_per_second": 100,
+        "max_open_handles": 8,
+        "expected_rss_mb": 64,
+    }
+    supervisor = mod.ServiceSkillSupervisor()
+
+    base = {
+        "available": True,
+        "reason": "sampled",
+        "owner_pid": 123,
+        "generation": "same",
+        "process_total": 1,
+        "pids": [123],
+        "rss_bytes": 1024,
+        "read_bytes": 0,
+        "thread_total": 2,
+        "open_handle_total": 4,
+        "open_handle_kind": "file_descriptors",
+    }
+    supervisor._record_resource_sample("observed_service", spec, {**base, "observed_at": 10.0, "write_bytes": 0})
+    first = supervisor._record_resource_sample(
+        "observed_service", spec, {**base, "observed_at": 12.0, "write_bytes": 400}
+    )
+    second = supervisor._record_resource_sample(
+        "observed_service", spec, {**base, "observed_at": 14.0, "write_bytes": 800}
+    )
+
+    assert first == []
+    assert [item["metric"] for item in second] == ["write_bytes_per_second"]
+    activity = supervisor._resource_activity["observed_service"]
+    assert activity["write_bytes_per_second"] == 200.0
+    assert activity["pressure"] == "sustained"
+    assert activity["violations"][0]["samples"] == 2
+
+
+def test_service_status_reads_cached_resource_activity(monkeypatch, tmp_path):
+    from adaos.services.skill import service_supervisor as mod
+
+    skill_root = tmp_path / "skills" / "cached_service"
+    skill_root.mkdir(parents=True)
+    spec = mod._resolve_service_spec(
+        "cached_service",
+        skill_root,
+        {
+            "runtime": {"kind": "service"},
+            "service": {"port": 18141, "command": ["-m", "handlers.service"]},
+        },
+    )
+    assert spec is not None
+
+    class _Proc:
+        pid = 141
+
+        @staticmethod
+        def poll():
+            return None
+
+    supervisor = mod.ServiceSkillSupervisor()
+    supervisor._specs["cached_service"] = spec
+    supervisor._procs["cached_service"] = _Proc()
+    supervisor._resource_activity["cached_service"] = {
+        "schema": "adaos.skill_service_resource_activity.v1",
+        "available": True,
+        "write_bytes_per_second": 42.0,
+    }
+    monkeypatch.setattr(supervisor, "ensure_discovered", lambda: None)
+    monkeypatch.setattr(
+        mod,
+        "_process_tree_resource_counters",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("status must not sample processes")),
+    )
+
+    status = supervisor.status("cached_service")
+
+    assert status is not None
+    assert status["resource_activity"]["write_bytes_per_second"] == 42.0
+
+
 def test_service_supervisor_serializes_concurrent_starts(monkeypatch):
     from adaos.services.skill import service_supervisor as mod
 

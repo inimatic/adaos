@@ -37,10 +37,17 @@ _IO_GUARD_RUNTIME: dict[str, Any] = {
     "schema": "adaos.skill_env_io_guard.v1",
     "rejected_total": 0,
     "rejected_by_operation": {},
+    "read_total": 0,
+    "write_total": 0,
+    "write_bytes_total": 0,
+    "write_skipped_total": 0,
+    "legacy_merge_total": 0,
     "last_rejected_at": None,
     "last_operation": None,
     "last_skill": None,
     "last_thread_id": None,
+    "last_write_at": None,
+    "last_write_bytes": 0,
 }
 
 
@@ -84,16 +91,51 @@ def skill_env_io_guard_snapshot() -> dict[str, Any]:
     return snapshot
 
 
+def _record_skill_env_io(
+    operation: str,
+    *,
+    write_bytes: int = 0,
+    skipped: bool = False,
+    legacy_merge: bool = False,
+) -> None:
+    now = time.time()
+    with _IO_GUARD_LOCK:
+        if operation == "read":
+            _IO_GUARD_RUNTIME["read_total"] = int(_IO_GUARD_RUNTIME.get("read_total") or 0) + 1
+        if write_bytes > 0:
+            _IO_GUARD_RUNTIME["write_total"] = int(_IO_GUARD_RUNTIME.get("write_total") or 0) + 1
+            _IO_GUARD_RUNTIME["write_bytes_total"] = int(
+                _IO_GUARD_RUNTIME.get("write_bytes_total") or 0
+            ) + int(write_bytes)
+            _IO_GUARD_RUNTIME["last_write_at"] = now
+            _IO_GUARD_RUNTIME["last_write_bytes"] = int(write_bytes)
+        if skipped:
+            _IO_GUARD_RUNTIME["write_skipped_total"] = int(
+                _IO_GUARD_RUNTIME.get("write_skipped_total") or 0
+            ) + 1
+        if legacy_merge:
+            _IO_GUARD_RUNTIME["legacy_merge_total"] = int(
+                _IO_GUARD_RUNTIME.get("legacy_merge_total") or 0
+            ) + 1
+
+
 def reset_skill_env_io_guard_runtime() -> None:
     with _IO_GUARD_LOCK:
         _IO_GUARD_RUNTIME.update(
             {
                 "rejected_total": 0,
                 "rejected_by_operation": {},
+                "read_total": 0,
+                "write_total": 0,
+                "write_bytes_total": 0,
+                "write_skipped_total": 0,
+                "legacy_merge_total": 0,
                 "last_rejected_at": None,
                 "last_operation": None,
                 "last_skill": None,
                 "last_thread_id": None,
+                "last_write_at": None,
+                "last_write_bytes": 0,
             }
         )
 
@@ -295,12 +337,14 @@ def _write_json_object(path: Path, payload: Mapping[str, Any]) -> None:
 def _write_json_object_unlocked(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp")
-    tmp.write_text(json.dumps(dict(payload), ensure_ascii=False, indent=2), encoding="utf-8")
+    raw = json.dumps(dict(payload), ensure_ascii=False, indent=2)
+    tmp.write_text(raw, encoding="utf-8")
     delay_s = 0.01
     try:
         for attempt in range(8):
             try:
                 os.replace(tmp, path)
+                _record_skill_env_io("write", write_bytes=len(raw.encode("utf-8")))
                 return
             except PermissionError:
                 if attempt >= 7:
@@ -319,8 +363,8 @@ def read_env() -> dict[str, Any]:
     _reject_blocking_io_on_event_loop("read_env", async_alternative="async_read_env()")
     target = skill_env_path()
     with _path_lock(target):
-        merged = _read_json_object(target) if target.exists() else {}
-        changed = not target.exists()
+        current = _read_json_object(target) if target.exists() else {}
+        merged = dict(current)
         for legacy in _legacy_paths(target):
             if not legacy.exists() or not legacy.is_file():
                 continue
@@ -328,9 +372,10 @@ def read_env() -> dict[str, Any]:
             if not payload:
                 continue
             merged = _deep_merge(payload, merged)
-            changed = True
-        if changed and merged:
+        if merged and merged != current:
             _write_json_object_unlocked(target, merged)
+            _record_skill_env_io("merge", legacy_merge=True)
+        _record_skill_env_io("read")
         return merged
 
 
@@ -338,6 +383,10 @@ def write_env(payload: Mapping[str, Any]) -> None:
     _reject_blocking_io_on_event_loop("write_env", async_alternative="async_write_env()")
     target = skill_env_path()
     with _path_lock(target):
+        current = _read_json_object(target) if target.exists() else {}
+        if current == dict(payload):
+            _record_skill_env_io("write", skipped=True)
+            return
         _write_json_object_unlocked(target, payload)
 
 
@@ -350,6 +399,10 @@ def set_env(key: str, value: Any) -> None:
     target = skill_env_path()
     with _path_lock(target):
         payload = read_env()
+        marker = object()
+        if payload.get(key, marker) == value:
+            _record_skill_env_io("set", skipped=True)
+            return
         payload[key] = value
         _write_json_object_unlocked(target, payload)
 
