@@ -40,6 +40,22 @@ from adaos.services.zone_hosts import canonical_zone_id
 
 _log = logging.getLogger("adaos.reliability")
 
+_DEFAULT_INCIDENT_READINESS_RECOVERY_HOLD_S = 15.0
+
+
+def _incident_readiness_recovery_hold_s() -> float:
+    try:
+        configured = float(
+            os.getenv(
+                "ADAOS_RELIABILITY_INCIDENT_RECOVERY_HOLD_S",
+                str(_DEFAULT_INCIDENT_READINESS_RECOVERY_HOLD_S),
+            )
+            or _DEFAULT_INCIDENT_READINESS_RECOVERY_HOLD_S
+        )
+    except Exception:
+        configured = _DEFAULT_INCIDENT_READINESS_RECOVERY_HOLD_S
+    return max(1.0, min(300.0, configured))
+
 
 class MessageTaxonomy(str, Enum):
     COMMAND = "command"
@@ -1857,24 +1873,25 @@ def effective_channel_view(
     effective_state = str(stability.get("state") or "unknown")
     assessment = transport_assessment if isinstance(transport_assessment, dict) else {}
     transport_state = str(assessment.get("state") or "").strip().lower()
+    try:
+        stable_for_s = float(diag_item.get("stable_for_s") or 0.0)
+    except Exception:
+        stable_for_s = 0.0
+    recovery_hold_s = _incident_readiness_recovery_hold_s()
+    if (
+        status == ReadinessStatus.READY.value
+        and effective_state in {"unstable", "flapping"}
+        and stable_for_s >= recovery_hold_s
+    ):
+        return {
+            "status": status,
+            "state": "stable",
+            "stability": stability,
+        }
     if channel_id in {"root_control", "route"} and transport_state in {"down", "unstable", "flapping"}:
-        try:
-            stable_for_s = float(diag_item.get("stable_for_s") or 0.0)
-        except Exception:
-            stable_for_s = 0.0
-        try:
-            recent_non_ready_5m = int(diag_item.get("recent_non_ready_transitions_5m") or 0)
-        except Exception:
-            recent_non_ready_5m = 0
-        try:
-            recent_transitions_5m = int(diag_item.get("recent_transitions_5m") or 0)
-        except Exception:
-            recent_transitions_5m = 0
         if (
             status == ReadinessStatus.READY.value
-            and stable_for_s >= 300.0
-            and recent_non_ready_5m <= 0
-            and recent_transitions_5m <= 0
+            and stable_for_s >= recovery_hold_s
         ):
             effective_state = "stable"
             return {
@@ -2431,8 +2448,19 @@ def _apply_incident_degradation(
         recent_transitions_5m = int(diag.get("recent_transitions_5m") or 0)
     except Exception:
         recent_transitions_5m = 0
-    if stable_for_s >= 300.0 and recent_non_ready_5m <= 0 and recent_transitions_5m <= 0:
-        return node
+    recovery_hold_s = _incident_readiness_recovery_hold_s()
+    if stable_for_s >= recovery_hold_s:
+        recovered = dict(node)
+        details = dict(node.get("details") or {})
+        details["stability_warning"] = {
+            "state": stability_state,
+            "reason": str(stability.get("reason") or ""),
+            "recent_non_ready_transitions_5m": recent_non_ready_5m,
+            "recent_transitions_5m": recent_transitions_5m,
+        }
+        details["incident_recovery_hold_s"] = recovery_hold_s
+        recovered["details"] = details
+        return recovered
     if allow_semantic_probe_recovery:
         recovered = _route_semantic_probe_recovery(node, diagnostics=diag, now_ts=time.time())
         if recovered is not None:

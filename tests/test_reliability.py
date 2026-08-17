@@ -321,6 +321,57 @@ def test_hub_reliability_marks_root_channel_unstable_after_reconnect_incident_wi
     assert any(item["status"] == "reconnect" for item in diag["recent_history"])
 
 
+def test_hub_reliability_restores_readiness_after_short_stable_hold(monkeypatch) -> None:
+    _reset_state()
+    reliability = importlib.import_module("adaos.services.reliability")
+    clock = {"now": 1_774_017_000.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+    mark_route_ready(details={"subject": "route.to_hub.*"})
+    for _ in range(2):
+        clock["now"] += 1.0
+        mark_root_control_down(details={"kind": "disconnected"})
+        clock["now"] += 1.0
+        mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+        mark_route_ready(details={"subject": "route.to_hub.*"})
+
+    clock["now"] += reliability._incident_readiness_recovery_hold_s() + 0.1
+    snapshot = reliability_snapshot(
+        node_id="node-1",
+        subnet_id="sn_1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    runtime = snapshot["runtime"]
+    root_diag = runtime["channel_diagnostics"]["root_control"]
+    assert root_diag["stability"]["state"] == "flapping"
+    assert root_diag["recent_non_ready_transitions_5m"] == 2
+    assert runtime["readiness_tree"]["root_control"]["status"] == "ready"
+    assert runtime["readiness_tree"]["route"]["status"] == "ready"
+    assert runtime["channel_overview"]["hub_root"]["effective_status"] == "ready"
+    assert runtime["channel_overview"]["hub_root"]["effective_state"] == "stable"
+    warning = runtime["readiness_tree"]["root_control"]["details"]["stability_warning"]
+    assert warning["state"] == "flapping"
+    assert warning["recent_non_ready_transitions_5m"] == 2
+
+
+def test_incident_readiness_recovery_hold_is_bounded(monkeypatch) -> None:
+    reliability = importlib.import_module("adaos.services.reliability")
+
+    monkeypatch.setenv("ADAOS_RELIABILITY_INCIDENT_RECOVERY_HOLD_S", "0")
+    assert reliability._incident_readiness_recovery_hold_s() == 1.0
+    monkeypatch.setenv("ADAOS_RELIABILITY_INCIDENT_RECOVERY_HOLD_S", "30")
+    assert reliability._incident_readiness_recovery_hold_s() == 30.0
+    monkeypatch.setenv("ADAOS_RELIABILITY_INCIDENT_RECOVERY_HOLD_S", "invalid")
+    assert reliability._incident_readiness_recovery_hold_s() == 15.0
+
+
 def test_hub_reliability_recovers_ready_route_after_stable_probe_window(monkeypatch) -> None:
     _reset_state()
     reliability = importlib.import_module("adaos.services.reliability")

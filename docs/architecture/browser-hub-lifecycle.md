@@ -214,6 +214,11 @@ every 15 seconds with `prepare_elapsed_s`, `prepare_heartbeat_at`, and
 `prepare_timeout_sec`. This keeps the read model observably live while package
 installation is running without treating progress reporting as readiness.
 
+Recent transport incidents remain visible through channel stability diagnostics,
+but they stop gating current browser availability after 15 seconds of continuous
+live readiness (configurable with `ADAOS_RELIABILITY_INCIDENT_RECOVERY_HOLD_S`).
+This separates present availability from the five-minute incident history.
+
 UI diagnostics use the same lifecycle gate. While a routed Root path is
 unavailable, events remain in a bounded local queue and no diagnostics POST is
 started. After recovery, diagnostics are coalesced behind a 30-second network
