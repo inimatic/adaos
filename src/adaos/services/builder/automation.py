@@ -1297,9 +1297,7 @@ class BuilderAutomationService:
             if isinstance(artifacts.get("execution_budget"), Mapping)
             else None
         )
-        usage = BuilderAutomationService._codex_journal_usage(
-            str(local_run.get("events_path") or "")
-        )
+        usage = BuilderAutomationService._codex_run_usage(local_run)
         started_raw = str(task.get("assigned_at") or task.get("created_at") or "").strip()
         finished_raw = str(task.get("updated_at") or "").strip()
         wall_seconds = 0.0
@@ -1358,6 +1356,27 @@ class BuilderAutomationService:
             return values
         except OSError:
             return {}
+
+    @staticmethod
+    def _codex_run_usage(local_run: Mapping[str, Any]) -> dict[str, int]:
+        run_root = Path(str(local_run.get("path") or "").strip())
+        runtime_root = run_root / "runtime"
+        paths = sorted(runtime_root.glob("codex-events*.jsonl")) if runtime_root.is_dir() else []
+        if not paths:
+            event_path = str(local_run.get("events_path") or "").strip()
+            paths = [Path(event_path)] if event_path else []
+        total: dict[str, int] = {}
+        for path in paths:
+            usage = BuilderAutomationService._codex_journal_usage(str(path))
+            for key, value in usage.items():
+                if key == "model_tokens":
+                    continue
+                total[key] = int(total.get(key) or 0) + int(value or 0)
+        if total:
+            total["model_tokens"] = int(total.get("input_tokens") or 0) + int(
+                total.get("output_tokens") or 0
+            )
+        return total
 
     @staticmethod
     def _phase_for_status(status: str) -> str:

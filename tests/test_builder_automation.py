@@ -228,7 +228,10 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
 
 
 def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Path) -> None:
-    journal = tmp_path / "codex-live.jsonl"
+    run_root = tmp_path / "run"
+    runtime_root = run_root / "runtime"
+    runtime_root.mkdir(parents=True)
+    journal = runtime_root / "codex-events.jsonl"
     journal.write_text(
         json.dumps(
             {
@@ -237,6 +240,20 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
                     "input_tokens": 1200,
                     "cached_input_tokens": 300,
                     "output_tokens": 400,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (runtime_root / "codex-events-repair-1.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 200,
+                    "cached_input_tokens": 100,
+                    "output_tokens": 50,
                 },
             }
         )
@@ -261,13 +278,14 @@ def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Pa
                 }
             },
         },
-        "local_run": {"events_path": str(journal)},
+        "local_run": {"path": str(run_root), "events_path": str(journal)},
     }
 
     projected = BuilderAutomationService.project_session(session)
 
     assert projected["budget_usage"]["declared"]["max_model_tokens"] == 80000
-    assert projected["budget_usage"]["observed"]["model_tokens"] == 1600
+    assert projected["budget_usage"]["observed"]["model_tokens"] == 1850
+    assert projected["budget_usage"]["observed"]["cached_input_tokens"] == 400
     assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
     assert projected["budget_usage"]["observed"]["terminal"] is True
 
