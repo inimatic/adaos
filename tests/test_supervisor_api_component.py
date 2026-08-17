@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from fastapi.testclient import TestClient
 
@@ -132,20 +131,16 @@ def test_supervisor_api_adapter_requests_managed_service_restart() -> None:
     assert result == {"ok": True, "accepted": True, "reason": "test.operator"}
 
 
-def test_supervisor_api_status_does_not_block_event_loop() -> None:
+def test_supervisor_api_status_reads_projection_inline() -> None:
+    calls = 0
+
     class _Manager:
         def status(self):
-            time.sleep(0.2)
+            nonlocal calls
+            calls += 1
             return {"runtime_state": "ready"}
 
     adapter = SupervisorApiAdapter(lambda: _Manager())
 
-    async def _exercise() -> dict[str, str]:
-        task = asyncio.create_task(adapter.supervisor_status())
-        started = asyncio.get_running_loop().time()
-        await asyncio.sleep(0.03)
-        assert asyncio.get_running_loop().time() - started < 0.12
-        assert not task.done()
-        return await task
-
-    assert asyncio.run(_exercise()) == {"runtime_state": "ready"}
+    assert asyncio.run(adapter.supervisor_status()) == {"runtime_state": "ready"}
+    assert calls == 1

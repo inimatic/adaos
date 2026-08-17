@@ -28,6 +28,187 @@ class SupervisorStatusOperations:
 
 
 class SupervisorStatusService:
+    @staticmethod
+    def _compact_bootstrap_update(payload: Any, *, list_limit: int = 16) -> dict[str, Any]:
+        source = payload if isinstance(payload, dict) else {}
+        result: dict[str, Any] = {}
+        for key, value in source.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                result[str(key)] = value
+            elif isinstance(value, list):
+                result[str(key)] = list(value[:list_limit])
+                if len(value) > list_limit:
+                    result[f"{key}_total"] = len(value)
+                    result[f"{key}_truncated"] = True
+        return result
+
+    @staticmethod
+    def _select_fields(payload: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+        source = payload if isinstance(payload, dict) else {}
+        return {key: source.get(key) for key in fields if key in source}
+
+    def compact_update_attempt(self, payload: Any) -> dict[str, Any]:
+        return self._select_fields(
+            payload,
+            (
+                "contract_version",
+                "authority",
+                "state",
+                "action",
+                "requested_at",
+                "transitioned_at",
+                "scheduled_for",
+                "updated_at",
+                "completed_at",
+                "countdown_sec",
+                "drain_timeout_sec",
+                "signal_delay_sec",
+                "target_rev",
+                "target_version",
+                "target_slot",
+                "reason",
+                "planned_reason",
+                "completion_reason",
+                "accepted",
+                "awaiting_restart",
+                "restart_required",
+                "restart_mode",
+                "restart_requested_at",
+                "min_update_period_sec",
+                "subsequent_transition",
+                "subsequent_transition_requested_at",
+                "candidate_prewarm_state",
+                "candidate_prewarm_message",
+                "candidate_prewarm_ready_at",
+                "candidate_prewarm_deferral_count",
+                "candidate_prewarm_max_deferrals",
+                "last_status_matches_current",
+                "last_status_updated_at",
+            ),
+        )
+
+    def compact_runtime_read_model(self, payload: Any) -> dict[str, Any]:
+        source = dict(payload) if isinstance(payload, dict) else {}
+        source.pop("persisted_state", None)
+
+        manifest = source.get("active_manifest") if isinstance(source.get("active_manifest"), dict) else {}
+        compact_manifest = self._select_fields(
+            manifest,
+            (
+                "slot",
+                "created_at",
+                "target_rev",
+                "target_version",
+                "requested_target_version",
+                "resolved_target_version",
+                "source_kind",
+                "base_version",
+                "build_version",
+                "build_date",
+                "git_commit",
+                "git_short_commit",
+                "git_branch",
+                "git_subject",
+            ),
+        )
+        source["active_manifest"] = compact_manifest
+        source["bootstrap_update"] = self._compact_bootstrap_update(source.get("bootstrap_update"))
+        source.pop("hub_root_watchdog", None)
+        source.pop("member_hub_watchdog", None)
+
+        sidecar = source.get("sidecar") if isinstance(source.get("sidecar"), dict) else {}
+        process = sidecar.get("process") if isinstance(sidecar.get("process"), dict) else {}
+        code = sidecar.get("code") if isinstance(sidecar.get("code"), dict) else {}
+        health = sidecar.get("health") if isinstance(sidecar.get("health"), dict) else {}
+        restart_policy = sidecar.get("restart_policy") if isinstance(sidecar.get("restart_policy"), dict) else {}
+        sync = sidecar.get("sync") if isinstance(sidecar.get("sync"), dict) else {}
+        compact_process = self._select_fields(
+            process,
+            (
+                "host",
+                "port",
+                "control_port",
+                "local_url",
+                "managed_pid",
+                "managed_alive",
+                "managed_exit_code",
+                "listener_pid",
+                "listener_running",
+                "listener_liveness_basis",
+                "listener_matches_managed",
+                "adopted_listener",
+                "enablement_policy",
+            ),
+        )
+        compact_code = self._select_fields(
+            code,
+            (
+                "mode",
+                "reason",
+                "repo_root",
+                "launch_cwd",
+                "fingerprint_contract",
+                "fingerprint",
+                "updated_at",
+                "sync_source_mode",
+                "sync_source_reason",
+                "sync_source_repo_root",
+                "sync_source_slot",
+                "active_fingerprint",
+                "active_updated_at",
+            ),
+        )
+        compact_health = self._select_fields(
+            health,
+            ("last_probe_at", "last_probe_ok", "last_probe_error", "consecutive_failures"),
+        )
+        compact_restart_policy = self._select_fields(
+            restart_policy,
+            (
+                "code_change_debounce_sec",
+                "automatic_code_restart",
+                "code_upgrade_policy",
+                "code_upgrade_state",
+                "waiting_for_runtime_stability",
+                "restart_window_sec",
+                "restart_limit",
+                "base_backoff_sec",
+                "max_backoff_sec",
+                "circuit_open_sec",
+                "pending_code_fingerprint",
+                "pending_code_since",
+                "pending_code_age_s",
+                "restart_backoff_until",
+                "restart_backoff_remaining_s",
+                "circuit_open_until",
+                "circuit_open_remaining_s",
+                "recent_restart_total",
+                "last_restart_at",
+            ),
+        )
+        compact_sync = self._select_fields(
+            sync,
+            ("last_sync_at", "last_sync_source_slot", "last_sync_reason", "last_sync_changed_paths"),
+        )
+        if isinstance(compact_sync.get("last_sync_changed_paths"), list):
+            compact_sync["last_sync_changed_paths"] = compact_sync["last_sync_changed_paths"][:32]
+        source["sidecar"] = {
+            **self._select_fields(
+                sidecar,
+                ("enabled", "role", "launch_cwd", "last_start_reason", "last_restart_reason"),
+            ),
+            "process": compact_process,
+            "code": compact_code,
+            "health": compact_health,
+            "restart_policy": compact_restart_policy,
+            "sync": compact_sync,
+        }
+        if isinstance(source.get("managed_cmdline"), list):
+            source["managed_cmdline"] = source["managed_cmdline"][:16]
+        if isinstance(source.get("candidate_managed_cmdline"), list):
+            source["candidate_managed_cmdline"] = source["candidate_managed_cmdline"][:16]
+        return source
+
     def sidecar_runtime_payload(
         self,
         manager: Any,

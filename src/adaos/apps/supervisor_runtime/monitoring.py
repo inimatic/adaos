@@ -33,11 +33,15 @@ class SupervisorMonitoringService:
                 manager._process_supervisor.track_sidecar(None)
                 manager._persist_runtime_state()
             if operations.realtime_sidecar_enabled(role=manager._sidecar_role()) and not manager._stopping:
-                sync_result = manager._sync_sidecar_controlled_files_from_validated_slot()
+                sync_result = await asyncio.to_thread(manager._sync_sidecar_controlled_files_from_validated_slot)
                 if bool(sync_result.get("changed")):
                     manager._persist_runtime_state()
-                sidecar_snapshot = operations.realtime_sidecar_listener_snapshot(manager._sidecar_proc, role=manager._sidecar_role())
-                code_state = manager._sidecar_code_state()
+                sidecar_snapshot = await asyncio.to_thread(
+                    operations.realtime_sidecar_listener_snapshot,
+                    manager._sidecar_proc,
+                    role=manager._sidecar_role(),
+                )
+                code_state = await asyncio.to_thread(manager._sidecar_code_state)
                 current_fingerprint = str(code_state.get("fingerprint") or "").strip() or None
                 code_changed = bool(
                     current_fingerprint
@@ -58,6 +62,7 @@ class SupervisorMonitoringService:
                     manager._sidecar_code_change_pending_fingerprint = None
                     manager._sidecar_code_change_pending_since = None
                 sidecar_ready = await manager._probe_sidecar_health()
+                manager._publish_sidecar_health_observation(sidecar_snapshot)
                 should_restart_sidecar = False
                 restart_reason = None
                 if manager._sidecar_proc is None and not bool(sidecar_snapshot.get("listener_running")):
@@ -171,8 +176,8 @@ class SupervisorMonitoringService:
             rc = proc.poll()
             if rc is None:
                 with contextlib.suppress(Exception):
-                    manager._sample_memory_telemetry()
-                critical_memory_decision = manager._memory_critical_restart_decision()
+                    await asyncio.to_thread(manager._sample_memory_telemetry)
+                critical_memory_decision = await asyncio.to_thread(manager._memory_critical_restart_decision)
                 if critical_memory_decision is not None:
                     with contextlib.suppress(Exception):
                         critical_memory_decision["pre_restart_evidence"] = manager._capture_runtime_stop_evidence(

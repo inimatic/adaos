@@ -404,6 +404,36 @@ Always available while the node is booted:
 - `POST /api/supervisor/runtime/candidate/start`
 - `POST /api/supervisor/runtime/candidate/stop`
 
+`GET /api/supervisor/status` is a compact in-memory read model. Supervisor
+publishes it on durable lifecycle transitions and refreshes liveness fields
+from the existing runtime and sidecar monitor observations. Serving the route
+must not probe runtime HTTP, enumerate processes or listeners, or read state
+files. `status_read_model` exposes the projection generation, observation age,
+stale threshold, publication reason, and last durable-state timestamp.
+The monitor performs blocking runtime HTTP, process, sidecar-code, and memory
+collection in worker threads while lifecycle transitions remain serialized by
+the supervisor lock, so those observations cannot stall the API event loop.
+An operator service restart is acknowledged before the potentially slow
+autostart-wrapper refresh; the restart worker signals the process only after
+that refresh succeeds. This keeps the control response observable under disk
+pressure without weakening wrapper validation.
+
+The general status intentionally omits the former recursive
+`persisted_state` copy and compacts manifests, bootstrap path lists, update
+attempts, and sidecar process details. Full evidence remains on the surfaces
+that own a concrete operator use case:
+
+- `GET /api/supervisor/update/status` for update plans, attempts, slots, and manifests
+- `GET /api/supervisor/sidecar/status` for transport ownership and sidecar diagnostics
+- `GET /api/supervisor/memory/status` and related memory routes for profiling evidence
+
+The browser client does not consume the authenticated general status. It uses
+control websocket events as the primary transition source, the compact
+`public/update-status` projection as fallback, and runtime reliability beacons
+for channel state. The public update projection is derived from the same
+in-memory supervisor read model, so fallback polling cannot trigger a second
+runtime readiness probe.
+
 This API is the source of truth for:
 
 - update attempt state

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from types import SimpleNamespace
 
@@ -2201,6 +2202,71 @@ def test_supervisor_status_exposes_core_skill_workload_gate(monkeypatch, tmp_pat
     status = manager.status()
     assert status["workload_admission"]["core_update_holds_skill_migration_gate"] is True
     assert status["workload_admission"]["skill_migration_lease_path"].endswith("worker.lock")
+
+
+def test_supervisor_status_reads_compact_in_memory_projection_without_io(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    manager._publish_status_snapshot(
+        {
+            "ok": True,
+            "supervisor_pid": 11,
+            "runtime_state": "ready",
+            "runtime_api_ready": True,
+            "listener_running": True,
+            "active_manifest": {
+                "slot": "A",
+                "git_short_commit": "abc1234",
+                "env": {"SHOULD_NOT_BE_EXPOSED": "x" * 1000},
+            },
+            "bootstrap_update": {
+                "required": True,
+                "changed_paths": [f"path-{index}" for index in range(100)],
+            },
+            "sidecar": {
+                "enabled": True,
+                "role": "hub",
+                "process": {
+                    "managed_pid": 22,
+                    "listener_running": True,
+                    "route_tunnel_contract": {"large": "x" * 1000},
+                },
+                "health": {"last_probe_ok": True, "consecutive_failures": 0},
+                "code": {"fingerprint": "next", "active_fingerprint": "current"},
+                "restart_policy": {"pending_code_fingerprint": "next"},
+                "sync": {"last_sync_changed_paths": ["one.py"]},
+            },
+        },
+        update_attempt={
+            "state": "active",
+            "action": "update",
+            "observed_status": {"large": "x" * 1000},
+        },
+        reason="test_projection",
+    )
+
+    def _unexpected_io(*args, **kwargs):
+        raise AssertionError("status read must not collect diagnostics")
+
+    monkeypatch.setattr(manager, "_runtime_state_payload", _unexpected_io)
+    monkeypatch.setattr(supervisor, "_read_json", _unexpected_io)
+    monkeypatch.setattr(supervisor, "_read_update_attempt", _unexpected_io)
+    monkeypatch.setattr(supervisor, "read_core_update_status", _unexpected_io)
+
+    first = manager.status()
+    second = manager.status()
+
+    assert first["runtime_state"] == "ready"
+    assert first["status_read_model"]["read_only"] is True
+    assert first["status_read_model"]["mode"] == "event_projection"
+    assert first["status_read_model"]["generation"] == second["status_read_model"]["generation"]
+    assert "persisted_state" not in first
+    assert "env" not in first["active_manifest"]
+    assert len(first["bootstrap_update"]["changed_paths"]) == 16
+    assert first["bootstrap_update"]["changed_paths_total"] == 100
+    assert "route_tunnel_contract" not in first["sidecar"]["process"]
+    assert "observed_status" not in first["update_attempt"]
+    assert len(json.dumps(first)) < 12_000
 
 
 def test_supervisor_prepare_failure_does_not_request_runtime_shutdown(monkeypatch, tmp_path) -> None:
@@ -4816,7 +4882,7 @@ def test_runtime_state_payload_reports_listener_and_api_readiness(monkeypatch, t
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["active_slot"] == "B"
     assert payload["managed_alive"] is True
@@ -4865,7 +4931,7 @@ def test_runtime_state_payload_surfaces_previous_slot(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["active_slot"] == "B"
     assert payload["previous_slot"] == "A"
@@ -4911,7 +4977,7 @@ def test_runtime_state_payload_surfaces_required_upstream_link_for_member(monkey
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["required_upstream_link"]["kind"] == "member_hub"
     assert payload["required_upstream_link"]["owner"] == "supervisor"
@@ -4957,7 +5023,7 @@ def test_runtime_state_payload_reports_slot_mismatch(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["runtime_state"] == "spawned"
     assert payload["managed_matches_active_slot"] is False
@@ -4995,7 +5061,7 @@ def test_runtime_state_payload_reports_verified_adoption_identity_basis(monkeypa
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["managed_process_matches_active_slot"] is False
     assert payload["managed_matches_active_slot"] is True
@@ -5034,7 +5100,7 @@ def test_runtime_state_payload_uses_supervisor_recorded_cwd_when_subprocess_hide
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["managed_cwd"] == str(tmp_path)
     assert payload["managed_matches_active_slot"] is True
@@ -5078,7 +5144,7 @@ def test_runtime_state_payload_includes_sidecar_snapshot(monkeypatch, tmp_path) 
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: False)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["sidecar"]["enabled"] is True
     assert payload["sidecar"]["process"]["listener_running"] is True
@@ -5861,7 +5927,7 @@ def test_runtime_state_payload_surfaces_root_promotion_requirement(monkeypatch, 
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["root_promotion_required"] is True
     assert "src/adaos/apps/supervisor.py" in payload["bootstrap_update"]["changed_paths"]
@@ -5908,7 +5974,7 @@ def test_runtime_state_payload_clears_root_promotion_requirement_when_root_match
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["root_promotion_required"] is False
     assert payload["bootstrap_update"]["required"] is True
@@ -6312,7 +6378,7 @@ def test_runtime_state_payload_surfaces_warm_switch_admission(monkeypatch, tmp_p
     monkeypatch.setattr(supervisor, "choose_inactive_slot", lambda: "B")
     monkeypatch.setattr(supervisor, "psutil", _Psutil)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["runtime_port"] == 8777
     assert payload["candidate_slot"] == "B"
@@ -6375,7 +6441,7 @@ def test_runtime_state_payload_falls_back_to_stop_and_switch_when_memory_is_low(
     monkeypatch.setattr(supervisor, "choose_inactive_slot", lambda: "B")
     monkeypatch.setattr(supervisor, "psutil", _Psutil)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["candidate_slot"] == "B"
     assert payload["transition_mode"] == "stop_and_switch"
@@ -6451,7 +6517,7 @@ def test_runtime_state_payload_uses_process_family_rss_for_warm_switch_gate(monk
     monkeypatch.setattr(supervisor, "choose_inactive_slot", lambda: "B")
     monkeypatch.setattr(supervisor, "psutil", _Psutil)
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["candidate_slot"] == "B"
     assert payload["warm_switch_allowed"] is False
@@ -6753,6 +6819,37 @@ def test_supervisor_schedule_service_restart_requests_self_exit(monkeypatch, tmp
     assert payload["mode"] == "self_exit"
     assert payload["wrapper_refresh"] == {"ok": True, "reason": "test.root_restart"}
     assert sleeps == [0.1]
+    assert kills == [(4321, supervisor.signal.SIGTERM)]
+
+
+def test_supervisor_service_restart_defers_wrapper_refresh_until_after_accept(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(supervisor, "_autostart_self_restart_supported", lambda: True)
+    monkeypatch.setattr(supervisor, "_root_restart_delay_sec", lambda: 0.1)
+    monkeypatch.setattr(supervisor.os, "getpid", lambda: 4321)
+    refresh_started = threading.Event()
+    refresh_release = threading.Event()
+    kills: list[tuple[int, int]] = []
+
+    def _refresh(*, reason: str) -> dict[str, object]:
+        refresh_started.set()
+        assert refresh_release.wait(timeout=1.0)
+        return {"ok": True, "reason": reason}
+
+    monkeypatch.setattr(manager, "_refresh_autostart_wrapper", _refresh)
+    monkeypatch.setattr(supervisor.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+
+    payload = manager.restart_service(reason="test.operator_restart")
+
+    assert payload["accepted"] is True
+    assert payload["restart"]["wrapper_refresh"]["scheduled"] is True
+    assert refresh_started.wait(timeout=0.5)
+    assert kills == []
+    refresh_release.set()
+    thread = manager._service_restart_thread
+    assert thread is not None
+    thread.join(timeout=1.0)
     assert kills == [(4321, supervisor.signal.SIGTERM)]
 
 
@@ -7358,35 +7455,37 @@ def test_public_update_status_does_not_probe_runtime_admin_status(monkeypatch, t
     assert payload["runtime"]["runtime_state"] == "spawned"
 
 
-def test_public_update_status_uses_short_runtime_probe_timeout(monkeypatch, tmp_path) -> None:
+def test_public_update_status_reads_runtime_projection_without_probing(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
-    manager._proc = object()  # type: ignore[assignment]
-
-    timeouts: list[float] = []
-    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
-    monkeypatch.setattr(
-        supervisor,
-        "_proc_details",
-        lambda *args, **kwargs: {
-            "managed_pid": 1,
-            "managed_alive": True,
-            "managed_cmdline": [],
-            "managed_executable": "",
-            "managed_cwd": "",
+    manager._publish_status_snapshot(
+        {
+            "ok": True,
+            "runtime_state": "starting",
+            "listener_running": True,
+            "runtime_api_ready": False,
+            "runtime_url": "http://127.0.0.1:8777",
+            "runtime_port": 8777,
+            "sidecar": {},
         },
+        update_attempt={},
+        reason="test_runtime_observation",
     )
+
+    def _unexpected_probe(*args, **kwargs):
+        raise AssertionError("public update status must use the supervisor read model")
+
+    monkeypatch.setattr(supervisor, "_listener_running", _unexpected_probe)
+    monkeypatch.setattr(supervisor, "_proc_details", _unexpected_probe)
     monkeypatch.setattr(
         supervisor,
         "_runtime_api_ready",
-        lambda *args, **kwargs: timeouts.append(float(kwargs.get("timeout") or 0.0)) or False,
+        _unexpected_probe,
     )
 
     payload = manager.public_update_status()
 
     assert payload["runtime"]["runtime_state"] == "starting"
-    assert timeouts
-    assert max(timeouts) <= 0.1
 
 
 def test_public_memory_status_uses_compact_last_session(monkeypatch, tmp_path) -> None:
@@ -8378,7 +8477,7 @@ def test_runtime_state_payload_surfaces_candidate_runtime_state(monkeypatch, tmp
         lambda base_url, **kwargs: base_url.endswith(":8777") or base_url.endswith(":8778"),
     )
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["candidate_slot"] == "B"
     assert payload["candidate_runtime_port"] == 8778
@@ -8434,7 +8533,7 @@ def test_runtime_state_payload_hides_candidate_after_root_restart_completion(mon
     monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
     monkeypatch.setattr(supervisor, "choose_inactive_slot", lambda: "A")
 
-    payload = manager.status()
+    payload = manager.status(refresh=True)
 
     assert payload["candidate_slot"] is None
     assert payload["candidate_runtime_url"] is None

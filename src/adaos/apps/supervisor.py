@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import copy
 import hashlib
 import json
 import logging
@@ -2292,6 +2293,39 @@ class SupervisorManager:
         self._sidecar_last_sync_reason: str | None = None
         self._sidecar_last_sync_changed_paths: list[str] = []
         self._required_upstream_watchdog_last_poll_at: float | None = None
+        self._status_snapshot_lock = threading.RLock()
+        self._status_snapshot_generation = 0
+        self._status_snapshot_observed_at: float | None = None
+        self._status_snapshot_reason = "initializing"
+        self._status_durable_updated_at: float | None = None
+        self._skill_runtime_migration_lease_path = str(
+            (current_base_dir() / "state" / "skill_runtime_migration" / "worker.lock").resolve()
+        )
+        initialized_at = time.time()
+        self._status_snapshot: dict[str, Any] = {
+            "ok": True,
+            "supervisor_pid": os.getpid(),
+            "supervisor_url": _supervisor_base_url(),
+            "runtime_url": self.slot_runtime_base_url(None),
+            "runtime_host": self.runtime_host,
+            "runtime_port": self.runtime_port,
+            "managed_slot": None,
+            "runtime_instance_id": None,
+            "transition_role": None,
+            "active_slot": None,
+            "previous_slot": None,
+            "desired_running": True,
+            "stopping": False,
+            "managed_pid": None,
+            "managed_alive": False,
+            "listener_running": False,
+            "runtime_api_ready": False,
+            "runtime_state": "initializing",
+            "sidecar": {},
+            "update_attempt": {},
+            "updated_at": initialized_at,
+        }
+        self._status_snapshot_observed_at = initialized_at
 
     @staticmethod
     def _process_operations() -> ProcessSupervisorOperations:
@@ -2754,7 +2788,11 @@ class SupervisorManager:
         return True, None
 
     async def _probe_sidecar_health(self, *, force: bool = False) -> bool | None:
-        snapshot = realtime_sidecar_listener_snapshot(self._sidecar_proc, role=self._sidecar_role())
+        snapshot = await asyncio.to_thread(
+            realtime_sidecar_listener_snapshot,
+            self._sidecar_proc,
+            role=self._sidecar_role(),
+        )
         if not bool(snapshot.get("listener_running")):
             self._sidecar_last_probe_at = time.time()
             self._sidecar_last_probe_ok = False
@@ -3588,6 +3626,7 @@ class SupervisorManager:
         *,
         reason: str,
         candidate_wrapper_refresh: dict[str, Any] | None = None,
+        defer_wrapper_refresh: bool = False,
     ) -> dict[str, Any]:
         delay_sec = _root_restart_delay_sec()
         if not _autostart_self_restart_supported():
@@ -3598,10 +3637,8 @@ class SupervisorManager:
                 "delay_sec": None,
                 "reason": "autostart self-restart is unavailable for the current supervisor process",
             }
-        wrapper_refresh = (
-            dict(candidate_wrapper_refresh)
-            if isinstance(candidate_wrapper_refresh, dict) and bool(candidate_wrapper_refresh.get("ok"))
-            else self._refresh_autostart_wrapper(reason=reason)
+        candidate_refresh_ready = isinstance(candidate_wrapper_refresh, dict) and bool(
+            candidate_wrapper_refresh.get("ok")
         )
         if self._service_restart_pending:
             return {
@@ -3610,14 +3647,45 @@ class SupervisorManager:
                 "mode": "self_exit",
                 "delay_sec": delay_sec,
                 "duplicate": True,
-                "wrapper_refresh": wrapper_refresh,
+                "wrapper_refresh": (
+                    dict(candidate_wrapper_refresh)
+                    if candidate_refresh_ready
+                    else {
+                        "ok": True,
+                        "scheduled": True,
+                        "reason": str(reason or "supervisor.service.restart"),
+                    }
+                ),
             }
+        wrapper_refresh = (
+            dict(candidate_wrapper_refresh)
+            if candidate_refresh_ready
+            else (
+                {
+                    "ok": True,
+                    "scheduled": True,
+                    "reason": str(reason or "supervisor.service.restart"),
+                }
+                if defer_wrapper_refresh
+                else self._refresh_autostart_wrapper(reason=reason)
+            )
+        )
         self._service_restart_pending = True
         pid = os.getpid()
         restart_reason = str(reason or "supervisor.update.complete")
 
         def _worker() -> None:
             try:
+                if defer_wrapper_refresh and not candidate_refresh_ready:
+                    deferred_refresh = self._refresh_autostart_wrapper(reason=restart_reason)
+                    if not bool(deferred_refresh.get("ok")):
+                        raise RuntimeError(
+                            str(
+                                deferred_refresh.get("error")
+                                or deferred_refresh.get("reason")
+                                or "wrapper refresh failed"
+                            )
+                        )
                 time.sleep(delay_sec)
                 _LOG.info(
                     "requesting autostart service self-restart pid=%s delay_sec=%.3f reason=%s",
@@ -3649,7 +3717,7 @@ class SupervisorManager:
                 "reason": "core_update_active",
                 "message": "supervisor service restart is blocked while a core update is active",
             }
-        restart = self._schedule_service_restart(reason=reason)
+        restart = self._schedule_service_restart(reason=reason, defer_wrapper_refresh=True)
         requested = bool(restart.get("requested"))
         return {
             "ok": bool(restart.get("ok")) and requested,
@@ -5645,6 +5713,99 @@ class SupervisorManager:
             runtime_api_timeout=runtime_api_timeout,
         )
 
+    def _publish_status_snapshot(
+        self,
+        payload: dict[str, Any],
+        *,
+        update_attempt: dict[str, Any] | None,
+        reason: str,
+        persisted_at: float | None = None,
+    ) -> None:
+        observed_at = time.time()
+        compact = self._status_service.compact_runtime_read_model(payload)
+        compact["update_attempt"] = self._status_service.compact_update_attempt(update_attempt)
+        compact["updated_at"] = observed_at
+        with self._status_snapshot_lock:
+            self._status_snapshot = copy.deepcopy(compact)
+            self._status_snapshot_generation += 1
+            self._status_snapshot_observed_at = observed_at
+            self._status_snapshot_reason = str(reason or "state_transition")
+            if persisted_at is not None:
+                self._status_durable_updated_at = float(persisted_at)
+
+    def _publish_status_observation(self, *, reason: str, fields: dict[str, Any]) -> None:
+        observed_at = time.time()
+        with self._status_snapshot_lock:
+            for key, value in fields.items():
+                self._status_snapshot[str(key)] = copy.deepcopy(value)
+            self._status_snapshot["updated_at"] = observed_at
+            self._status_snapshot_generation += 1
+            self._status_snapshot_observed_at = observed_at
+            self._status_snapshot_reason = str(reason or "runtime_observation")
+
+    def _publish_sidecar_health_observation(self, process: dict[str, Any] | None) -> None:
+        observed_at = time.time()
+        process_source = process if isinstance(process, dict) else {}
+        process_fields = {
+            key: process_source.get(key)
+            for key in (
+                "host",
+                "port",
+                "control_port",
+                "local_url",
+                "managed_pid",
+                "managed_alive",
+                "managed_exit_code",
+                "listener_pid",
+                "listener_running",
+                "listener_liveness_basis",
+                "listener_matches_managed",
+                "adopted_listener",
+                "enablement_policy",
+            )
+            if key in process_source
+        }
+        health = {
+            "last_probe_at": self._sidecar_last_probe_at,
+            "last_probe_ok": self._sidecar_last_probe_ok,
+            "last_probe_error": self._sidecar_last_probe_error,
+            "consecutive_failures": int(self._sidecar_consecutive_probe_failures),
+        }
+        with self._status_snapshot_lock:
+            sidecar = self._status_snapshot.get("sidecar")
+            sidecar = copy.deepcopy(sidecar) if isinstance(sidecar, dict) else {}
+            existing_process = sidecar.get("process") if isinstance(sidecar.get("process"), dict) else {}
+            sidecar["process"] = {**existing_process, **process_fields}
+            sidecar["health"] = health
+            self._status_snapshot["sidecar"] = sidecar
+            self._status_snapshot["updated_at"] = observed_at
+            self._status_snapshot_generation += 1
+            self._status_snapshot_observed_at = observed_at
+            self._status_snapshot_reason = "sidecar_health_observation"
+
+    def _refresh_status_snapshot(
+        self,
+        *,
+        reason: str,
+        runtime_api_timeout: float = 0.75,
+        persist: bool = False,
+    ) -> None:
+        payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
+        update_attempt = _observed_update_attempt(
+            _read_update_attempt(),
+            read_core_update_status(),
+        )
+        persisted_at = None
+        if persist:
+            _write_json(_supervisor_runtime_state_path(), payload)
+            persisted_at = time.time()
+        self._publish_status_snapshot(
+            payload,
+            update_attempt=update_attempt,
+            reason=reason,
+            persisted_at=persisted_at,
+        )
+
     def _managed_runtime_slot_expectations(
         self,
         *,
@@ -5715,7 +5876,11 @@ class SupervisorManager:
 
     def _persist_runtime_state(self) -> None:
         with contextlib.suppress(Exception):
-            _write_json(_supervisor_runtime_state_path(), self._runtime_state_payload())
+            self._refresh_status_snapshot(
+                reason="durable_state_transition",
+                runtime_api_timeout=0.2,
+                persist=True,
+            )
         with contextlib.suppress(Exception):
             write_memory_runtime_state(self._memory_runtime_state_payload())
 
@@ -5877,14 +6042,15 @@ class SupervisorManager:
         from its exception boundary. Auxiliary monitor failures must not keep
         a live-but-unresponsive runtime alive indefinitely.
         """
-        restart_decision = self._runtime_self_heal_decision()
+        async with self._lock:
+            restart_decision = await asyncio.to_thread(self._runtime_self_heal_decision)
         if restart_decision is None:
             return False
         recorded_decision = self._record_runtime_self_heal_restart(restart_decision)
         self._last_error = str(recorded_decision.get("message") or "active runtime became unhealthy")
         self._runtime_unhealthy_since = None
         self._runtime_unhealthy_kind = None
-        self._persist_runtime_state()
+        await asyncio.to_thread(self._persist_runtime_state)
         try:
             await self.restart_runtime(reason=str(recorded_decision.get("reason") or "supervisor.runtime.unhealthy"))
         except Exception:
@@ -6331,6 +6497,16 @@ class SupervisorManager:
         proc = self._proc
         if proc is None or proc.poll() is not None or self._stopping or not self._desired_running:
             self._recovery_policy.clear_unhealthy_window()
+            self._publish_status_observation(
+                reason="runtime_health_observation",
+                fields={
+                    "managed_alive": False,
+                    "listener_running": False,
+                    "runtime_api_ready": False,
+                    "runtime_state": "stopping" if self._stopping else "stopped",
+                    "runtime_self_heal": self._runtime_self_heal_status_payload(),
+                },
+            )
             return None
         update_status = read_core_update_status()
         update_state = str(update_status.get("state") or "").strip().lower()
@@ -6390,7 +6566,42 @@ class SupervisorManager:
                 api_restart_timeout_sec=_runtime_api_restart_timeout_sec(),
             )
         )
-        return self._recovery_policy.record_evaluation(evaluation)
+        decision = self._recovery_policy.record_evaluation(evaluation)
+        runtime_state = "ready" if api_ready else ("starting" if listener_running else "spawned")
+        self._publish_status_observation(
+            reason="runtime_health_observation",
+            fields={
+                "active_slot": current_slot,
+                "runtime_url": runtime_url,
+                "runtime_port": runtime_port,
+                "managed_pid": managed.get("managed_pid"),
+                "managed_alive": True,
+                "listener_running": listener_running,
+                "runtime_api_ready": api_ready,
+                "runtime_state": runtime_state,
+                "managed_executable": managed_executable,
+                "managed_cwd": managed_cwd,
+                "expected_managed_executable": expected_executable,
+                "expected_managed_cwd": expected_cwd,
+                "managed_matches_active_slot": managed_matches_active_slot,
+                "managed_runtime_api_identity": {
+                    "verified": bool(self._managed_runtime_api_identity_verified),
+                    "observed_at": self._managed_runtime_api_identity_observed_at,
+                    **dict(self._managed_runtime_api_identity or {}),
+                },
+                "runtime_self_heal": self._runtime_self_heal_status_payload(),
+                "monitor": {
+                    "running": bool(self._monitor_task is not None and not self._monitor_task.done()),
+                    "loop_started_at": self._monitor_loop_started_at,
+                    "last_iteration_at": self._monitor_last_iteration_at,
+                    "last_failure_at": self._monitor_last_failure_at,
+                    "last_failure": self._monitor_last_failure,
+                    "consecutive_failure_total": int(self._monitor_failure_total),
+                    "recovery_total": int(self._monitor_recovery_total),
+                },
+            },
+        )
+        return decision
 
     def _local_supervisor_update_status_payload(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = _local_update_payload()
@@ -7464,19 +7675,41 @@ class SupervisorManager:
         except Exception:
             _LOG.warning("failed to stop adaos-realtime sidecar", exc_info=True)
 
-    def status(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
-        payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
-        payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
-        payload["update_attempt"] = _observed_update_attempt(
-            _read_update_attempt(),
-            read_core_update_status(),
-        )
+    def status(
+        self,
+        *,
+        runtime_api_timeout: float = 0.75,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        if refresh:
+            self._refresh_status_snapshot(
+                reason="explicit_refresh",
+                runtime_api_timeout=runtime_api_timeout,
+            )
+        with self._status_snapshot_lock:
+            payload = copy.deepcopy(self._status_snapshot)
+            generation = int(self._status_snapshot_generation)
+            observed_at = self._status_snapshot_observed_at
+            reason = self._status_snapshot_reason
+            durable_updated_at = self._status_durable_updated_at
+        age_s = max(0.0, time.time() - float(observed_at)) if observed_at is not None else None
+        stale_after_s = 5.0
+        payload["status_read_model"] = {
+            "schema": "adaos.supervisor_status_read_model.v1",
+            "mode": "event_projection",
+            "read_only": True,
+            "generation": generation,
+            "observed_at": observed_at,
+            "age_s": round(age_s, 3) if age_s is not None else None,
+            "stale_after_s": stale_after_s,
+            "stale": age_s is None or age_s > stale_after_s,
+            "reason": reason,
+            "durable_state_updated_at": durable_updated_at,
+        }
         payload["update_task_running"] = self._update_state_machine.task_running()
         payload["workload_admission"] = {
             "core_update_holds_skill_migration_gate": self._skill_runtime_migration_gate_lease is not None,
-            "skill_migration_lease_path": str(
-                (current_base_dir() / "state" / "skill_runtime_migration" / "worker.lock").resolve()
-            ),
+            "skill_migration_lease_path": self._skill_runtime_migration_lease_path,
         }
         return payload
 

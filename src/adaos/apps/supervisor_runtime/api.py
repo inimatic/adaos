@@ -44,7 +44,7 @@ class SupervisorApiAdapter:
         return {"ok": True, "ts": time.time(), "service": "adaos-supervisor"}
 
     async def supervisor_status(self) -> dict[str, Any]:
-        return await asyncio.to_thread(self._manager().status)
+        return self._manager().status()
 
     async def supervisor_memory_status(self) -> dict[str, Any]:
         return await asyncio.to_thread(self._manager().memory_status)
