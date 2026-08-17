@@ -551,6 +551,13 @@ def test_native_voice_transcript_requires_address_and_dispatches_only_after_leas
 
     bootstrap._claim_voice_activation = claim
     try:
+        assert bootstrap._skills is not None
+        bootstrap._skills._hub_dialog_response = (  # type: ignore[method-assign]
+            lambda text, agent, *, webspace_id: (f"Handled: {text}", False)
+        )
+        bootstrap._skills._dispatch_nlu_teacher = (  # type: ignore[method-assign]
+            lambda **kwargs: False
+        )
         status, ignored = _post_json(
             f"{base_url}/api/node/voice/native/transcript",
             {"text": "разговор в комнате", "confidence": 0.9, "capture_id": "native-1"},
@@ -709,6 +716,7 @@ def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
     class FakeMemberLink:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict, float]] = []
+            self.call_thread_ids: list[int] = []
 
         def snapshot(self) -> dict:
             return {
@@ -725,6 +733,7 @@ def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
             self, tool: str, arguments: dict, *, timeout: float
         ) -> dict:
             self.calls.append((tool, arguments, timeout))
+            self.call_thread_ids.append(threading.get_ident())
             time.sleep(0.1)
             return {
                 "ok": True,
@@ -742,17 +751,18 @@ def test_android_connect_delegates_remote_invitations_to_canonical_hub_skill(
         assert bootstrap._skills is not None
         bootstrap._skills.member_link = member_link
 
-        started = time.monotonic()
+        caller_thread_id = threading.get_ident()
         result = bootstrap._skills._prepare_connect(
             "browser", {"webspace_id": "desktop", "refresh": True}
         )
 
-        assert time.monotonic() - started < 0.08
         assert result["current"]["status"] == "pending"
         worker = bootstrap._skills._connect_prepare_thread
         assert worker is not None
         worker.join(timeout=2)
         result = bootstrap._skills._connect_current()
+        assert member_link.call_thread_ids == [worker.ident]
+        assert member_link.call_thread_ids[0] != caller_thread_id
         assert member_link.calls[0][0] == "adaos_connect:prepare"
         assert member_link.calls[0][1]["mode"] == "browser"
         assert result["current"]["status"] == "ready"
@@ -1312,9 +1322,13 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
             close_timeout=2,
         ) as websocket:
             original_dialog_handler = bootstrap._skills.handle_dialog_message
+            dialog_started = threading.Event()
+            dialog_release = threading.Event()
 
             def _slow_dialog_handler(payload):
-                time.sleep(0.25)
+                dialog_started.set()
+                if not dialog_release.wait(timeout=2):
+                    raise RuntimeError("dialog test worker was not released")
                 return original_dialog_handler(payload)
 
             bootstrap._skills.handle_dialog_message = _slow_dialog_handler
@@ -1329,11 +1343,13 @@ def test_fixed_in_process_skills_publish_ws_yjs_and_persist_notebook(tmp_path: P
                     }
                 )
             )
-            websocket.send(json.dumps({"type": "ping"}))
-            pong_started = time.monotonic()
-            pong = json.loads(websocket.recv(timeout=1))
-            assert pong == {"type": "pong"}
-            assert time.monotonic() - pong_started < 0.2
+            assert dialog_started.wait(timeout=1)
+            try:
+                websocket.send(json.dumps({"type": "ping"}))
+                pong = json.loads(websocket.recv(timeout=1))
+                assert pong == {"type": "pong"}
+            finally:
+                dialog_release.set()
             dialog_ack = json.loads(websocket.recv(timeout=2))
             assert dialog_ack["id"] == "dialog-keepalive-proof"
             assert dialog_ack["data"]["accepted"] is True
