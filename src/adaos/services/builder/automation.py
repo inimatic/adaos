@@ -279,6 +279,7 @@ class BuilderAutomationService:
             "session_id": token,
             "project_ref": session["project_ref"],
             "target_ref": target_ref,
+            "request": session["handoff"].get("request"),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
             "prohibited_actions": list(session["handoff"]["prohibited_actions"]),

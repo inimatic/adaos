@@ -32,6 +32,7 @@
         "automation_brief_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "research_prototype_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "artifact_manifest_digests": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+        "request": {"type": "string", "minLength": 1, "maxLength": 20000},
         "prohibited_actions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
       },
       "additionalProperties": false

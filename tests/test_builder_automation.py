@@ -176,6 +176,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
             "automation_brief_digest": "sha256:" + "3" * 64,
             "research_prototype_digest": "sha256:" + "4" * 64,
             "artifact_manifest_digests": ["sha256:" + "1" * 64],
+            "request": "Implement the frozen calibration request.",
             "prohibited_actions": ["Do not inspect undeclared evaluator material."],
         },
         "status": "ready",
@@ -200,6 +201,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     )
     receipt = task["realize_request"]["artifacts"]["development_context"]
     assert receipt["session_id"] == session_id
+    assert receipt["request"] == "Implement the frozen calibration request."
     assert receipt["artifact_inputs"][0]["path"].startswith(".adaos_context/")
     assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
     assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
