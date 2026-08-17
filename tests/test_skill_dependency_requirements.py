@@ -205,6 +205,8 @@ def test_exact_runtime_restore_selects_requested_version_and_slot(monkeypatch, t
         "ok": True,
         "restored_active_version": "2.6.18",
         "restored_active_slot": "B",
+        "restored_deactivated": False,
+        "activation_emitted": False,
     }
     assert env.resolve_active_version() == "2.6.18"
     assert env.read_active_slot("2.6.18") == "B"

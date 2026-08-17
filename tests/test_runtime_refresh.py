@@ -6,7 +6,13 @@ import threading
 import types
 from typing import Any
 
-from adaos.services.runtime_refresh import rebuild_webspace_projection_sync, refresh_skill_runtime
+import pytest
+
+from adaos.services.runtime_refresh import (
+    RuntimeRefreshError,
+    rebuild_webspace_projection_sync,
+    refresh_skill_runtime,
+)
 
 
 def test_rebuild_webspace_projection_sync_works_inside_running_loop(monkeypatch) -> None:
@@ -295,6 +301,141 @@ def test_refresh_skill_runtime_isolates_same_version_source_revision() -> None:
         "activate_for_space:demo_skill:1.0.0:B:default:desktop",
         "runtime_status:demo_skill:2",
     ]
+
+
+def test_refresh_skill_runtime_restores_active_fallback_after_activation_failure() -> None:
+    calls: list[str] = []
+
+    class _Runtime:
+        version = "1.1.0"
+        slot = "B"
+        data_migration = {}
+
+    class _Manager:
+        def runtime_status(self, name: str) -> dict[str, Any]:
+            calls.append(f"runtime_status:{name}")
+            return {"version": "1.0.0", "active_slot": "A", "deactivated": False}
+
+        def deactivate_runtime(self, name: str, **_kwargs: Any) -> dict[str, Any]:
+            calls.append(f"deactivate_runtime:{name}")
+            return {
+                "deactivated": True,
+                "transient": True,
+                "reason": "runtime_migration_in_progress",
+            }
+
+        def prepare_runtime(self, name: str, **_kwargs: Any) -> _Runtime:
+            calls.append(f"prepare_runtime:{name}")
+            return _Runtime()
+
+        def activate_for_space(self, name: str, **_kwargs: Any) -> str:
+            calls.append(f"activate_for_space:{name}")
+            raise RuntimeError("candidate rehydrate failed")
+
+        def restore_runtime_selection_exact(self, name: str, **kwargs: Any) -> dict[str, Any]:
+            calls.append(f"restore_runtime_selection_exact:{name}")
+            assert kwargs == {
+                "version": "1.0.0",
+                "slot": "A",
+                "previous_deactivation": None,
+                "webspace_id": "desktop",
+                "emit_activation": True,
+            }
+            return {
+                "ok": True,
+                "restored_active_version": "1.0.0",
+                "restored_active_slot": "A",
+                "restored_deactivated": False,
+                "activation_emitted": True,
+            }
+
+    with pytest.raises(RuntimeRefreshError) as exc_info:
+        refresh_skill_runtime(
+            _Manager(),
+            "demo_skill",
+            webspace_id="desktop",
+            source_version="1.1.0",
+            migrate_runtime=True,
+            disable_during_migration=True,
+        )
+
+    payload = exc_info.value.payload
+    assert payload["failed_stage"] == "activate"
+    assert payload["active_version_after"] == "1.0.0"
+    assert payload["active_slot_after"] == "A"
+    assert payload["fallback_restore"] == {
+        "ok": True,
+        "restored_active_version": "1.0.0",
+        "restored_active_slot": "A",
+        "restored_deactivated": False,
+        "activation_emitted": True,
+        "version": "1.0.0",
+        "slot": "A",
+    }
+    assert payload["lifecycle_stages"][-1]["stage"] == "fallback_restore"
+    assert payload["lifecycle_stages"][-1]["ok"] is True
+    assert calls == [
+        "runtime_status:demo_skill",
+        "deactivate_runtime:demo_skill",
+        "prepare_runtime:demo_skill",
+        "activate_for_space:demo_skill",
+        "restore_runtime_selection_exact:demo_skill",
+        "runtime_status:demo_skill",
+    ]
+
+
+def test_refresh_skill_runtime_restores_original_deactivation_after_prepare_failure() -> None:
+    original = {
+        "deactivated": True,
+        "transient": False,
+        "reason": "operator_hold",
+    }
+
+    class _Manager:
+        def runtime_status(self, _name: str) -> dict[str, Any]:
+            return {
+                "version": "2.0.0",
+                "active_slot": "B",
+                "deactivated": True,
+                "deactivation": original,
+            }
+
+        def deactivate_runtime(self, _name: str, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "deactivated": True,
+                "transient": True,
+                "reason": "runtime_migration_in_progress",
+            }
+
+        def prepare_runtime(self, _name: str, **_kwargs: Any) -> Any:
+            raise RuntimeError("candidate dependency unavailable")
+
+        def restore_runtime_selection_exact(self, _name: str, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["previous_deactivation"] == original
+            assert kwargs["emit_activation"] is False
+            return {
+                "ok": True,
+                "restored_active_version": "2.0.0",
+                "restored_active_slot": "B",
+                "restored_deactivated": True,
+                "activation_emitted": False,
+            }
+
+    with pytest.raises(RuntimeRefreshError) as exc_info:
+        refresh_skill_runtime(
+            _Manager(),
+            "held_skill",
+            webspace_id="desktop",
+            source_version="2.1.0",
+            migrate_runtime=True,
+            disable_during_migration=True,
+            retry_deactivated=True,
+        )
+
+    payload = exc_info.value.payload
+    assert payload["failed_stage"] == "prepare"
+    assert payload["fallback_restore"]["restored_deactivated"] is True
+    assert payload["fallback_restore"]["activation_emitted"] is False
 
 
 def test_refresh_skill_runtime_without_migration_keeps_active_slot_immutable() -> None:

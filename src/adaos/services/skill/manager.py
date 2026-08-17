@@ -2443,7 +2443,16 @@ class SkillManager:
             pass
         return restored_slot
 
-    def restore_runtime_selection_exact(self, name: str, *, version: str, slot: str) -> dict[str, Any]:
+    def restore_runtime_selection_exact(
+        self,
+        name: str,
+        *,
+        version: str,
+        slot: str,
+        previous_deactivation: Mapping[str, Any] | None = None,
+        webspace_id: str | None = None,
+        emit_activation: bool = False,
+    ) -> dict[str, Any]:
         """Restore one known-good runtime selection after a failed candidate switch."""
 
         target_version = str(version or "").strip()
@@ -2466,7 +2475,7 @@ class SkillManager:
             env=env,
             previous_active_version=target_version,
             previous_active_slot=target_slot,
-            previous_deactivation=None,
+            previous_deactivation=previous_deactivation,
         )
         if not bool(result.get("ok")):
             raise RuntimeError(str(result.get("error") or "exact runtime restore failed"))
@@ -2481,10 +2490,28 @@ class SkillManager:
             install_skill_in_capacity(name, target_version, active=True)
         except Exception:
             pass
+        restored_deactivated = bool(previous_deactivation and previous_deactivation.get("deactivated"))
+        activation_emitted = False
+        if emit_activation and not restored_deactivated and self.bus:
+            emit(
+                self.bus,
+                "skills.activated",
+                {
+                    "skill_name": name,
+                    "space": "default",
+                    "webspace_id": webspace_id or _default_webspace_id(),
+                    "defer_webspace_rebuild": False,
+                    "reason": "runtime_candidate_rejected_fallback_restored",
+                },
+                "skill.mgr",
+            )
+            activation_emitted = True
         return {
             "ok": True,
             "restored_active_version": restored_version,
             "restored_active_slot": restored_slot,
+            "restored_deactivated": restored_deactivated,
+            "activation_emitted": activation_emitted,
         }
 
     def dev_rollback_runtime(self, name: str) -> str:

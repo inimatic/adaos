@@ -99,6 +99,59 @@ def _is_runtime_migration_transient(deactivation: dict[str, Any]) -> bool:
     return bool(deactivation.get("deactivated")) and bool(deactivation.get("transient")) and reason == "runtime_migration_in_progress"
 
 
+def _restore_rejected_candidate_fallback(
+    mgr: Any,
+    skill_name: str,
+    *,
+    version: str,
+    slot: str,
+    previous_deactivation: dict[str, Any],
+    webspace_id: str,
+) -> dict[str, Any]:
+    """Restore the exact pre-migration runtime after candidate rejection."""
+
+    if not version or slot not in {"A", "B"}:
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "missing_previous_runtime_selection",
+            "version": version,
+            "slot": slot,
+        }
+    restore = getattr(mgr, "restore_runtime_selection_exact", None)
+    if not callable(restore):
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "runtime_manager_restore_unsupported",
+            "version": version,
+            "slot": slot,
+        }
+    try:
+        result = restore(
+            skill_name,
+            version=version,
+            slot=slot,
+            previous_deactivation=previous_deactivation or None,
+            webspace_id=webspace_id,
+            emit_activation=not bool(previous_deactivation.get("deactivated")),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "skipped": False,
+            "reason": "fallback_restore_failed",
+            "version": version,
+            "slot": slot,
+            "error": str(exc),
+        }
+    payload = dict(result) if isinstance(result, dict) else {"result": result}
+    payload.setdefault("ok", True)
+    payload.setdefault("version", version)
+    payload.setdefault("slot", slot)
+    return payload
+
+
 def refresh_skill_runtime(
     mgr: Any,
     skill_name: str,
@@ -186,7 +239,6 @@ def refresh_skill_runtime(
         # production candidate must remain physically isolated until its
         # prepare/tests/activation sequence completes, including same-version
         # source revisions.
-        runtime_result: dict[str, Any] = {}
         isolation_reason = (
             "versioned_candidate_isolated"
             if expected_version != runtime_version_before
@@ -194,7 +246,6 @@ def refresh_skill_runtime(
         )
         _record_stage(payload, "runtime_update", ok=True, skipped=True, reason=isolation_reason)
     else:
-        runtime_result = {}
         payload["runtime_refresh_skipped"] = True
         payload["runtime_refresh_skip_reason"] = (
             "source_version_missing" if migrate_runtime else "runtime_migration_disabled"
@@ -244,6 +295,20 @@ def refresh_skill_runtime(
             payload["failure_reason"] = str(exc)
             payload["error"] = message
             _record_stage(payload, failed_stage, ok=False, error=str(exc))
+            payload["fallback_restore"] = _restore_rejected_candidate_fallback(
+                mgr,
+                skill_name,
+                version=runtime_version_before,
+                slot=str(payload.get("active_slot_before") or "").strip().upper(),
+                previous_deactivation=dict(deactivation_before),
+                webspace_id=target_webspace,
+            )
+            _record_stage(
+                payload,
+                "fallback_restore",
+                ok=bool(payload["fallback_restore"].get("ok")),
+                **{key: value for key, value in payload["fallback_restore"].items() if key != "ok"},
+            )
             try:
                 runtime_status_after = mgr.runtime_status(skill_name)
             except Exception:
@@ -280,6 +345,20 @@ def refresh_skill_runtime(
             payload["failure_reason"] = str(exc)
             payload["error"] = message
             _record_stage(payload, "activate", ok=False, version=version, slot=slot, error=str(exc))
+            payload["fallback_restore"] = _restore_rejected_candidate_fallback(
+                mgr,
+                skill_name,
+                version=runtime_version_before,
+                slot=str(payload.get("active_slot_before") or "").strip().upper(),
+                previous_deactivation=dict(deactivation_before),
+                webspace_id=target_webspace,
+            )
+            _record_stage(
+                payload,
+                "fallback_restore",
+                ok=bool(payload["fallback_restore"].get("ok")),
+                **{key: value for key, value in payload["fallback_restore"].items() if key != "ok"},
+            )
             try:
                 runtime_status_after = mgr.runtime_status(skill_name)
             except Exception:
