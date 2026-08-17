@@ -209,6 +209,11 @@ browser. Recursive operator data such as update manifests is available only
 with `?diagnostics=true` and is never copied into the periodic node-status
 heartbeat.
 
+Long-running inactive-slot preparation emits a supervisor status heartbeat
+every 15 seconds with `prepare_elapsed_s`, `prepare_heartbeat_at`, and
+`prepare_timeout_sec`. This keeps the read model observably live while package
+installation is running without treating progress reporting as readiness.
+
 UI diagnostics use the same lifecycle gate. While a routed Root path is
 unavailable, events remain in a bounded local queue and no diagnostics POST is
 started. After recovery, diagnostics are coalesced behind a 30-second network

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 import threading
 import time
 from types import SimpleNamespace
@@ -2367,11 +2368,67 @@ def test_supervisor_prepare_failure_does_not_request_runtime_shutdown(monkeypatc
         status = read_status()
         assert status["state"] == "failed"
         assert status["phase"] == "prepare"
+        assert status["prepare_lease_revocation"]["ok"] is True
+        lease = json.loads(Path(status["prepare_lease_path"]).read_text(encoding="utf-8"))
+        assert lease["state"] == "revoked"
+        assert lease["revoked_reason"] == "supervisor.prepare_failed"
         attempt = supervisor._read_update_attempt()
         assert isinstance(attempt, dict)
         assert attempt["state"] == "failed"
 
     asyncio.run(_exercise())
+
+
+def test_supervisor_prepare_emits_progress_heartbeat(monkeypatch, tmp_path) -> None:
+    from adaos.apps.supervisor_runtime import update_execution
+
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("ADAOS_SUPERVISOR_MIN_UPDATE_PERIOD_SEC", "0")
+    monkeypatch.setattr(update_execution, "PREPARE_HEARTBEAT_SEC", 0.01)
+
+    def _slow_prepare(plan):
+        time.sleep(0.04)
+        return {
+            "state": "failed",
+            "phase": "prepare",
+            "message": "expected test failure",
+            "target_slot": "B",
+            "plan": {"target_slot": "B"},
+        }
+
+    status_writes: list[dict[str, object]] = []
+    original_write_status = supervisor.write_core_update_status
+
+    def _record_status(payload):
+        status_writes.append(dict(payload))
+        return original_write_status(payload)
+
+    monkeypatch.setattr(supervisor, "prepare_pending_update", _slow_prepare)
+    monkeypatch.setattr(supervisor, "write_core_update_status", _record_status)
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    async def _exercise() -> None:
+        result = await manager.start_update(
+            action="update",
+            target_rev="rev2026",
+            target_version="1.2.3",
+            reason="test.update",
+            countdown_sec=0.0,
+            drain_timeout_sec=10.0,
+            signal_delay_sec=0.25,
+        )
+        assert result["accepted"] is True
+        assert manager._update_task is not None
+        await manager._update_task
+
+    asyncio.run(_exercise())
+
+    heartbeats = [payload for payload in status_writes if payload.get("prepare_heartbeat_at")]
+    assert heartbeats
+    assert heartbeats[-1]["state"] == "preparing"
+    assert heartbeats[-1]["phase"] == "prepare"
+    assert float(heartbeats[-1]["prepare_elapsed_s"]) > 0.0
+    assert "worker active" in str(heartbeats[-1]["message"])
 
 
 def test_prepare_worker_writes_prepared_restart_plan_and_reenables_runtime(monkeypatch, tmp_path) -> None:

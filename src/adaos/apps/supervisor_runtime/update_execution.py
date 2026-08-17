@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
+PREPARE_HEARTBEAT_SEC = 15.0
+
+
 @dataclass(frozen=True, slots=True)
 class SupervisorUpdateExecutionOperations:
     build_attempt_payload: Any
@@ -211,18 +214,58 @@ class SupervisorUpdateExecution:
         venv_seed_source = None
         venv_seeded = False
         try:
-            prepare_result = await asyncio.to_thread(
-                operations.prepare_pending_update,
-                {
-                    "action": action,
-                    "target_rev": target_rev,
-                    "target_version": target_version,
-                    "reason": reason,
-                    "prepare_lease_path": prepare_lease_path,
-                    "prepare_lease_token": prepare_lease_token,
-                },
+            prepare_started_at = time.time()
+            prepare_task = asyncio.create_task(
+                asyncio.to_thread(
+                    operations.prepare_pending_update,
+                    {
+                        "action": action,
+                        "target_rev": target_rev,
+                        "target_version": target_version,
+                        "reason": reason,
+                        "prepare_lease_path": prepare_lease_path,
+                        "prepare_lease_token": prepare_lease_token,
+                    },
+                )
+            )
+            while True:
+                try:
+                    prepare_result = await asyncio.wait_for(
+                        asyncio.shield(prepare_task),
+                        timeout=PREPARE_HEARTBEAT_SEC,
+                    )
+                    break
+                except TimeoutError:
+                    if prepare_task.done():
+                        prepare_result = await prepare_task
+                        break
+                    heartbeat_at = time.time()
+                    elapsed_s = max(0.0, heartbeat_at - prepare_started_at)
+                    operations.write_core_update_status(
+                        {
+                            "state": "preparing",
+                            "phase": "prepare",
+                            "action": action,
+                            "target_rev": target_rev,
+                            "target_version": target_version,
+                            "reason": reason,
+                            "message": f"preparing inactive slot; worker active for {elapsed_s:.0f}s",
+                            "prepare_elapsed_s": round(elapsed_s, 3),
+                            "prepare_heartbeat_at": heartbeat_at,
+                            "prepare_timeout_sec": prepare_timeout_sec,
+                            "prepare_lease_path": prepare_lease_path or None,
+                            "prepare_lease_token": prepare_lease_token or None,
+                        }
             )
             if str(prepare_result.get("state") or "").strip().lower() != "prepared":
+                prepare_lease_revocation = operations.revoke_prepare_lease(
+                    status={
+                        "prepare_lease_path": prepare_lease_path,
+                        "prepare_lease_token": prepare_lease_token,
+                    },
+                    attempt=None,
+                    reason="supervisor.prepare_failed",
+                )
                 status = operations.write_core_update_status(
                     {
                         **dict(prepare_result),
@@ -233,6 +276,7 @@ class SupervisorUpdateExecution:
                         "prepare_lease_path": prepare_lease_path or None,
                         "prepare_lease_token": prepare_lease_token or None,
                         "prepare_timeout_sec": prepare_timeout_sec,
+                        "prepare_lease_revocation": prepare_lease_revocation,
                     }
                 )
                 operations.complete_update_attempt(
