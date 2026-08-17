@@ -20,7 +20,11 @@ from jsonschema import Draft202012Validator
 from adaos.sdk.core._ctx import require_ctx
 from adaos.sdk.core.errors import SdkError
 from adaos.sdk.developer import artifact_context, compositions, projects
-from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
+from adaos.services.artifact_pipeline.storage import (
+    atomic_write_bytes,
+    atomic_write_json,
+    mutation_lock,
+)
 
 
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
@@ -257,6 +261,84 @@ def attach_instruction(
     }
 
 
+def attach_instruction_file(
+    session_id: str,
+    kind: str,
+    path: str | Path,
+    *,
+    expected_digest: str,
+    media_type: str = "text/plain",
+) -> dict[str, Any]:
+    """Copy one arbitrary immutable instruction file into a session.
+
+    JSON producer contracts should normally use :func:`attach_instruction` so
+    their declared object digest is checked separately.  This operation exists
+    for reviewed prose, prescribed scaffolds, and other typed text inputs whose
+    identity is the digest of the exact source bytes.
+    """
+
+    token = _session_id(session_id)
+    instruction_kind = _instruction_kind(kind)
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise DevelopmentSessionError("instruction source file is unavailable")
+    payload = source.read_bytes()
+    content_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    required_digest = str(expected_digest or "").strip().lower()
+    if required_digest != content_digest:
+        raise DevelopmentSessionError("instruction file digest does not match expected_digest")
+    suffix = source.suffix.lower()
+    if not suffix or len(suffix) > 12 or not re.fullmatch(r"[.][a-z0-9]+", suffix):
+        suffix = ".bin"
+    session_path = _path(token)
+    instruction_path = (
+        session_path.parent / "instructions" / f"{instruction_kind}{suffix}"
+    ).resolve()
+    if not _within(session_path.parent, instruction_path):
+        raise DevelopmentSessionError("instruction path escapes Development Session root")
+    descriptor = {
+        "ref": f"instruction://builder/{token}/{instruction_kind}",
+        "kind": instruction_kind,
+        "access": "read-only",
+        "media_type": str(media_type or "application/octet-stream").strip(),
+        "content_digest": content_digest,
+        "path": str(instruction_path),
+    }
+    with mutation_lock(session_path.parent / ".mutation.lock"):
+        session = get(token)
+        existing = next(
+            (
+                dict(item)
+                for item in session.get("instruction_inputs") or []
+                if str(item.get("kind") or "") == instruction_kind
+            ),
+            None,
+        )
+        if existing and existing != descriptor:
+            raise DevelopmentSessionError(
+                f"development session {token!r} already has another {instruction_kind!r} instruction"
+            )
+        if instruction_path.is_file():
+            if instruction_path.read_bytes() != payload:
+                raise DevelopmentSessionError("persisted instruction content does not match its descriptor")
+        else:
+            atomic_write_bytes(instruction_path, payload)
+        if not existing:
+            persisted = {key: item for key, item in session.items() if key != "state_path"}
+            persisted["instruction_inputs"] = [
+                *list(persisted.get("instruction_inputs") or []),
+                descriptor,
+            ]
+            validate(persisted)
+            atomic_write_json(session_path, persisted)
+    return {
+        "ok": True,
+        "idempotent": existing is not None,
+        "instruction": descriptor,
+        "session": get(token),
+    }
+
+
 def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
     """Read an instruction only after verifying its descriptor and content."""
 
@@ -279,13 +361,27 @@ def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
     path = Path(str(descriptor["path"])).resolve()
     if not _within(session_root, path) or not path.is_file():
         raise DevelopmentSessionError("instruction path is unavailable or escapes its session root")
-    value = json.loads(path.read_text(encoding="utf-8-sig"))
-    if not isinstance(value, Mapping):
-        raise DevelopmentSessionError("instruction content must be an object")
-    actual_digest = "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    payload = path.read_bytes()
+    media_type = str(descriptor.get("media_type") or "").lower()
+    if media_type == "application/json" or path.suffix.lower() == ".json":
+        value = json.loads(payload.decode("utf-8-sig"))
+        if not isinstance(value, Mapping):
+            raise DevelopmentSessionError("JSON instruction content must be an object")
+        actual_digest = "sha256:" + hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    else:
+        value = None
+        actual_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     if actual_digest != str(descriptor["content_digest"]):
         raise DevelopmentSessionError("instruction content digest does not match its descriptor")
-    return {"ok": True, "instruction": descriptor, "value": dict(value)}
+    result: dict[str, Any] = {"ok": True, "instruction": descriptor}
+    if value is not None:
+        result["value"] = dict(value)
+    elif media_type.startswith("text/") or "markdown" in media_type:
+        try:
+            result["content"] = payload.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise DevelopmentSessionError("text instruction is not valid UTF-8") from exc
+    return result
 
 
 def review_changes(session_id: str, paths: Sequence[str]) -> dict[str, Any]:
@@ -479,6 +575,7 @@ def create(
     research_prototype_digest: str,
     artifact_groups: Sequence[str],
     artifact_audience: str | None = None,
+    artifact_sources: Sequence[Mapping[str, Any]] = (),
     primary_targets: Sequence[str] | None = None,
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
@@ -511,16 +608,35 @@ def create(
 
     primary_skill = default_primary.partition(":")[2]
     artifact_inputs = []
-    for group_id in artifact_groups:
-        group = artifact_context.get_group(primary_skill, group_id)
+    sources = [
+        {
+            "skill_id": primary_skill,
+            "group_id": str(group_id),
+            "audience": artifact_audience,
+        }
+        for group_id in artifact_groups
+    ]
+    sources.extend(dict(item) for item in artifact_sources)
+    seen_artifact_refs: set[str] = set()
+    for source in sources:
+        source_skill = str(source.get("skill_id") or "").strip()
+        group_id = str(source.get("group_id") or "").strip()
+        audience = str(source.get("audience") or "").strip() or None
+        if not source_skill or not group_id:
+            raise DevelopmentSessionError("artifact_sources require skill_id and group_id")
+        ref = f"artifact://skill/{source_skill}/{group_id}"
+        if ref in seen_artifact_refs:
+            raise DevelopmentSessionError(f"duplicate development artifact input: {ref}")
+        seen_artifact_refs.add(ref)
+        group = artifact_context.get_group(source_skill, group_id)
         descriptor = {
-            "ref": f"artifact://skill/{primary_skill}/{group_id}",
+            "ref": ref,
             "access": "read-only",
             "manifest_digest": group["digest"],
             "root_path": group["root_path"],
         }
-        if artifact_audience:
-            view = artifact_context.materialize_context(primary_skill, group_id, artifact_audience)
+        if audience:
+            view = artifact_context.materialize_context(source_skill, group_id, audience)
             descriptor.update(
                 {
                     "root_path": view["root_path"],
@@ -588,6 +704,7 @@ def create(
 __all__ = [
     "DevelopmentSessionError",
     "attach_instruction",
+    "attach_instruction_file",
     "bind",
     "binding_for",
     "create",

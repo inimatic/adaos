@@ -1067,6 +1067,11 @@ class LocalSkillFactoryWorker:
             else {}
         )
         context_projection = _context_packet_prompt_projection(context_packet)
+        development_context = (
+            dict(artifacts.get("development_context") or {})
+            if isinstance(artifacts.get("development_context"), Mapping)
+            else {}
+        )
         allowed = [str(item) for item in (assignment.get("forge") or {}).get("sparse_paths") or []]
         packet = {
             "schema": PACKET_SCHEMA,
@@ -1082,6 +1087,9 @@ class LocalSkillFactoryWorker:
             "workflow_transition": workflow_transition or None,
             "context_packet": context_packet or None,
             "context_packet_digest": str(context_packet.get("digest") or "").strip() or None,
+            "development_context": development_context or None,
+            "development_context_digest": str(development_context.get("digest") or "").strip()
+            or None,
         }
         _write_json(input_dir / "packet.json", packet)
         (input_dir / "allowed_files.txt").write_text("\n".join(allowed) + "\n", encoding="utf-8")
@@ -1134,6 +1142,11 @@ When `scenarios/{target_id}/.builder_current_publication` exists, treat it as th
             if context_projection
             else "No governed context packet was supplied. Inspect the complete target source and fail closed if the requested scope or acceptance criteria are ambiguous."
         )
+        development_inputs = (
+            json.dumps(development_context, ensure_ascii=False, indent=2, sort_keys=True)
+            if development_context
+            else "No external Development Session inputs were admitted."
+        )
         prompt = f"""# AdaOS local realization task
 
 You are implementing a real AdaOS project from an approved interface prototype. Work autonomously in the current repository and finish the implementation; do not merely describe code.
@@ -1162,6 +1175,18 @@ are retained in `packet.json` for audit.
 
 ```json
 {governed_context}
+```
+
+## Governed Development Session inputs
+
+The following receipt identifies immutable read-only artifacts and typed
+instruction files materialized inside this isolated checkout. Read the listed
+relative paths when present. Do not edit them, scan their parent directories,
+or substitute undeclared context. Their content and the receipt digest are
+part of the submitted source snapshot.
+
+```json
+{development_inputs}
 ```
 
 {transition_requirements}

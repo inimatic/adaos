@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -573,6 +574,76 @@ def test_development_session_rejects_instruction_digest_drift(project_space, tmp
             {"digest": "sha256:" + "3" * 64},
             expected_digest=digest,
         )
+
+
+def test_development_session_copies_digest_bound_text_instruction(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    compositions.create(_project("candidate_project", "candidate_skill"))
+    source = tmp_path / "source.md"
+    source.write_text("# Reviewed evidence\n\nNo confirmatory claim.\n", encoding="utf-8")
+    artifact_context.add_path("candidate_skill", "part0", source)
+    instruction = tmp_path / "review.md"
+    instruction.write_text("# Expert review\n\nTreat notebook output as exploratory.\n", encoding="utf-8")
+    expected = "sha256:" + hashlib.sha256(instruction.read_bytes()).hexdigest()
+    created = development_sessions.create(
+        "candidate_project",
+        automation_brief_digest="sha256:" + "1" * 64,
+        research_prototype_digest="sha256:" + "2" * 64,
+        artifact_groups=["part0"],
+        prohibited_actions=["Do not claim confirmation"],
+    )
+
+    attached = development_sessions.attach_instruction_file(
+        created["session"]["session_id"],
+        "reviewed_prose",
+        instruction,
+        expected_digest=expected,
+        media_type="text/markdown",
+    )
+    restored = development_sessions.get_instruction(
+        created["session"]["session_id"], "reviewed_prose"
+    )
+
+    assert attached["instruction"]["content_digest"] == expected
+    assert restored["content"].startswith("# Expert review")
+    assert Path(attached["instruction"]["path"]).parent != instruction.parent
+
+
+def test_development_session_admits_external_owner_artifact_view(project_space, tmp_path: Path) -> None:
+    _skill(project_space["skills"], "candidate_skill")
+    _skill(project_space["skills"], "source_direction")
+    compositions.create(_project("candidate_project", "candidate_skill"))
+    visible = tmp_path / "notebook.ipynb"
+    visible.write_text("{}", encoding="utf-8")
+    hidden = tmp_path / "oracle.md"
+    hidden.write_text("hidden answer", encoding="utf-8")
+    artifact_context.add_path("source_direction", "part0", visible)
+    artifact_context.add_path(
+        "source_direction",
+        "part0",
+        hidden,
+        context_policy={"default": "deny", "allow": ["research.evaluation"], "deny": []},
+    )
+
+    created = development_sessions.create(
+        "candidate_project",
+        automation_brief_digest="sha256:" + "1" * 64,
+        research_prototype_digest="sha256:" + "2" * 64,
+        artifact_groups=[],
+        artifact_sources=[
+            {
+                "skill_id": "source_direction",
+                "group_id": "part0",
+                "audience": "research.calibration.c0_raw",
+            }
+        ],
+        prohibited_actions=["No evaluator access"],
+    )
+
+    admitted = created["session"]["artifact_inputs"][0]
+    assert admitted["ref"] == "artifact://skill/source_direction/part0"
+    assert admitted["audience"] == "research.calibration.c0_raw"
+    assert [path.name for path in Path(admitted["root_path"]).iterdir()] == ["notebook.ipynb"]
 
 
 def test_development_session_rejects_non_owned_write_target(project_space, tmp_path: Path) -> None:

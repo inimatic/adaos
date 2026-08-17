@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -115,6 +116,104 @@ def test_execute_starts_local_automation_and_persists_session(tmp_path: Path) ->
     assert status["session"]["local_run"]["events_path"].endswith("codex-live.jsonl")
 
 
+def test_automation_materializes_governed_development_session_inputs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    artifact_root = tmp_path / "admitted-artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "notebook.ipynb").write_text("{}", encoding="utf-8")
+    session_id = "dev_recipes_calibration"
+    session_root = service.state_dir / "builder" / "development_sessions" / session_id
+    instruction_root = session_root / "instructions"
+    instruction_root.mkdir(parents=True)
+    review = instruction_root / "reviewed_prose.md"
+    review.write_text("Notebook results are exploratory only.\n", encoding="utf-8")
+    review_digest = "sha256:" + hashlib.sha256(review.read_bytes()).hexdigest()
+    session = {
+        "schema": "adaos.builder.development_session.v1",
+        "session_id": session_id,
+        "project_ref": "project:recipes",
+        "base_release": None,
+        "focus": {"ref": "scenario:recipes"},
+        "targets": {
+            "primary": [
+                {
+                    "ref": "scenario:recipes",
+                    "access": "read-write",
+                    "context": "full",
+                    "source_path": str(service.dev_scenarios_root / "recipes"),
+                }
+            ],
+            "secondary": [],
+        },
+        "context_members": [],
+        "artifact_inputs": [
+            {
+                "ref": "artifact://skill/source_direction/part0",
+                "access": "read-only",
+                "manifest_digest": "sha256:" + "1" * 64,
+                "root_path": str(artifact_root),
+                "audience": "research.calibration.c1_reviewed_prose",
+                "context_digest": "sha256:" + "2" * 64,
+            }
+        ],
+        "instruction_inputs": [
+            {
+                "ref": f"instruction://builder/{session_id}/reviewed_prose",
+                "kind": "reviewed_prose",
+                "access": "read-only",
+                "media_type": "text/markdown",
+                "content_digest": review_digest,
+                "path": str(review),
+            }
+        ],
+        "scratch": {
+            "owner": "session",
+            "access": "read-write",
+            "path": str(session_root / "scratch"),
+        },
+        "handoff": {
+            "automation_brief_digest": "sha256:" + "3" * 64,
+            "research_prototype_digest": "sha256:" + "4" * 64,
+            "artifact_manifest_digests": ["sha256:" + "1" * 64],
+            "prohibited_actions": ["Do not inspect undeclared evaluator material."],
+        },
+        "status": "ready",
+        "created_at": "2026-08-18T00:00:00Z",
+        "created_by": "skill:research_calibration_runner_skill",
+    }
+    (session_root / "session.json").write_text(
+        json.dumps(session, ensure_ascii=False), encoding="utf-8"
+    )
+
+    started = service.start_from_execute(
+        object_type="scenario",
+        object_id="recipes",
+        implementation_brief="Implement the frozen calibration request.",
+        development_session_id=session_id,
+    )
+
+    task = next(
+        item
+        for item in service.factory.snapshot(include_tasks=True)["tasks"]
+        if item["task_id"] == started["session"]["current_task_id"]
+    )
+    receipt = task["realize_request"]["artifacts"]["development_context"]
+    assert receipt["session_id"] == session_id
+    assert receipt["artifact_inputs"][0]["path"].startswith(".adaos_context/")
+    assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
+    assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
+    attachments = task["forge"]["source_snapshot"]["attachments"]
+    assert {item["name"] for item in attachments} >= {
+        "development_artifact_00",
+        "development_instructions",
+    }
+    prompt = (
+        tmp_path / "runs" / started["session"]["current_task_id"] / "input" / "task.md"
+    ).read_text(encoding="utf-8")
+    assert "Governed Development Session inputs" in prompt
+    assert ".adaos_context/dev_recipes_calibration/instructions/reviewed_prose.md" in prompt
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True
@@ -165,7 +264,7 @@ def test_automation_worker_executes_its_submitted_task_not_an_older_queue_item(t
         }
     )["task"]
 
-    started = service.start_from_execute(
+    service.start_from_execute(
         object_type="scenario",
         object_id="recipes",
         implementation_brief="Implement the approved recipe prototype.",

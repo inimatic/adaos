@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -61,6 +62,7 @@ _AUTOMATION_STEPS = (
     ("verification", "builder.automation.step.verification", 3),
     ("result", "builder.automation.step.result", 4),
 )
+_DEVELOPMENT_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 
 
 def _now_iso() -> str:
@@ -85,6 +87,16 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _canonical_digest(value: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def _publish_automation_changed(projection: Mapping[str, Any]) -> None:
@@ -157,6 +169,117 @@ class BuilderAutomationService:
                 state_dir=self.state_dir,
             )
         return self.workflow_service
+
+    def _load_development_session(
+        self,
+        session_id: str,
+        *,
+        target_ref: str,
+    ) -> tuple[dict[str, Any], Path]:
+        token = str(session_id or "").strip()
+        if not _DEVELOPMENT_SESSION_ID_RE.fullmatch(token):
+            raise ValueError("development_session_id is invalid")
+        root = (self.state_dir / "builder" / "development_sessions").resolve()
+        path = (root / token / "session.json").resolve()
+        if path.parent.parent != root or not path.is_file():
+            raise ValueError("development session is unavailable")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("development session is unreadable") from exc
+        if not isinstance(value, Mapping):
+            raise ValueError("development session must be an object")
+        from adaos.sdk.builder.development_sessions import validate as validate_session
+
+        session = validate_session(value)
+        admitted_targets = {
+            str(item.get("ref") or "")
+            for group in session["targets"].values()
+            for item in group
+            if isinstance(item, Mapping)
+        }
+        if target_ref not in admitted_targets:
+            raise ValueError("development session does not admit the Automation target")
+        if str(session.get("status") or "") not in {"ready", "active"}:
+            raise ValueError("development session is not open for Automation")
+        return session, path
+
+    def _development_context(
+        self,
+        session_id: str,
+        *,
+        target_ref: str,
+    ) -> tuple[dict[str, Any], list[tuple[str, Path, str]]]:
+        session, state_path = self._load_development_session(
+            session_id,
+            target_ref=target_ref,
+        )
+        token = str(session["session_id"])
+        context_root = f".adaos_context/{token}"
+        attachments: list[tuple[str, Path, str]] = []
+        artifact_receipts: list[dict[str, Any]] = []
+        for index, item in enumerate(session.get("artifact_inputs") or []):
+            source = Path(str(item["root_path"])).resolve()
+            if not source.is_dir():
+                raise ValueError(f"development artifact input is unavailable: {item['ref']}")
+            target_path = f"{context_root}/artifacts/{index:02d}"
+            attachments.append((f"development_artifact_{index:02d}", source, target_path))
+            artifact_receipts.append(
+                {
+                    "ref": item["ref"],
+                    "access": "read-only",
+                    "manifest_digest": item["manifest_digest"],
+                    "context_digest": item.get("context_digest"),
+                    "audience": item.get("audience"),
+                    "path": target_path,
+                }
+            )
+        instruction_receipts: list[dict[str, Any]] = []
+        instruction_root = (state_path.parent / "instructions").resolve()
+        if session.get("instruction_inputs"):
+            if not instruction_root.is_dir():
+                raise ValueError("development instruction root is unavailable")
+            attachments.append(
+                ("development_instructions", instruction_root, f"{context_root}/instructions")
+            )
+        for item in session.get("instruction_inputs") or []:
+            source = Path(str(item["path"])).resolve()
+            if source.parent != instruction_root or not source.is_file():
+                raise ValueError(f"development instruction is unavailable: {item['kind']}")
+            payload = source.read_bytes()
+            media_type = str(item.get("media_type") or "").lower()
+            if media_type == "application/json" or source.suffix.lower() == ".json":
+                try:
+                    decoded = json.loads(payload.decode("utf-8-sig"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(f"development JSON instruction is invalid: {item['kind']}") from exc
+                if not isinstance(decoded, Mapping):
+                    raise ValueError(f"development JSON instruction must be an object: {item['kind']}")
+                content_digest = _canonical_digest(decoded)
+            else:
+                content_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+            if content_digest != str(item["content_digest"]):
+                raise ValueError(f"development instruction digest drifted: {item['kind']}")
+            instruction_receipts.append(
+                {
+                    "ref": item["ref"],
+                    "kind": item["kind"],
+                    "access": "read-only",
+                    "media_type": item["media_type"],
+                    "content_digest": item["content_digest"],
+                    "path": f"{context_root}/instructions/{source.name}",
+                }
+            )
+        identity = {
+            "schema": "adaos.builder.development_context_receipt.v1",
+            "session_id": token,
+            "project_ref": session["project_ref"],
+            "target_ref": target_ref,
+            "artifact_inputs": artifact_receipts,
+            "instruction_inputs": instruction_receipts,
+            "prohibited_actions": list(session["handoff"]["prohibited_actions"]),
+        }
+        return {**identity, "digest": _canonical_digest(identity)}, attachments
 
     @staticmethod
     def _change_id(*, session_id: str, iteration: int, seed: str) -> str:
@@ -232,12 +355,19 @@ class BuilderAutomationService:
         brief_path: str | None = None,
         change_set_id: str | None = None,
         prototype_handoff: Mapping[str, Any] | None = None,
+        development_session_id: str | None = None,
     ) -> dict[str, Any]:
         kind, project_id = self._project_ref(object_type, object_id)
         brief = str(implementation_brief or "").strip()
         if not brief:
             raise ValueError("implementation_brief is required after Prompt IDE Execute")
         _reject_transport_corruption(brief, field="implementation_brief")
+        admitted_development_session_id = str(development_session_id or "").strip() or None
+        if admitted_development_session_id:
+            self._load_development_session(
+                admitted_development_session_id,
+                target_ref=f"{kind}:{project_id}",
+            )
         admitted_handoff: dict[str, Any] | None = None
         if prototype_handoff is not None:
             from adaos.services.builder.prototype_handoff import admit_automation_handoff
@@ -350,6 +480,14 @@ class BuilderAutomationService:
                     current_change_set_id = requested_change_set_id
                 if requested_change_set_id and current_change_set_id != requested_change_set_id:
                     raise ValueError("another Builder change set already owns the active Automation session")
+                current_development_session_id = str(
+                    current.get("development_session_id") or ""
+                ).strip() or None
+                if (
+                    admitted_development_session_id
+                    and current_development_session_id != admitted_development_session_id
+                ):
+                    raise ValueError("another Development Session already owns the active Automation session")
                 refreshed = self.refresh_session(current)
                 result = {
                     "ok": True,
@@ -393,6 +531,7 @@ class BuilderAutomationService:
                 "canonical_change_id": requested_change_set_id,
                 "source_prototype_version": self._project_prototype_ref(kind, project_id),
                 "prototype_handoff": admitted_handoff,
+                "development_session_id": admitted_development_session_id,
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "status": "starting",
                 "iteration": 0,
@@ -1478,6 +1617,14 @@ class BuilderAutomationService:
                         f"scenarios/{project_id}/.builder_current_publication",
                     )
                 )
+        development_context: dict[str, Any] | None = None
+        development_session_id = str(session.get("development_session_id") or "").strip()
+        if development_session_id:
+            development_context, development_attachments = self._development_context(
+                development_session_id,
+                target_ref=f"{kind}:{project_id}",
+            )
+            attachments.extend(development_attachments)
         source_snapshot = capture_source_snapshot(
             state_dir=self.state_dir,
             artifacts=source_artifacts,
@@ -1516,6 +1663,11 @@ class BuilderAutomationService:
             instruction_refs=[
                 str(session.get("brief_path") or "").strip(),
                 str(session.get("topic_id") or "").strip(),
+                *(
+                    [str(item.get("ref") or "") for item in development_context["instruction_inputs"]]
+                    if development_context
+                    else []
+                ),
             ],
             run_purpose=str(session.get("run_purpose") or "iteration"),
             required_facets=required_context_facets,
@@ -1564,6 +1716,7 @@ class BuilderAutomationService:
                 "standard_prompt_version": STANDARD_PROMPT_VERSION,
                 "change_set": dict(change_set) if change_set else None,
                 "context_packet": context_packet,
+                "development_context": development_context,
                 "prototype_handoff": copy.deepcopy(session.get("prototype_handoff")),
             },
             "repo": {
@@ -1597,6 +1750,10 @@ class BuilderAutomationService:
                 "context_packet_digest": context_packet.get("digest"),
                 "prototype_handoff_digest": str(
                     dict(session.get("prototype_handoff") or {}).get("digest") or ""
+                ) or None,
+                "development_session_id": development_session_id or None,
+                "development_context_digest": str(
+                    (development_context or {}).get("digest") or ""
                 ) or None,
             },
         }

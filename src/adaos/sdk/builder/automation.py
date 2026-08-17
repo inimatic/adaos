@@ -58,6 +58,7 @@ def start(
     brief_path: str | None = None,
     change_set_id: str | None = None,
     prototype_handoff: Mapping[str, Any] | None = None,
+    development_session_id: str | None = None,
 ) -> dict[str, Any]:
     """Start or resume implementation from an approved brief."""
 
@@ -71,6 +72,7 @@ def start(
         brief_path=brief_path,
         change_set_id=change_set_id,
         prototype_handoff=prototype_handoff,
+        development_session_id=development_session_id,
     ) or {}
     return _foreground_result(
         service,
