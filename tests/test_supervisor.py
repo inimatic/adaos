@@ -4263,6 +4263,90 @@ def test_supervisor_monitor_runs_subsequent_transition_once_after_completion(mon
     assert calls[0]["bypass_min_period"] is True
 
 
+def test_update_attempt_phase_write_preserves_concurrently_queued_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "1.2.2",
+            "updated_at": 700.0,
+        }
+    )
+    supervisor._write_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "1.2.2",
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 710.0,
+            "subsequent_transition_request": {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "1.2.3",
+                "reason": "test.concurrent-push",
+                "requested_at": 710.0,
+            },
+            "updated_at": 710.0,
+        }
+    )
+
+    manager._update_execution_operations().write_update_attempt(
+        {
+            "state": "awaiting_root_restart",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "1.2.2",
+            "updated_at": 720.0,
+        }
+    )
+
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["subsequent_transition"] is True
+    assert attempt["subsequent_transition_requested_at"] == 710.0
+    assert attempt["subsequent_transition_request"]["target_version"] == "1.2.3"
+
+
+def test_replacing_update_attempt_consumes_queued_transition(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    supervisor._write_update_attempt(
+        {
+            "state": "completed",
+            "action": "update",
+            "target_version": "1.2.2",
+            "subsequent_transition": True,
+            "subsequent_transition_requested_at": 710.0,
+            "subsequent_transition_request": {
+                "action": "update",
+                "target_rev": "rev2026",
+                "target_version": "1.2.3",
+                "requested_at": 710.0,
+            },
+            "updated_at": 720.0,
+        }
+    )
+
+    supervisor._replace_update_attempt(
+        {
+            "state": "active",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "1.2.3",
+            "updated_at": 730.0,
+        }
+    )
+
+    attempt = supervisor._read_update_attempt()
+    assert isinstance(attempt, dict)
+    assert attempt["target_version"] == "1.2.3"
+    assert attempt["subsequent_transition"] is False
+    assert not attempt.get("subsequent_transition_request")
+
+
 def test_supervisor_monitor_drops_same_target_subsequent_transition(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")

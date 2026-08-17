@@ -876,6 +876,26 @@ def _write_update_attempt(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _write_update_attempt_preserving_subsequent_transition(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    attempt_payload = dict(payload)
+    current = _read_update_attempt()
+    queued = _subsequent_transition_request(current)
+    if queued is not None and _subsequent_transition_request(attempt_payload) is None:
+        attempt_payload["subsequent_transition"] = True
+        attempt_payload["subsequent_transition_requested_at"] = (
+            (current or {}).get("subsequent_transition_requested_at")
+            or queued.get("requested_at")
+        )
+        attempt_payload["subsequent_transition_request"] = queued
+    return _write_update_attempt(attempt_payload)
+
+
+def _replace_update_attempt(payload: dict[str, Any]) -> dict[str, Any]:
+    return _write_update_attempt(payload)
+
+
 def _observed_update_attempt(
     attempt: dict[str, Any] | None,
     status: dict[str, Any] | None,
@@ -1246,7 +1266,7 @@ def _clear_same_target_subsequent_transition(
         attempt_payload["same_target_subsequent_deduped_reason"] = reason
         attempt_payload["same_target_subsequent_target_version"] = str(queued.get("target_version") or "")
         attempt_payload["updated_at"] = now
-        _write_update_attempt(attempt_payload)
+        _replace_update_attempt(attempt_payload)
 
     status_payload = dict(status or read_core_update_status() or {})
     status_payload["subsequent_transition"] = False
@@ -2186,7 +2206,7 @@ class SupervisorManager:
         self._update_state_machine = UpdateStateMachine()
         self._update_state_machine.bind_persistence(
             write_status=write_core_update_status,
-            write_attempt=_write_update_attempt,
+            write_attempt=_replace_update_attempt,
         )
         self._recovery_policy = RuntimeRecoveryPolicy()
         self._memory_profiling = MemoryProfilingService(
@@ -2476,7 +2496,7 @@ class SupervisorManager:
             warm_switch_max_deferrals=_warm_switch_max_deferrals,
             warm_switch_strict_cutover_enabled=_warm_switch_strict_cutover_enabled,
             write_prepare_lease=_write_prepare_lease,
-            write_update_attempt=_write_update_attempt,
+            write_update_attempt=_write_update_attempt_preserving_subsequent_transition,
             activate_slot=activate_slot,
             choose_inactive_slot=choose_inactive_slot,
             clear_core_update_plan=clear_core_update_plan,
@@ -4250,7 +4270,7 @@ class SupervisorManager:
         attempt_payload["updated_at"] = now
         attempt_payload["completion_reason"] = ""
         attempt_payload["last_status"] = status
-        attempt = _write_update_attempt(attempt_payload)
+        attempt = _write_update_attempt_preserving_subsequent_transition(attempt_payload)
 
         # The durable root-promoted/awaiting markers above must exist before the
         # restart worker can signal this process. The worker delay is deliberately
@@ -8478,7 +8498,7 @@ class SupervisorManager:
                 "updated_at": now,
             }
         )
-        _write_update_attempt(attempt_payload)
+        _replace_update_attempt(attempt_payload)
         return {
             "ok": True,
             "accepted": True,
@@ -9070,7 +9090,7 @@ class SupervisorManager:
                 "last_status": status,
             }
         )
-        _write_update_attempt(awaiting_attempt)
+        _write_update_attempt_preserving_subsequent_transition(awaiting_attempt)
         return {"ok": True, "accepted": True, "status": status, "root_promotion": promotion, "_served_by": "supervisor"}
 
     def proxy_update_post(self, path: str, *, body: dict[str, Any]) -> dict[str, Any]:
@@ -9089,11 +9109,11 @@ class SupervisorManager:
             status = payload.get("status") if isinstance(payload, dict) and isinstance(payload.get("status"), dict) else {}
             accepted = bool(payload.get("accepted", True)) if isinstance(payload, dict) else True
             if path.endswith("/update/start"):
-                _write_update_attempt(
+                _replace_update_attempt(
                     _build_attempt_payload(action="update", request=body, status=status, accepted=accepted)
                 )
             elif path.endswith("/update/rollback"):
-                _write_update_attempt(
+                _replace_update_attempt(
                     _build_attempt_payload(action="rollback", request=body, status=status, accepted=accepted)
                 )
             elif path.endswith("/update/cancel"):
