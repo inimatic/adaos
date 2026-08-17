@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import traceback
 from dataclasses import asdict
 from pathlib import Path
@@ -36,7 +37,6 @@ from adaos.services.skill.runtime import (
     run_skill_handler_sync,
 )
 from adaos.services.skill.update import SkillUpdateService
-from adaos.services.skill.validation import SkillValidationService
 from adaos.services.skill.scaffold import create as scaffold_create
 from adaos.services.runtime_refresh import rebuild_webspace_projection_sync, refresh_skill_runtime
 from adaos.services.workspace_registry import build_registry_entry, list_workspace_registry_entries
@@ -44,6 +44,18 @@ from adaos.adapters.db import SqliteSkillRegistry
 from adaos.services.eventbus import emit as bus_emit
 from adaos.services.yjs.webspace import default_webspace_id
 from adaos.services.zone_hosts import DEFAULT_PUBLIC_ROOT_BASE_URL
+
+
+def _echo_utf8_json(value: object) -> None:
+    """Write machine JSON independently of the Windows console code page."""
+
+    rendered = json.dumps(value, ensure_ascii=False)
+    binary = getattr(sys.stdout, "buffer", None)
+    if binary is None:
+        typer.echo(rendered)
+        return
+    binary.write(rendered.encode("utf-8") + b"\n")
+    binary.flush()
 
 app = typer.Typer(help=_("cli.help_skill"))
 service_app = typer.Typer(help="Manage service-type skills (start/stop/restart/status).")
@@ -566,7 +578,7 @@ def _run_safe(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             if os.getenv("ADAOS_CLI_DEBUG") == "1":
                 traceback.print_exc()
             raise
@@ -1661,7 +1673,7 @@ def run_tool(
         typer.secho(f"run failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(1) from exc
 
-    typer.echo(json.dumps(result, ensure_ascii=False))
+    _echo_utf8_json(result)
 
 
 @_run_safe
