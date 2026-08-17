@@ -190,6 +190,50 @@ def _select_mapping_fields(value: object, fields: tuple[str, ...]) -> dict[str, 
     return {field: source[field] for field in fields if field in source}
 
 
+def _compact_core_update_status(value: object) -> dict[str, Any]:
+    return _select_mapping_fields(
+        value,
+        (
+            "state",
+            "phase",
+            "action",
+            "message",
+            "target_rev",
+            "target_version",
+            "requested_target_version",
+            "target_slot",
+            "reason",
+            "planned_reason",
+            "countdown_sec",
+            "scheduled_for",
+            "started_at",
+            "prepared_at",
+            "validated_at",
+            "finished_at",
+            "updated_at",
+            "min_update_period_sec",
+            "subsequent_transition",
+            "subsequent_transition_requested_at",
+            "subsequent_transition_action",
+            "subsequent_transition_target_rev",
+            "subsequent_transition_target_version",
+            "candidate_prewarm_state",
+            "candidate_prewarm_message",
+            "candidate_prewarm_ready_at",
+            "candidate_prewarm_deferral_count",
+            "candidate_prewarm_max_deferrals",
+            "restart_mode",
+            "restart_requested_at",
+            "root_promotion_required",
+            "error_type",
+            "error",
+            "last_error",
+            "active_slot_target_mismatch",
+            "active_slot_target_mismatch_reason",
+        ),
+    )
+
+
 def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Keep node-status fanout bounded while retaining control-plane state."""
 
@@ -199,6 +243,10 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
         "role",
         "node_names",
         "primary_node_name",
+        "node_label",
+        "node_compact_label",
+        "node_index",
+        "node_color",
         "ready",
         "node_state",
         "draining",
@@ -214,8 +262,9 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
     supervisor = runtime.get("supervisor_runtime") if isinstance(runtime.get("supervisor_runtime"), dict) else {}
     compact_supervisor = _select_mapping_fields(
         supervisor,
-        ("available", "enabled", "status", "runtime_url", "supervisor_url", "_served_by"),
+        ("available", "enabled", "runtime_url", "supervisor_url", "_served_by"),
     )
+    compact_supervisor["status"] = _compact_core_update_status(supervisor.get("status"))
     compact_supervisor["attempt"] = _select_mapping_fields(
         supervisor.get("attempt"),
         (
@@ -232,13 +281,18 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
             "target_rev",
             "target_version",
             "reason",
+            "planned_reason",
             "completion_reason",
             "accepted",
             "awaiting_restart",
             "restart_required",
             "restart_mode",
+            "restart_requested_at",
+            "subsequent_transition",
+            "subsequent_transition_requested_at",
             "candidate_prewarm_state",
             "candidate_prewarm_message",
+            "candidate_prewarm_ready_at",
         ),
     )
     compact_supervisor["runtime"] = _select_mapping_fields(
@@ -256,8 +310,10 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
             "runtime_api_ready",
             "runtime_state",
             "candidate_slot",
+            "candidate_runtime_port",
             "candidate_runtime_url",
             "candidate_runtime_instance_id",
+            "candidate_transition_role",
             "candidate_managed_pid",
             "candidate_managed_alive",
             "candidate_runtime_api_ready",
@@ -311,9 +367,7 @@ def compact_node_status_transport_payload(payload: dict[str, Any]) -> dict[str, 
         "supervisor_available": bool(runtime.get("supervisor_available")),
         "supervisor_runtime": compact_supervisor,
         "sidecar_runtime": compact_sidecar,
-        "core_update_status": (
-            runtime.get("core_update_status") if isinstance(runtime.get("core_update_status"), dict) else {}
-        ),
+        "core_update_status": _compact_core_update_status(runtime.get("core_update_status")),
     }
     compact["environment"] = environment
     meta = dict(payload.get("_meta") or {}) if isinstance(payload.get("_meta"), dict) else {}

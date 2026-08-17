@@ -311,9 +311,18 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
             "supervisor_available": True,
             "supervisor_runtime": {
                 "available": True,
+                "status": {
+                    "state": "preparing",
+                    "phase": "prewarm",
+                    "action": "update",
+                    "planned_reason": "minimum_update_period",
+                    "candidate_prewarm_state": "ready",
+                    "manifest": {"history": "x" * (300 * 1024)},
+                },
                 "attempt": {
                     "state": "recovering",
                     "target_version": "0.1.817",
+                    "planned_reason": "minimum_update_period",
                     "last_status": {"incident_history": "x" * (300 * 1024)},
                 },
                 "runtime": {
@@ -327,7 +336,12 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
                 "session_state": "remote_active",
                 "last_diag": {"history": "x" * (300 * 1024)},
             },
-            "core_update_status": {"state": "idle"},
+            "core_update_status": {
+                "state": "preparing",
+                "phase": "prewarm",
+                "candidate_prewarm_state": "ready",
+                "manifest": {"history": "x" * (300 * 1024)},
+            },
         },
     }
     monkeypatch.setattr(system_model_service, "current_node_status_payload", lambda: full_payload)
@@ -337,6 +351,14 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
     assert payload["runtime"]["supervisor_runtime"]["attempt"] == {
         "state": "recovering",
         "target_version": "0.1.817",
+        "planned_reason": "minimum_update_period",
+    }
+    assert payload["runtime"]["supervisor_runtime"]["status"] == {
+        "state": "preparing",
+        "phase": "prewarm",
+        "action": "update",
+        "planned_reason": "minimum_update_period",
+        "candidate_prewarm_state": "ready",
     }
     assert payload["runtime"]["supervisor_runtime"]["runtime"] == {
         "managed_alive": True,
@@ -345,6 +367,11 @@ def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
     assert payload["runtime"]["sidecar_runtime"] == {
         "status": "ready",
         "session_state": "remote_active",
+    }
+    assert payload["runtime"]["core_update_status"] == {
+        "state": "preparing",
+        "phase": "prewarm",
+        "candidate_prewarm_state": "ready",
     }
     assert payload["_meta"] == {
         "projection": "adaos.node_status.transport.v1",
@@ -387,6 +414,45 @@ def test_node_status_overlays_fresh_sidecar_runtime(monkeypatch) -> None:
     supervisor_runtime = payload["runtime"]["supervisor_runtime"]
     assert supervisor_runtime["runtime"]["sidecar"] == fresh_sidecar
     assert supervisor_runtime["runtime"]["sidecar_source"] == "reliability.sidecar_runtime_snapshot"
+
+
+def test_node_status_endpoint_defaults_to_bounded_projection(monkeypatch) -> None:
+    full_payload = {
+        "node_id": "hub-1",
+        "subnet_id": "sn-1",
+        "role": "hub",
+        "ready": True,
+        "runtime": {
+            "supervisor_available": True,
+            "supervisor_runtime": {
+                "available": True,
+                "status": {
+                    "state": "preparing",
+                    "phase": "prewarm",
+                    "manifest": {"history": "x" * (300 * 1024)},
+                },
+                "attempt": {"state": "active", "last_status": {"history": "x" * (300 * 1024)}},
+                "runtime": {"runtime_url": "http://127.0.0.1:8778", "runtime_state": "ready"},
+            },
+            "core_update_status": {
+                "state": "preparing",
+                "manifest": {"history": "x" * (300 * 1024)},
+            },
+        },
+        "environment": {"envType": "dev"},
+    }
+    monkeypatch.setattr(node_api, "_node_status_payload", lambda: full_payload)
+
+    compact = asyncio.run(node_api.node_status(diagnostics=False)).model_dump()
+    full = asyncio.run(node_api.node_status(diagnostics=True)).model_dump()
+
+    assert compact["runtime"]["supervisor_runtime"]["status"] == {
+        "state": "preparing",
+        "phase": "prewarm",
+    }
+    assert compact["runtime"]["supervisor_runtime"]["attempt"] == {"state": "active"}
+    assert len(json.dumps(compact).encode("utf-8")) < 32 * 1024
+    assert full["runtime"]["supervisor_runtime"]["status"]["manifest"]["history"]
 
 
 def test_subnet_identity_is_distinct_from_hub_node_identity(monkeypatch) -> None:

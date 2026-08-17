@@ -103,6 +103,7 @@ from adaos.services.ui_runtime_diagnostics import ingest_ui_runtime_diagnostics
 from adaos.services.webui_contract import webui_contract_diagnostic_catalog
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
 from adaos.services.system_model.service import (
+    compact_node_status_transport_payload,
     current_inventory_projection,
     current_neighborhood_projection,
     current_node_object,
@@ -3649,10 +3650,12 @@ def _node_status_payload() -> dict[str, Any]:
 
 
 @router.get("/status", response_model=NodeStatus, dependencies=[Depends(require_token)])
-async def node_status():
+async def node_status(diagnostics: bool = Query(False)):
     # Keep the authoritative status shape, but perform its blocking
     # filesystem/SQLite/psutil collection outside the ASGI event loop.
     payload = await asyncio.to_thread(_node_status_payload)
+    if not diagnostics:
+        payload = compact_node_status_transport_payload(payload)
     return NodeStatus(**payload)
 
 

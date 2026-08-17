@@ -178,6 +178,38 @@ def test_core_update_status_keeps_rollout_metadata_across_validate(monkeypatch, 
     assert read_last_result()["target_version"] == "0.1.0+77.d7d79d5"
 
 
+def test_core_update_status_does_not_inherit_metadata_from_another_target(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    write_status(
+        {
+            "state": "planned",
+            "phase": "scheduled",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "old-target",
+            "planned_reason": "minimum_update_period",
+            "scheduled_for": 123.0,
+            "candidate_prewarm_state": "failed",
+        }
+    )
+
+    status = write_status(
+        {
+            "state": "preparing",
+            "phase": "prepare",
+            "action": "update",
+            "target_rev": "rev2026",
+            "target_version": "new-target",
+            "reason": "operator.update",
+        }
+    )
+
+    assert status["target_version"] == "new-target"
+    assert "planned_reason" not in status
+    assert "scheduled_for" not in status
+    assert "candidate_prewarm_state" not in status
+
+
 def test_finalize_runtime_boot_status_rejects_active_slot_target_mismatch(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     write_slot_manifest(

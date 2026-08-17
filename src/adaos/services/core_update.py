@@ -390,6 +390,31 @@ _ROLLOUT_STATUS_KEYS = (
 )
 
 
+def _rollout_status_identity_matches(payload: dict[str, Any], current: dict[str, Any]) -> bool:
+    payload_action = str(payload.get("action") or "").strip().lower()
+    current_action = str(current.get("action") or "").strip().lower()
+    if payload_action and current_action and payload_action != current_action:
+        return False
+
+    payload_version = str(payload.get("target_version") or "").strip()
+    current_version = str(current.get("target_version") or "").strip()
+    payload_rev = str(payload.get("target_rev") or "").strip()
+    current_rev = str(current.get("target_rev") or "").strip()
+    payload_has_target = bool(payload_version or payload_rev)
+    current_has_target = bool(current_version or current_rev)
+    if not payload_has_target:
+        return True
+    if not current_has_target:
+        return False
+    if payload_version or current_version:
+        return bool(
+            payload_version
+            and current_version
+            and _target_version_matches(payload_version, current_version)
+        )
+    return bool(payload_rev and current_rev and payload_rev == current_rev)
+
+
 def _hydrate_rollout_status_fields(payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(payload)
     plan = merged.get("plan") if isinstance(merged.get("plan"), dict) else {}
@@ -397,11 +422,6 @@ def _hydrate_rollout_status_fields(payload: dict[str, Any]) -> dict[str, Any]:
     state = str(merged.get("state") or "").strip().lower()
     if state == "idle" and not plan and not manifest:
         return merged
-
-    current = read_status()
-    for key in _ROLLOUT_STATUS_KEYS:
-        if key not in merged and key in current:
-            merged[key] = current[key]
 
     if not str(merged.get("action") or "").strip():
         action = str(plan.get("action") or "").strip()
@@ -417,6 +437,12 @@ def _hydrate_rollout_status_fields(payload: dict[str, Any]) -> dict[str, Any]:
         target_version = str(plan.get("target_version") or manifest.get("target_version") or "").strip()
         if target_version:
             merged["target_version"] = target_version
+
+    current = read_status()
+    if _rollout_status_identity_matches(merged, current):
+        for key in _ROLLOUT_STATUS_KEYS:
+            if key not in merged and key in current:
+                merged[key] = current[key]
 
     if not str(merged.get("planned_reason") or "").strip():
         planned_reason = str(plan.get("reason") or "").strip()

@@ -202,6 +202,13 @@ that select a browser-visible transition variant: `action`, `planned_reason`,
 `attempt_state`, `transition_mode`, `candidate_prewarm_state`, and
 `warm_switch_allowed`, in addition to state, phase, message, and target version.
 
+`/api/node/status` remains the compatibility and local runtime-discovery
+surface. Its default response is a bounded transport projection containing
+node identity, runtime selection, and the transition fields consumed by the
+browser. Recursive operator data such as update manifests is available only
+with `?diagnostics=true` and is never copied into the periodic node-status
+heartbeat.
+
 UI diagnostics use the same lifecycle gate. While a routed Root path is
 unavailable, events remain in a bounded local queue and no diagnostics POST is
 started. After recovery, diagnostics are coalesced behind a 30-second network
