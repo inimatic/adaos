@@ -2,7 +2,7 @@
 
 Status: domain roadmap for the proposed AdaOS Research Fabric.
 
-Last reviewed: 2026-08-11.
+Last reviewed: 2026-08-18.
 
 This roadmap sequences the implementation of the
 [AdaOS Research Fabric](research-fabric.md). TLP is the first transparent
@@ -10,6 +10,13 @@ reference case and conformance fixture for deterministic, assisted, and later
 autonomous research. A PaperBench-like replication suite follows TLP to
 measure autonomous performance on frozen external tasks. Neither case is a
 reason to put domain-specific semantics into AdaOS core.
+
+The next authoring iteration is governed by
+[Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md):
+TLP first calibrates the source-artifact-to-executable-experiment bridge under
+matched typing ablations, then a multi-task suite determines whether the
+result generalizes. The program target is measurable progress in AI-driven
+science, not a positive TLP result.
 
 ## Outcome
 
@@ -31,10 +38,11 @@ ResearchRelease. A later writer may derive a neutral draft essay from that
 release, but external publication remains separately authorized.
 
 TLP proves the mechanism without requiring a positive TLP result. The later
-AdaOS Research Replication Benchmark (`ARRB`, working name) supplies frozen
-paper-replication tasks, target-level rubrics, matched budgets, and comparable
-scores so autonomous-science claims are measured rather than inferred from a
-single demonstration.
+ResearchCompilerBench track and AdaOS Research Replication Benchmark (`ARRB`,
+working names) supply frozen artifact-to-experiment and paper-replication
+tasks, target-level rubrics, matched budgets, and comparable scores so
+autonomous-science claims are measured rather than inferred from a single
+demonstration.
 
 ## Priority and Maturity Rules
 
@@ -94,6 +102,10 @@ scientific conclusion. A local demo is not production acceptance.
 10. The LLM provider, agent topology, and model profile are replaceable. This
     roadmap owns Research Mandate, autonomy, evaluation, and evidence semantics,
     not a provider-specific autonomous-agent loop.
+11. [Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md)
+    owns the scientific-problem-to-engineering bridge, stage visibility,
+    controlled typing ablation, primary comparative endpoint, and evidence bar
+    for any competitive claim. This roadmap owns their implementation order.
 
 ## Guardrails
 
@@ -126,6 +138,13 @@ scientific conclusion. A local demo is not production acceptance.
   read-only context are explicit session policy.
 - No automatic external paper, repository, or community publication in the
   initial A4 profile.
+- No hidden evaluator or review requirement may be used to fail Codex unless
+  the requirement was compiled into its visible accepted contract. Otherwise
+  the failure belongs to formulation/evaluation design.
+- No reporting of the historical review-assisted TLP path as a clean from-raw
+  formulation result.
+- No SOTA or cross-domain claim from one TLP task, one successful trace, an LLM
+  self-score, or unmatched model/tool/compute budgets.
 
 ## Current Baseline
 
@@ -143,11 +162,11 @@ scientific conclusion. A local demo is not production acceptance.
 | Distributed execution | Current/selected member-node execution through existing AdaOS semantics; no Ray provider | deliberately deferred until the complete local research loop is proven |
 | Research domain | Versioned Study/Experiment/Protocol/Trial/Run/Attempt/Observation/Evidence/Claim contracts, runner-provider boundary, ResearchSpace owner projection, and governed workflows | reusable control plane is separated from domain runner/data ownership |
 | Scenario guidance | Versioned README, modal binding, workflow-aware state/action projection, deterministic EN/RU text and voice intents | implemented first in `tlp_research`; cross-scenario rollout is incremental |
-| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | Builder-published direction skill `0.1.5` passes bounded realization acceptance; real-data workflow and confirmatory scientific proof remain ARF7.3/ARF6 work |
-| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, and canonical preview | ARF7.2 validated locally on TLP; ProjectRelease and accepted-workflow execution are the next gates |
+| TLP | E002 conditions, separate TLP runner/data-owner skill, real deterministic CPU runner, native Workbench, clean fixtures, sanitized exploratory provenance | Builder-published direction skill `0.1.5` passes bounded realization acceptance; clean from-raw research compilation, real-data workflow, and confirmatory scientific proof remain ARF7.3/ARF6 work |
+| Research authoring | Shared Workbench portfolio/focus, atomic Project + direction-skill creation, direction-owned manifested artifacts, typed formulation, private local checkpoint, least-write Development Session, consumer-owned contract requirements, exact system specification, scope gate, and canonical preview | ARF7.2 validated locally on a review-assisted TLP handoff; the earlier `initial-review` performed part of the scientific-to-engineering bridge, so stage visibility, from-raw compilation, controlled typing ablation, ProjectRelease, and accepted-workflow execution remain open |
 | Agent assistance/autonomy | Root LLM jobs, durable Builder Runs/context packets, governed workflows, conversations, and exact action admission exist | no Research Mandate, autonomy profile, autonomous campaign controller, agent budget ledger, or TLP autonomous proof |
 | Scientific release | EvidenceBundle and ClaimDecision contracts exist | no ClaimSet synthesis projection, distinct ResearchRelease, external review loop, or writer input contract |
-| Replication evaluation | TLP supplies one internal transparent case | no frozen PaperBench-like task package, target rubric evaluator, matched-budget baseline, or benchmark release |
+| Comparative evaluation | TLP supplies one internal transparent implementation case and hidden legacy oracle | no clean C0-C4 typing ablation, frozen multi-task ResearchCompilerBench/ARRB package, target rubric evaluator, matched-budget baseline, or benchmark release |
 
 ## Milestone Sequence
 
@@ -164,9 +183,9 @@ scientific conclusion. A local demo is not production acceptance.
 | ARF7.0 | Builder-embedded precursor proves SourceBundle, ResearchPrototype acceptance, and AutomationBrief contracts | `validated-local` | technical precursor complete |
 | ARF7.1 | Research Workbench creates/focuses a local research Project, admits local artifact groups, exposes provenance/coverage and a deterministic formulation review, and creates a scoped pre-Codex Development Session | `validated-local`, including strengthened TLP admission; authenticated browser reload receipt pending | active UX acceptance gate |
 | ARF7.2 | Codex realizes the exact brief as a validated and published TLP direction skill | `validated-local`; direction-skill checkpoint published, ProjectRelease not yet created | complete locally |
-| ARF7.3 | The published direction instantiates and runs the accepted local TLP workflow | `hypothesis` | alongside ARF6 |
+| ARF7.3 | Clean from-raw research compilation is calibrated under matched C0-C4 TLP arms; the published direction then instantiates and runs the accepted local workflow | `hypothesis` | next integrated authoring/scientific gate alongside ARF6 |
 | ARF8 | aResearcher completes a mandate-bound autonomous TLP loop through ResearchRelease | `hypothesis` | after ARF7 |
-| ARF9 | ARRB measures replication on frozen PaperBench-like tasks and matched budgets | `hypothesis` | after autonomous TLP proof |
+| ARF9 | ResearchCompilerBench/ARRB measures artifact-to-experiment compilation and replication on frozen multi-domain tasks and matched budgets | `hypothesis` | compilation track after ARF7.3; autonomous replication track after ARF8 |
 | ARF10 | Multi-domain evidence, scale, security, and operations justify broader claims/core promotion | `deferred` | long-term |
 
 Milestones are cumulative. TLP supplies fixtures and acceptance pressure from
@@ -1312,6 +1331,85 @@ not substitute for this operator path.
   aggregate usage, and identifies concrete semantic corrections; direct-
   Markdown baseline, Codex fidelity, and a multi-task evaluation set remain.
 
+### ARF7.3 research-compilation calibration and accepted workflow proof
+
+**Outcome:** Research Workbench makes the scientific-problem-to-engineering
+bridge explicit, performs one clean from-raw TLP compilation with the
+historical review and implementation hidden, compares controlled degrees of
+typing under matched budgets, and then publishes and executes the accepted
+direction through generic Research Fabric contracts.
+
+**Admission gate:** ARF7.2 realization evidence remains available, but its
+review-assisted handoff is labelled as such. The historical `initial-review`,
+legacy TLP packages/scenario, E002 receipts, and evaluator rubric have declared
+stage visibility and cannot enter a clean model or Codex context.
+
+**Exit proof:** a frozen calibration package contains the visible inputs,
+hidden/evaluator inputs, source-analysis and formulation revisions,
+traceability graph, exact AutomationBrief, Builder/Codex traces, ProjectRelease,
+generic Workbench execution receipts, costs, interventions, and per-stage
+failure attribution. C0-C4 use the same task, model class, tools, environment,
+and declared budgets. The result is reported as a TLP calibration, not a TLP
+efficacy result or cross-domain SOTA claim.
+
+- [ ] `[must]` `ARF7.3-01` Add versioned artifact stage visibility for
+  `formulation`, `implementation`, `execution`, `evaluation`, and human-only
+  access. Materialize every model/agent context from this policy and record its
+  exact included/excluded refs and digest.
+- [ ] `[must]` `ARF7.3-02` Persist a source-analysis projection with inventory,
+  extraction coverage, stable fragment refs, observations, interpretations,
+  claims, assumptions, contradictions, ambiguities, environment hints, and
+  explicit untrusted-output status.
+- [ ] `[must]` `ARF7.3-03` Extend staged formulation with an auditable
+  ResearchProblem facet covering primitives, tension/gap, primary question,
+  assumptions, alternatives, falsifier, minimal decisive test, expected
+  observations, failure-update rule, and prohibited claims.
+- [ ] `[must]` `ARF7.3-04` Compile an ExperimentalProtocol facet that maps the
+  problem to population, intervention/comparator, controlled invariants,
+  outcomes/estimand, allocation/pairing, random streams, profiles, seals,
+  stopping, uncertainty, decision regions, and evidence requirements.
+- [ ] `[must]` `ARF7.3-05` Produce and validate a traversable chain from source
+  or human decision through scientific requirement, protocol element,
+  engineering obligation, runtime observation/artifact, and acceptance/claim
+  decision. Classify expert-review points as compiled, deferred,
+  rejected-with-reason, or unresolved.
+- [ ] `[must]` `ARF7.3-06` Project the accepted protocol into the existing
+  AutomationBrief and direction manifest as a narrow task envelope,
+  provider-operation bindings, artifact flow, result/observation schemas,
+  ownership/recovery constraints, forbidden scientific mutations, and neutral
+  conformance fixtures. Do not prescribe internal code structure without a
+  contract reason.
+- [ ] `[must]` `ARF7.3-07` Let Codex return typed clarification, feasibility,
+  capability-gap, and protocol-conflict results. Require a reviewed new
+  formulation/protocol revision instead of silent scientific mutation.
+- [ ] `[must]` `ARF7.3-08` Render Source Analysis, Problem, Protocol,
+  Engineering Contract, coverage, and traceability as related Workbench
+  revisions. Preserve free narrative beside typed decisions and keep model
+  readiness separate from human acceptance.
+- [ ] `[must]` `ARF7.3-09` Implement a matched C0 raw, C1 reviewed-prose, C2
+  staged, C3 typed-execution, and C4 over-specified evaluation harness. Freeze
+  model/tool/environment/time/token/compute/retry policy, prevent cross-arm
+  workspace leakage, and blacklist legacy TLP implementation sources. Report
+  both fixed downstream-Codex budget and fixed total end-to-end budget views;
+  charge formulation and expert-review effort rather than hiding it.
+- [ ] `[must]` `ARF7.3-10` Measure evidence-valid completion, pass@1, protocol
+  drift, unsupported assumptions, source/review coverage, conformance,
+  runtime/result validity, reproducibility, leakage, interventions, human
+  repair time, tokens/cost/compute, and portability. Attribute every failure to
+  source understanding, formulation, operationalization, compilation, Codex,
+  runtime/platform, or scientific evaluation.
+- [ ] `[must]` `ARF7.3-11` Run the clean TLP calibration with a preregistered
+  repeated paired design sufficient to expose run variance. Keep
+  `initial-review` visible only in C1 and evaluation; use it and legacy TLP
+  solely as coverage/semantic oracles, never as hidden Codex requirements.
+- [ ] `[must]` `ARF7.3-12` Complete ARF7-14 ProjectRelease and instantiate/run
+  the accepted local workflow through `research_manager_skill` and the shared
+  Workbench. The direction supplies bindings and artifacts, not a TLP-specific
+  scenario or management UI.
+- [ ] `[must]` `ARF7.3-13` Freeze a machine-recomputable calibration package,
+  document negative and inconclusive outcomes, and record which candidate
+  fields remain profile-local. No contract enters core from TLP alone.
+
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 
 **Outcome:** after one human-approved Research Mandate, aResearcher may operate
@@ -1419,22 +1517,28 @@ positive TLP result.
   unrestricted dependency acquisition, public software promotion, model
   promotion, and external scientific publication require separate later gates.
 
-## ARF9. AdaOS Research Replication Benchmark
+## ARF9. AdaOS Research Compilation and Replication Benchmark
 
-**Outcome:** a versioned PaperBench-like benchmark measures how well AdaOS and
-alternative agent configurations reconstruct and reproduce external research
-claims under matched task, tool, model, and resource contracts.
+**Outcome:** versioned `ResearchCompilerBench` and PaperBench-like replication
+tracks measure how well AdaOS and alternative agent configurations compile raw
+scientific artifacts into executable evidence and reconstruct/reproduce
+external research claims under matched task, tool, model, and resource
+contracts.
 
-**Admission gate:** ARF8 has one independently verified autonomous TLP release
-and frozen process metrics. The first benchmark release may start at R0-R2;
-R3-R5 require corresponding implementation and evaluator evidence.
+**Admission gate:** the artifact-to-experiment compilation track may begin after
+ARF7.3 has a frozen TLP calibration and metrics. Autonomous replication requires
+ARF8's independently verified TLP ResearchRelease and frozen process metrics.
+The first replication release may start at R0-R2; R3-R5 require corresponding
+implementation and evaluator evidence.
 
-**Exit proof:** a frozen ARRB release contains multiple licensed computational
-research tasks and expert/author-reviewed target rubrics. At least two AdaOS
-autonomy profiles and one declared external or no-AdaOS baseline run every task
-under comparable budgets. Per-target, aggregate, cost, intervention, safety,
-and reproducibility evidence can be independently recomputed from an immutable
-benchmark result package.
+**Exit proof:** frozen benchmark releases contain multiple licensed
+computational research tasks and expert/author-reviewed source-to-protocol and
+target-claim rubrics. The compilation release runs C0-C4 plus one declared
+external or no-AdaOS baseline; the autonomous replication release runs at least
+two AdaOS autonomy profiles and one declared external or no-AdaOS baseline.
+Every comparison uses matched budgets. Per-stage, per-target, aggregate, cost,
+intervention, safety, and reproducibility evidence can be independently
+recomputed from immutable result packages.
 
 - [ ] `[must]` `ARF9-01` Define a versioned benchmark/task manifest with source
   snapshots, paper/supplement/repository/data/environment refs, licenses,
@@ -1443,41 +1547,47 @@ benchmark result package.
 - [ ] `[must]` `ARF9-02` Define expert-curated hierarchical `TargetClaimSet`
   rubrics with weights, tolerances, evidence requirements, partial credit,
   critical-failure overrides, report coverage, and hidden evaluator refs.
-- [ ] `[must]` `ARF9-03` Define R0 artifact audit, R1 original reproduction, R2
+- [ ] `[must]` `ARF9-03` Define source-to-experiment rubrics and the matched C0
+  raw, C1 reviewed-prose, C2 staged, C3 typed-execution, and C4 over-specified
+  delivery arms. Use evidence-valid completion as the primary endpoint and
+  report the reliability/autonomy/context-cost Pareto frontier under both
+  fixed implementation and fixed total-system budgets rather than assuming
+  the most typed arm is best.
+- [ ] `[must]` `ARF9-04` Define R0 artifact audit, R1 original reproduction, R2
   minimal compatibility repair, R3 independent replication, R4 robustness, and
   R5 follow-up as separate task profiles and result families.
-- [ ] `[must]` `ARF9-04` Isolate original, compatibility-repair,
+- [ ] `[must]` `ARF9-05` Isolate original, compatibility-repair,
   method-correction, and independent-implementation workspaces. Every patch is
   classified and linked; one track cannot silently replace another.
-- [ ] `[must]` `ARF9-05` Record `ProtocolReconstruction`, `AmbiguityLog`,
+- [ ] `[must]` `ARF9-06` Record `ProtocolReconstruction`, `AmbiguityLog`,
   per-target generated evidence, numerical comparison, successful/failed Runs,
   provenance, and exact report locations before a target is complete.
-- [ ] `[must]` `ARF9-06` Classify results as reproduced,
+- [ ] `[must]` `ARF9-07` Classify results as reproduced,
   reproduced-with-repairs, partially reproduced, not reproduced, or
   indeterminate with explicit artifact/environment/ambiguity/budget/validity
   reason; never infer paper invalidity from execution failure alone.
-- [ ] `[must]` `ARF9-07` Implement deterministic rubric checks where possible
+- [ ] `[must]` `ARF9-08` Implement deterministic rubric checks where possible
   and calibrated, versioned LLM/expert judging only for residual semantic
   criteria. Measure judge agreement and prevent the research agent from seeing
   hidden scoring evidence.
-- [ ] `[must]` `ARF9-08` Report weighted target coverage, numerical fidelity,
+- [ ] `[must]` `ARF9-09` Report weighted target coverage, numerical fidelity,
   protocol/evidence match, claim calibration, invalid result rate,
   reproducibility, intervention/clarification, time/compute/model cost, safety,
   and report evidence coverage with uncertainty across repeated runs.
-- [ ] `[must]` `ARF9-09` Run matched A0-A4, model, and agent-topology ablations;
+- [ ] `[must]` `ARF9-10` Run matched A0-A4, model, and agent-topology ablations;
   publish exact task/tool/budget/evaluator versions and normalized result
   packages so improvements are attributable rather than anecdotal.
-- [ ] `[must]` `ARF9-10` Select the first tasks for public artifacts, manageable
+- [ ] `[must]` `ARF9-11` Select the first tasks for public artifacts, manageable
   local/stand compute, clear primary claims, safe data, durable licenses, and
   evaluator feasibility. Do not copy PaperBench materials without compatible
   licensing; compatibility means comparable contracts and metrics.
-- [ ] `[should]` `ARF9-11` Include progressive source/code masking and at least
+- [ ] `[should]` `ARF9-12` Include progressive source/code masking and at least
   one post-model-cutoff or privately held evaluation split to estimate
   contamination and memorization effects.
-- [ ] `[should]` `ARF9-12` Include multiple domains and at least one non-neural
+- [ ] `[should]` `ARF9-13` Include multiple domains and at least one non-neural
   computational task so generalization is not inferred from another image-
   classification study.
-- [ ] `[should]` `ARF9-13` Export benchmark tasks/results and ResearchReleases
+- [ ] `[should]` `ARF9-14` Export benchmark tasks/results and ResearchReleases
   in a portable profile, with an RO-Crate mapping after internal contract
   verification.
 
@@ -1537,6 +1647,7 @@ promotion has cross-domain compatibility evidence.
 | Executor | Idempotent submit, unknown reconciliation, cancellation, checkpoint, fault injection |
 | Scientific | Locked protocol/analysis plan, paired trial manifest, QC/exclusions, independent recomputation |
 | Authoring | Exact Project/direction identity, manifested local artifact groups, ResearchPrototype diffs, consensus/AutomationBrief, scoped unopened Development Session, source-to-Study lineage |
+| Research compilation | Frozen visible/hidden inputs, source analysis, source-to-evidence traceability, C0-C4 matched delivery arms, evidence-valid completion, per-stage failure attribution, cost/intervention evidence |
 | Autonomy | Research Mandate, admitted Agent Decisions, budget ledger, exploration/confirmation isolation, escalation/terminal evidence |
 | Builder re-entry | CapabilityGap, exact installed base, bounded Codex context, tests, Trial candidate, adoption/rollback lineage |
 | Synthesis/release | ClaimSet coverage, contradicting/negative evidence, table/figure provenance, independently verified ResearchRelease |
@@ -1567,24 +1678,31 @@ autonomous research readiness.
 The **Research Project Pre-Codex Milestone** requires every ARF7.1 `must` item
 and the Workbench-to-unopened-Codex-session TLP story. The broader **Research
 Project Authoring MVP** additionally requires every remaining ARF7 `must` item
-and its attachment-to-published-TLP acceptance story.
+and its attachment-to-published-TLP acceptance story. Because the historical
+TLP path was review-assisted, the authoring MVP also requires the ARF7.3 clean
+from-raw compilation receipt; otherwise only the narrower implementation
+handoff has been proven.
 
 The **Autonomous Research Preview** additionally requires every ARF8 `must`
 item, one matched A0/A4 TLP run, and an independently verified ResearchRelease.
 It is a bounded preview, not a claim of general autonomous scientific
 reliability.
 
-A **comparable autonomous-research claim** additionally requires a versioned
-ARRB release, matched baselines, repeated-run uncertainty, contamination and
-judge controls, and every ARF9 `must` item. Broader operational/core claims are
-blocked on ARF10. The deferred writer, journal adaptation, and A5 external
-publication are not prerequisites for deterministic or benchmark MVPs.
+A **comparable research-compilation claim** requires the multi-task
+ResearchCompilerBench subset of ARF9, matched C0-C4 and external/no-AdaOS
+baselines, repeated-run uncertainty, contamination and judge controls, and
+independent expert review. A **comparable autonomous-research claim** further
+requires ARF8 and the full replication subset of ARF9. Broader
+operational/core claims are blocked on ARF10. The deferred writer, journal
+adaptation, and A5 external publication are not prerequisites for deterministic
+or benchmark MVPs.
 
 ## Related Plans
 
 - [Builder Roadmap](builder-roadmap.md)
 - [Project Composition, Presentation, and Development Context](project-composition-and-development-context.md)
 - [Builder Conversational Development Architecture](builder-conversational-development.md)
+- [Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md)
 - [Governed Data-Driven Workflow Model Roadmap](governed-workflow-runtime-roadmap.md)
 - [Artifact Source, Package, and Activation Roadmap](artifact-source-package-activation-roadmap.md)
 - [Model Runtime Roadmap](model-runtime-roadmap.md)

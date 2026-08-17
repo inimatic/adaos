@@ -3,20 +3,22 @@
 Status: target architecture with every non-deferred ARF0.5 through ARF4 item
 implemented and validated locally by the TLP single-experiment vertical. The
 first ARF7 technical precursor proved typed formulation revisions and an exact
-AutomationBrief. ARF7.1 now also validates the pre-Codex mechanics and its
-strengthened authoring gate; the final authenticated browser reload receipt
-remains an explicit UX acceptance item:
+AutomationBrief; ARF7.2 validated bounded Codex realization of the direction
+skill. ARF7.1 also validates the pre-Codex mechanics and its strengthened
+authoring gate; the final authenticated browser reload receipt remains an
+explicit UX acceptance item:
 creation, artifact intake, focus, and formulation begin in a shared Research
 Workbench over an explicit local Project and Builder Development Session, not
 in a research-specific Builder tab. State-scoped full-surface layout variants,
 provenance-aware artifact extraction, disclosed LLM context coverage, and a
 core-owned deterministic admission review now prevent partial UI state or LLM
-self-readiness from becoming an implementation handoff. Automated implementation, autonomous TLP
-campaigns, and replication benchmarking remain target work. Distributed
+self-readiness from becoming an implementation handoff. Clean from-raw
+research compilation, autonomous TLP campaigns, and comparative multi-task
+evaluation remain target work. Distributed
 execution/Ray is explicitly deferred; the current path executes on the
 selected AdaOS member node.
 
-Last reviewed: 2026-08-12.
+Last reviewed: 2026-08-18.
 
 This page defines a general research framework for AdaOS and uses Tropical
 Learnable Pooling (TLP) as its first reference case. It intentionally does not
@@ -24,6 +26,10 @@ turn TLP, MLflow, Ray, or a particular database into AdaOS core concepts.
 
 Implementation order and acceptance evidence are owned by the
 [Research Fabric Roadmap](research-fabric-roadmap.md).
+
+The scientific-problem-to-engineering bridge, controlled typing ablation, and
+evidence required for a competitive autonomous-science claim are defined in
+[Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md).
 
 Portfolio placement and the distinction between Research Fabric, a solution
 pack, and aResearcher as a solution agent or workbench are governed by the
@@ -131,6 +137,24 @@ pack, and aResearcher as a solution agent or workbench are governed by the
     explicitly selects the current workspace tree with
     `skill install NAME --source workspace`. Both paths use the same validation,
     slot, test, activation, and isolation contracts.
+26. Research formulation includes an explicit **research compilation** bridge.
+    Source analysis, scientific problem formulation, operationalization, and
+    engineering compilation remain distinguishable revisions with a traversable
+    source-to-evidence chain; a prose review is useful input, not an implicit
+    substitute for that bridge.
+27. Typing strength is stage-dependent. AdaOS strictly types accepted decisions,
+    authority boundaries, executions, observations, evidence, and revisions,
+    while preserving free scientific reasoning and engineering implementation
+    inside those boundaries. There is no assumed universal schema/prose ratio.
+28. The historical TLP review and implementation are evaluator oracles in a
+    clean from-raw calibration and are hidden from autonomous implementation.
+    Evaluator-only material cannot impose a requirement absent from the visible
+    accepted contract.
+29. TLP calibrates the mechanism; proving TLP efficacy is not the product goal
+    and one TLP trace cannot establish autonomous-research SOTA. Competitive
+    claims require frozen matched baselines, controlled typing ablations,
+    repeated held-out tasks, uncertainty, independent review, and portable
+    evidence packages.
 
 ## Why `Research Fabric`
 
@@ -708,6 +732,49 @@ semantic failure. A schema-valid candidate may still be a
 draft. Bounded repair receives the exact gate findings; exhausted repair stores
 the draft with blockers instead of either discarding useful work or pretending
 it is ready.
+
+### Research compilation boundary
+
+The transition from a scientific problem to a coding task is a first-class
+research stage, not prompt preparation. Its logical products are:
+
+```text
+SourceAnalysis
+  -> ResearchProblem
+  -> ExperimentalProtocol
+  -> AutomationBrief plus direction bindings
+```
+
+They may remain projections and revisions inside `ResearchPrototype` and
+`AutomationBrief` until cross-domain evidence justifies additional persistent
+entities. The important contract is that every material source or human
+decision can be traced through a scientific requirement, protocol element,
+engineering obligation, runtime observation/artifact, and later evidence or
+claim decision. Missing links remain visible findings.
+
+The historical TLP `initial-review` performed much of this scientific critique
+and operationalization before AdaOS received the task. It therefore shortened
+the first proof. In an ordinary project such a review is valid user-supplied
+source material. In the clean TLP research-compilation evaluation it is marked
+`formulation`-hidden and `implementation`-hidden, retained only as an evaluator
+oracle; the legacy TLP scenario, skills, and E002 receipts are also excluded
+from agent context. An assisted arm may expose the review, but its result must
+not be confused with the from-raw arm.
+
+Artifact stage visibility is enforced when context is materialized. A hidden
+review or rubric cannot become a hidden acceptance requirement: if its material
+point was not compiled into the visible accepted contract, the omission is a
+formulation defect rather than a Codex defect. Feasibility feedback travels in
+the reverse direction as a typed clarification, constraint, capability gap, or
+protocol conflict and creates a reviewed revision instead of silently changing
+accepted science.
+
+Typing is deliberately uneven across the path. Source discussion and internal
+implementation stay expressive; accepted scientific decisions, authority,
+Run/Observation/Evidence records, and revisions are strict. The controlled
+`C0_raw` through `C4_over_specified` ablation and its primary
+evidence-valid-completion endpoint are specified in
+[Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md).
 
 The accepted `AutomationBrief` contains the exact Project and primary target,
 SourceBundle/group/item digests and native paths, exact ResearchPrototype
@@ -1432,11 +1499,15 @@ or cluster-admin access.
 
 ## Replication Benchmark and Generalization Gate
 
-TLP validates the transparent mechanism, but it cannot by itself establish
-competitive autonomous-research performance or justify every core abstraction.
-The next validation family is a PaperBench-like replication benchmark whose
-tasks are imported as immutable benchmark releases and executed through the
-same Research Fabric and Builder paths as TLP.
+TLP validates and calibrates the transparent mechanism, but evaluating TLP is
+not the framework objective and it cannot by itself establish competitive
+autonomous-research performance or justify every core abstraction. Before the
+full replication family, TLP supplies a controlled research-compilation
+ablation that compares raw, reviewed-prose, staged, typed-execution, and
+over-specified handoffs under matched budgets. The next multi-task validation
+family combines this `ResearchCompilerBench` track with a PaperBench-like
+replication benchmark whose tasks are imported as immutable benchmark releases
+and executed through the same Research Fabric and Builder paths as TLP.
 
 Each benchmark task contains or references:
 
@@ -1496,6 +1567,15 @@ The target follows current research-infrastructure and autonomous-science
 practice without adopting a monolithic agent or confusing a research demo with
 reliable evidence:
 
+- auditable question derivation through definitions, assumptions, mechanism,
+  falsifier, minimal decisive test, expected observations, and a failure-update
+  rule from [FirstResearch](https://arxiv.org/abs/2607.05682), while treating
+  its early LLM-judge-heavy evidence as promising prior art rather than a
+  settled universal ontology;
+- pragmatic facet-based formalization and controlled task construction from
+  [DiscoveryBench](https://arxiv.org/abs/2407.01725), supporting a small
+  semantic waist rather than an attempt to encode all science;
+
 - typed tracking and remote tracking-server boundaries from
   [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/) and its
   [backend-store architecture](https://mlflow.org/docs/latest/self-hosting/architecture/backend-store/);
@@ -1530,6 +1610,21 @@ reliable evidence:
 - target decomposition, author/expert rubrics, and judge calibration from
   [PaperBench](https://openai.com/index/paperbench/), including process and
   cost evidence rather than only aggregate replication score;
+- structured extraction of research questions, procedures, and executable
+  acceptance from [EXP-Bench](https://arxiv.org/abs/2505.24785), whose reported
+  gap between partial design/implementation scores and complete executable
+  experiments motivates an explicit research-compilation stage;
+- expert-validated, stagewise scientific coding assessment from
+  [ScienceAgentBench](https://proceedings.iclr.cc/paper_files/paper/2025/hash/f12b4df26344f3be803c06b555252efe-Abstract-Conference.html),
+  reinforcing that component and end-to-end failures must be attributed
+  separately;
+- open research-agent environments and full-lifecycle task families from
+  [MLGym](https://arxiv.org/abs/2502.14499) and
+  [AIRS-Bench](https://arxiv.org/abs/2602.06855), candidates for later matched
+  evaluation rather than AdaOS-specific task definitions;
+- long-horizon structured memory and claim traceability from
+  [Kosmos](https://arxiv.org/abs/2511.02824), while keeping an agent's world
+  model distinct from accepted governance and evidence state;
 - stagewise and end-to-end measurement from
   [MLR-Bench](https://proceedings.neurips.cc/paper_files/paper/2025/hash/ab8dd000d6f87f40061a73f8bca7fae4-Abstract-Datasets_and_Benchmarks_Track.html),
   whose reported high invalid/fabricated-result rate makes independent
@@ -1550,17 +1645,30 @@ reliable evidence:
   amplify errors and harm sequential ones in
   [controlled agent-scaling experiments](https://www.nature.com/articles/s42256-026-01268-y).
 
+Mature research infrastructure also constrains what AdaOS should not reinvent.
+[OpenML](https://docs.openml.org/concepts/) supplies useful ML-specific
+Dataset/Task/Flow/Run semantics, while
+[Workflow Run RO-Crate](https://arxiv.org/abs/2312.07852) provides portable
+prospective/retrospective workflow-run provenance profiles aligned with W3C
+PROV. AdaOS may keep a governance-oriented internal model, but its export and
+interoperability mappings should reuse these concepts where their semantics
+match.
+
 The architectural inference is deliberate: current systems demonstrate that
 end-to-end autonomy is possible, but benchmark results still show a large
 capability-reliability gap. AdaOS therefore designs for A4 autonomy now while
 requiring typed targets, durable state, bounded authority, independent
 validators, fresh confirmation, and comparable evaluation before making an
-autonomous-science product claim.
+autonomous-science product claim. The proposed SOTA target is correspondingly
+narrow and falsifiable: improve evidence-valid artifact-to-experiment
+completion at fixed models and budgets. It is not a claim that AdaOS, TLP, or
+one successful Codex trace already advances scientific SOTA.
 
 ## Related AdaOS Documents
 
 - [Builder](builder.md)
 - [Builder Conversational Development Architecture](builder-conversational-development.md)
+- [Research Compilation and Autonomous-Science Evaluation Program](research-compilation-and-sota-program.md)
 - [Scenario Guidance and Help Contract](scenario-guidance.md)
 - [Governed Data-Driven Workflow Model and Interaction Architecture](governed-workflow-runtime.md)
 - [Artifact Source, Package, and Activation Architecture](artifact-source-package-activation.md)
