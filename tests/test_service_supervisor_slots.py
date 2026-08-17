@@ -867,7 +867,7 @@ def test_service_resource_activity_reports_sustained_declared_io_pressure(tmp_pa
             "process": {
                 "sustained_samples": 2,
                 "max_write_bytes_per_second": 100,
-                "max_open_handles": 8,
+                "max_file_descriptors": 8,
             },
         },
     }
@@ -876,7 +876,7 @@ def test_service_resource_activity_reports_sustained_declared_io_pressure(tmp_pa
     assert spec.resource_budget == {
         "sustained_samples": 2,
         "max_write_bytes_per_second": 100,
-        "max_open_handles": 8,
+        "max_file_descriptors": 8,
         "expected_rss_mb": 64,
     }
     supervisor = mod.ServiceSkillSupervisor()

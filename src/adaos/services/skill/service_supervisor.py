@@ -2014,10 +2014,17 @@ print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
 
         write_rate = rate("write_bytes")
         read_rate = rate("read_bytes")
+        handle_budget_key = (
+            "max_file_descriptors"
+            if current.get("open_handle_kind") == "file_descriptors"
+            else "max_windows_handles"
+            if current.get("open_handle_kind") == "windows_handles"
+            else "max_open_handles"
+        )
         checks: tuple[tuple[str, float | int | None, str, float], ...] = (
             ("write_bytes_per_second", write_rate, "max_write_bytes_per_second", 1.0),
             ("read_bytes_per_second", read_rate, "max_read_bytes_per_second", 1.0),
-            ("open_handles", int(current.get("open_handle_total") or 0), "max_open_handles", 1.0),
+            ("open_handles", int(current.get("open_handle_total") or 0), handle_budget_key, 1.0),
             ("threads", int(current.get("thread_total") or 0), "max_threads", 1.0),
             ("rss_bytes", int(current.get("rss_bytes") or 0), "max_rss_mb", 1024.0 * 1024.0),
         )
