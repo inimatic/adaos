@@ -874,6 +874,34 @@ def _write_update_attempt(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _observed_update_attempt(
+    attempt: dict[str, Any] | None,
+    status: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(attempt, dict):
+        return None
+    payload = dict(attempt)
+    current = status if isinstance(status, dict) else {}
+    last = attempt.get("last_status") if isinstance(attempt.get("last_status"), dict) else {}
+    snapshot_keys = (
+        "state",
+        "phase",
+        "action",
+        "target_rev",
+        "target_version",
+        "target_slot",
+    )
+    observed = {key: current.get(key) for key in snapshot_keys}
+    observed["updated_at"] = current.get("updated_at")
+    payload["observed_status"] = observed
+    payload["last_status_matches_current"] = all(
+        str(last.get(key) or "").strip() == str(current.get(key) or "").strip()
+        for key in snapshot_keys
+    )
+    payload["last_status_updated_at"] = last.get("updated_at")
+    return payload
+
+
 def _epoch(value: Any) -> float:
     return _UPDATE_ATTEMPTS.epoch(value)
 
@@ -7303,7 +7331,10 @@ class SupervisorManager:
     def status(self, *, runtime_api_timeout: float = 0.75) -> dict[str, Any]:
         payload = self._runtime_state_payload(runtime_api_timeout=runtime_api_timeout)
         payload["persisted_state"] = _read_json(_supervisor_runtime_state_path())
-        payload["update_attempt"] = _read_update_attempt()
+        payload["update_attempt"] = _observed_update_attempt(
+            _read_update_attempt(),
+            read_core_update_status(),
+        )
         payload["update_task_running"] = self._update_state_machine.task_running()
         payload["workload_admission"] = {
             "core_update_holds_skill_migration_gate": self._skill_runtime_migration_gate_lease is not None,

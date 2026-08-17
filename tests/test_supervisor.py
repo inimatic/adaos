@@ -696,6 +696,37 @@ def test_reconcile_update_status_keeps_root_promotion_pending_active(monkeypatch
     assert attempt.get("completion_reason") in {None, ""}
 
 
+def test_observed_update_attempt_exposes_stale_last_status_without_mutating_it() -> None:
+    attempt = {
+        "state": "active",
+        "target_version": "b5cbb1d5",
+        "last_status": {
+            "state": "countdown",
+            "phase": "countdown",
+            "target_version": "b5cbb1d5",
+            "updated_at": 110.0,
+        },
+    }
+    status = {
+        "state": "validated",
+        "phase": "root_promotion_pending",
+        "action": "update",
+        "target_version": "b5cbb1d5",
+        "target_slot": "A",
+        "updated_at": 500.0,
+    }
+
+    observed = supervisor._observed_update_attempt(attempt, status)
+
+    assert isinstance(observed, dict)
+    assert observed["last_status"]["phase"] == "countdown"
+    assert observed["observed_status"]["phase"] == "root_promotion_pending"
+    assert observed["observed_status"]["target_slot"] == "A"
+    assert observed["last_status_matches_current"] is False
+    assert observed["last_status_updated_at"] == 110.0
+    assert "observed_status" not in attempt
+
+
 def test_reconcile_update_status_marks_stale_awaiting_root_restart_failed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_SUPERVISOR_UPDATE_TIMEOUT_SEC", "60")
