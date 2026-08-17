@@ -162,6 +162,7 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
                 "kind": "reviewed_prose",
                 "access": "read-only",
                 "media_type": "text/markdown",
+                "digest_mode": "bytes",
                 "content_digest": review_digest,
                 "path": str(review),
             }

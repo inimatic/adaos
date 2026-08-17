@@ -72,6 +72,7 @@
         "kind": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
         "access": {"const": "read-only"},
         "media_type": {"type": "string", "minLength": 1},
+        "digest_mode": {"enum": ["canonical-json", "bytes"]},
         "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "path": {"type": "string", "minLength": 1}
       },

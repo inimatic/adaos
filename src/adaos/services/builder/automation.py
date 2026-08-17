@@ -248,7 +248,10 @@ class BuilderAutomationService:
                 raise ValueError(f"development instruction is unavailable: {item['kind']}")
             payload = source.read_bytes()
             media_type = str(item.get("media_type") or "").lower()
-            if media_type == "application/json" or source.suffix.lower() == ".json":
+            digest_mode = str(item.get("digest_mode") or "").strip() or (
+                "canonical-json" if media_type == "application/json" else "bytes"
+            )
+            if digest_mode == "canonical-json":
                 try:
                     decoded = json.loads(payload.decode("utf-8-sig"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -266,6 +269,7 @@ class BuilderAutomationService:
                     "kind": item["kind"],
                     "access": "read-only",
                     "media_type": item["media_type"],
+                    "digest_mode": digest_mode,
                     "content_digest": item["content_digest"],
                     "path": f"{context_root}/instructions/{source.name}",
                 }

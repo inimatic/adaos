@@ -222,6 +222,7 @@ def attach_instruction(
         "kind": instruction_kind,
         "access": "read-only",
         "media_type": str(media_type or "application/json").strip(),
+        "digest_mode": "canonical-json",
         "content_digest": content_digest,
         "path": str(instruction_path),
     }
@@ -301,6 +302,7 @@ def attach_instruction_file(
         "kind": instruction_kind,
         "access": "read-only",
         "media_type": str(media_type or "application/octet-stream").strip(),
+        "digest_mode": "bytes",
         "content_digest": content_digest,
         "path": str(instruction_path),
     }
@@ -363,7 +365,10 @@ def get_instruction(session_id: str, kind: str) -> dict[str, Any]:
         raise DevelopmentSessionError("instruction path is unavailable or escapes its session root")
     payload = path.read_bytes()
     media_type = str(descriptor.get("media_type") or "").lower()
-    if media_type == "application/json" or path.suffix.lower() == ".json":
+    digest_mode = str(descriptor.get("digest_mode") or "").strip() or (
+        "canonical-json" if media_type == "application/json" else "bytes"
+    )
+    if digest_mode == "canonical-json":
         value = json.loads(payload.decode("utf-8-sig"))
         if not isinstance(value, Mapping):
             raise DevelopmentSessionError("JSON instruction content must be an object")
