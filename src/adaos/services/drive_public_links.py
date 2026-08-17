@@ -7,11 +7,12 @@ import mimetypes
 import os
 import re
 import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
@@ -38,6 +39,11 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,160}$")
 _DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 _MAX_TTL_SECONDS = 90 * 24 * 3600
 _PUBLIC_LABEL_MAX = 120
+_DOWNLOAD_RECENT_MAX = 2000
+_DOWNLOAD_EVENT_TEXT_MAX = 240
+_DOWNLOAD_USER_AGENT_MAX = 240
+_DOWNLOAD_STORE_SCHEMA = "adaos.drive.public_downloads.v1"
+_DOWNLOAD_LOCK = threading.Lock()
 
 
 class DrivePublicLinkError(RuntimeError):
@@ -199,6 +205,123 @@ def _save_store(kind: str, data: Mapping[str, Any], ctx: AgentContext | None = N
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def _download_store_path(ctx: AgentContext | None = None) -> Path:
+    root = _base_dir(ctx) / "state" / "drive_public_links"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "hub_downloads.json"
+
+
+def _load_download_store(ctx: AgentContext | None = None) -> dict[str, Any]:
+    path = _download_store_path(ctx)
+    if not path.exists():
+        return {"schema": _DOWNLOAD_STORE_SCHEMA, "v": 1, "summaries": {}, "events": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return {"schema": _DOWNLOAD_STORE_SCHEMA, "v": 1, "summaries": {}, "events": []}
+    if not isinstance(data, dict):
+        return {"schema": _DOWNLOAD_STORE_SCHEMA, "v": 1, "summaries": {}, "events": []}
+    data["schema"] = str(data.get("schema") or _DOWNLOAD_STORE_SCHEMA)
+    try:
+        data["v"] = int(data.get("v") or 1)
+    except Exception:
+        data["v"] = 1
+    if not isinstance(data.get("summaries"), dict):
+        data["summaries"] = {}
+    if not isinstance(data.get("events"), list):
+        data["events"] = []
+    return data
+
+
+def _save_download_store(data: Mapping[str, Any], ctx: AgentContext | None = None) -> None:
+    path = _download_store_path(ctx)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(dict(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _limited_text(value: Any, *, max_len: int = _DOWNLOAD_EVENT_TEXT_MAX) -> str:
+    text = str(value or "").replace("\x00", "").strip()
+    return text[:max(0, int(max_len))]
+
+
+def _safe_guest_device_id(value: Any) -> str:
+    text = _limited_text(value, max_len=160)
+    if not text:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)[:160]
+
+
+def _first_header(headers: Mapping[str, Any] | None, *names: str) -> str:
+    if not isinstance(headers, Mapping):
+        return ""
+    lower = {str(k).lower(): v for k, v in headers.items()}
+    for name in names:
+        value = lower.get(str(name).lower())
+        if value is not None:
+            return _limited_text(value, max_len=_DOWNLOAD_USER_AGENT_MAX)
+    return ""
+
+
+def _query_value(*, request: Request | None = None, search: str = "", key: str) -> str:
+    try:
+        if request is not None:
+            return _limited_text(request.query_params.get(key, ""))
+    except Exception:
+        pass
+    try:
+        raw = str(search or "")
+        query = raw[1:] if raw.startswith("?") else raw
+        parsed = parse_qs(query, keep_blank_values=True)
+        values = parsed.get(key) or []
+        return _limited_text(values[0] if values else "")
+    except Exception:
+        return ""
+
+
+def _client_ip_hash(value: Any) -> str:
+    text = _limited_text(value, max_len=128)
+    if not text:
+        return ""
+    first = text.split(",", 1)[0].strip()
+    if not first:
+        return ""
+    return hashlib.sha256(f"adaos-drive-public-client:{first}".encode("utf-8")).hexdigest()[:16]
+
+
+def _download_request_context(
+    *,
+    request: Request | None = None,
+    request_headers: Mapping[str, Any] | None = None,
+    search: str = "",
+    method: str = "",
+) -> dict[str, Any]:
+    headers: Mapping[str, Any] = request_headers if isinstance(request_headers, Mapping) else {}
+    try:
+        if request is not None:
+            headers = request.headers
+    except Exception:
+        pass
+    remote_ip = _first_header(headers, "cf-connecting-ip", "x-real-ip", "x-forwarded-for")
+    if not remote_ip and request is not None:
+        try:
+            remote_ip = str(getattr(request.client, "host", "") or "")
+        except Exception:
+            remote_ip = ""
+    guest_device_id = (
+        _query_value(request=request, search=search, key="guest_device_id")
+        or _first_header(headers, "x-adaos-public-device-id", "x-adaos-device-id")
+    )
+    return {
+        "method": (str(method or "") or (str(getattr(request, "method", "") or "") if request is not None else "") or "GET").upper(),
+        "guest_device_id": _safe_guest_device_id(guest_device_id),
+        "client_ip_hash": _client_ip_hash(remote_ip),
+        "user_agent": _limited_text(_first_header(headers, "user-agent"), max_len=_DOWNLOAD_USER_AGENT_MAX),
+        "referer": _limited_text(_first_header(headers, "referer", "referrer"), max_len=_DOWNLOAD_USER_AGENT_MAX),
+        "range": _limited_text(_first_header(headers, "range"), max_len=120),
+    }
 
 
 def _clean_rel(value: Any) -> str:
@@ -514,13 +637,18 @@ def register_root_public_link(payload: Mapping[str, Any], *, ctx: AgentContext |
     return _public_record(record, include_public_token=True, include_routing=True)
 
 
-def _resolve_record(kind: str, public_token: str, *, ctx: AgentContext | None = None) -> dict[str, Any]:
+def _lookup_record(kind: str, public_token: str, *, ctx: AgentContext | None = None) -> dict[str, Any]:
     token = validate_public_token(public_token)
     data = _load_store(kind, ctx)
     links = data.get("links") if isinstance(data.get("links"), dict) else {}
     record = links.get(_token_hash(token))
     if not isinstance(record, dict):
         raise DrivePublicLinkNotFound("drive public link not found")
+    return record
+
+
+def _resolve_record(kind: str, public_token: str, *, ctx: AgentContext | None = None) -> dict[str, Any]:
+    record = _lookup_record(kind, public_token, ctx=ctx)
     status = str(record.get("status") or "active").strip().lower()
     if status not in {"active", "ready"}:
         raise DrivePublicLinkForbidden("drive public link is not active")
@@ -556,8 +684,274 @@ def revoke_root_public_link(public_token: str, *, ctx: AgentContext | None = Non
     return _public_record(record, include_public_token=True, include_routing=True)
 
 
+def _download_event_path(record: Mapping[str, Any], rel_path: Any, filename: str) -> str:
+    try:
+        rel = _clean_rel(rel_path)
+    except Exception:
+        rel = _limited_text(rel_path, max_len=300).replace("\\", "/").lstrip("/")
+    if rel:
+        return rel
+    if _record_resource_kind(record) == "file":
+        return str(record.get("rel_path") or filename or record.get("filename") or "").strip()
+    return str(filename or record.get("filename") or "").strip()
+
+
+def _download_summary_from_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "public_token_hint": str(record.get("public_token_hint") or ""),
+        "name": str(record.get("filename") or record.get("name") or ""),
+        "resource_kind": _record_resource_kind(record),
+        "events_total": 0,
+        "started_total": 0,
+        "completed_total": 0,
+        "failed_total": 0,
+        "aborted_total": 0,
+        "download_started_total": 0,
+        "download_completed_total": 0,
+        "download_failed_total": 0,
+        "download_aborted_total": 0,
+        "preview_started_total": 0,
+        "preview_completed_total": 0,
+        "bytes_completed": 0,
+        "last_at": None,
+        "last_status": "",
+        "last_error": "",
+        "by_error": {},
+        "files": {},
+    }
+
+
+def _download_public_token_hash(record: Mapping[str, Any]) -> str:
+    token_hash = str(record.get("public_token_hash") or "").strip()
+    if token_hash:
+        return token_hash
+    token = str(record.get("public_token") or "").strip()
+    return _token_hash(token) if token else ""
+
+
+def _coerce_download_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    return status if status in {"started", "completed", "failed", "aborted"} else "started"
+
+
+def _coerce_download_action(value: Any, *, download: bool | None = None) -> str:
+    action = str(value or "").strip().lower()
+    if action in {"download", "preview", "content", "metadata"}:
+        return action
+    if download is not None:
+        return "download" if download else "preview"
+    return "download"
+
+
+def record_hub_public_download_event(
+    record: Mapping[str, Any],
+    *,
+    status: str,
+    action: str = "",
+    download: bool | None = None,
+    rel_path: Any = "",
+    target: Path | None = None,
+    filename: str = "",
+    size_bytes: Any = None,
+    bytes_sent: Any = None,
+    status_code: Any = None,
+    error: Any = "",
+    reason: Any = "",
+    phase: str = "",
+    method: str = "",
+    request: Request | None = None,
+    request_headers: Mapping[str, Any] | None = None,
+    search: str = "",
+    ctx: AgentContext | None = None,
+) -> dict[str, Any] | None:
+    token_hash = _download_public_token_hash(record)
+    if not token_hash:
+        return None
+    now = _now()
+    status0 = _coerce_download_status(status)
+    action0 = _coerce_download_action(action, download=download)
+    filename0 = str(filename or (target.name if target is not None else "") or record.get("filename") or "download").strip()
+    try:
+        size0 = int(size_bytes if size_bytes is not None else (target.stat().st_size if target is not None and target.exists() else record.get("size_bytes") or 0))
+    except Exception:
+        size0 = 0
+    try:
+        bytes0 = int(bytes_sent) if bytes_sent is not None else None
+    except Exception:
+        bytes0 = None
+    try:
+        status_code0 = int(status_code) if status_code is not None else None
+    except Exception:
+        status_code0 = None
+    ctx0 = _download_request_context(request=request, request_headers=request_headers, search=search, method=method)
+    path0 = _download_event_path(record, rel_path, filename0)
+    event = {
+        "id": secrets.token_hex(8),
+        "schema": "adaos.drive.public_download_event.v1",
+        "at": _iso_utc(now),
+        "epoch": now,
+        "public_token_hint": str(record.get("public_token_hint") or ""),
+        "public_token_hash": token_hash,
+        "action": action0,
+        "status": status0,
+        "phase": _limited_text(phase or ("stream" if status0 in {"started", "completed", "aborted"} else "resolve"), max_len=80),
+        "method": ctx0.get("method") or "GET",
+        "path": path0,
+        "filename": filename0,
+        "size_bytes": size0,
+        "bytes_sent": bytes0,
+        "status_code": status_code0,
+        "error": _limited_text(error),
+        "reason": _limited_text(reason),
+        "guest_device_id": ctx0.get("guest_device_id") or "",
+        "client_ip_hash": ctx0.get("client_ip_hash") or "",
+        "user_agent": ctx0.get("user_agent") or "",
+        "referer": ctx0.get("referer") or "",
+        "range": ctx0.get("range") or "",
+    }
+    with _DOWNLOAD_LOCK:
+        data = _load_download_store(ctx)
+        summaries = data.get("summaries") if isinstance(data.get("summaries"), dict) else {}
+        summary = summaries.get(token_hash) if isinstance(summaries.get(token_hash), dict) else _download_summary_from_record(record)
+        summary["public_token_hint"] = str(record.get("public_token_hint") or summary.get("public_token_hint") or "")
+        summary["name"] = str(record.get("filename") or summary.get("name") or "")
+        summary["resource_kind"] = _record_resource_kind(record)
+        summary["events_total"] = int(summary.get("events_total") or 0) + 1
+        status_key = f"{status0}_total"
+        summary[status_key] = int(summary.get(status_key) or 0) + 1
+        action_status_key = f"{action0}_{status0}_total"
+        summary[action_status_key] = int(summary.get(action_status_key) or 0) + 1
+        if status0 == "completed" and bytes0 is not None:
+            summary["bytes_completed"] = int(summary.get("bytes_completed") or 0) + max(0, bytes0)
+        summary["last_at"] = event["at"]
+        summary["last_status"] = status0
+        summary["last_error"] = event["error"] if status0 == "failed" else ""
+        if status0 == "failed" and event["error"]:
+            by_error = summary.get("by_error") if isinstance(summary.get("by_error"), dict) else {}
+            by_error[event["error"]] = int(by_error.get(event["error"]) or 0) + 1
+            summary["by_error"] = by_error
+        files = summary.get("files") if isinstance(summary.get("files"), dict) else {}
+        file_key = path0 or filename0 or "__root__"
+        file_summary = files.get(file_key) if isinstance(files.get(file_key), dict) else {
+            "path": file_key,
+            "filename": filename0,
+            "started_total": 0,
+            "completed_total": 0,
+            "failed_total": 0,
+            "aborted_total": 0,
+            "bytes_completed": 0,
+            "last_at": None,
+            "last_status": "",
+        }
+        file_summary["filename"] = filename0
+        file_summary[status_key] = int(file_summary.get(status_key) or 0) + 1
+        if status0 == "completed" and bytes0 is not None:
+            file_summary["bytes_completed"] = int(file_summary.get("bytes_completed") or 0) + max(0, bytes0)
+        file_summary["last_at"] = event["at"]
+        file_summary["last_status"] = status0
+        files[file_key] = file_summary
+        summary["files"] = files
+        summaries[token_hash] = summary
+        events = data.get("events") if isinstance(data.get("events"), list) else []
+        events.insert(0, event)
+        data["events"] = events[:_DOWNLOAD_RECENT_MAX]
+        data["summaries"] = summaries
+        data["schema"] = _DOWNLOAD_STORE_SCHEMA
+        data["v"] = 1
+        _save_download_store(data, ctx)
+    return event
+
+
+def record_hub_public_download_failure(
+    public_token: str,
+    *,
+    error: Any,
+    status_code: Any = None,
+    action: str = "",
+    download: bool | None = None,
+    rel_path: Any = "",
+    reason: Any = "",
+    phase: str = "resolve",
+    method: str = "",
+    request: Request | None = None,
+    request_headers: Mapping[str, Any] | None = None,
+    search: str = "",
+    ctx: AgentContext | None = None,
+) -> dict[str, Any] | None:
+    try:
+        record = _lookup_record("hub", public_token, ctx=ctx)
+    except Exception:
+        return None
+    return record_hub_public_download_event(
+        record,
+        status="failed",
+        action=action,
+        download=download,
+        rel_path=rel_path,
+        status_code=status_code,
+        error=error,
+        reason=reason,
+        phase=phase,
+        method=method,
+        request=request,
+        request_headers=request_headers,
+        search=search,
+        ctx=ctx,
+    )
+
+
+def _download_summary_for_record(record: Mapping[str, Any], data: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    token_hash = _download_public_token_hash(record)
+    summaries = data.get("summaries") if isinstance(data, Mapping) and isinstance(data.get("summaries"), dict) else {}
+    summary = summaries.get(token_hash) if token_hash and isinstance(summaries.get(token_hash), dict) else {}
+    merged = _download_summary_from_record(record)
+    merged.update(dict(summary))
+    return merged
+
+
+def list_hub_public_download_events(
+    public_token: str = "",
+    *,
+    limit: Any = 100,
+    ctx: AgentContext | None = None,
+) -> dict[str, Any]:
+    try:
+        max_items = max(1, min(500, int(limit or 100)))
+    except Exception:
+        max_items = 100
+    token_hash = ""
+    summary: dict[str, Any] = {}
+    if str(public_token or "").strip():
+        record = _lookup_record("hub", public_token, ctx=ctx)
+        token_hash = _download_public_token_hash(record)
+    with _DOWNLOAD_LOCK:
+        data = _load_download_store(ctx)
+        events0 = data.get("events") if isinstance(data.get("events"), list) else []
+        summaries = data.get("summaries") if isinstance(data.get("summaries"), dict) else {}
+        if token_hash:
+            events = [dict(item) for item in events0 if isinstance(item, Mapping) and str(item.get("public_token_hash") or "") == token_hash]
+            summary = dict(summaries.get(token_hash) or {})
+        else:
+            events = [dict(item) for item in events0 if isinstance(item, Mapping)]
+            summary = {
+                "links_total": len(summaries),
+                "events_total": sum(int(item.get("events_total") or 0) for item in summaries.values() if isinstance(item, Mapping)),
+                "completed_total": sum(int(item.get("completed_total") or 0) for item in summaries.values() if isinstance(item, Mapping)),
+                "failed_total": sum(int(item.get("failed_total") or 0) for item in summaries.values() if isinstance(item, Mapping)),
+                "aborted_total": sum(int(item.get("aborted_total") or 0) for item in summaries.values() if isinstance(item, Mapping)),
+                "bytes_completed": sum(int(item.get("bytes_completed") or 0) for item in summaries.values() if isinstance(item, Mapping)),
+            }
+    return {
+        "ok": True,
+        "schema": _DOWNLOAD_STORE_SCHEMA,
+        "summary": summary,
+        "events": events[:max_items],
+    }
+
+
 def list_hub_public_links(*, ctx: AgentContext | None = None) -> list[dict[str, Any]]:
     data = _load_store("hub", ctx)
+    download_data = _load_download_store(ctx)
     links = data.get("links") if isinstance(data.get("links"), dict) else {}
     out: list[dict[str, Any]] = []
     for record in links.values():
@@ -568,6 +962,13 @@ def list_hub_public_links(*, ctx: AgentContext | None = None) -> list[dict[str, 
         item["source_label"] = str(record.get("source_label") or "")
         item["rel_path"] = str(record.get("rel_path") or "")
         item["revoked_at"] = record.get("revoked_at")
+        stats = _download_summary_for_record(record, download_data)
+        item["download_stats"] = stats
+        item["download_summary"] = (
+            f"{int(stats.get('download_completed_total') or 0)} downloads, "
+            f"{int(stats.get('failed_total') or 0)} failures, "
+            f"{int(stats.get('aborted_total') or 0)} aborted"
+        )
         out.append(item)
     out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     return out
@@ -748,6 +1149,76 @@ def _attachment_content_disposition(filename: str) -> str:
     return f'attachment; filename="{safe}"; filename*=UTF-8\'\'{encoded}'
 
 
+def _public_download_file_iter(
+    record: Mapping[str, Any],
+    target: Path,
+    *,
+    start: int,
+    end: int,
+    filename: str,
+    size: int,
+    status_code: int,
+    action: str,
+    rel_path: Any,
+    request: Request,
+    ctx: AgentContext | None = None,
+):
+    sent = 0
+    try:
+        for chunk in file_range_iter(target, start=start, end=end):
+            sent += len(chunk)
+            yield chunk
+    except GeneratorExit:
+        record_hub_public_download_event(
+            record,
+            status="aborted",
+            action=action,
+            rel_path=rel_path,
+            target=target,
+            filename=filename,
+            size_bytes=size,
+            bytes_sent=sent,
+            status_code=status_code,
+            phase="stream",
+            request=request,
+            ctx=ctx,
+        )
+        raise
+    except Exception as exc:
+        record_hub_public_download_event(
+            record,
+            status="failed",
+            action=action,
+            rel_path=rel_path,
+            target=target,
+            filename=filename,
+            size_bytes=size,
+            bytes_sent=sent,
+            status_code=502,
+            error=type(exc).__name__,
+            reason=str(exc),
+            phase="stream",
+            request=request,
+            ctx=ctx,
+        )
+        raise
+    else:
+        record_hub_public_download_event(
+            record,
+            status="completed",
+            action=action,
+            rel_path=rel_path,
+            target=target,
+            filename=filename,
+            size_bytes=size,
+            bytes_sent=sent,
+            status_code=status_code,
+            phase="stream",
+            request=request,
+            ctx=ctx,
+        )
+
+
 def stream_hub_public_link(
     public_token: str,
     hub_token: str,
@@ -758,11 +1229,44 @@ def stream_hub_public_link(
     ctx: AgentContext | None = None,
 ) -> StreamingResponse | Response:
     requested_path = rel_path if rel_path not in (None, "") else request.query_params.get("path", "")
-    record, target = resolve_hub_public_link(public_token, hub_token, rel_path=requested_path, require_file=True, ctx=ctx)
+    action = "download" if download else "preview"
+    try:
+        record, target = resolve_hub_public_link(public_token, hub_token, rel_path=requested_path, require_file=True, ctx=ctx)
+    except Exception as exc:
+        status_code, detail = map_public_link_exception(exc)
+        if request.method.upper() != "HEAD":
+            record_hub_public_download_failure(
+                public_token,
+                error=detail,
+                status_code=status_code,
+                action=action,
+                rel_path=requested_path,
+                phase="resolve",
+                request=request,
+                ctx=ctx,
+            )
+        raise
     size = int(target.stat().st_size)
     try:
         byte_range = parse_media_range(request.headers.get("range"), size=size)
     except Exception:
+        if request.method.upper() != "HEAD":
+            filename0, _mime0 = public_file_response_metadata(record, target)
+            record_hub_public_download_event(
+                record,
+                status="failed",
+                action=action,
+                rel_path=requested_path,
+                target=target,
+                filename=filename0,
+                size_bytes=size,
+                bytes_sent=0,
+                status_code=416,
+                error="invalid_range",
+                phase="range",
+                request=request,
+                ctx=ctx,
+            )
         return Response(
             status_code=416,
             content=b"",
@@ -788,9 +1292,63 @@ def stream_hub_public_link(
     if download:
         headers["Content-Disposition"] = _attachment_content_disposition(filename)
     if request.method.upper() == "HEAD" or int(headers.get("Content-Length") or 0) <= 0:
+        if request.method.upper() != "HEAD":
+            record_hub_public_download_event(
+                record,
+                status="started",
+                action=action,
+                rel_path=requested_path,
+                target=target,
+                filename=filename,
+                size_bytes=size,
+                bytes_sent=0,
+                status_code=status_code,
+                phase="stream",
+                request=request,
+                ctx=ctx,
+            )
+            record_hub_public_download_event(
+                record,
+                status="completed",
+                action=action,
+                rel_path=requested_path,
+                target=target,
+                filename=filename,
+                size_bytes=size,
+                bytes_sent=0,
+                status_code=status_code,
+                phase="stream",
+                request=request,
+                ctx=ctx,
+            )
         return Response(status_code=status_code, headers=headers, media_type=mime_type)
+    record_hub_public_download_event(
+        record,
+        status="started",
+        action=action,
+        rel_path=requested_path,
+        target=target,
+        filename=filename,
+        size_bytes=size,
+        status_code=status_code,
+        phase="stream",
+        request=request,
+        ctx=ctx,
+    )
     return StreamingResponse(
-        file_range_iter(target, start=start, end=end),
+        _public_download_file_iter(
+            record,
+            target,
+            start=start,
+            end=end,
+            filename=filename,
+            size=size,
+            status_code=status_code,
+            action=action,
+            rel_path=requested_path,
+            request=request,
+            ctx=ctx,
+        ),
         status_code=status_code,
         media_type=mime_type,
         headers=headers,

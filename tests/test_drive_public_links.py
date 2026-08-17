@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from adaos.services.drive_public_links import (
     issue_hub_token,
     issue_public_token,
+    list_hub_public_download_events,
+    list_hub_public_links,
     public_file_response_metadata,
     register_hub_public_link,
 )
@@ -108,6 +110,18 @@ def test_root_drive_public_link_registers_and_streams_without_auth(monkeypatch, 
     assert head.headers["content-length"] == "11"
     assert "attachment" in head.headers["content-disposition"]
 
+    downloaded = client.get(f"/v1/drive/public-links/{public_token}/content?download=1&guest_device_id=guest-1")
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"hello world"
+
+    journal = list_hub_public_download_events(public_token, ctx=fake_ctx)
+    assert journal["summary"]["download_started_total"] == 1
+    assert journal["summary"]["download_completed_total"] == 1
+    assert journal["summary"]["bytes_completed"] >= 11
+    assert journal["events"][0]["status"] == "completed"
+    assert journal["events"][0]["action"] == "download"
+    assert journal["events"][0]["guest_device_id"] == "guest-1"
+
 
 def test_root_drive_public_folder_lists_and_streams_children(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ROOT_TOKEN", "root-secret")
@@ -183,6 +197,13 @@ def test_root_drive_public_folder_lists_and_streams_children(monkeypatch, tmp_pa
 
     blocked = client.get(f"/v1/drive/public-links/{public_token}/content?path=../outside.txt")
     assert blocked.status_code == 400
+
+    journal = list_hub_public_download_events(public_token, ctx=fake_ctx)
+    assert journal["summary"]["failed_total"] >= 1
+    assert any(event["status"] == "failed" and event["error"] == "path_traversal_not_allowed" for event in journal["events"])
+    public_links = list_hub_public_links(ctx=fake_ctx)
+    assert public_links[0]["download_stats"]["failed_total"] >= 1
+    assert "failures" in public_links[0]["download_summary"]
 
 
 def test_root_drive_public_link_registration_requires_root_auth(monkeypatch, tmp_path: Path) -> None:

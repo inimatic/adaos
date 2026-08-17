@@ -1968,7 +1968,8 @@ class NatsRouteTunnelRuntime:
                 display_name: str | None = None,
                 mime_type: str | None = None,
                 download: bool = False,
-            ) -> None:
+                on_failed: Any | None = None,
+            ) -> int | None:
                 from adaos.services.media_core import (
                     ROOT_MEDIA_RELAY_CHUNK_BYTES,
                     guess_media_type,
@@ -1985,6 +1986,11 @@ class NatsRouteTunnelRuntime:
                 try:
                     range_spec = parse_media_range(range_header or None, size=total_size)
                 except Exception:
+                    if callable(on_failed):
+                        try:
+                            on_failed("invalid_range", 416, 0)
+                        except Exception:
+                            pass
                     await _route_reply(
                         key,
                         {
@@ -1997,7 +2003,7 @@ class NatsRouteTunnelRuntime:
                         },
                     )
                     await _route_reply(key, {"t": "media_http_end", "total_bytes": 0, "truncated": False})
-                    return
+                    return None
 
                 status, _reason, headers, start, end = media_content_response_parts(
                     filename=response_name,
@@ -2021,7 +2027,7 @@ class NatsRouteTunnelRuntime:
                 )
                 if str(method or "").upper() == "HEAD" or length <= 0:
                     await _route_reply(key, {"t": "media_http_end", "total_bytes": 0, "truncated": False})
-                    return
+                    return 0
 
                 sent = 0
                 with target.open("rb") as handle:
@@ -2051,6 +2057,7 @@ class NatsRouteTunnelRuntime:
                         "truncated": False,
                     },
                 )
+                return sent
 
             def _start_route_media_reply_file(
                 key: str,
@@ -2061,10 +2068,13 @@ class NatsRouteTunnelRuntime:
                 display_name: str | None = None,
                 mime_type: str | None = None,
                 download: bool = False,
+                on_completed: Any | None = None,
+                on_failed: Any | None = None,
+                on_aborted: Any | None = None,
             ) -> None:
                 async def _run() -> None:
                     try:
-                        await _route_media_reply_file(
+                        sent = await _route_media_reply_file(
                             key,
                             target=target,
                             method=method,
@@ -2072,10 +2082,26 @@ class NatsRouteTunnelRuntime:
                             display_name=display_name,
                             mime_type=mime_type,
                             download=download,
+                            on_failed=on_failed,
                         )
+                        if sent is not None and callable(on_completed):
+                            try:
+                                on_completed(sent)
+                            except Exception:
+                                pass
                     except asyncio.CancelledError:
+                        if callable(on_aborted):
+                            try:
+                                on_aborted()
+                            except Exception:
+                                pass
                         raise
                     except Exception as e:
+                        if callable(on_failed):
+                            try:
+                                on_failed(type(e).__name__, 502, None)
+                            except Exception:
+                                pass
                         try:
                             await _route_reply(
                                 key,
@@ -3241,6 +3267,8 @@ class NatsRouteTunnelRuntime:
                                         DrivePublicLinkNotFound,
                                         list_hub_public_link,
                                         public_file_response_metadata,
+                                        record_hub_public_download_event,
+                                        record_hub_public_download_failure,
                                         resolve_hub_public_link,
                                     )
 
@@ -3250,6 +3278,34 @@ class NatsRouteTunnelRuntime:
                                         or ""
                                     ).strip()
                                     requested_rel_path = str(_query_param(search, "path") or "").strip()
+                                    download_flag = str(_query_param(search, "download") or "").strip().lower() in {
+                                        "1",
+                                        "true",
+                                        "yes",
+                                        "on",
+                                    }
+                                    download_action = "download" if download_flag else "preview"
+
+                                    def _record_drive_public_failure(status_code: int, error: str, *, reason: str = "", phase: str = "resolve") -> None:
+                                        if method == "HEAD":
+                                            return
+                                        try:
+                                            record_hub_public_download_failure(
+                                                drive_public_token,
+                                                error=error,
+                                                status_code=status_code,
+                                                action=download_action,
+                                                rel_path=requested_rel_path,
+                                                reason=reason,
+                                                phase=phase,
+                                                method=method,
+                                                request_headers=headers,
+                                                search=search,
+                                                ctx=service.ctx,
+                                            )
+                                        except Exception:
+                                            pass
+
                                     if drive_public_action == "list":
                                         listing = list_hub_public_link(
                                             drive_public_token,
@@ -3268,14 +3324,13 @@ class NatsRouteTunnelRuntime:
                                         require_file=True,
                                         ctx=service.ctx,
                                     )
-                                    download_flag = str(_query_param(search, "download") or "").strip().lower() in {
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "on",
-                                    }
                                     response_name, response_mime = public_file_response_metadata(record, target)
+                                    try:
+                                        response_size = int(target.stat().st_size)
+                                    except Exception:
+                                        response_size = 0
                                 except ValueError as exc:
+                                    _record_drive_public_failure(400, str(exc) or "invalid_drive_public_link")
                                     await _route_media_reply_json(
                                         key,
                                         status=400,
@@ -3284,6 +3339,7 @@ class NatsRouteTunnelRuntime:
                                     route_outcome = "drive_public_content_bad_request"
                                     return
                                 except PermissionError as exc:
+                                    _record_drive_public_failure(403, "drive_public_link_forbidden", reason=str(exc))
                                     await _route_media_reply_json(
                                         key,
                                         status=403,
@@ -3292,6 +3348,7 @@ class NatsRouteTunnelRuntime:
                                     route_outcome = "drive_public_content_forbidden"
                                     return
                                 except FileNotFoundError as exc:
+                                    _record_drive_public_failure(404, "drive_public_link_not_found", reason=str(exc))
                                     await _route_media_reply_json(
                                         key,
                                         status=404,
@@ -3300,6 +3357,7 @@ class NatsRouteTunnelRuntime:
                                     route_outcome = "drive_public_content_missing"
                                     return
                                 except DrivePublicLinkExpired:
+                                    _record_drive_public_failure(410, "drive_public_link_expired")
                                     await _route_media_reply_json(
                                         key,
                                         status=410,
@@ -3308,6 +3366,7 @@ class NatsRouteTunnelRuntime:
                                     route_outcome = "drive_public_content_expired"
                                     return
                                 except DrivePublicLinkForbidden:
+                                    _record_drive_public_failure(403, "drive_public_link_forbidden")
                                     await _route_media_reply_json(
                                         key,
                                         status=403,
@@ -3316,6 +3375,7 @@ class NatsRouteTunnelRuntime:
                                     route_outcome = "drive_public_content_forbidden"
                                     return
                                 except DrivePublicLinkNotFound:
+                                    _record_drive_public_failure(404, "drive_public_link_not_found")
                                     await _route_media_reply_json(
                                         key,
                                         status=404,
@@ -3323,6 +3383,93 @@ class NatsRouteTunnelRuntime:
                                     )
                                     route_outcome = "drive_public_content_missing"
                                     return
+                                if method != "HEAD":
+                                    try:
+                                        record_hub_public_download_event(
+                                            record,
+                                            status="started",
+                                            action=download_action,
+                                            rel_path=requested_rel_path,
+                                            target=target,
+                                            filename=response_name,
+                                            size_bytes=response_size,
+                                            phase="relay",
+                                            method=method,
+                                            request_headers=headers,
+                                            search=search,
+                                            ctx=service.ctx,
+                                        )
+                                    except Exception:
+                                        pass
+
+                                def _record_drive_public_completed(sent: int) -> None:
+                                    if method == "HEAD":
+                                        return
+                                    try:
+                                        record_hub_public_download_event(
+                                            record,
+                                            status="completed",
+                                            action=download_action,
+                                            rel_path=requested_rel_path,
+                                            target=target,
+                                            filename=response_name,
+                                            size_bytes=response_size,
+                                            bytes_sent=sent,
+                                            status_code=200,
+                                            phase="relay",
+                                            method=method,
+                                            request_headers=headers,
+                                            search=search,
+                                            ctx=service.ctx,
+                                        )
+                                    except Exception:
+                                        pass
+
+                                def _record_drive_public_stream_failed(error: str, status_code: int, sent: int | None) -> None:
+                                    if method == "HEAD":
+                                        return
+                                    try:
+                                        record_hub_public_download_event(
+                                            record,
+                                            status="failed",
+                                            action=download_action,
+                                            rel_path=requested_rel_path,
+                                            target=target,
+                                            filename=response_name,
+                                            size_bytes=response_size,
+                                            bytes_sent=sent,
+                                            status_code=status_code,
+                                            error=error,
+                                            phase="relay",
+                                            method=method,
+                                            request_headers=headers,
+                                            search=search,
+                                            ctx=service.ctx,
+                                        )
+                                    except Exception:
+                                        pass
+
+                                def _record_drive_public_aborted() -> None:
+                                    if method == "HEAD":
+                                        return
+                                    try:
+                                        record_hub_public_download_event(
+                                            record,
+                                            status="aborted",
+                                            action=download_action,
+                                            rel_path=requested_rel_path,
+                                            target=target,
+                                            filename=response_name,
+                                            size_bytes=response_size,
+                                            phase="relay",
+                                            method=method,
+                                            request_headers=headers,
+                                            search=search,
+                                            ctx=service.ctx,
+                                        )
+                                    except Exception:
+                                        pass
+
                                 _start_route_media_reply_file(
                                     key,
                                     target=target,
@@ -3331,6 +3478,9 @@ class NatsRouteTunnelRuntime:
                                     display_name=response_name,
                                     mime_type=response_mime,
                                     download=download_flag,
+                                    on_completed=_record_drive_public_completed,
+                                    on_failed=_record_drive_public_stream_failed,
+                                    on_aborted=_record_drive_public_aborted,
                                 )
                                 route_outcome = "drive_public_content_started"
                                 return
