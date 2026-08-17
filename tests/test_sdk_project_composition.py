@@ -474,6 +474,39 @@ def test_development_session_separates_write_targets_and_readonly_context(projec
     )
     assert repeated_expansion["request"]["request_id"] == expansion["request"]["request_id"]
 
+    feedback = development_sessions.record_feedback(
+        session["session_id"],
+        "feasibility_constraint",
+        "The accepted paired runner requires a deterministic seed injection point.",
+        affected_refs=["skill:tlp_direction"],
+        constraints=["Do not replace the accepted paired estimator."],
+        evidence=[{"kind": "contract", "ref": "instruction://automation_brief", "digest": digest}],
+        proposed_action="revise_engineering_contract",
+        protocol_digest=prototype,
+    )
+    repeated_feedback = development_sessions.record_feedback(
+        session["session_id"],
+        "feasibility_constraint",
+        "The accepted paired runner requires a deterministic seed injection point.",
+        affected_refs=["skill:tlp_direction"],
+        constraints=["Do not replace the accepted paired estimator."],
+        evidence=[{"kind": "contract", "ref": "instruction://automation_brief", "digest": digest}],
+        proposed_action="revise_engineering_contract",
+        protocol_digest=prototype,
+    )
+    assert feedback["feedback"]["status"] == "open"
+    assert repeated_feedback["idempotent"] is True
+    assert development_sessions.list_feedback(session["session_id"], blocking=True) == [feedback["feedback"]]
+
+    with pytest.raises(development_sessions.DevelopmentSessionError, match="outside session context"):
+        development_sessions.record_feedback(
+            session["session_id"],
+            "capability_gap",
+            "A missing dependency cannot be addressed inside the accepted target scope.",
+            affected_refs=["skill:not_admitted"],
+            proposed_action="request_scope",
+        )
+
     later = development_sessions.create(
         "tlp_research",
         automation_brief_digest="sha256:" + "4" * 64,

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adaos.builder.development_feedback.v1",
+  "title": "AdaOS typed Development Session feedback",
+  "type": "object",
+  "required": [
+    "schema", "feedback_id", "session_id", "kind", "severity", "blocking",
+    "summary", "affected_refs", "constraints", "evidence", "proposed_action",
+    "protocol_digest", "status", "created_at", "created_by", "digest"
+  ],
+  "properties": {
+    "schema": {"const": "adaos.builder.development_feedback.v1"},
+    "feedback_id": {"type": "string", "pattern": "^feedback_[0-9a-f]{20}$"},
+    "session_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$"},
+    "kind": {
+      "enum": [
+        "clarification_required", "feasibility_constraint", "capability_gap",
+        "protocol_conflict", "runtime_blocker"
+      ]
+    },
+    "severity": {"enum": ["info", "warning", "error"]},
+    "blocking": {"type": "boolean"},
+    "summary": {"type": "string", "minLength": 10, "maxLength": 4000},
+    "affected_refs": {
+      "type": "array", "maxItems": 50, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(skill|scenario):[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"}
+    },
+    "constraints": {
+      "type": "array", "maxItems": 100, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 3, "maxLength": 1000}
+    },
+    "evidence": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object", "required": ["kind", "ref", "digest"],
+        "properties": {
+          "kind": {"enum": ["file", "test", "log", "contract", "environment"]},
+          "ref": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "proposed_action": {
+      "enum": [
+        "clarify_contract", "revise_engineering_contract", "request_capability",
+        "request_scope", "retry_infrastructure", "abort_execution"
+      ]
+    },
+    "protocol_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "status": {"const": "open"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 200},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

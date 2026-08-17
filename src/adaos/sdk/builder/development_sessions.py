@@ -45,6 +45,10 @@ def _schema_path() -> Path:
     return Path(__file__).resolve().parents[2] / "abi" / "builder.development_session.v1.schema.json"
 
 
+def _feedback_schema_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "abi" / "builder.development_feedback.v1.schema.json"
+
+
 def validate(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = dict(value)
     schema = json.loads(_schema_path().read_text(encoding="utf-8"))
@@ -58,6 +62,22 @@ def validate(value: Mapping[str, Any]) -> dict[str, Any]:
         raise DevelopmentSessionError("development target refs must be unique")
     if payload["focus"]["ref"] not in set(target_refs) | {str(item["ref"]) for item in payload["context_members"]}:
         raise DevelopmentSessionError("focus must reference an admitted target or context member")
+    return payload
+
+
+def validate_feedback(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(value)
+    schema = json.loads(_feedback_schema_path().read_text(encoding="utf-8"))
+    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda item: list(item.absolute_path))
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "$"
+        raise DevelopmentSessionError(f"development feedback invalid at {location}: {error.message}")
+    expected = "sha256:" + hashlib.sha256(
+        _canonical_bytes({key: item for key, item in payload.items() if key != "digest"})
+    ).hexdigest()
+    if payload["digest"] != expected:
+        raise DevelopmentSessionError("development feedback digest does not match its content")
     return payload
 
 
@@ -362,6 +382,96 @@ def request_scope_expansion(
     return {"ok": True, "approved": False, "request": payload, "state_path": str(path)}
 
 
+def record_feedback(
+    session_id: str,
+    kind: str,
+    summary: str,
+    *,
+    severity: str = "warning",
+    blocking: bool = True,
+    affected_refs: Sequence[str] = (),
+    constraints: Sequence[str] = (),
+    evidence: Sequence[Mapping[str, Any]] = (),
+    proposed_action: str = "clarify_contract",
+    protocol_digest: str | None = None,
+    actor: str = "codex",
+) -> dict[str, Any]:
+    """Persist immutable, typed Builder feedback without altering accepted science.
+
+    Codex and other implementation agents use this channel when the accepted
+    contract is ambiguous, infeasible, missing a capability, or blocked by the
+    runtime.  Recording feedback cannot expand scope or mutate the protocol.
+    """
+
+    session = get(session_id)
+    normalized_refs = sorted({str(item).strip() for item in affected_refs if str(item).strip()})
+    admitted_refs = {
+        str(item["ref"])
+        for group in session["targets"].values()
+        for item in group
+    } | {str(item["ref"]) for item in session["context_members"]}
+    outside = sorted(set(normalized_refs) - admitted_refs)
+    if outside:
+        raise DevelopmentSessionError(f"feedback affected_refs are outside session context: {outside}")
+    normalized_summary = " ".join(str(summary or "").split()).strip()
+    identity = {
+        "session_id": session["session_id"],
+        "kind": str(kind or "").strip(),
+        "severity": str(severity or "").strip(),
+        "blocking": bool(blocking),
+        "summary": normalized_summary,
+        "affected_refs": normalized_refs,
+        "constraints": [" ".join(str(item).split()).strip() for item in constraints if str(item).strip()],
+        "evidence": [dict(item) for item in evidence],
+        "proposed_action": str(proposed_action or "").strip(),
+        "protocol_digest": str(protocol_digest).strip() if protocol_digest else None,
+        "created_by": str(actor or "codex").strip(),
+    }
+    fingerprint = hashlib.sha256(_canonical_bytes(identity)).hexdigest()
+    feedback_id = f"feedback_{fingerprint[:20]}"
+    payload = {
+        "schema": "adaos.builder.development_feedback.v1",
+        "feedback_id": feedback_id,
+        **identity,
+        "status": "open",
+        "created_at": _now(),
+    }
+    payload["digest"] = "sha256:" + hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    validate_feedback(payload)
+    path = (_path(session["session_id"]).parent / "feedback" / f"{feedback_id}.json").resolve()
+    with mutation_lock(path.parent / ".mutation.lock"):
+        if path.is_file():
+            restored = json.loads(path.read_text(encoding="utf-8-sig"))
+            return {"ok": True, "idempotent": True, "feedback": validate_feedback(restored), "state_path": str(path)}
+        atomic_write_json(path, payload)
+    return {"ok": True, "idempotent": False, "feedback": payload, "state_path": str(path)}
+
+
+def list_feedback(
+    session_id: str,
+    *,
+    kind: str | None = None,
+    blocking: bool | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Read validated feedback for orchestration, review, and audit surfaces."""
+
+    session = get(session_id)
+    root = (_path(session["session_id"]).parent / "feedback").resolve()
+    if not root.is_dir():
+        return []
+    values = []
+    for path in root.glob("feedback_*.json"):
+        value = validate_feedback(json.loads(path.read_text(encoding="utf-8-sig")))
+        if kind and value["kind"] != kind:
+            continue
+        if blocking is not None and value["blocking"] is not bool(blocking):
+            continue
+        values.append(value)
+    values.sort(key=lambda item: (str(item["created_at"]), str(item["feedback_id"])))
+    return values[-max(1, min(int(limit), 5000)):]
+
+
 def create(
     project_id: str,
     *,
@@ -484,7 +594,10 @@ __all__ = [
     "get",
     "get_instruction",
     "list_sessions",
+    "list_feedback",
+    "record_feedback",
     "request_scope_expansion",
     "review_changes",
     "validate",
+    "validate_feedback",
 ]
