@@ -39,6 +39,41 @@ def _write_skill(
     return skill_dir
 
 
+def test_validation_accepts_flat_runtime_capabilities(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=["capabilities:", "  - storage.relational"],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert "schema.invalid" not in {issue.code for issue in report.issues}
+
+
+def test_validation_rejects_capability_mapping_not_consumed_by_admission(tmp_path: Path) -> None:
+    skill_dir = _write_skill(
+        tmp_path,
+        handler="""
+from adaos.sdk.core.decorators import tool
+@tool(summary="ping")
+def ping():
+    return {"ok": True}
+""",
+        manifest_extra=["capabilities:", "  requires:", "    - storage.relational"],
+    )
+
+    report = SkillValidationService(get_ctx()).validate_path(skill_dir)
+
+    assert report.ok is False
+    assert "schema.invalid" in {issue.code for issue in report.issues}
+
+
 def test_strict_validation_predicts_heavy_dependency_isolation_failure(tmp_path: Path) -> None:
     skill_dir = _write_skill(
         tmp_path,

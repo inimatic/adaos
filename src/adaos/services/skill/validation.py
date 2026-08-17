@@ -1,14 +1,21 @@
 # src/adaos/sdk/skill_validator.py
 
 from __future__ import annotations
-import ast, os, re, shlex, sys, json, subprocess, importlib.util
+
+import ast
+import copy
+import importlib.resources as ir
+import json
+import re
+import shlex
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import copy
+
 import yaml
 from jsonschema import Draft202012Validator, ValidationError
-import importlib.resources as ir
 
 from adaos.domain.personalization_access import CAPABILITY_VOCABULARY, validate_capability
 from adaos.services.agent_context import AgentContext, get_ctx

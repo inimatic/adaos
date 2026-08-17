@@ -39,6 +39,12 @@
 			"items": { "type": "string", "minLength": 1 },
 			"uniqueItems": true
 		},
+		"capabilities": {
+			"description": "Runtime capabilities admitted for this skill. Capability admission consumes this exact flat list.",
+			"type": "array",
+			"items": { "type": "string", "minLength": 1 },
+			"uniqueItems": true
+		},
 		"permissions": {
 			"description": "Legacy runtime permissions or Phase 9 capability declarations. A list remains legacy-compatible; an object may contain required/optional policy capability arrays.",
 			"oneOf": [
