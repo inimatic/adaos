@@ -879,6 +879,40 @@ def test_codex_executor_uses_current_sdk_and_utf8_python(monkeypatch, tmp_path: 
     assert "OPENAI_API_KEY" not in environment
 
 
+def test_worker_applies_frozen_agent_profile_to_codex_executor(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, str | None] = {}
+
+    def fake_call(self, **_kwargs):
+        captured["model"] = self.model
+        captured["reasoning_effort"] = self.reasoning_effort
+        return CodexRunResult(returncode=0)
+
+    monkeypatch.setattr(SubprocessCodexExecutor, "__call__", fake_call)
+    worker = LocalSkillFactoryWorker(
+        state_dir=tmp_path / "state",
+        repo_root=tmp_path / "repo",
+        dev_skills_root=tmp_path / "skills",
+        dev_scenarios_root=tmp_path / "scenarios",
+        runs_root=tmp_path / "runs",
+        executor=SubprocessCodexExecutor(model="fallback"),
+    )
+
+    worker._execute_codex(
+        task_id="task.profile",
+        workspace=tmp_path,
+        prompt="bounded task",
+        output_dir=tmp_path / "output",
+        agent_profile={
+            "provider": "openai-codex-cli",
+            "model": "gpt-5.4",
+            "reasoning_effort": "high",
+            "tool_profile": "adaos-local-bounded-v1",
+        },
+    )
+
+    assert captured == {"model": "gpt-5.4", "reasoning_effort": "high"}
+
+
 def test_worker_prompt_requires_authoritative_sdk_and_utf8_transport(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker = LocalSkillFactoryWorker(

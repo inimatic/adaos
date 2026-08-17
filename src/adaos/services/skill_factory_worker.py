@@ -240,12 +240,14 @@ class SubprocessCodexExecutor:
         *,
         executable: str = "codex",
         model: str | None = None,
+        reasoning_effort: str | None = None,
         timeout_seconds: int = 4 * 60 * 60,
         sandbox_mode: str | None = None,
         repo_root: Path | None = None,
     ) -> None:
         self.executable = executable
         self.model = str(model or "").strip() or None
+        self.reasoning_effort = str(reasoning_effort or "").strip() or None
         self.timeout_seconds = max(60, int(timeout_seconds))
         self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
         configured_sandbox = str(sandbox_mode or os.getenv("ADAOS_LOCAL_CODEX_SANDBOX") or "").strip()
@@ -284,6 +286,8 @@ class SubprocessCodexExecutor:
         ]
         if self.model:
             command.extend(["--model", self.model])
+        if self.reasoning_effort:
+            command.extend(["--config", f'model_reasoning_effort="{self.reasoning_effort}"'])
         command.append("-")
         with live_events_path.open("w", encoding="utf-8", newline="\n") as events_file, live_stderr_path.open(
             "w", encoding="utf-8", newline="\n"
@@ -792,6 +796,7 @@ class LocalSkillFactoryWorker:
         workspace = run_root / "workspace"
         output_dir = run_root / "output"
         runtime_dir = run_root / "runtime"
+        agent_profile = dict((assignment.get("codex") or {}).get("agent_profile") or {})
         for path in (input_dir, output_dir, runtime_dir):
             path.mkdir(parents=True, exist_ok=True)
 
@@ -813,7 +818,13 @@ class LocalSkillFactoryWorker:
             self._init_git_workspace(workspace, str((assignment.get("forge") or {}).get("branch") or f"realize/{task_id}"))
             self._progress(task_id, "in_progress", "Codex is implementing the requested skill changes")
             self._ensure_task_active(task_id)
-            codex_result = self._execute_codex(task_id=task_id, workspace=workspace, prompt=prompt, output_dir=output_dir)
+            codex_result = self._execute_codex(
+                task_id=task_id,
+                workspace=workspace,
+                prompt=prompt,
+                output_dir=output_dir,
+                agent_profile=agent_profile,
+            )
             self._ensure_task_active(task_id)
             self._record_codex_attempt(runtime_dir, codex_result, attempt=0)
             if codex_result.returncode:
@@ -844,6 +855,7 @@ class LocalSkillFactoryWorker:
                     workspace=workspace,
                     prompt=repair_prompt,
                     output_dir=output_dir,
+                    agent_profile=agent_profile,
                 )
                 self._ensure_task_active(task_id)
                 self._record_codex_attempt(runtime_dir, codex_result, attempt=repair_attempt + 1)
@@ -949,9 +961,31 @@ class LocalSkillFactoryWorker:
         if status in {"completed", "failed", "missing"}:
             raise RuntimeError(f"Skill Factory task is no longer active: {status}")
 
-    def _execute_codex(self, *, task_id: str, workspace: Path, prompt: str, output_dir: Path) -> CodexRunResult:
+    def _execute_codex(
+        self,
+        *,
+        task_id: str,
+        workspace: Path,
+        prompt: str,
+        output_dir: Path,
+        agent_profile: Mapping[str, Any] | None = None,
+    ) -> CodexRunResult:
         if isinstance(self.executor, SubprocessCodexExecutor):
-            return self.executor(
+            profile = dict(agent_profile or {})
+            provider = str(profile.get("provider") or "openai-codex-cli").strip()
+            if provider != "openai-codex-cli":
+                raise ValueError(f"unsupported Codex agent provider: {provider}")
+            executor = self.executor
+            if profile:
+                executor = SubprocessCodexExecutor(
+                    executable=self.executor.executable,
+                    model=str(profile.get("model") or "").strip() or self.executor.model,
+                    reasoning_effort=str(profile.get("reasoning_effort") or "").strip() or None,
+                    timeout_seconds=self.executor.timeout_seconds,
+                    sandbox_mode=self.executor.sandbox_mode,
+                    repo_root=self.executor.repo_root,
+                )
+            return executor(
                 workspace=workspace,
                 prompt=prompt,
                 output_dir=output_dir,

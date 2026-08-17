@@ -1447,6 +1447,8 @@ class SkillFactoryService:
         forge = _mapping(task.get("forge"))
         mcp = _mapping(task.get("mcp"))
         lease = _mapping(task.get("access_lease"))
+        realize_request = _mapping(task.get("realize_request"))
+        agent_profile = _mapping(_mapping(realize_request.get("artifacts")).get("agent_profile"))
         return {
             "schema": DEV_TASK_ASSIGNMENT_SCHEMA,
             "task_id": task_id,
@@ -1476,6 +1478,7 @@ class SkillFactoryService:
                 "instruction_file": f".adaos/tasks/{_safe_branch_fragment(task_id)}/task.md",
                 "working_dir": "workspace/",
                 "mode": "autonomous_bounded",
+                "agent_profile": agent_profile or None,
             },
             "policy": {
                 "network": "restricted",
@@ -1491,7 +1494,7 @@ class SkillFactoryService:
             # deterministic instruction packet.  Keep it task-scoped and
             # already redacted instead of asking the worker to reconstruct
             # requirements from conversation history.
-            "realize_request": _mapping(task.get("realize_request")),
+            "realize_request": realize_request,
             "evidence": _mapping(task.get("evidence")) or {
                 "schema": "adaos.skill_factory.task_evidence.v1",
                 "expected_paths": _expected_evidence_paths(task_id),

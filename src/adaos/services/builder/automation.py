@@ -281,6 +281,7 @@ class BuilderAutomationService:
             "target_ref": target_ref,
             "request": session["handoff"].get("request"),
             "execution_budget": copy.deepcopy(session["handoff"].get("execution_budget")),
+            "agent_profile": copy.deepcopy(session["handoff"].get("agent_profile")),
             "artifact_inputs": artifact_receipts,
             "instruction_inputs": instruction_receipts,
             "prohibited_actions": list(session["handoff"]["prohibited_actions"]),
@@ -1881,6 +1882,14 @@ class BuilderAutomationService:
         if execution_budget:
             request["timeout_seconds"] = int(execution_budget["max_wall_seconds"])
             request["artifacts"]["execution_budget"] = copy.deepcopy(execution_budget)
+        agent_profile = (
+            development_context.get("agent_profile")
+            if isinstance(development_context, Mapping)
+            and isinstance(development_context.get("agent_profile"), Mapping)
+            else None
+        )
+        if agent_profile:
+            request["artifacts"]["agent_profile"] = copy.deepcopy(agent_profile)
         return self.factory.submit_realize_request(request)
 
     def _launch_worker(self, session_id: str) -> None:

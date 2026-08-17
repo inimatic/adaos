@@ -637,6 +637,12 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
             "max_attempts": 1,
             "max_human_interventions": 0,
         },
+        agent_profile={
+            "provider": "openai-codex-cli",
+            "model": "gpt-5.4",
+            "reasoning_effort": "high",
+            "tool_profile": "adaos-local-bounded-v1",
+        },
         artifact_sources=[
             {
                 "skill_id": "source_direction",
@@ -651,6 +657,7 @@ def test_development_session_admits_external_owner_artifact_view(project_space, 
     assert admitted["ref"] == "artifact://skill/source_direction/part0"
     assert admitted["audience"] == "research.calibration.c0_raw"
     assert created["session"]["handoff"]["execution_budget"]["max_wall_seconds"] == 7200
+    assert created["session"]["handoff"]["agent_profile"]["model"] == "gpt-5.4"
     assert [path.name for path in Path(admitted["root_path"]).iterdir()] == ["notebook.ipynb"]
 
 

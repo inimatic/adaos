@@ -583,6 +583,7 @@ def create(
     artifact_sources: Sequence[Mapping[str, Any]] = (),
     request: str | None = None,
     execution_budget: Mapping[str, Any] | None = None,
+    agent_profile: Mapping[str, Any] | None = None,
     primary_targets: Sequence[str] | None = None,
     secondary_targets: Sequence[str] = (),
     context_members: Sequence[Mapping[str, Any]] = (),
@@ -678,6 +679,14 @@ def create(
                 execution_budget.get("max_human_interventions") or 0
             ),
         }
+    normalized_agent_profile = None
+    if agent_profile is not None:
+        normalized_agent_profile = {
+            "provider": str(agent_profile.get("provider") or "").strip(),
+            "model": str(agent_profile.get("model") or "").strip(),
+            "reasoning_effort": str(agent_profile.get("reasoning_effort") or "").strip(),
+            "tool_profile": str(agent_profile.get("tool_profile") or "").strip(),
+        }
     payload = {
         "schema": "adaos.builder.development_session.v1",
         "session_id": token,
@@ -697,6 +706,7 @@ def create(
             "artifact_manifest_digests": [item["manifest_digest"] for item in artifact_inputs],
             **({"request": str(request).strip()} if str(request or "").strip() else {}),
             **({"execution_budget": normalized_budget} if normalized_budget else {}),
+            **({"agent_profile": normalized_agent_profile} if normalized_agent_profile else {}),
             "prohibited_actions": [str(item) for item in prohibited_actions if str(item).strip()],
         },
         "status": "ready",

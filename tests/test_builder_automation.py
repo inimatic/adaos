@@ -184,6 +184,12 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
                 "max_attempts": 1,
                 "max_human_interventions": 0,
             },
+            "agent_profile": {
+                "provider": "openai-codex-cli",
+                "model": "gpt-5.4",
+                "reasoning_effort": "high",
+                "tool_profile": "adaos-local-bounded-v1",
+            },
             "prohibited_actions": ["Do not inspect undeclared evaluator material."],
         },
         "status": "ready",
@@ -210,11 +216,13 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert receipt["session_id"] == session_id
     assert receipt["request"] == "Implement the frozen calibration request."
     assert receipt["execution_budget"]["max_model_tokens"] == 80000
+    assert receipt["agent_profile"]["reasoning_effort"] == "high"
     assert receipt["artifact_inputs"][0]["path"].startswith(".adaos_context/")
     assert receipt["instruction_inputs"][0]["content_digest"] == review_digest
     assert task["realize_request"]["links"]["development_context_digest"] == receipt["digest"]
     assert task["timeout_seconds"] == 7200
     assert task["realize_request"]["artifacts"]["execution_budget"]["budget_view"] == "fixed_downstream"
+    assert task["realize_request"]["artifacts"]["agent_profile"]["model"] == "gpt-5.4"
     attachments = task["forge"]["source_snapshot"]["attachments"]
     assert {item["name"] for item in attachments} >= {
         "development_artifact_00",
