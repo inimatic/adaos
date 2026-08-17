@@ -355,7 +355,7 @@ class SupervisorStatusService:
         )
         managed_matches_active_slot = managed_process_matches_active_slot
         managed_slot_match_basis = "process_paths" if expected_executable or expected_cwd else "unavailable"
-        if manager._verified_adopted_runtime_matches_active_slot(current_slot=current_slot, api_ready=api_ready):
+        if manager._verified_adopted_runtime_matches_active_slot(current_slot=current_slot):
             managed_matches_active_slot = True
             managed_slot_match_basis = "runtime_api_identity"
         warm_switch = manager._warm_switch_state(
@@ -449,6 +449,11 @@ class SupervisorStatusService:
             "managed_matches_active_slot": managed_matches_active_slot,
             "managed_process_matches_active_slot": managed_process_matches_active_slot,
             "managed_slot_match_basis": managed_slot_match_basis,
+            "managed_runtime_api_identity": {
+                "verified": bool(manager._managed_runtime_api_identity_verified),
+                "observed_at": manager._managed_runtime_api_identity_observed_at,
+                **dict(manager._managed_runtime_api_identity or {}),
+            },
             **warm_switch,
             "candidate_slot": candidate_slot,
             "candidate_runtime_url": candidate_runtime_url,

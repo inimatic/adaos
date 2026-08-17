@@ -1770,7 +1770,7 @@ def _listener_running(host: str, port: int, *, timeout: float = 0.35) -> bool:
     return _PROCESS_SUPERVISOR.listener_running(host, port, timeout=timeout)
 
 
-def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.75) -> bool:
+def _runtime_api_probe(base_url: str, *, token: str | None, timeout: float = 0.75) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     if token:
         headers["X-AdaOS-Token"] = token
@@ -1778,16 +1778,35 @@ def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.7
         with requests.get(f"{base_url}/api/ping", headers=headers, timeout=max(0.1, float(timeout))) as response:
             response.raise_for_status()
             payload = response.json()
-    except Exception:
-        return False
+    except Exception as exc:
+        return {
+            "ready": False,
+            "runtime": {},
+            "error_type": type(exc).__name__,
+        }
     if not isinstance(payload, dict) or payload.get("ok") is not True:
-        return False
+        return {
+            "ready": False,
+            "runtime": {},
+            "error_type": "invalid_response",
+        }
     readiness = payload.get("readiness")
     if isinstance(readiness, dict):
-        return readiness.get("ready") is True and str(readiness.get("state") or "").strip().lower() == "ready"
-    # Compatibility with a runtime from the generation immediately before the
-    # explicit boot-readiness contract was introduced.
-    return True
+        ready = readiness.get("ready") is True and str(readiness.get("state") or "").strip().lower() == "ready"
+    else:
+        # Compatibility with a runtime from the generation immediately before
+        # the explicit boot-readiness contract was introduced.
+        ready = True
+    runtime = payload.get("runtime")
+    return {
+        "ready": bool(ready),
+        "runtime": dict(runtime) if isinstance(runtime, dict) else {},
+        "error_type": None,
+    }
+
+
+def _runtime_api_ready(base_url: str, *, token: str | None, timeout: float = 0.75) -> bool:
+    return bool(_runtime_api_probe(base_url, token=token, timeout=timeout).get("ready"))
 
 
 def _runtime_beacon_ready(base_url: str, *, token: str | None, timeout: float = 1.25) -> bool:
@@ -2212,6 +2231,8 @@ class SupervisorManager:
         self._managed_runtime_cwd: str | None = None
         self._managed_start_reason: str | None = None
         self._managed_runtime_api_identity_verified = False
+        self._managed_runtime_api_identity_observed_at: float | None = None
+        self._managed_runtime_api_identity: dict[str, Any] = {}
         self._last_stop_reason: str | None = None
         self._candidate_slot: str | None = None
         self._candidate_runtime_instance_id: str | None = None
@@ -5651,16 +5672,46 @@ class SupervisorManager:
         self,
         *,
         current_slot: str | None,
-        api_ready: bool,
     ) -> bool:
         return bool(
             self._managed_runtime_api_identity_verified
-            and api_ready
             and current_slot
             and str(self._managed_slot or "").strip().upper() == str(current_slot).strip().upper()
             and str(self._managed_transition_role or "").strip().lower() == "active"
             and str(self._managed_runtime_instance_id or "").strip()
         )
+
+    def _refresh_managed_runtime_api_identity(
+        self,
+        *,
+        current_slot: str | None,
+        probe: dict[str, Any],
+    ) -> bool | None:
+        identity = probe.get("runtime") if isinstance(probe.get("runtime"), dict) else {}
+        reported_slot = str(identity.get("slot") or "").strip().upper()
+        reported_role = str(identity.get("transition_role") or "").strip().lower()
+        reported_instance_id = str(identity.get("runtime_instance_id") or "").strip()
+        expected_instance_id = str(self._managed_runtime_instance_id or "").strip()
+        if not reported_slot or not reported_role or not reported_instance_id:
+            return None
+
+        self._managed_runtime_api_identity_observed_at = time.time()
+        self._managed_runtime_api_identity = {
+            "slot": reported_slot,
+            "transition_role": reported_role,
+            "runtime_instance_id": reported_instance_id,
+        }
+        if not current_slot or not expected_instance_id:
+            self._managed_runtime_api_identity_verified = False
+            return None
+
+        matches = bool(
+            reported_slot == str(current_slot).strip().upper()
+            and reported_role == "active"
+            and reported_instance_id == expected_instance_id
+        )
+        self._managed_runtime_api_identity_verified = matches
+        return matches
 
     def _persist_runtime_state(self) -> None:
         with contextlib.suppress(Exception):
@@ -6297,8 +6348,19 @@ class SupervisorManager:
         runtime_port = self.slot_runtime_port(current_slot)
         runtime_url = self.slot_runtime_base_url(current_slot)
         listener_running = _listener_running(self.runtime_host, runtime_port)
-        api_ready = bool(listener_running and _runtime_api_ready(runtime_url, token=self.token))
-        if self._verified_adopted_runtime_matches_active_slot(current_slot=current_slot, api_ready=api_ready):
+        api_probe = (
+            _runtime_api_probe(runtime_url, token=self.token)
+            if listener_running
+            else {"ready": False, "runtime": {}, "error_type": "listener_unavailable"}
+        )
+        api_ready = bool(api_probe.get("ready"))
+        api_identity_matches = self._refresh_managed_runtime_api_identity(
+            current_slot=current_slot,
+            probe=api_probe,
+        )
+        if api_identity_matches is not None:
+            managed_matches_active_slot = api_identity_matches
+        if self._verified_adopted_runtime_matches_active_slot(current_slot=current_slot):
             managed_matches_active_slot = True
         current_time = time.time() if now is None else float(now)
         evaluation = self._recovery_policy.evaluate(
@@ -6393,6 +6455,8 @@ class SupervisorManager:
         self._managed_runtime_cwd = str(cwd or os.getcwd())
         self._managed_start_reason = str(reason or "supervisor.start")
         self._managed_runtime_api_identity_verified = False
+        self._managed_runtime_api_identity_observed_at = None
+        self._managed_runtime_api_identity = {}
         self._memory_profile_mode = profile_mode
         self._memory_profile_current_trigger_source = str(profile_trigger_source or "").strip().lower() or None
         self._reset_memory_baseline_scope(managed_pid=getattr(proc, "pid", None))
@@ -7295,6 +7359,8 @@ class SupervisorManager:
         self._managed_runtime_base_url = self.slot_runtime_base_url(resolved_slot)
         self._managed_runtime_cwd = self._candidate_runtime_cwd
         self._managed_runtime_api_identity_verified = False
+        self._managed_runtime_api_identity_observed_at = None
+        self._managed_runtime_api_identity = {}
         self._process_supervisor.track_candidate(None)
         self._candidate_slot = None
         self._candidate_runtime_instance_id = None

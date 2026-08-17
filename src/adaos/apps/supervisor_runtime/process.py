@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -397,6 +398,8 @@ class ProcessSupervisor:
             and reported_role == "active"
             and str(identity.get("runtime_instance_id") or "").strip()
         )
+        manager._managed_runtime_api_identity_observed_at = time.time() if identity else None
+        manager._managed_runtime_api_identity = dict(identity) if identity else {}
         manager._last_start_at = float(getattr(adopted, "_created_at", time.time()))
         manager._last_error = None
         manager._runtime_unhealthy_since = None

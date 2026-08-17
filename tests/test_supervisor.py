@@ -6001,7 +6001,11 @@ def test_runtime_self_heal_decision_restarts_after_api_timeout(monkeypatch, tmp_
 
     monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
-    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        supervisor,
+        "_runtime_api_probe",
+        lambda *args, **kwargs: {"ready": False, "runtime": {}, "error_type": "Timeout"},
+    )
     monkeypatch.setattr(supervisor, "_runtime_api_restart_timeout_sec", lambda: 60.0)
 
     assert manager._runtime_self_heal_decision(now=110.0) is None
@@ -6145,7 +6149,66 @@ def test_runtime_self_heal_decision_restarts_slot_mismatch_even_when_apply_statu
     assert payload["expected_managed_executable"] == "/slots/A/venv/bin/python"
 
 
-def test_runtime_self_heal_trusts_verified_adopted_runtime_identity_on_windows(monkeypatch, tmp_path) -> None:
+def test_runtime_self_heal_refreshes_lost_adopted_runtime_identity(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+
+    class _Proc:
+        pid = 32123
+        args = ["/uv/python", "-m", "adaos.apps.autostart_runner"]
+
+        @staticmethod
+        def poll():
+            return None
+
+    manager._proc = _Proc()
+    manager._desired_running = True
+    manager._managed_runtime_cwd = "/slots/A/repo"
+    manager._managed_runtime_instance_id = "rt-a-a-existing"
+    manager._managed_transition_role = "active"
+    manager._managed_slot = "A"
+    manager._managed_runtime_api_identity_verified = False
+    manager._last_start_at = 100.0
+
+    monkeypatch.setattr(supervisor, "read_core_update_status", lambda: {"state": "succeeded", "phase": "validate"})
+    monkeypatch.setattr(supervisor, "active_slot", lambda: "A")
+    monkeypatch.setattr(
+        supervisor,
+        "active_slot_manifest",
+        lambda: {"slot": "A", "argv": ["/slots/A/venv/bin/python"], "cwd": "/slots/A/repo"},
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_proc_details",
+        lambda proc, cwd_hint=None: {
+            "managed_pid": 32123,
+            "managed_alive": True,
+            "managed_cmdline": ["/uv/python", "-m", "adaos.apps.autostart_runner"],
+            "managed_executable": "/uv/python",
+            "managed_cwd": "/slots/A/repo",
+        },
+    )
+    monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        supervisor,
+        "_runtime_api_probe",
+        lambda *args, **kwargs: {
+            "ready": True,
+            "runtime": {
+                "runtime_instance_id": "rt-a-a-existing",
+                "transition_role": "active",
+                "slot": "A",
+            },
+            "error_type": None,
+        },
+    )
+
+    assert manager._runtime_self_heal_decision(now=200.0) is None
+    assert manager._managed_runtime_api_identity_verified is True
+    assert manager._managed_runtime_api_identity["runtime_instance_id"] == "rt-a-a-existing"
+
+
+def test_runtime_self_heal_keeps_verified_identity_during_transient_api_failure(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
 
@@ -6185,9 +6248,16 @@ def test_runtime_self_heal_trusts_verified_adopted_runtime_identity_on_windows(m
         },
     )
     monkeypatch.setattr(supervisor, "_listener_running", lambda *args, **kwargs: True)
-    monkeypatch.setattr(supervisor, "_runtime_api_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        supervisor,
+        "_runtime_api_probe",
+        lambda *args, **kwargs: {"ready": False, "runtime": {}, "error_type": "ReadTimeout"},
+    )
 
     assert manager._runtime_self_heal_decision(now=200.0) is None
+    assert manager._runtime_unhealthy_kind == "api_unready"
+    assert manager._runtime_unhealthy_since == 200.0
+    assert manager._managed_runtime_api_identity_verified is True
 
 
 def test_runtime_state_payload_surfaces_warm_switch_admission(monkeypatch, tmp_path) -> None:
