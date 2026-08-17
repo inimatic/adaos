@@ -1221,6 +1221,11 @@ class BuilderAutomationService:
         failure = session.get("last_failure") if isinstance(session.get("last_failure"), Mapping) else {}
         progress = session.get("progress") if isinstance(session.get("progress"), Mapping) else {}
         local_run = session.get("local_run") if isinstance(session.get("local_run"), Mapping) else {}
+        budget_usage = BuilderAutomationService._budget_usage_projection(
+            status=status,
+            task=task,
+            local_run=local_run,
+        )
         error = str(failure.get("error") or failure.get("message") or task.get("error") or "").strip() or None
         return {
             "schema": AUTOMATION_PROJECTION_SCHEMA,
@@ -1250,6 +1255,7 @@ class BuilderAutomationService:
             "steps": BuilderAutomationService._step_projection(status),
             "progress": dict(progress) if progress else None,
             "summary": str(result.get("summary") or result.get("message") or "").strip() or None,
+            "budget_usage": budget_usage,
             "error": error,
             "failure_id": str(failure.get("failure_id") or "").strip() or None,
             "failure_stage": str(failure.get("stage") or "").strip() or None,
@@ -1268,6 +1274,90 @@ class BuilderAutomationService:
             else None,
             "updated_at": session.get("updated_at"),
         }
+
+    @staticmethod
+    def _budget_usage_projection(
+        *,
+        status: str,
+        task: Mapping[str, Any],
+        local_run: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        realize_request = (
+            task.get("realize_request")
+            if isinstance(task.get("realize_request"), Mapping)
+            else {}
+        )
+        artifacts = (
+            realize_request.get("artifacts")
+            if isinstance(realize_request.get("artifacts"), Mapping)
+            else {}
+        )
+        declared = (
+            dict(artifacts.get("execution_budget"))
+            if isinstance(artifacts.get("execution_budget"), Mapping)
+            else None
+        )
+        usage = BuilderAutomationService._codex_journal_usage(
+            str(local_run.get("events_path") or "")
+        )
+        started_raw = str(task.get("assigned_at") or task.get("created_at") or "").strip()
+        finished_raw = str(task.get("updated_at") or "").strip()
+        wall_seconds = 0.0
+        try:
+            started = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if status in _TERMINAL_STATUSES and finished_raw:
+                finished = datetime.fromisoformat(finished_raw.replace("Z", "+00:00"))
+            else:
+                finished = datetime.now(timezone.utc)
+            wall_seconds = max(0.0, (finished - started).total_seconds())
+        except (TypeError, ValueError):
+            pass
+        if declared is None and not usage and not started_raw:
+            return None
+        return {
+            "declared": declared,
+            "observed": {
+                "model_tokens": int(usage.get("model_tokens") or 0),
+                "input_tokens": int(usage.get("input_tokens") or 0),
+                "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
+                "output_tokens": int(usage.get("output_tokens") or 0),
+                "wall_seconds": wall_seconds,
+                "terminal": status in _TERMINAL_STATUSES,
+            },
+        }
+
+    @staticmethod
+    def _codex_journal_usage(path_value: str) -> dict[str, int]:
+        path = Path(str(path_value or "").strip())
+        if not path.is_file():
+            return {}
+        try:
+            if path.stat().st_size > 16 * 1024 * 1024:
+                return {}
+            values: dict[str, int] = {}
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                usage = event.get("usage") if isinstance(event.get("usage"), Mapping) else None
+                if usage is None and isinstance(event.get("turn"), Mapping):
+                    turn = event["turn"]
+                    usage = turn.get("usage") if isinstance(turn.get("usage"), Mapping) else None
+                if usage is None:
+                    continue
+                for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+                    try:
+                        values[key] = max(values.get(key, 0), int(usage.get(key) or 0))
+                    except (TypeError, ValueError):
+                        continue
+            if values:
+                values["model_tokens"] = int(values.get("input_tokens") or 0) + int(
+                    values.get("output_tokens") or 0
+                )
+            return values
+        except OSError:
+            return {}
 
     @staticmethod
     def _phase_for_status(status: str) -> str:

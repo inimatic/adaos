@@ -227,6 +227,51 @@ def test_automation_materializes_governed_development_session_inputs(tmp_path: P
     assert ".adaos_context/dev_recipes_calibration/instructions/reviewed_prose.md" in prompt
 
 
+def test_automation_projects_declared_and_observed_execution_budget(tmp_path: Path) -> None:
+    journal = tmp_path / "codex-live.jsonl"
+    journal.write_text(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1200,
+                    "cached_input_tokens": 300,
+                    "output_tokens": 400,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session = {
+        "status": "completed",
+        "task": {
+            "created_at": "2026-08-18T00:00:00Z",
+            "assigned_at": "2026-08-18T00:00:10Z",
+            "updated_at": "2026-08-18T00:01:10Z",
+            "realize_request": {
+                "artifacts": {
+                    "execution_budget": {
+                        "budget_view": "fixed_downstream",
+                        "max_wall_seconds": 7200,
+                        "max_model_tokens": 80000,
+                        "max_attempts": 1,
+                        "max_human_interventions": 0,
+                    }
+                }
+            },
+        },
+        "local_run": {"events_path": str(journal)},
+    }
+
+    projected = BuilderAutomationService.project_session(session)
+
+    assert projected["budget_usage"]["declared"]["max_model_tokens"] == 80000
+    assert projected["budget_usage"]["observed"]["model_tokens"] == 1600
+    assert projected["budget_usage"]["observed"]["wall_seconds"] == 60.0
+    assert projected["budget_usage"]["observed"]["terminal"] is True
+
+
 def test_background_automation_launches_durable_worker_process(tmp_path: Path, monkeypatch) -> None:
     service = _service(tmp_path)
     service.background = True
