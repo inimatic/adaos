@@ -5141,6 +5141,16 @@ class SupervisorManager:
             "last_summary": str(strategy.get("last_summary") or "").strip() or None,
             "selected_server": str(strategy.get("selected_server") or "").strip() or None,
             "effective_transport": str(strategy.get("effective_transport") or "").strip() or None,
+            "strategy_updated_ago_s": (
+                float(strategy["updated_ago_s"])
+                if isinstance(strategy.get("updated_ago_s"), (int, float))
+                else None
+            ),
+            "last_attempt_ago_s": (
+                float(strategy["last_attempt_ago_s"])
+                if isinstance(strategy.get("last_attempt_ago_s"), (int, float))
+                else None
+            ),
         }
 
     @staticmethod
@@ -5491,12 +5501,7 @@ class SupervisorManager:
         self._hub_root_watchdog_reconnect_total += 1
         action = str(decision.get("action") or "runtime_reconnect")
         try:
-            if action == "sidecar_restart":
-                result = await self.restart_sidecar(
-                    reconnect_hub_root=True,
-                    allow_active_channel_disruption=True,
-                )
-            elif action == "runtime_route_reset":
+            if action == "runtime_route_reset":
                 result = await asyncio.to_thread(
                     self._runtime_request_json,
                     path="/api/node/hub-root/route-reset",

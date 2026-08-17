@@ -998,6 +998,12 @@ the latter prevents diagnostic publication lag from causing a second reconnect.
 The settle decision reads current `channel_diagnostics`, not the high-level
 readiness quality projection: recent expected disruption may remain visible as
 `flapping` without being mistaken for a currently broken transport.
+Loss of the remote hub-root channel is not sidecar process-health evidence. The
+hub-root watchdog lets a fresh runtime transport attempt finish and requests an
+idempotent runtime reconnect when recovery becomes stale. Only the sidecar
+process/health monitor or an explicit operator action may restart the sidecar,
+so an upstream network outage cannot destroy an already recovering local
+session.
 When root control is live but only the browser route is degraded, the watchdog
 may reset route runtime when that policy is enabled; it must not restart a
 healthy sidecar merely because the sidecar owns the transport. On Windows, a

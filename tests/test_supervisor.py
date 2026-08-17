@@ -1196,7 +1196,7 @@ def test_hub_root_watchdog_ignores_fresh_root_probe_when_report_route_is_down(mo
     )
 
     assert decision is not None
-    assert decision["action"] == "sidecar_restart"
+    assert decision["action"] == "runtime_reconnect"
     assert decision["root_perspective_probe"]["root_control_status"] == "down"
     assert decision["root_perspective_probe"]["route_status"] == "degraded"
     assert manager._hub_root_watchdog_last_state != "root_perspective_ready"
@@ -1671,7 +1671,7 @@ def test_periodic_core_update_reconcile_uses_local_runtime_when_hub_root_route_i
     assert result["verification"]["source"] == "supervisor.periodic_core_update_reconcile.direct_root_mtls"
 
 
-def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypatch, tmp_path) -> None:
+def test_hub_root_watchdog_requests_runtime_reconnect_when_sidecar_owns_transport(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ADAOS_BASE_DIR", str(tmp_path))
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_VERIFY_TIMEOUT_SEC", "0")
@@ -1707,6 +1707,7 @@ def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypa
         return snapshots[0]
 
     sidecar_calls: list[dict[str, object]] = []
+    runtime_calls: list[dict[str, object]] = []
 
     async def _restart_sidecar(**kwargs):
         sidecar_calls.append(dict(kwargs))
@@ -1714,18 +1715,68 @@ def test_hub_root_watchdog_restarts_sidecar_when_sidecar_owns_transport(monkeypa
 
     monkeypatch.setattr(manager, "_runtime_reliability_payload", _runtime_payload)
     monkeypatch.setattr(manager, "restart_sidecar", _restart_sidecar)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_request_json",
+        lambda **kwargs: runtime_calls.append(dict(kwargs)) or {"ok": True},
+    )
 
     asyncio.run(manager._maybe_reconnect_hub_root_from_watchdog())
 
-    assert len(sidecar_calls) == 1
-    assert sidecar_calls[0]["reconnect_hub_root"] is True
-    assert sidecar_calls[0]["allow_active_channel_disruption"] is True
-    assert manager._hub_root_watchdog_last_result["action"] == "sidecar_restart"
+    assert sidecar_calls == []
+    assert runtime_calls[0]["path"] == "/api/node/hub-root/reconnect"
+    assert manager._hub_root_watchdog_last_result["action"] == "runtime_reconnect"
     assert manager._hub_root_watchdog_last_result["verification"]["ok"] is True
     assert manager._hub_root_watchdog_last_state == "ready"
     events = supervisor._read_jsonl_tail(supervisor._supervisor_hub_root_watchdog_log_path(), limit=5)
-    assert events[-1]["action"] == "sidecar_restart"
+    assert events[-1]["action"] == "runtime_reconnect"
     assert events[-1]["verification"]["ok"] is True
+
+
+def test_hub_root_watchdog_waits_for_fresh_runtime_recovery_attempt(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+
+    decision = manager._hub_root_watchdog_decision(
+        {
+            "readiness_tree": {"root_control": {"status": "down"}},
+            "channel_overview": {"hub_root": {"effective_status": "down"}},
+            "hub_root_transport_strategy": {
+                "last_event": "attempt",
+                "last_attempt_ago_s": 1.0,
+                "updated_ago_s": 0.5,
+            },
+        },
+        now=100.0,
+    )
+
+    assert decision is None
+    assert manager._hub_root_watchdog_last_state == "runtime_recovery_in_progress"
+    assert "attempt" in str(manager._hub_root_watchdog_last_reason)
+
+
+def test_hub_root_watchdog_rearms_stale_runtime_recovery_attempt(monkeypatch) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_HUB_ROOT_RECONNECT_COOLDOWN_SEC", "30")
+    manager = supervisor.SupervisorManager(runtime_host="127.0.0.1", runtime_port=8777, token="dev-local-token")
+    monkeypatch.setattr(manager, "_sidecar_role", lambda: "hub")
+
+    decision = manager._hub_root_watchdog_decision(
+        {
+            "readiness_tree": {"root_control": {"status": "down"}},
+            "channel_overview": {"hub_root": {"effective_status": "down"}},
+            "hub_root_transport_strategy": {
+                "last_event": "attempt",
+                "last_attempt_ago_s": 45.0,
+                "updated_ago_s": 45.0,
+            },
+        },
+        now=100.0,
+    )
+
+    assert decision is not None
+    assert decision["action"] == "runtime_reconnect"
 
 
 def test_watchdog_payloads_stay_light_when_previous_state_is_recursive(monkeypatch, tmp_path) -> None:

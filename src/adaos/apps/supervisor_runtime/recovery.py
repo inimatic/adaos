@@ -184,13 +184,7 @@ class RuntimeRecoveryPolicy:
             else {}
         )
         root_probe_state = str(root_probe.get("state") or "").strip().lower()
-        action = (
-            "runtime_route_reset"
-            if route_degraded and not root_down
-            else "sidecar_restart"
-            if transport_owner == "sidecar"
-            else "runtime_reconnect"
-        )
+        action = "runtime_route_reset" if route_degraded and not root_down else "runtime_reconnect"
 
         if (
             root_down
@@ -223,6 +217,27 @@ class RuntimeRecoveryPolicy:
             state = hub_root_browser_status or hub_root_browser_state or route_status or "route_degraded"
             manager._hub_root_watchdog_last_state = state
             manager._hub_root_watchdog_last_reason = "browser route degraded; preserving active runtime-owned tunnels"
+            return None
+
+        recovery_event = str(channel_state.get("last_event") or "").strip().lower()
+        recovery_age_key = (
+            "last_attempt_ago_s"
+            if recovery_event in {"attempt", "connect_try"}
+            else "strategy_updated_ago_s"
+        )
+        recovery_age_value = channel_state.get(recovery_age_key)
+        recovery_age_s = float(recovery_age_value) if isinstance(recovery_age_value, (int, float)) else None
+        recovery_grace_s = max(15.0, operations.hub_root_watchdog_cooldown_sec())
+        if (
+            root_down
+            and recovery_event in {"attempt", "connect_try", "reconnect_requested", "bridge_rearmed"}
+            and recovery_age_s is not None
+            and recovery_age_s <= recovery_grace_s
+        ):
+            manager._hub_root_watchdog_last_state = "runtime_recovery_in_progress"
+            manager._hub_root_watchdog_last_reason = (
+                f"runtime hub-root recovery is active ({recovery_event}, age={recovery_age_s:.1f}s)"
+            )
             return None
 
         cooldown = operations.hub_root_watchdog_cooldown_sec()
