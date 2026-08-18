@@ -172,6 +172,39 @@ def _resolve_redevice_endpoint(
     return None, ""
 
 
+def _resolve_provided_redevice_endpoint(
+    endpoint_snapshot: Mapping[str, Any] | None,
+    device_ref: str | None = None,
+    code: str | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    endpoint = _mapping(endpoint_snapshot)
+    target = _normalize_redevice_ref(device_ref, code)
+    if not endpoint or not target:
+        return None, ""
+    try:
+        from adaos.sdk.redevice import compact_endpoint
+    except Exception:
+        return None, ""
+    compact = compact_endpoint(endpoint)
+    candidates = {
+        _text(endpoint.get("code")),
+        _text(endpoint.get("pair_code")),
+        _text(endpoint.get("endpoint_id")),
+        _text(_mapping(endpoint.get("endpoint_manifest")).get("endpoint_id")),
+        _text(compact.get("code")),
+        _text(compact.get("endpoint_id")),
+        _text(compact.get("id")),
+    }
+    if target not in candidates:
+        return None, ""
+    state = _text(endpoint.get("state") or compact.get("state")).lower()
+    policy = _mapping(endpoint.get("endpoint_policy"))
+    if state in {"denied", "revoked", "superseded"} or _text(policy.get("admission_policy")).lower() == "deny":
+        return None, ""
+    pair_code = _text(compact.get("code") or endpoint.get("code") or endpoint.get("pair_code"))
+    return (endpoint, pair_code) if pair_code else (None, "")
+
+
 def resolve_endpoint_device(
     device_ref: str | None = None,
     *,
@@ -528,11 +561,14 @@ def send_endpoint_command(
     constraints: Mapping[str, Any] | None = None,
     timeout: int | float | None = None,
     refresh_endpoint: bool = True,
+    endpoint_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = _text(device_ref)
     if target and not target.startswith("redevice:"):
         return {"ok": False, "error": "unsupported_endpoint_kind", "device_ref": target}
-    if refresh_endpoint:
+    if endpoint_snapshot is not None:
+        endpoint, pair_code = _resolve_provided_redevice_endpoint(endpoint_snapshot, device_ref, code)
+    elif refresh_endpoint:
         endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code)
     else:
         endpoint, pair_code = _resolve_redevice_endpoint(device_ref, code, refresh_remote=False)

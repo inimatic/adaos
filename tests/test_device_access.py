@@ -204,6 +204,37 @@ def test_sdk_device_access_can_resolve_endpoint_without_remote_refresh(monkeypat
     assert pair_code == "SNX68P2A"
 
 
+def test_sdk_device_access_validates_provided_endpoint_snapshot() -> None:
+    from adaos.sdk.data import device_access as sdk_device_access
+
+    endpoint = {
+        "code": "SNX68P2A",
+        "endpoint_id": "endpoint-1",
+        "state": "consumed",
+        "last_seen_at": 1_900_000_000,
+    }
+
+    resolved, pair_code = sdk_device_access._resolve_provided_redevice_endpoint(
+        endpoint,
+        code="SNX68P2A",
+    )
+    mismatch, mismatch_code = sdk_device_access._resolve_provided_redevice_endpoint(
+        endpoint,
+        code="OTHER",
+    )
+    revoked, revoked_code = sdk_device_access._resolve_provided_redevice_endpoint(
+        {**endpoint, "state": "revoked"},
+        code="SNX68P2A",
+    )
+
+    assert resolved == endpoint
+    assert pair_code == "SNX68P2A"
+    assert mismatch is None
+    assert mismatch_code == ""
+    assert revoked is None
+    assert revoked_code == ""
+
+
 def test_sdk_device_access_assign_endpoint_records_owner(monkeypatch) -> None:
     from adaos.sdk.data import device_access as sdk_device_access
 
