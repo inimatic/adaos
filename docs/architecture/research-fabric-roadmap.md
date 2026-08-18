@@ -1396,12 +1396,15 @@ efficacy result or cross-domain SOTA claim.
   usage accounting policy and explicitly distinguishes workload seeds from
   unavailable model-randomness control. The v1 C3 diagnostic is a retained
   budget failure; it is not silently reclassified after the budget was seen.
-- [ ] `[must]` `ARF7.3-10` Measure evidence-valid completion, pass@1, protocol
+- [x] `[must]` `ARF7.3-10` Measure evidence-valid completion, pass@1, protocol
   drift, unsupported assumptions, source/review coverage, conformance,
   runtime/result validity, reproducibility, leakage, interventions, human
   repair time, tokens/cost/compute, and portability. Attribute every failure to
   source understanding, formulation, operationalization, compilation, Codex,
-  runtime/platform, or scientific evaluation.
+  runtime/platform, or scientific evaluation. The complete frozen v5 C0-C4
+  pass records `0/5` evidence-valid completions, exact usage, no human
+  interventions, and immutable per-arm failures. Portability is measured as
+  not demonstrated in this single-host run rather than inferred from it.
 - [ ] `[must]` `ARF7.3-11` Run the clean TLP calibration with a preregistered
   repeated paired design sufficient to expose run variance. Keep
   `initial-review` visible only in C1 and evaluation; use it and legacy TLP
@@ -1413,6 +1416,12 @@ efficacy result or cross-domain SOTA claim.
 - [ ] `[must]` `ARF7.3-13` Freeze a machine-recomputable calibration package,
   document negative and inconclusive outcomes, and record which candidate
   fields remain profile-local. No contract enters core from TLP alone.
+  Partial evidence: evaluator `0.1.13` exports the frozen task, five packets,
+  five results, and recomputed summary under package digest
+  `sha256:44dab2cab3bba2705e59264bd6ddddca1030e51b49b8c29a2bd54d094a110be9`.
+  The package is score-recomputable, but admitted source bytes, licenses,
+  runtime images, and an external verification recipe are not yet a portable
+  release, so this item remains open.
 
 ## ARF8. Autonomous TLP Closed Loop and Scientific Release
 

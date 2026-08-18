@@ -295,6 +295,60 @@ scientific-workload seeds; model random-seed control is recorded as
 `unsupported_not_claimed`. A new task id/digest is required for the corrected
 calibration. The v1 result and budget are immutable and must not be rewritten.
 
+#### Frozen TLP C0-C4 calibration v5
+
+The first complete five-arm execution is
+`tlp-research-compiler-calibration-v5`, task digest
+`sha256:0a199fa858148e1f670aef13f6fa252a499fa1cf9a95cc64d770defb493b73ff`.
+It froze core commit `6bb666aa9c8f69369a3a202cf677e177ec28a059`, skill-workspace
+commit `32ee2226499afe7b23e93fab38757d20dc6e46cf`, Python `3.11.9`,
+Windows `10.0.19044`, `gpt-5.4` with `high` reasoning, the local executor,
+and Research Orchestrator `0.20.0`, Research Evaluator `0.1.11`, and
+calibration runner `0.1.7`. Each arm had one candidate and workload seed 17;
+automatic Builder repair turns were retained in the cost. No human
+intervention or model-random seed control was claimed.
+
+| Arm | Mandatory checks | Model tokens | Wall seconds | Builder turns | EVC | Immutable result digest | First observed failure |
+| --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| C0 raw | 1/6 | 5,841,343 | 1,380 | 2 | false | `sha256:fd4f2872baa0d891326bd6747d48ed98caf0605f7876d6c3b9420fa6f86c4911` | no installable runner; dependency/isolation contract absent |
+| C1 reviewed prose | 1/6 | 5,332,699 | 993 | 2 | false | `sha256:e12602ea9fa0db9aa96568b8bf2a80b31449957d1d4a1f4249b4ee4fcd7a93aa` | no installable runner; dependency/isolation contract absent |
+| C2 staged | 2/6 | 7,230,520 | 1,725 | 2 | false | `sha256:b38c1160d9b5ff874a9e59cbb3300dbc64adc70cc0e6fe44cad0555d8795263a` | semantically similar surface did not implement the exact runner ABI |
+| C3 typed execution | 1/6 | 5,074,543 | 1,556 | 1 | false | `sha256:372bae2269bc69e1e0496adc3a7be1fff9bb30523a357cb724783c7de518e7db` | Forge rejected task-created runtime state outside its admitted source scope |
+| C4 over-specified | 1/6 | 11,416,407 | 2,110 | 2 | false | `sha256:ac5b497de784905baee8b3139209ccf44f5cffa4f8b4d99a252f46df5c892c75` | packaging failed because candidate `operator.py` shadowed the Python stdlib module during dependency installation |
+
+The fixed-downstream summary is complete but negative: `0/5`
+evidence-valid completions, digest
+`sha256:b28705843a23f4300d267f1d42948ac6535594306c1682b3f211dca220e6ea85`.
+The result does not show that extra typing is ineffective: C3 produced the
+exact runner operations, passed its tests, and completed a real three-epoch CPU
+smoke before the delivery boundary rejected it; C4 also reached strict native
+validation and a real smoke before packaging failed. It does show that no arm
+crossed the preregistered end-to-end acceptance boundary and that C4's larger
+context/scaffold was neither cheaper nor sufficient. One candidate per arm is
+diagnostic calibration, not a variance estimate, comparative superiority, or
+SOTA evidence.
+
+The frozen evaluator attributed all terminal failures to operationalization
+and, after a terminal Builder failure, could report secondary protocol drift.
+Root-cause audit must therefore be recorded beside, not substituted for, the
+immutable score. Later evaluator versions preserve the terminal Builder stage
+and error so a packaging/platform failure cannot be masked by downstream
+checks. The run exposed and drove general core fixes for retained workers,
+terminal-state monotonicity, deterministic checkpoint reconciliation, exact
+manifest ABI delivery, task-scoped automation runtime, explicit checkpoint
+recovery, and authoritative isolated test bases (`651ddb6e`, `97d5ee35`,
+`d66a1a63`, `d623b2f0`, `e753495a`, `7fb02713`, `d462cceb`). These fixes do not
+retroactively change v5.
+
+Research Evaluator `0.1.13` exports the task, all five exact packets, all five
+immutable results, and the recomputed summary as
+`sha256:44dab2cab3bba2705e59264bd6ddddca1030e51b49b8c29a2bd54d094a110be9`.
+Its stored `ContentRef` has content digest
+`sha256:31ac1fc627b53eae10c7c760bb7979699531348441ce61c8979c460e5aacf6ac`
+and size 41,031 bytes. This makes the score recomputable from one bound object,
+but a portable public release must still materialize admitted input bytes,
+source licenses, frozen runtime artifacts, and an external verification recipe.
+
 The independent evaluator derives checks from the frozen session, Builder
 state, native validation, public runner operations, a bounded CPU trial and
 content identities. Candidate-authored claims cannot mark a check passed. The
