@@ -126,7 +126,19 @@ def _prefer_persisted_session(
         if isinstance(incoming.get("completion_readiness"), Mapping)
         else {}
     )
-    if terminal_readiness and not (
+    task = incoming.get("task") if isinstance(incoming.get("task"), Mapping) else {}
+    explicit_finalization = bool(
+        incoming_status == "commit_ready"
+        and str(incoming.get("finalizing_task_id") or "").strip() == incoming_task
+        and str(task.get("status") or "").strip() == "completed"
+        and isinstance(incoming.get("last_result"), Mapping)
+    )
+    explicit_checkpoint_recovery = bool(
+        explicit_finalization
+        and incoming.get("reuse_confirmed_checkpoints") is True
+        and not isinstance(previous_readiness.get("workflow_checkpoint"), Mapping)
+    )
+    if terminal_readiness and not explicit_checkpoint_recovery and not (
         incoming_status == "completed"
         and incoming_readiness.get("ok")
         and str(incoming_readiness.get("task_id") or "").strip() == incoming_task
@@ -136,15 +148,7 @@ def _prefer_persisted_session(
     previous_rank = _STATUS_RANK.get(previous_status, -1)
     incoming_rank = _STATUS_RANK.get(incoming_status, -1)
     if previous_rank > incoming_rank:
-        task = incoming.get("task") if isinstance(incoming.get("task"), Mapping) else {}
-        explicit_finalization = bool(
-            incoming_status == "commit_ready"
-            and str(incoming.get("finalizing_task_id") or "").strip() == incoming_task
-            and str(task.get("status") or "").strip() == "completed"
-            and isinstance(incoming.get("last_result"), Mapping)
-            and not terminal_readiness
-        )
-        if not explicit_finalization:
+        if not explicit_finalization or (terminal_readiness and not explicit_checkpoint_recovery):
             return True
 
     previous_updated = str(previous.get("updated_at") or "").strip()
