@@ -874,6 +874,11 @@ Use these rules for command and subscription handlers:
   nice value and idle/best-effort I/O scheduling where available. Keep actual
   CPU, I/O, RSS, priority, command owner and target skill/scenario in incident
   evidence so throttling does not hide a regression.
+- Assume tools and subscriptions may execute in different processes. A
+  diagnostic tool backed only by module globals can report a healthy zero while
+  the authoritative subscription runtime is overloaded. Put bounded counters
+  and the last compact outcome in skill memory or a runtime-owned status store,
+  update them off the event loop, and identify the returned status source.
 
 Acceptance must exercise contention, not only a fast mock. Run the handler
 against a realistically sized primary Yjs snapshot while a bounded competing
