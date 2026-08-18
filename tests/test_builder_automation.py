@@ -1168,6 +1168,76 @@ def test_refresh_preserves_terminal_orchestration_progress_after_worker_completi
     assert refreshed["updated_at"] == "2026-07-18T00:01:00+00:00"
 
 
+def test_session_store_rejects_stale_commit_ready_after_terminal_readiness(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    commit_ready = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.1",
+        "finalizing_task_id": "task.1",
+        "status": "commit_ready",
+        "updated_at": "2026-08-18T02:38:55+00:00",
+    }
+    service._save_session(commit_ready)
+    stale_projection = dict(commit_ready)
+    completed = {
+        **commit_ready,
+        "status": "completed",
+        "updated_at": "2026-08-18T02:40:45+00:00",
+        "completion_readiness": {
+            "ok": True,
+            "task_id": "task.1",
+            "completed_at": "2026-08-18T02:40:45+00:00",
+            "vcs_checkpoints": [
+                {"ok": True, "kind": "scenario", "name": "recipes"}
+            ],
+        },
+    }
+    completed.pop("finalizing_task_id")
+    service._save_session(completed)
+
+    service._save_session(stale_projection)
+
+    persisted = service.get_session("scenario", "recipes")
+    assert persisted is not None
+    assert persisted["status"] == "completed"
+    assert persisted["completion_readiness"]["ok"] is True
+    assert stale_projection["status"] == "completed"
+
+
+def test_session_store_allows_first_finalization_of_validated_task(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    validated = {
+        "schema": "adaos.builder.automation_session.v1",
+        "session_id": "automation.scenario.recipes",
+        "object_type": "scenario",
+        "object_id": "recipes",
+        "current_task_id": "task.1",
+        "status": "completed",
+        "task": {"task_id": "task.1", "status": "completed"},
+        "last_result": {"status": "completed"},
+        "updated_at": "2026-08-18T02:38:55+00:00",
+    }
+    service._save_session(validated)
+    finalizing = {
+        **validated,
+        "status": "commit_ready",
+        "finalizing_task_id": "task.1",
+        "updated_at": "2026-08-18T02:38:57+00:00",
+    }
+
+    service._save_session(finalizing)
+
+    persisted = service.get_session("scenario", "recipes")
+    assert persisted is not None
+    assert persisted["status"] == "commit_ready"
+    assert persisted["finalizing_task_id"] == "task.1"
+
+
 def test_refresh_reconciles_legacy_false_positive_checkpoint_completion(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service.factory = SimpleNamespace(

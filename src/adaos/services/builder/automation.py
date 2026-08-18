@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
+from adaos.services.artifact_pipeline.storage import atomic_write_json, mutation_lock
 from adaos.services.builder.workspace import BuilderWorkspaceService
 from adaos.services.builder.workflow import BuilderWorkflowService
 from adaos.services.runtime_paths import current_repo_root, current_state_dir
@@ -84,9 +85,75 @@ def _reject_transport_corruption(value: Any, *, field: str) -> None:
         )
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    atomic_write_json(path, payload)
+
+
+def _prefer_persisted_session(
+    previous: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> bool:
+    """Reject a stale projection that would move one task backwards.
+
+    Builder API reads and the durable Automation worker run in separate
+    processes.  A process-local lock therefore cannot prevent a slow read from
+    persisting an older projection after the worker has committed a terminal
+    result.  Explicit recovery remains possible when a validated task has not
+    yet produced completion readiness.
+    """
+
+    if str(previous.get("session_id") or "") != str(incoming.get("session_id") or ""):
+        return False
+    previous_task = str(previous.get("current_task_id") or "").strip()
+    incoming_task = str(incoming.get("current_task_id") or "").strip()
+    if not previous_task or previous_task != incoming_task:
+        return False
+
+    previous_status = str(previous.get("status") or "starting").strip() or "starting"
+    incoming_status = str(incoming.get("status") or "starting").strip() or "starting"
+    previous_readiness = (
+        previous.get("completion_readiness")
+        if isinstance(previous.get("completion_readiness"), Mapping)
+        else {}
+    )
+    terminal_readiness = bool(
+        previous_status == "completed"
+        and previous_readiness.get("ok")
+        and str(previous_readiness.get("task_id") or "").strip() == previous_task
+    )
+    incoming_readiness = (
+        incoming.get("completion_readiness")
+        if isinstance(incoming.get("completion_readiness"), Mapping)
+        else {}
+    )
+    if terminal_readiness and not (
+        incoming_status == "completed"
+        and incoming_readiness.get("ok")
+        and str(incoming_readiness.get("task_id") or "").strip() == incoming_task
+    ):
+        return True
+
+    previous_rank = _STATUS_RANK.get(previous_status, -1)
+    incoming_rank = _STATUS_RANK.get(incoming_status, -1)
+    if previous_rank > incoming_rank:
+        task = incoming.get("task") if isinstance(incoming.get("task"), Mapping) else {}
+        explicit_finalization = bool(
+            incoming_status == "commit_ready"
+            and str(incoming.get("finalizing_task_id") or "").strip() == incoming_task
+            and str(task.get("status") or "").strip() == "completed"
+            and isinstance(incoming.get("last_result"), Mapping)
+            and not terminal_readiness
+        )
+        if not explicit_finalization:
+            return True
+
+    previous_updated = str(previous.get("updated_at") or "").strip()
+    incoming_updated = str(incoming.get("updated_at") or "").strip()
+    return bool(
+        previous_updated
+        and incoming_updated
+        and previous_updated > incoming_updated
+    )
 
 
 def _canonical_digest(value: Mapping[str, Any]) -> str:
@@ -2676,18 +2743,27 @@ class BuilderAutomationService:
     def _session_path(self, object_type: str, object_id: str) -> Path:
         return self.root / f"{_safe_token(object_type)}.{_safe_token(object_id)}.json"
 
-    def _save_session(self, session: Mapping[str, Any]) -> None:
+    def _save_session(self, session: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(session)
         path = self._session_path(str(payload["object_type"]), str(payload["object_id"]))
-        try:
-            previous = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
-            previous = None
-        if previous == payload:
-            return
-        _write_json(path, payload)
+        lock_path = self.root / ".mutation.lock"
+        with mutation_lock(lock_path, timeout_s=30.0):
+            try:
+                previous = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError):
+                previous = None
+            if isinstance(previous, Mapping) and _prefer_persisted_session(previous, payload):
+                persisted = dict(previous)
+                if isinstance(session, dict):
+                    session.clear()
+                    session.update(copy.deepcopy(persisted))
+                return persisted
+            if previous == payload:
+                return payload
+            _write_json(path, payload)
         if self.event_sink is not None:
             self.event_sink(self.project_session(payload))
+        return payload
 
 
 __all__ = [
