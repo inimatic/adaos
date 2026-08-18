@@ -38,6 +38,16 @@ does not consume the overlap slot during prewarm; it opens transport only after
 supervisor calls `promote-active`, and the old session closes naturally during
 drain after new route authority is confirmed.
 
+Overlap is an explicit supervisor transition, not a reconnect heuristic. The
+sidecar resolves the loopback TCP owner and admits a second relay only when the
+persisted supervisor state proves a ready warm-switch candidate, the existing
+owner is the managed runtime, and PID plus runtime-instance identities match.
+An ordinary reconnect from the same PID/runtime instance first aborts and drains
+its prior relay, then opens a replacement without overlap. An unresolved or
+different owner waits a bounded interval for the prior relay to drain and is
+rejected if that relay is still live. Admission decisions are serialized so
+simultaneous clients cannot pass against the same stale session count.
+
 Retiring the old runtime is explicitly runtime-scoped. It closes the old
 listener and process-local resources without publishing node-wide
 `subnet.stopping/subnet.stopped`; the replacement runtime and sidecar continue
@@ -63,6 +73,9 @@ Checklist items use the same four-level MoSCoW-style priority vocabulary as
   two sessions may overlap only until the old runtime drains
 - relays raw NATS bytes in both directions
 - writes periodic diagnostics to `.adaos/diagnostics/realtime_sidecar.jsonl`
+- records local TCP owner PID, runtime instance/transition role, overlap
+  allow/reject/drain and same-owner replacement counters, and the oldest
+  unresolved runtime NATS PING
 - acts as the durable diagnostic bridge to Root by combining its transport
   observation with persisted supervisor/runtime lifecycle snapshots; it sends
   on semantic change plus a bounded heartbeat and never becomes the update or
@@ -234,6 +247,25 @@ Success criteria:
   stream. Defaults are one probe every 30 seconds, a five-second response
   timeout, and reconnect after the first failed roundtrip; the timeout path
   removes its PONG waiter so a late PONG cannot terminate the nats-py reader.
+- [x] `[must]` Treat unresolved runtime-owned NATS PING/PONG roundtrips as live
+  transport evidence. Once the oldest outstanding PING crosses
+  `ADAOS_REALTIME_CLIENT_PING_STALE_S` (default six seconds), readiness becomes
+  `remote_unresponsive` even when the WebSocket and historical connect time are
+  still present. This state and the outstanding count/age must also reach the
+  durable sidecar lifecycle report. The observer must parse the NATS stream
+  across TCP/WebSocket chunk boundaries and skip declared `MSG/HMSG/PUB/HPUB`
+  payload lengths; exact-chunk matching is invalid because Root may coalesce a
+  PONG with application frames, while payload bytes may themselves contain
+  `PING\r\n` or `PONG\r\n`.
+- [x] `[must]` Admit overlapping local NATS relays only for a verified
+  supervisor warm switch. Resolve loopback socket ownership off the sidecar
+  event loop, match managed/candidate PID and runtime-instance identities, and
+  serialize admission. Ordinary reconnects wait up to
+  `ADAOS_REALTIME_SESSION_DRAIN_TIMEOUT_S` for old relay cleanup and otherwise
+  fail closed. A reconnect whose socket owner matches the sole active
+  PID/runtime instance actively aborts and drains that old relay before opening
+  its replacement. Neither path may increment the admitted-handoff counter or
+  leave parallel Root sessions.
 - [x] `[must]` Probe process readiness with `GET /ready` on the loopback control
   port (`ADAOS_REALTIME_CONTROL_PORT`, default NATS port plus four). The response
   carries `adaos.realtime_sidecar.control.v1`; readiness must not open the NATS

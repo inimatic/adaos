@@ -118,6 +118,90 @@ def test_sidecar_transport_accepts_fresh_active_remote_session() -> None:
     assert classification["session_state"] == "remote_ready"
 
 
+def test_sidecar_transport_rejects_stale_nats_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADAOS_REALTIME_CLIENT_PING_STALE_S", "6")
+
+    classification = classify_realtime_sidecar_transport(
+        {
+            "active_session": True,
+            "active_session_total": 1,
+            "remote_connected_ago_s": 48.0,
+            "client_nats_pings_outstanding": 5,
+            "client_nats_oldest_ping_ago_s": 9.5,
+            "last_error": None,
+        },
+        diag_fresh=True,
+    )
+
+    assert classification["transport_ready"] is False
+    assert classification["remote_session_state"] == "unresponsive"
+    assert classification["session_state"] == "remote_unresponsive"
+    assert "9.5s" in classification["status_reason"]
+
+
+def test_nats_control_observer_handles_coalesced_frames_without_reading_payload() -> None:
+    observer = realtime_sidecar_mod._NatsControlObserver()
+
+    pings, pongs = observer.feed(
+        b"MSG route.subject 1 6\r\nPONG\r\n\r\nPONG\r\nPING\r\n"
+    )
+
+    assert (pings, pongs) == (1, 1)
+
+
+def test_nats_control_observer_handles_fragmented_lines_and_payloads() -> None:
+    observer = realtime_sidecar_mod._NatsControlObserver()
+
+    assert observer.feed(b"PO") == (0, 0)
+    assert observer.feed(b"NG\r\nMSG route.subject 1 4\r\nPI") == (0, 1)
+    assert observer.feed(b"NG\r\nPING\r\n") == (1, 0)
+    assert observer.feed(b"PUB route.subject 6\r\nPONG\r\n\r\nPING\r\n") == (1, 0)
+
+
+def test_realtime_handoff_overlap_requires_verified_warm_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state" / "supervisor"
+    state_dir.mkdir(parents=True)
+    (state_dir / "runtime.json").write_text(
+        json.dumps(
+            {
+                "managed_pid": 101,
+                "candidate_managed_pid": 202,
+                "runtime_instance_id": "runtime-a",
+                "candidate_runtime_instance_id": "runtime-b",
+                "transition_mode": "warm_switch",
+                "warm_switch_allowed": True,
+                "candidate_slot": "B",
+                "candidate_managed_alive": True,
+                "candidate_runtime_api_ready": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "1")
+    monkeypatch.delenv("ADAOS_REALTIME_HANDOFF_OVERLAP", raising=False)
+
+    allowed = realtime_sidecar_mod._realtime_handoff_overlap_decision(
+        new_client={"pid": 202, "runtime_instance_id": "runtime-b"},
+        existing_clients=[{"pid": 101, "runtime_instance_id": "runtime-a"}],
+        base_dir=tmp_path,
+    )
+    rejected = realtime_sidecar_mod._realtime_handoff_overlap_decision(
+        new_client={"pid": 101, "runtime_instance_id": "runtime-a"},
+        existing_clients=[{"pid": 101, "runtime_instance_id": "runtime-a"}],
+        base_dir=tmp_path,
+    )
+
+    assert allowed["allowed"] is True
+    assert allowed["reason"] == "verified_warm_switch"
+    assert rejected["allowed"] is False
+    assert "new_is_candidate" in rejected["reason"]
+
+
 def test_sidecar_lifecycle_fingerprint_ignores_observation_heartbeat(tmp_path: Path) -> None:
     first = build_sidecar_lifecycle_report(
         base_dir=tmp_path,
@@ -1734,6 +1818,7 @@ async def test_realtime_sidecar_keeps_two_local_nats_sessions_during_runtime_han
     monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
     monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
     monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.02")
+    monkeypatch.setenv("ADAOS_REALTIME_HANDOFF_OVERLAP", "1")
 
     server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
     await server.start()
@@ -1764,6 +1849,143 @@ async def test_realtime_sidecar_keeps_two_local_nats_sessions_during_runtime_han
         assert server._stats.superseded_total == 0
         assert server._stats.overlap_admitted_total == 1
         assert len(server._live_session_tasks()) == 2
+    finally:
+        for writer in (first_writer, second_writer):
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_rejects_unverified_overlapping_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    remote_sessions: list[_FakeInfoRemoteWS] = []
+
+    async def _fake_connect(*args, **kwargs):
+        session = _FakeInfoRemoteWS()
+        remote_sessions.append(session)
+        return session
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.02")
+    monkeypatch.setenv("ADAOS_REALTIME_SESSION_DRAIN_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+    monkeypatch.delenv("ADAOS_REALTIME_HANDOFF_OVERLAP", raising=False)
+    identities = iter(
+        (
+            {"pid": 101, "runtime_instance_id": "runtime-a", "transition_role": "active"},
+            {"pid": 202, "runtime_instance_id": "runtime-x", "transition_role": "active"},
+        )
+    )
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_realtime_local_client_identity",
+        lambda **_kwargs: next(identities),
+    )
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
+    await server.start()
+    first_writer = second_writer = None
+    try:
+        first_reader, first_writer = await asyncio.open_connection(
+            server.listen_host,
+            server.listen_port,
+        )
+        assert await asyncio.wait_for(first_reader.readuntil(b"\r\n"), timeout=1.0) == (
+            b'INFO {"server_id":"test","proto":1}\r\n'
+        )
+
+        second_reader, second_writer = await asyncio.open_connection(
+            server.listen_host,
+            server.listen_port,
+        )
+        assert await asyncio.wait_for(second_reader.read(), timeout=1.0) == b""
+
+        assert len(remote_sessions) == 1
+        assert server._stats.overlap_admitted_total == 0
+        assert server._stats.overlap_cleanup_wait_total == 1
+        assert server._stats.overlap_rejected_total == 1
+        assert server._stats.last_overlap_reason == "supervisor_not_enabled"
+        assert len(server._live_session_tasks()) == 1
+    finally:
+        for writer in (first_writer, second_writer):
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_realtime_sidecar_replaces_same_owner_reconnect_without_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    remote_sessions: list[_FakeInfoRemoteWS] = []
+
+    async def _fake_connect(*args, **kwargs):
+        session = _FakeInfoRemoteWS()
+        remote_sessions.append(session)
+        return session
+
+    import websockets  # type: ignore
+
+    monkeypatch.setattr(websockets, "connect", _fake_connect)
+    monkeypatch.setenv("ADAOS_REALTIME_DIAG_FILE", str(tmp_path / "diag.jsonl"))
+    monkeypatch.setenv("ADAOS_REALTIME_LOG", str(tmp_path / "sidecar.log"))
+    monkeypatch.setenv("ADAOS_REALTIME_ENABLE", "1")
+    monkeypatch.setenv("ADAOS_REALTIME_REMOTE_WS_URL", "wss://example.invalid/nats")
+    monkeypatch.setenv("ADAOS_REALTIME_PROBE_GRACE_S", "0.02")
+    monkeypatch.setenv("ADAOS_SUPERVISOR_ENABLED", "0")
+    monkeypatch.delenv("ADAOS_REALTIME_HANDOFF_OVERLAP", raising=False)
+    monkeypatch.setattr(
+        realtime_sidecar_mod,
+        "_realtime_local_client_identity",
+        lambda **_kwargs: {
+            "pid": 101,
+            "runtime_instance_id": "runtime-a",
+            "transition_role": "active",
+        },
+    )
+
+    server = RealtimeSidecarServer(host="127.0.0.1", port=0, control_port=0)
+    await server.start()
+    first_writer = second_writer = None
+    try:
+        first_reader, first_writer = await asyncio.open_connection(
+            server.listen_host,
+            server.listen_port,
+        )
+        assert await asyncio.wait_for(first_reader.readuntil(b"\r\n"), timeout=1.0) == (
+            b'INFO {"server_id":"test","proto":1}\r\n'
+        )
+
+        second_reader, second_writer = await asyncio.open_connection(
+            server.listen_host,
+            server.listen_port,
+        )
+        assert await asyncio.wait_for(second_reader.readuntil(b"\r\n"), timeout=1.0) == (
+            b'INFO {"server_id":"test","proto":1}\r\n'
+        )
+        assert await asyncio.wait_for(first_reader.read(), timeout=1.0) == b""
+
+        assert len(remote_sessions) == 2
+        assert remote_sessions[0].closed is True
+        assert server._stats.same_owner_reconnect_total == 1
+        assert server._stats.same_owner_reconnect_rejected_total == 0
+        assert server._stats.overlap_admitted_total == 0
+        assert server._stats.last_overlap_reason == "same_owner_reconnect_replaced"
+        assert len(server._live_session_tasks()) == 1
     finally:
         for writer in (first_writer, second_writer):
             if writer is not None:
