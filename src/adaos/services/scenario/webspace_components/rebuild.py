@@ -116,7 +116,12 @@ class WebspaceRebuildService:
         if requested_action == "scenario_switch_rebuild":
             effective_switch_mode = "pointer_only"
         effective_materialization_identity = dict(materialization_identity) if isinstance(materialization_identity, Mapping) else None
-        if effective_materialization_identity is None and requested_action == "scenario_switch_rebuild" and target_scenario:
+        startup_materialization_hydration = requested_action == "startup_materialization_hydration"
+        if (
+            effective_materialization_identity is None
+            and requested_action in {"scenario_switch_rebuild", "startup_materialization_hydration"}
+            and target_scenario
+        ):
             stage_started = time.perf_counter()
             try:
                 source_mode_for_identity = operations.resolve_projection_refresh_space(webspace_id)
@@ -355,6 +360,7 @@ class WebspaceRebuildService:
         payload_only_rebuild = (
             scenario_switch_payload_rebuild
             or skill_runtime_payload_rebuild
+            or startup_materialization_hydration
             or bool(scenario_content_override)
         )
         try:
@@ -405,7 +411,9 @@ class WebspaceRebuildService:
                     # declaration. Keep that CPU/GIL work outside the channel
                     # owner process; scenario switches retain the low-latency
                     # in-process payload path.
-                    "isolate_process": bool(skill_runtime_payload_rebuild),
+                    "isolate_process": bool(
+                        skill_runtime_payload_rebuild or startup_materialization_hydration
+                    ),
                 }
                 if scenario_content_override:
                     payload_rebuild_kwargs["scenario_content_override"] = scenario_content_override

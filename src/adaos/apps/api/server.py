@@ -1125,13 +1125,20 @@ async def _runtime_context(app: FastAPI):
         logging.getLogger("adaos.api.server").debug("failed to prewarm Builder project catalog", exc_info=True)
 
     try:
-        from adaos.services.scenario.webspace_runtime import prewarm_webspace_materialization_sources
+        from adaos.services.scenario.webspace_runtime import (
+            hydrate_webspace_materialization_statuses,
+            prewarm_webspace_materialization_sources,
+        )
 
         with _StartupTimer("prewarm_webspace_materialization_sources"):
             await prewarm_webspace_materialization_sources()
+        with _StartupTimer("hydrate_webspace_materialization_statuses"):
+            app.state.webspace_materialization_hydration = (
+                await hydrate_webspace_materialization_statuses()
+            )
     except Exception:
-        logging.getLogger("adaos.api.server").debug(
-            "failed to prewarm webspace materialization sources",
+        logging.getLogger("adaos.api.server").warning(
+            "failed to initialize webspace materialization runtime",
             exc_info=True,
         )
 

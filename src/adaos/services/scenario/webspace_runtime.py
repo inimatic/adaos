@@ -3921,16 +3921,23 @@ def _builder_revision_detached_direct_live_room_updates_enabled() -> bool:
 
 def _semantic_rebuild_timeout_s(action: str) -> float | None:
     action_token = str(action or "").strip().lower()
-    env_name = (
-        "ADAOS_BUILDER_REVISION_REBUILD_TIMEOUT_S"
-        if action_token == "builder_revision_apply"
-        else "ADAOS_WEBSPACE_REBUILD_TIMEOUT_S"
-    )
+    if action_token == "builder_revision_apply":
+        env_name = "ADAOS_BUILDER_REVISION_REBUILD_TIMEOUT_S"
+        default_timeout = "30"
+    elif action_token == "startup_materialization_hydration":
+        env_name = "ADAOS_WEBSPACE_STARTUP_HYDRATION_TIMEOUT_S"
+        default_timeout = "20"
+    else:
+        env_name = "ADAOS_WEBSPACE_REBUILD_TIMEOUT_S"
+        default_timeout = "30"
     raw = os.getenv(env_name)
-    if raw is None and action_token != "builder_revision_apply":
+    if raw is None and action_token not in {
+        "builder_revision_apply",
+        "startup_materialization_hydration",
+    }:
         return None
     try:
-        value = float(str(raw or "30").strip())
+        value = float(str(raw or default_timeout).strip())
     except Exception:
         value = 30.0
     if value <= 0:
@@ -7964,6 +7971,111 @@ async def prewarm_webspace_materialization_sources() -> dict[str, Any]:
     )
 
 
+def _startup_materialization_hydration_concurrency() -> int:
+    raw = str(os.getenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_CONCURRENCY") or "2").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 2
+    return max(1, min(value, 8))
+
+
+async def hydrate_webspace_materialization_statuses() -> dict[str, Any]:
+    """Rebuild process-local materialization status without reseeding YDocs."""
+    started = time.perf_counter()
+    rows = await asyncio.to_thread(workspace_index.list_workspaces)
+    default_id = default_webspace_id()
+    webspace_ids = sorted(
+        {
+            str(getattr(row, "workspace_id", "") or "").strip()
+            for row in rows
+            if str(getattr(row, "workspace_id", "") or "").strip()
+        },
+        key=lambda item: (item != default_id, item),
+    )
+    concurrency = _startup_materialization_hydration_concurrency()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _hydrate(webspace_id: str) -> dict[str, Any]:
+        item_started = time.perf_counter()
+        try:
+            async with semaphore:
+                result = await rebuild_webspace_from_sources(
+                    webspace_id,
+                    action="startup_materialization_hydration",
+                    source_of_truth="startup_runtime",
+                    request_id=f"startup-materialization:{webspace_id}:{time.time_ns()}",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"[:1000]
+            materialization = _pending_materialization_snapshot(
+                webspace_id,
+                scenario_id=None,
+                snapshot_source="startup_hydration:failed",
+            )
+            _set_webspace_rebuild_status(
+                webspace_id,
+                status="failed",
+                pending=False,
+                background=False,
+                action="startup_materialization_hydration",
+                source_of_truth="startup_runtime",
+                finished_at=time.time(),
+                error="startup_materialization_hydration_failed",
+                error_detail=error,
+                materialization=materialization,
+            )
+            _log.warning(
+                "startup webspace materialization hydration failed webspace=%s error=%s",
+                webspace_id,
+                error,
+                exc_info=True,
+            )
+            return {
+                "webspace_id": webspace_id,
+                "ok": False,
+                "accepted": False,
+                "ready": False,
+                "scenario_id": None,
+                "error": "startup_materialization_hydration_failed",
+                "duration_ms": _elapsed_ms(item_started),
+            }
+        materialization = (
+            result.get("materialization")
+            if isinstance(result.get("materialization"), Mapping)
+            else {}
+        )
+        return {
+            "webspace_id": webspace_id,
+            "ok": bool(result.get("ok")),
+            "accepted": bool(result.get("accepted")),
+            "ready": bool(materialization.get("ready")),
+            "scenario_id": str(result.get("scenario_id") or "").strip() or None,
+            "error": str(result.get("error") or "").strip() or None,
+            "duration_ms": _elapsed_ms(item_started),
+        }
+
+    items = list(await asyncio.gather(*(_hydrate(webspace_id) for webspace_id in webspace_ids)))
+    ready_total = sum(1 for item in items if item["ok"] and item["ready"])
+    summary = {
+        "ok": ready_total == len(items),
+        "webspace_total": len(items),
+        "ready_total": ready_total,
+        "failed_total": len(items) - ready_total,
+        "concurrency": concurrency,
+        "duration_ms": _elapsed_ms(started),
+        "webspaces": items,
+    }
+    log = _log.info if summary["ok"] else _log.warning
+    log(
+        "startup webspace materialization hydration finished summary=%s",
+        json.dumps(summary, ensure_ascii=True, sort_keys=True),
+    )
+    return summary
+
+
 async def reload_workspace_webspaces_for_publication(
     object_type: str,
     object_id: str,
@@ -8090,6 +8202,7 @@ __all__ = [
     "describe_webspace_rebuild_state",
     "get_webspace_rebuild_materialized_payload",
     "invalidate_webspace_materialization_cache",
+    "hydrate_webspace_materialization_statuses",
     "prewarm_webspace_materialization_sources",
     "reload_workspace_webspaces_for_publication",
     "set_current_webspace_home",

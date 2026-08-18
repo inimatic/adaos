@@ -4381,6 +4381,117 @@ def test_materialization_source_prewarm_returns_mode_summary(monkeypatch) -> Non
     assert fingerprint_modes == ["workspace", "dev"]
 
 
+def test_startup_materialization_hydrates_every_registered_webspace(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("ADAOS_WEBSPACE_STARTUP_HYDRATION_CONCURRENCY", "1")
+    monkeypatch.setattr(webspace_runtime_module, "default_webspace_id", lambda: "desktop")
+    monkeypatch.setattr(
+        webspace_runtime_module.workspace_index,
+        "list_workspaces",
+        lambda: [
+            SimpleNamespace(workspace_id="desktop-dev"),
+            SimpleNamespace(workspace_id="desktop"),
+            SimpleNamespace(workspace_id="homepoint"),
+            SimpleNamespace(workspace_id="desktop"),
+        ],
+    )
+
+    async def _fake_rebuild(webspace_id: str, **kwargs) -> dict[str, object]:
+        calls.append({"webspace_id": webspace_id, **kwargs})
+        ready = webspace_id != "homepoint"
+        return {
+            "ok": ready,
+            "accepted": ready,
+            "scenario_id": "web_desktop",
+            "error": None if ready else "materialization_failed",
+            "materialization": {"ready": ready},
+        }
+
+    monkeypatch.setattr(webspace_runtime_module, "rebuild_webspace_from_sources", _fake_rebuild)
+
+    result = asyncio.run(webspace_runtime_module.hydrate_webspace_materialization_statuses())
+
+    assert [call["webspace_id"] for call in calls] == ["desktop", "desktop-dev", "homepoint"]
+    assert all(call["action"] == "startup_materialization_hydration" for call in calls)
+    assert all(call["source_of_truth"] == "startup_runtime" for call in calls)
+    assert all(str(call["request_id"]).startswith("startup-materialization:") for call in calls)
+    assert result["ok"] is False
+    assert result["webspace_total"] == 3
+    assert result["ready_total"] == 2
+    assert result["failed_total"] == 1
+
+
+def test_startup_materialization_uses_isolated_payload_without_live_mutation(monkeypatch) -> None:
+    materialize_calls: list[dict[str, object]] = []
+    direct_rebuild_calls: list[str] = []
+
+    async def _fake_refresh(
+        ctx,  # noqa: ARG001
+        webspace_id: str,  # noqa: ARG001
+        *,
+        scenario_id: str | None = None,
+        scenario_resolution: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "attempted": True,
+            "scenario_id": scenario_id,
+            "scenario_resolution": scenario_resolution,
+        }
+
+    async def _fake_materialize(self, webspace_id: str, **kwargs):
+        materialize_calls.append({"webspace_id": webspace_id, **kwargs})
+        self._last_rebuild_timings_ms = {"payload_worker": 5.0, "total": 5.0}
+        self._last_rebuild_ydoc_timings_ms = {"worker_process": 5.0, "total": 5.0}
+        self._last_worker_diagnostics = {"mode": "payload_only"}
+        self._last_apply_summary = {"payload_only": True}
+        self._last_materialized_payload = {
+            "scenario_id": "web_desktop",
+            "application": {"desktop": {"pageSchema": {"id": "desktop"}}},
+            "catalog": {"apps": [], "widgets": []},
+            "registry": {},
+            "installed": {"apps": [], "widgets": []},
+            "desktop": {},
+            "webio": {},
+            "routing": {},
+        }
+        return SimpleNamespace(scenario_id="web_desktop", apps=[], widgets=[])
+
+    async def _unexpected_direct_rebuild(self, webspace_id: str, **kwargs):  # noqa: ARG001
+        direct_rebuild_calls.append(webspace_id)
+        raise AssertionError("startup hydration must not mutate the operational YDoc")
+
+    monkeypatch.setattr(webspace_runtime_module, "_refresh_projection_rules_for_rebuild", _fake_refresh)
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "resolve_materialized_payload_async",
+        _fake_materialize,
+    )
+    monkeypatch.setattr(
+        webspace_runtime_module.WebspaceScenarioRuntime,
+        "rebuild_webspace_async",
+        _unexpected_direct_rebuild,
+    )
+
+    result = asyncio.run(
+        webspace_runtime_module.rebuild_webspace_from_sources(
+            "startup-desktop",
+            action="startup_materialization_hydration",
+            scenario_id="web_desktop",
+            scenario_resolution="manifest_home",
+            source_of_truth="startup_runtime",
+            request_id="startup-materialization:test",
+        )
+    )
+
+    assert result["accepted"] is True
+    assert result["payload_only_rebuild"] is True
+    assert result["live_room_update_requested"] is False
+    assert result["live_room_refresh"] is None
+    assert direct_rebuild_calls == []
+    assert len(materialize_calls) == 1
+    assert materialize_calls[0]["isolate_process"] is True
+
+
 def test_scenarios_synced_routes_through_semantic_rebuild_helper(monkeypatch) -> None:
     captured: list[tuple[str, str | None, str, str]] = []
 
