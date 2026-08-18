@@ -299,6 +299,59 @@ def test_node_status_exposes_runtime_environment(monkeypatch) -> None:
     assert payload["runtime"]["environment"]["envType"] == "dev"
 
 
+def test_node_status_probe_profile_avoids_diagnostic_payload(monkeypatch) -> None:
+    probe_payload = {
+        "node_id": "hub-1",
+        "subnet_id": "sn-1",
+        "role": "hub",
+        "ready": True,
+        "status_profile": "probe",
+        "runtime": {"runtime_url": "http://127.0.0.1:8777"},
+        "environment": {"envType": "prod"},
+    }
+
+    def _unexpected_diagnostic_payload():
+        raise AssertionError("probe status must not build diagnostic status")
+
+    monkeypatch.setattr(node_api, "_node_status_payload", _unexpected_diagnostic_payload)
+    monkeypatch.setattr(node_api, "current_node_probe_status_payload", lambda: probe_payload)
+
+    payload = asyncio.run(node_api.node_status(diagnostics=False, profile="probe")).model_dump()
+
+    assert payload["status_profile"] == "probe"
+    assert payload["node_id"] == "hub-1"
+    assert payload["runtime"] == {"runtime_url": "http://127.0.0.1:8777"}
+    assert len(json.dumps(payload).encode("utf-8")) < 2 * 1024
+
+
+def test_current_node_probe_status_uses_live_state_without_supervisor_or_sidecar_io(monkeypatch) -> None:
+    monkeypatch.setattr(
+        system_model_service,
+        "current_node_identity_status_payload",
+        lambda: {
+            "node_id": "hub-1",
+            "subnet_id": "sn-1",
+            "role": "hub",
+            "ready": True,
+            "node_state": "ready",
+        },
+    )
+    monkeypatch.setattr(system_model_service, "runtime_port_http_base_from_env", lambda: "http://127.0.0.1:8778")
+    monkeypatch.setattr(system_model_service, "runtime_environment_payload", lambda: {"envType": "prod"})
+
+    def _unexpected_diagnostic_io(*_args, **_kwargs):
+        raise AssertionError("probe status must not read supervisor or sidecar diagnostics")
+
+    monkeypatch.setattr(system_model_service, "_node_status_supervisor_runtime", _unexpected_diagnostic_io)
+    monkeypatch.setattr(system_model_service, "_node_status_sidecar_runtime", _unexpected_diagnostic_io)
+
+    payload = system_model_service.current_node_probe_status_payload()
+
+    assert payload["status_profile"] == "probe"
+    assert payload["runtime"]["runtime_url"] == "http://127.0.0.1:8778"
+    assert payload["runtime"]["runtime_state"] == "ready"
+
+
 def test_node_status_push_excludes_recursive_diagnostics(monkeypatch) -> None:
     full_payload = {
         "node_id": "hub-1",

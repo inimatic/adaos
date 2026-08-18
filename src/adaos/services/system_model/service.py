@@ -16,7 +16,7 @@ from adaos.services.registry.subnet_directory import get_directory
 from adaos.services.runtime_paths import current_base_dir
 from adaos.services.runtime_environment import runtime_environment_payload
 from adaos.services.runtime_lifecycle import runtime_lifecycle_snapshot
-from adaos.services.runtime_topology import supervisor_base_from_env
+from adaos.services.runtime_topology import runtime_port_http_base_from_env, supervisor_base_from_env
 from adaos.services.subnet.link_client import get_member_link_client
 from adaos.services.system_model.catalog import (
     browser_session_objects,
@@ -134,6 +134,26 @@ def current_node_identity_status_payload() -> dict[str, Any]:
         "route_mode": route_mode,
         "connected_to_subnet": connected,
         "connected_to_hub": connected,
+    }
+
+
+def current_node_probe_status_payload() -> dict[str, Any]:
+    """Return the live identity/reachability projection without diagnostic I/O."""
+
+    identity = current_node_identity_status_payload()
+    runtime_url = runtime_port_http_base_from_env()
+    runtime = {
+        "runtime_url": runtime_url,
+        "runtime_state": str(identity.get("node_state") or "ready"),
+        "transition_role": str(os.getenv("ADAOS_RUNTIME_TRANSITION_ROLE") or "active").strip() or "active",
+        "runtime_instance_id": str(os.getenv("ADAOS_RUNTIME_INSTANCE_ID") or "").strip() or None,
+        "slot": str(os.getenv("ADAOS_ACTIVE_CORE_SLOT") or os.getenv("ADAOS_RUNTIME_SLOT") or "").strip() or None,
+    }
+    return {
+        **identity,
+        "status_profile": "probe",
+        "runtime": runtime,
+        "environment": runtime_environment_payload(),
     }
 
 
@@ -789,6 +809,7 @@ __all__ = [
     "current_node_object",
     "current_node_identity_status_payload",
     "current_node_status_push_payload",
+    "current_node_probe_status_payload",
     "compact_node_status_transport_payload",
     "current_node_status_payload",
     "current_object_inspector",
