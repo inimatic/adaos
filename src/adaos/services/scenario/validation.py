@@ -198,7 +198,7 @@ def _scenario_webui_contract_issues(
             if side_effects not in {"", "none", "read_only"}:
                 issues.append(ScenarioValidationIssue("error", "scenario.webui.mutation_data_source", f"mutating tool '{target}' cannot be a dataSource", where))
             if tool_name not in routed_tools:
-                issues.append(ScenarioValidationIssue("warning", "scenario.webui.data_route_missing", f"skill dataSource '{target}' has no exact tool data_route", where))
+                issues.append(ScenarioValidationIssue(policy_level, "scenario.webui.data_route_missing", f"skill dataSource '{target}' has no exact tool data_route", where))
             if data_source.get("cacheTtlMs") is None:
                 issues.append(ScenarioValidationIssue("warning", "scenario.webui.cache_policy_implicit", f"stable skill dataSource '{target}' relies on the client default cache policy", where))
             tags = data_source.get("invalidationTags")

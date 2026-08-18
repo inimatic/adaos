@@ -257,6 +257,50 @@ def test_scenario_validation_rejects_data_route_policy_drift(tmp_path: Path) -> 
     }.issubset(codes)
 
 
+def test_strict_scenario_rejects_skill_datasource_without_data_route(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "smoke_skill", "check")
+    scenario = _write_scenario(
+        tmp_path,
+        "webui_missing_route",
+        depends=["smoke_skill"],
+        route="smoke_skill.check",
+    )
+    scenario_manifest = scenario / "scenario.yaml"
+    scenario_payload = yaml.safe_load(scenario_manifest.read_text(encoding="utf-8"))
+    scenario_payload["runtime_data_policy"] = {"enforcement": "strict"}
+    scenario_manifest.write_text(
+        yaml.safe_dump(scenario_payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    (scenario / "webui.json").write_text(
+        json.dumps(
+            {
+                "widgets": [
+                    {
+                        "id": "status",
+                        "type": "item.details",
+                        "dataSource": {
+                            "kind": "skill",
+                            "name": "smoke_skill.check",
+                            "cacheTtlMs": 0,
+                            "invalidationTags": ["status"],
+                            "preserveLastValue": True,
+                            "maxRequestHz": 1,
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_scenario_path(scenario)
+
+    assert report.ok is False
+    issue = next(item for item in report.issues if item.code == "scenario.webui.data_route_missing")
+    assert issue.level == "error"
+
+
 def test_scenario_validation_does_not_let_incomplete_dev_skill_shadow_workspace_skill(tmp_path: Path) -> None:
     dev_root = tmp_path / "dev" / "subnet"
     (dev_root / "skills" / "builder_skill").mkdir(parents=True)
