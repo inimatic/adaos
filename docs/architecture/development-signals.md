@@ -1,0 +1,435 @@
+# Development Signals And Evolution Feedback
+
+Status: target architecture.
+
+Last reviewed: 2026-08-18.
+
+This document defines the AdaOS boundary for user, runtime, review, and
+conversation feedback that may drive software evolution. It sits between raw
+observations and durable development work. It does not replace AdaOS Issues,
+Builder tasks, NLU Teacher candidates, Pending Actions, incidents, or release
+records.
+
+## Purpose
+
+AdaOS needs a natural way for people and deterministic runtime checks to say
+"something should change" without turning every utterance, screenshot, or
+exception into an immediate development task.
+
+A Development Signal is an immutable, scoped observation that may later become
+a user preference, NLU correction, Builder repair, AdaOS Issue, deferred idea,
+or rejected duplicate. It preserves the original evidence and artifact version
+before triage chooses the appropriate lifecycle.
+
+The model follows established human-AI interaction practice:
+
+- Microsoft Human-AI Interaction Guidelines emphasize uncertainty handling,
+  cautious adaptation, and granular feedback during ordinary interaction:
+  <https://www.microsoft.com/en-us/research/blog/guidelines-for-human-ai-interaction-design/>.
+- Google People + AI Guidebook frames human-AI products as bidirectional
+  feedback loops with explicit feedback and control:
+  <https://pair.withgoogle.com/guidebook/>.
+- NIST AI RMF and the Generative AI Profile call for risk management,
+  structured feedback, human review, tracking, and documentation where
+  generated outputs or automated decisions affect people:
+  <https://www.nist.gov/itl/ai-risk-management-framework> and
+  <https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf>.
+- Modern agent frameworks use durable human-in-the-loop pauses before risky or
+  sensitive actions. AdaOS implements that pattern through Pending Actions,
+  not through hidden prompt-only state. Reference examples include OpenAI
+  Agents human review and LangGraph interrupts:
+  <https://developers.openai.com/api/docs/guides/agents/guardrails-approvals>
+  and <https://docs.langchain.com/oss/python/langgraph/interrupts>.
+- Conversational systems treat no-match, correction, clarification,
+  interruption, cancel, and handoff as explicit repair states. Rasa CALM and
+  Dialogflow CX test cases are useful reference patterns:
+  <https://rasa.com/docs/learn/concepts/conversation-patterns/> and
+  <https://docs.cloud.google.com/dialogflow/cx/docs/concept/test-case>.
+
+These are design anchors, not dependencies. AdaOS keeps durable mutation,
+approval, validation, and runtime dispatch inside its own governed contracts.
+
+## Position In Governed Evolution
+
+The target flow is:
+
+```text
+human, runtime, review, or conversation observation
+  -> contextual intake
+  -> Development Signal
+  -> triage and deduplication
+  -> user adaptation | NLU Teacher correction | Builder repair/task |
+     AdaOS Issue | deferred idea | rejection
+  -> validation, versioning, activation, or closure evidence
+```
+
+Development Signals are evidence and routing records. They are not commands,
+Issues, chat history, or approvals.
+
+An AdaOS Issue remains the durable work source of truth once support or
+development accepts a problem for tracked execution. Until that Issue layer is
+implemented, workspace-scoped Development Signals may bridge to the existing
+Builder repair and task records.
+
+## Core Record
+
+The minimum conceptual record is:
+
+```json
+{
+  "schema": "adaos.development_signal.v1",
+  "signal_id": "dsig_...",
+  "kind": "feedback_note | development_request | compatibility_finding | runtime_failure | review_comment | nlu_failure | user_adaptation_request",
+  "summary": "...",
+  "original_input_ref": "...",
+  "status": "open",
+  "severity": "info | low | medium | high | critical",
+  "blocking": false,
+  "classification_confidence": 0.0,
+  "owner_scope": {
+    "type": "workspace",
+    "id": "..."
+  },
+  "origin_scope": {
+    "type": "scenario | skill | webui | component | conversation | runtime",
+    "id": "...",
+    "surface": "header | modal | panel | widget | voice | chat",
+    "component_id": "..."
+  },
+  "target_scope": {
+    "type": "skill | scenario | webui | component | runtime | nlu | unknown",
+    "id": "...",
+    "version": "...",
+    "digest": "...",
+    "source": "dev | workspace | installed | catalog | remote | unknown"
+  },
+  "artifact_refs": [],
+  "conversation_ref": {},
+  "nlu_teacher_ref": {},
+  "builder_ref": {},
+  "issue_ref": {},
+  "policy": {},
+  "created_at": "...",
+  "created_by": "..."
+}
+```
+
+`owner_scope` answers where the signal is stored and governed. `origin_scope`
+answers where the user or runtime observed it. `target_scope` answers what is
+likely to change.
+
+This distinction matters when an installed skill has no DEV checkout. The
+signal should still be stored in the workspace inbox with artifact identity,
+then linked to a Builder fork, overlay, upstream request, or deferred record
+when development becomes possible.
+
+## Storage And Versioning
+
+Development Signals are created in the workspace evolution inbox by default.
+They may also be projected into the artifact-local evolution log of a skill,
+scenario, or WebUI surface when that source exists in a writable development
+space.
+
+Required invariants:
+
+- A signal is immutable except for lifecycle state and relationship links.
+- The signal records the artifact version, digest, activation id, and runtime
+  context where it was observed.
+- A signal created against `skill@1.4.2` does not automatically authorize a
+  patch against `skill@1.5.0`; it must be revalidated or marked stale.
+- Binary evidence such as screenshots, audio snippets, DOM snapshots, logs, or
+  test output is stored as artifact refs with digest, media type, sensitivity,
+  origin, and retention policy. The signal stores only references and summary
+  metadata.
+- Global projections and dashboards are indexes. They are not the source of
+  truth for artifact lineage, approvals, releases, or Issues.
+
+Target lifecycle:
+
+```text
+captured
+  -> classified
+  -> needs_clarification | triaged | duplicate | rejected
+  -> deferred | adaptation_applied | teacher_candidate |
+     repair_created | issue_created
+  -> in_progress
+  -> resolved_by_version | resolved_by_overlay |
+     not_design_time_fixable | stale | superseded
+```
+
+## Feedback Skill Boundary
+
+The Feedback Skill owns intake surfaces for user remarks and proposals.
+
+It may:
+
+- collect text, voice transcript, category, severity, and user intent;
+- infer the initial scope from where it was opened;
+- let the user adjust the scope when the automatic choice is wrong;
+- capture a screenshot by hiding its own modal, taking the image, storing it
+  as an artifact, and restoring the modal;
+- attach selected logs, visible UI state, runtime diagnostics, and conversation
+  refs when policy allows;
+- ask short clarifying questions needed to make the signal useful;
+- create a Development Signal;
+- offer "record", "postpone", "open Builder", or "ask Builder to repair
+  autonomously" actions through Pending Actions or immediate UI choices.
+
+It must not:
+
+- own Builder planning, staged development, patches, acceptance criteria, or
+  release decisions;
+- apply NLU Teacher candidates;
+- silently mutate skill, scenario, workflow, or conversational source;
+- retain raw audio, screenshots, or logs without the retention and sensitivity
+  policy attached to the artifact.
+
+Feedback conversations are short intake sessions. Builder conversations are
+development sessions. They may share `signal_id`, `repair_id`, or `issue_id`,
+but they do not share one state machine.
+
+## Context From Invocation Site
+
+The invocation location supplies the default scope:
+
+| Invocation site | Default origin scope | Typical target scope |
+| --- | --- | --- |
+| Scenario header | `scenario` | scenario or active application surface |
+| Skill panel | `skill` | skill |
+| Modal | `skill` or `scenario` plus `surface=modal` | modal owner or component |
+| Widget affordance | `component` | component owner |
+| Runtime diagnostic | `runtime` | skill, scenario, route, projection, or core component |
+| Voice/chat turn | `conversation` | action target, NLU, feedback skill, or Builder |
+
+The UI should show the selected scope in plain language and allow correction.
+Scope correction changes routing metadata; it does not rewrite the original
+observation.
+
+## Conversational And Voice Boundary
+
+Conversational input must not force AdaOS to guess whether the user expects an
+immediate action, NLU correction, feedback note, or development request.
+
+AdaOS should classify uncertain utterances before dispatch:
+
+| Class | Meaning | Owner |
+| --- | --- | --- |
+| `do_now` | The user expects an immediate action. | NLU/action router |
+| `correct_understanding` | The utterance was misunderstood. | NLU Teacher |
+| `correct_action` | The intent was understood but the selected target or action was wrong. | NLU Teacher plus router evidence |
+| `development_request` | The user asks to add or change capability. | Feedback Skill -> Builder |
+| `feedback_note` | The user records a remark without requesting immediate repair. | Feedback Skill |
+| `user_adaptation` | The user wants local personal behavior or layout change. | Personalization/adaptation layer |
+| `support_question` | The user asks what happened or why. | Support/read model |
+| `runtime_failure` | A command failed after dispatch. | Runtime evidence -> repair |
+
+If confidence is low, AdaOS asks a bounded clarification:
+
+```text
+Do you want me to perform another action, correct command understanding, or
+record a development request?
+```
+
+The wording can be localized and shortened by channel. The important
+property is that the proposed next step is visible before a durable change,
+training example, or Builder task is created.
+
+The system should also teach stable interaction phrases in context, not
+through long tutorials. After a relevant ambiguity it may say, for example:
+
+```text
+For future improvements, say: "Ada, record an improvement."
+If I understood the command wrong, say: "No, I meant ..."
+```
+
+These hints are UX affordances, not parser dependencies.
+
+## NLU Teacher Boundary
+
+NLU Teacher owns the lifecycle of understanding corrections:
+
+```text
+miss or correction
+  -> teacher request
+  -> candidate
+  -> preview/test
+  -> approval
+  -> scoped runtime overlay
+  -> promotion candidate
+  -> Builder patch when reusable source should change
+```
+
+Feedback Skill may create a signal that references an NLU Teacher request,
+candidate, trace, or promotion candidate. NLU Teacher may create a signal or
+Builder task when a repeated miss indicates a descriptor gap or missing
+capability. Neither side should copy the other's durable state.
+
+Routing rules:
+
+- "You misunderstood; I meant X" belongs to NLU Teacher.
+- "This voice correction flow is confusing" belongs to Feedback Skill with
+  target `nlu_teacher` or the owning UI surface.
+- "Add a new command/capability" may enter through NLU Teacher but becomes a
+  Development Signal or Builder task before source changes.
+- Repeated NLU misses can create `nlu_failure` signals, but a missing
+  capability must not be hidden as another regex/example candidate.
+
+## Builder Handoff Boundary
+
+The user-facing branch is:
+
+```text
+record only | postpone | ask Builder to repair autonomously | open Builder
+```
+
+Both Builder options share the same handoff contract:
+
+- signal refs and original user words;
+- owner, origin, and target scopes;
+- artifact versions and digests;
+- evidence artifact refs;
+- classification, risk, and policy constraints;
+- acceptance expectations and replay phrases when applicable.
+
+`autonomous` means Builder may execute the bounded repair pipeline and report
+back later through Pending Actions or notifications. `interactive` means a
+Builder conversation opens immediately in the skill or scenario context. In
+both cases, Builder owns planning, patching, validation, and closure.
+
+If the target artifact is installed, catalog, remote, or read-only, Builder
+first materializes an authorized development context:
+
+```text
+existing DEV source | local fork/overlay | upstream proposal |
+not_design_time_fixable | deferred
+```
+
+Development Signals remain in the workspace inbox and are linked to the
+materialized development lineage. They are not moved blindly into a checkout.
+
+## Runtime Compatibility Findings
+
+Compatibility findings are Development Signals created by deterministic
+runtime or validation checks.
+
+For legacy stream/Yjs receiver declarations, the desired sequence is:
+
+```text
+activation, validation, or stream admission detects missing receiver policy
+  -> compatibility_finding signal
+  -> BuilderRepairService.report with dedup key
+  -> Pending Action if blocking or user-visible
+  -> descriptor_fix repair or manual review
+  -> strict validation and replay evidence
+```
+
+The finding should include:
+
+- affected skill/scenario, version, digest, and activation id;
+- missing or mismatched `data_routes`, `webio.receivers`, or projection rule;
+- the receiver/topic/event that triggered the finding;
+- whether compatibility fallback allowed, degraded, or blocked execution;
+- `blocking`, `run_policy`, `design_time_fixable`, and
+  `autonomous_repair_eligible`;
+- validator, runtime guard, import, route-pressure, or projection evidence.
+
+The blocker flag should be computed from contract checks and policy, not
+stored as a free-form maintainer assertion. Maintainer-declared debt may be
+recorded, but runtime incompatibility must be reproducible from evidence.
+
+## Pending Actions
+
+Pending Actions carry durable human decisions about a signal. They are not
+the signal source of truth.
+
+Typical evolution actions:
+
+- `preview_evidence`
+- `record_only`
+- `postpone`
+- `start_autonomous_repair`
+- `open_builder`
+- `disable_until_fixed`
+- `run_once_with_compatibility`
+- `refuse`
+
+High-risk choices require explicit approval according to policy:
+
+- new permissions;
+- external I/O;
+- credential or secret handling;
+- destructive migration;
+- broad receiver or data-route expansion;
+- public promotion of private feedback or NLU examples.
+
+## Privacy And Retention
+
+Development Signals may contain sensitive information because they are created
+from live UI context, conversation, voice, screenshots, logs, and runtime
+diagnostics.
+
+Required policy:
+
+- store summary and transcript by default, not raw audio;
+- store screenshots and DOM/context snapshots only as artifact refs with
+  sensitivity, redaction status, and retention;
+- default to local-only retention unless the deployment profile explicitly
+  allows remote support or shared development;
+- keep user-authored remarks separate from model summaries;
+- treat signals, screenshots, transcripts, logs, and prior Issues as untrusted
+  model input;
+- require explicit approval before promoting private feedback into reusable or
+  public artifacts.
+
+## Metrics
+
+The first metrics should answer operational questions, not build a dashboard
+for its own sake:
+
+- signal capture count by source and target type;
+- duplicate rate;
+- classification confidence and clarification rate;
+- autonomous repair eligibility and success rate;
+- time from signal to triage, repair, and closure;
+- stale-after-version-change rate;
+- user adaptation versus shared artifact change rate;
+- NLU miss, correction, and wrong-action rates;
+- screenshot/log/audio attachment retention and redaction outcomes;
+- false-positive and refused-repair rate.
+
+These metrics help decide where to improve skills, scenarios, NLU surfaces,
+runtime contracts, and user education.
+
+## Ownership
+
+| Contract | Owner |
+| --- | --- |
+| Development Signal schema, lifecycle, storage, and projections | This document and the Development Signals Roadmap |
+| Human choice and deferred response | Pending Actions |
+| NLU understanding corrections | NLU Teacher |
+| Builder planning, implementation, validation, and release evidence | Builder |
+| Durable accepted work and support lifecycle | Future AdaOS Issue architecture |
+| Runtime guard, incident, and operational evidence | Runtime Guarding, Incident Registry, Operational Event Model |
+| Artifact versions, release lineage, and activation | Artifact/source/activation architecture |
+| User-specific preferences and personalization | Personalization, Identity, And Access |
+
+## Current Reality
+
+Existing foundations include Builder repair tasks, Builder development
+feedback, Builder handoff schemas, review anchors, Pending Actions, NLU
+Teacher candidates, conversation stories, runtime incidents, projection
+diagnostics, artifact refs, and skill runtime declaration checks.
+
+Missing target pieces include:
+
+- a first-class `adaos.development_signal.v1` schema;
+- workspace evolution inbox and artifact-local signal projection;
+- Feedback Skill UI/voice intake with screenshot capture;
+- conversational disambiguation before feedback/Teacher/Builder routing;
+- NLU Teacher and Feedback Signal refs in both directions;
+- runtime compatibility-finding producer for missing receiver/data-route
+  contracts;
+- Pending Action producers and response handlers for autonomous versus
+  interactive Builder handoff;
+- closure by artifact version, overlay, acceptance evidence, or stale
+  revalidation.

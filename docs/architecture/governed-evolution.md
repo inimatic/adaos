@@ -17,6 +17,9 @@ The durable unit of work is an AdaOS Issue. Conversation is an interface for
 creating, clarifying, prioritizing, and reviewing that work; it is not the
 source of truth for development state. Generated code is an implementation
 artifact; it is not sufficient evidence that the requested capability works.
+Before an observation becomes an Issue, AdaOS may preserve it as a scoped
+Development Signal: a versioned, immutable feedback or diagnostic record that
+keeps the original evidence, artifact identity, and routing context intact.
 
 This direction is deliberately broader than the current Builder implementation.
 It gives existing architecture tracks a common destination without claiming
@@ -54,7 +57,9 @@ The target system connects existing AdaOS planes through typed records:
 
 ```text
 Human or machine signal
-  -> NLU / Support intake
+  -> contextual intake
+  -> scoped Development Signal
+  -> NLU / Support triage
   -> durable AdaOS Issue
   -> Builder task
   -> isolated realization
@@ -68,17 +73,19 @@ The loop has the following invariants:
 
 1. A signal is evidence, not automatically a defect or a command to change the
    system.
-2. NLU and Support intake classify, deduplicate, clarify, and preserve the
+2. Contextual intake preserves owner, origin, target, version, digest,
+   conversation, NLU, runtime, and artifact evidence before development begins.
+3. NLU and Support intake classify, deduplicate, clarify, and preserve the
    original signal before development begins.
-3. The AdaOS Issue records the agreed problem, scope, acceptance criteria,
+4. The AdaOS Issue records the agreed problem, scope, acceptance criteria,
    urgency, authority, and links to evidence.
-4. Builder realizes approved work through AdaOS development contracts; it does
+5. Builder realizes approved work through AdaOS development contracts; it does
    not mutate production state directly.
-5. Realization occurs in an isolated DEV space and produces reviewable
+6. Realization occurs in an isolated DEV space and produces reviewable
    artifacts and reproducible verification evidence.
-6. Publication and activation are separate governed transitions. A valid build
+7. Publication and activation are separate governed transitions. A valid build
    is not automatically authorized for production use.
-7. Runtime evidence may confirm acceptance, reveal a regression, or create a
+8. Runtime evidence may confirm acceptance, reveal a regression, or create a
    follow-up Issue. It never silently edits the original request or deployed
    artifact.
 
@@ -92,6 +99,29 @@ not need to maintain issue-tracker mechanics or inspect code for routine work,
 but they must retain visibility and meaningful control over consequential
 changes.
 
+### Feedback Intake And Development Signals
+
+Feedback intake is the user-facing and runtime-facing capture layer for
+remarks, proposals, compatibility findings, review comments, screenshots,
+voice transcripts, conversation refs, and deterministic diagnostics. Its
+durable output is a Development Signal.
+
+A Development Signal is scoped by storage owner, observation origin, and likely
+target. It may refer to a skill, scenario, WebUI surface, component,
+conversation turn, NLU Teacher request, runtime contract, or installed artifact
+version. It is stored in the workspace evolution inbox by default so that
+feedback can be captured even when the affected artifact has no DEV checkout.
+When writable source exists, the signal may be projected into the local
+artifact evolution log without becoming a second source of truth.
+
+Feedback intake may ask short clarifying questions and offer immediate choices
+such as record, postpone, open Builder, or request autonomous Builder repair.
+It does not own Builder planning, NLU Teacher candidate application, source
+patches, acceptance criteria, release decisions, or production activation.
+
+The detailed contract is defined by
+[Development Signals And Evolution Feedback](development-signals.md).
+
 ### NLU And NLU Teacher
 
 NLU identifies the meaning and target of an utterance. NLU Teacher improves
@@ -100,6 +130,13 @@ capability. It may propose `descriptor_fix`, `development_task`, or other typed
 candidates, but it does not own development execution. Its current contracts
 remain defined by [NLU Teacher LLM](nlu-teacher-llm.md) and the
 [NLU Roadmap](nlu-roadmap.md).
+
+Conversational and voice fallback must distinguish immediate action,
+understanding correction, wrong target/action, feedback note, development
+request, user adaptation, support question, and runtime failure before it
+creates durable work. Low-confidence cases should clarify the expected next
+step instead of silently choosing between executing an action and planning a
+change.
 
 ### Support Agent
 
@@ -132,6 +169,12 @@ Its authoritative scope and implementation pipeline remain in
 [Builder](builder.md), [Builder Roadmap](builder-roadmap.md), and
 [Skill Factory](skill-factory.md).
 
+Builder may receive work from a Development Signal either interactively, by
+opening a Builder conversation in the relevant skill or scenario context, or
+autonomously, by accepting a bounded repair task and reporting delayed results.
+Both paths use the same typed handoff and preserve the signal, evidence, and
+version lineage.
+
 ### Deterministic Runtime And Policy
 
 AdaOS owns validation, permission checks, publication and activation gates,
@@ -157,6 +200,12 @@ An AdaOS Issue is a durable, addressable work record independent of whether the
 affected skill or scenario already has a DEV checkout. It may refer to a public
 artifact, an installed production version, a runtime component, a proposed new
 capability, or a cross-component contract.
+
+Development Signals precede Issues. They are appropriate for raw feedback,
+compatibility findings, voice misunderstandings, screenshots, deferred ideas,
+review remarks, and runtime diagnostics whose final owner is not yet known. An
+Issue is created only after triage accepts a problem or capability request as
+tracked work with scope, authority, and acceptance criteria.
 
 The minimum conceptual record is:
 
@@ -271,15 +320,19 @@ artifact. The target sequence is:
 
 1. runtime or a person emits a bounded signal with artifact and deployment
    provenance;
-2. Support intake creates or links an Issue in a registry independent of DEV
-   filesystem presence;
-3. ownership policy selects an existing DEV space, creates a new fork from the
+2. contextual intake stores a Development Signal in the workspace evolution
+   inbox and links artifact refs, screenshots, conversations, NLU traces, and
+   diagnostics by policy;
+3. Support intake creates or links an Issue in a registry independent of DEV
+   filesystem presence when the signal becomes accepted work;
+4. ownership policy selects an existing DEV space, creates a new fork from the
    deployed/public version, or queues the Issue without realization;
-4. Builder receives only the authorized context and evidence needed for the
+5. Builder receives only the authorized context and evidence needed for the
    task;
-5. a release links back to the Issue and the deployment evidence that motivated
+6. a release links back to the Issue and the deployment evidence that motivated
    it;
-6. post-activation checks append results and may resolve or reopen the Issue.
+7. post-activation checks append results and may resolve or reopen the Issue or
+   linked Development Signals.
 
 Setup and migration validation can use an observation window. A deterministic
 post-install report records the applied version, migration checkpoints,
@@ -341,6 +394,8 @@ benefit and operational cost.
 
 - skills and scenarios as governed artifacts;
 - Builder terminology and a working local development pipeline;
+- Builder repair tasks, development feedback records, review anchors, and
+  Pending Actions as partial Development Signal foundations;
 - separate SDK, service, runtime, projection, and policy boundaries;
 - DEV-space creation, static validation, Git checkpoints, and publication
   paths in varying stages of integration;
@@ -356,6 +411,13 @@ readiness.
 ### Near-term architecture work
 
 - complete the repeatable single-user Issue-to-release Builder loop;
+- specify and implement the Development Signal schema, workspace evolution
+  inbox, Feedback Skill intake, and signal-to-Builder handoff;
+- add conversational disambiguation between action execution, NLU correction,
+  feedback note, user adaptation, and development request;
+- route deterministic runtime compatibility findings, including missing
+  receiver declarations, into Development Signals, Pending Actions, and Builder
+  repair evidence;
 - formalize setup, migration, post-install verification, and failure evidence;
 - define the AdaOS Issue contract and its relationship to existing
   `development_task`, incident, task, operation, and release records;
@@ -385,6 +447,9 @@ Authoritative execution detail remains in:
 
 - [MVP Roadmap](../mvp_roadmap.md) for the active platform path;
 - [Roadmap Inventory](roadmap-inventory.md) for roadmap ownership and status;
+- [Development Signals And Evolution Feedback](development-signals.md) and
+  [Development Signals Roadmap](development-signals-roadmap.md) for evolution
+  feedback intake, scope, lifecycle, and handoff sequencing;
 - [Builder Roadmap](builder-roadmap.md) for Builder readiness and gates;
 - [Skill Factory](skill-factory.md) for isolated autonomous realization;
 - [NLU Roadmap](nlu-roadmap.md) for understanding and Teacher

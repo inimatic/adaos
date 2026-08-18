@@ -2,7 +2,7 @@
 
 Status: cross-cutting product and architecture roadmap.
 
-Last reviewed: 2026-07-24.
+Last reviewed: 2026-08-18.
 
 AdaOS is intended to make software change a governed, observable lifecycle:
 
@@ -38,14 +38,18 @@ is described.
    slice. [Skill Factory](skill-factory.md) owns isolated autonomous
    implementation. [Registry and Operations Roadmap](registry-marketplace-operations-roadmap.md)
    owns distribution, installation, publication, and registry operations.
-6. [Incident Registry](incident-registry.md), [Operational Event Model](operational-event-model.md),
+6. [Development Signals Roadmap](development-signals-roadmap.md) owns the
+   feedback-intake, scoped-signal, conversational-disambiguation, and
+   signal-to-Builder handoff sequence before full Issue-first support is
+   admitted.
+7. [Incident Registry](incident-registry.md), [Operational Event Model](operational-event-model.md),
    and [Post-Deploy E2E Testing](post-deploy-e2e-testing.md) own runtime feedback
    and verification contracts. [Conversation Architecture](conversation-and-channel-architecture.md)
    owns conversational transport and durable thread boundaries.
-7. A checked item means that the stated cross-cutting proof exists at the
+8. A checked item means that the stated cross-cutting proof exists at the
    recorded maturity. It does not imply production acceptance unless the
    evidence explicitly says so.
-8. When this document and a domain owner disagree on implementation state, the
+9. When this document and a domain owner disagree on implementation state, the
    domain owner is authoritative. Correct the summary here; do not fork the
    detailed task.
 
@@ -102,7 +106,7 @@ work and evidence.
 | GE0 | A governed runtime can install, activate, observe, and recover a capability. | `validated-stand` bounded artifact slice; default rollout and broader runtime acceptance open | now |
 | GE1 | AdaOS can be delivered and supported as a managed deployment. | `implemented`; exit proof open | now / next |
 | GE2 | One user can take a request to a validated, reversible release through a Personal Builder. | `validated-stand` bounded artifact slice; autonomous Builder-from-empty acceptance open | next |
-| GE3 | Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; not admitted | later |
+| GE3 | Development Signals and Issues, rather than chat transcripts, become durable support and repair work. | `hypothesis`; Development Signal slice now specified, full Issue aggregate not admitted | later |
 | GE4 | Independent Builders collaborate without sharing a writable DEV workspace. | `hypothesis`; not admitted | later |
 | GE5 | A verified capability can be reused across deployments with provenance and evidence. | `hypothesis`; not admitted | long-term |
 
@@ -228,6 +232,16 @@ separate acceptance decision.
 - [ ] `[deferred]` `GE2-06` Defer large-module decomposition unless a touched
   seam blocks the acceptance flow; track it as a dedicated later refactoring
   preparation effort. Owner: [Builder Roadmap](builder-roadmap.md).
+- [ ] `[should]` `GE2-07` Accept a scoped Development Signal as Builder input
+  through the same typed context whether the user chooses autonomous repair or
+  opens an interactive Builder session. Owner:
+  [Development Signals Roadmap](development-signals-roadmap.md),
+  [Builder Roadmap](builder-roadmap.md).
+- [ ] `[should]` `GE2-08` Materialize Builder work for installed, catalog,
+  remote, or read-only artifacts from a workspace signal without requiring a
+  pre-existing DEV checkout. Owner:
+  [Development Signals Roadmap](development-signals-roadmap.md),
+  [Skill Factory](skill-factory.md).
 
 **Non-goals:** unrestricted repository autonomy, shared writable DEV trees,
 removing human authority at consequential boundaries, or preserving Prompt IDE
@@ -268,6 +282,23 @@ the Issue only against release and verification evidence.
   Agent roadmap.
 - [ ] `[deferred]` `GE3-06` Defer issue exchange across trust groups until GE4
   defines visibility and proposal boundaries. Owner: GE4.
+- [ ] `[must]` `GE3-07` Promote workspace- and artifact-scoped Development
+  Signals into accepted Issues only after triage establishes problem scope,
+  authority, acceptance criteria, and owning lifecycle. Owner:
+  [Development Signals Roadmap](development-signals-roadmap.md), future Issue
+  architecture.
+- [ ] `[must]` `GE3-08` Preserve the boundary between Feedback Skill intake, NLU
+  Teacher correction, Builder development conversation, and Support Agent
+  issue flow through typed refs instead of shared chat state. Owner:
+  [Development Signals Roadmap](development-signals-roadmap.md),
+  [NLU Teacher Evolution Roadmap](nlu-evolution-roadmap.md),
+  [Builder Roadmap](builder-roadmap.md).
+- [ ] `[must]` `GE3-09` Prove one runtime compatibility finding, such as a
+  legacy receiver declaration gap, moving from deterministic evidence to
+  Development Signal, Pending Action, Builder repair, validation, and closure
+  by version or explicit deferral. Owner:
+  [Development Signals Roadmap](development-signals-roadmap.md),
+  [Runtime Guarding](runtime-guarding.md).
 
 **Non-goals:** making the LLM an unreviewable authority, continuous raw-log
 analysis as the normal monitoring path, replacing deterministic checks with

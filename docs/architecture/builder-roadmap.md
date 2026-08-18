@@ -2,7 +2,7 @@
 
 Status: high-level sequencing for the AdaOS Builder vertical slice.
 
-Last reviewed: 2026-08-05.
+Last reviewed: 2026-08-18.
 
 This roadmap tracks how AdaOS evolves from separate skill/scenario/runtime
 surfaces into a coherent Builder workflow: idea -> governed artifact -> preview
@@ -81,6 +81,9 @@ clean-stand or multi-user production acceptance claim.
 - [Conversational Control Interface](conversational-interface.md) defines the
   shared conversational input/output contract, NLU data boundary,
   Teacher-to-Builder promotion path, and conversation-story testing model.
+- [Development Signals And Evolution Feedback](development-signals.md) defines
+  feedback intake, scoped signal storage, autonomous-versus-interactive Builder
+  handoff, and the boundary with NLU Teacher.
 - [Builder SDK Boundary](builder-sdk-boundary.md) defines the public SDK
   dependency direction and tracks the functional replacement-control slice.
 - [Navigation Intent And Location](navigation-intent-and-location.md) defines
@@ -516,6 +519,7 @@ Primary references:
 
 - [Runtime Guarding](runtime-guarding.md)
 - [Operational Event Model Roadmap](operational-event-model-roadmap.md)
+- [Development Signals Roadmap](development-signals-roadmap.md)
 - [Root MCP Roadmap](root-mcp-roadmap.md)
 
 ## Phase 8. Product Experience

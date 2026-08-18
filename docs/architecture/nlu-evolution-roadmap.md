@@ -2,7 +2,7 @@
 
 Status: active use-case-gated roadmap.
 
-Last reviewed: 2026-08-07.
+Last reviewed: 2026-08-18.
 
 This document is the use-case-gated roadmap for controlled AdaOS NLU
 evolution. It does not replace the detailed technical checklist in
@@ -34,6 +34,9 @@ replayable and auditable.
 - [Builder](builder.md) and
   [Builder Roadmap](builder-roadmap.md): handoff when a
   descriptor or capability is missing.
+- [Development Signals And Evolution Feedback](development-signals.md):
+  boundary between feedback intake, NLU correction, user adaptation, and
+  Builder handoff.
 - [Conversational Control Interface](conversational-interface.md):
   shared input/output contract, NLU data lifecycle, Builder promotion boundary,
   and conversation-story tests.
@@ -57,6 +60,12 @@ These invariants are stronger than individual milestones:
   source directly.
 - Missing descriptors and missing capabilities are not treated as normal NLU
   misses. They become `descriptor_fix` or `development_task` candidates.
+- Low-confidence conversational fallback must distinguish immediate action,
+  understanding correction, wrong target/action, feedback note, development
+  request, user adaptation, support question, and runtime failure before it
+  creates durable work.
+- NLU Teacher owns understanding correction. Feedback Skill owns evolution
+  feedback intake. Builder owns development planning and realization.
 - A repeated request should demonstrate what the system learned without another
   Root/OpenAI call, unless the target behavior explicitly requires generative
   reasoning.
@@ -405,25 +414,56 @@ Repair types:
 
 - `no_match`
 - `provider_outage`
+- `asr_misrecognition`
 - `misrecognition`
+- `wrong_intent`
 - `wrong_target`
+- `wrong_action`
 - `ambiguous_entity`
 - `missing_parameter`
+- `action_unavailable`
 - `change_parameter`
 - `change_result_mode`
 - `cancel_pending`
 - `resume_previous`
 - `repeat_last`
+- `development_request`
+- `feedback_note`
+- `user_adaptation`
+- `support_question`
+- `runtime_failure`
 
 Acceptance checklist:
 
 - [ ] `[must]` Define `repair_policy` state machine and event taxonomy.
+- [ ] `[must]` Add a fallback classifier that runs after deterministic
+  NLU/Rasa no-match or low confidence and before Teacher, Feedback Skill,
+  Builder, or action dispatch receives the turn.
+- [ ] `[must]` For low-confidence cases, ask the user whether they expect
+  another immediate action, a command-understanding correction, a feedback
+  note, a personal adaptation, or a planned development change.
+- [ ] `[must]` Route `correct_understanding` to NLU Teacher, `feedback_note`
+  and `development_request` to Development Signals, `user_adaptation` to the
+  personalization/adaptation layer, and `do_now` back to action preview or
+  dispatch.
+- [ ] `[must]` Make the terminal user-visible outcome distinct: action
+  executed, understanding correction recorded, action correction planned,
+  feedback recorded, development planned, adaptation saved, deferred, or
+  rejected.
 - [ ] `[must]` Short answers, cancellation, correction, and interruption route
   through active repair/clarification sessions before normal NLU.
 - [ ] `[must]` A failed provider path tells the user whether the request was
   deferred, skipped, or sent to another active NLU stage.
+- [ ] `[must]` Prevent loops where failure to understand a feedback command is
+  stored as product feedback; it remains an NLU/Teacher issue until the
+  feedback intent and content are understood.
 - [ ] `[should]` Repair attempts have a bounded retry policy before asking for
   a clearer user instruction or creating a Builder task.
+- [ ] `[should]` Provide short contextual teaching phrases after ambiguity,
+  such as "Say 'Ada, record an improvement' for future changes" and "Say 'No,
+  I meant ...' when command understanding was wrong."
+- [ ] `[should]` Conversation-story tests cover the taxonomy across Web,
+  Telegram, and Voice where those channels are admitted.
 
 ## Gate 8: Descriptor Gap to Builder Handoff
 
@@ -446,6 +486,9 @@ Acceptance checklist:
   with owner, missing surface, source utterance, and replay expectation.
 - [ ] `[must]` Completed Builder descriptor fixes link back to the originating
   Teacher request and rerun the phrase.
+- [ ] `[should]` Descriptor-gap candidates link to a Development Signal when
+  the issue was discovered through Feedback Skill, runtime diagnostics, or a
+  repeated conversational failure rather than a single Teacher miss.
 
 ## Gate 9: Missing Capability to Builder Draft
 
@@ -470,6 +513,9 @@ Acceptance checklist:
   and marked resolved or still blocked.
 - [ ] `[should]` Duplicate missing-capability requests dedupe into one Builder
   task with multiple evidence examples.
+- [ ] `[should]` Missing-capability candidates create or link a Development
+  Signal so the request can be postponed, opened in Builder, or sent to
+  autonomous Builder repair without keeping chat history as work state.
 
 ## Gate 10: Promotion, Publication, and Release Channels
 
@@ -625,12 +671,14 @@ The recommended delivery order is:
    for phrases that should be covered by published `voice_capabilities` /
    `voice_affordances`.
 3. Add Gate 4 for query/result-mode learning, still using Infrastate Inventory.
-4. Harden Gate 5 and Gate 7 so STT variants and corrections do not corrupt
-   templates.
+4. Harden Gate 5 and Gate 7 so STT variants, corrections, feedback requests,
+   and development requests do not corrupt templates or surprise the user.
 5. Add Gate 13 for endpoint audio sessions before broad dialog or dictation
    UX. Keep the first slice bounded to ReDevice push-to-talk/VAD, member-side
    STT, and normal Voice/NLU dispatch.
-6. Add Gate 8 and Gate 9 to route gaps into Builder.
+6. Add Gate 8 and Gate 9 to route descriptor and capability gaps into Builder,
+   linking Development Signals when the gap originates from feedback or
+   repeated conversational failures.
 7. Add Gate 10 and Gate 11 before broad promotion or public reuse.
 8. Add static conversation-story and workflow/statechart reports before
    interactive replay or studio work.

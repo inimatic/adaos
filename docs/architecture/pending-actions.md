@@ -229,6 +229,10 @@ Initial system producers should include:
   endpoint when automatic routing is not safe.
 - Quarantine/guard recovery: acknowledge, disable, retry with reduced scope, or
   open a repair task.
+- Development Signal and compatibility repair: preview evidence, record only,
+  postpone, open Builder interactively, start bounded autonomous Builder
+  repair, disable until fixed, or run once with compatibility where policy
+  allows it.
 
 These are not notifications because each one can change control flow or durable
 state.
