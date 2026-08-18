@@ -12,6 +12,7 @@ from adaos.services.runtime_topology import (
     http_base,
     is_loopback_http_url,
     runtime_fallback_http_bases,
+    supervisor_base_candidates_from_env,
 )
 
 
@@ -117,37 +118,68 @@ def _autostart_control_url() -> str | None:
     return None
 
 
-def _supervisor_public_runtime_url() -> str | None:
+def _autostart_supervisor_urls() -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
     try:
         from adaos.services.agent_context import get_ctx
         from adaos.services.autostart import status as autostart_status
 
         info = autostart_status(get_ctx())
-        supervisor_url = _normalize_url((info or {}).get("supervisor_url") if isinstance(info, dict) else None)
-        if not supervisor_url or not _is_local_url(supervisor_url):
-            return None
+        if isinstance(info, dict):
+            _append_candidate(candidates, seen, info.get("supervisor_url"))
+            wrapper_env = info.get("wrapper_env") if isinstance(info.get("wrapper_env"), dict) else {}
+            host = str(wrapper_env.get("ADAOS_SUPERVISOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+            raw_port = str(wrapper_env.get("ADAOS_SUPERVISOR_PORT") or "").strip()
+            if raw_port:
+                try:
+                    _append_candidate(candidates, seen, http_base(host=host, port=int(raw_port)))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return [candidate for candidate in candidates if _is_local_url(candidate)]
+
+
+def _supervisor_public_runtime_url() -> str | None:
+    supervisor_candidates = _autostart_supervisor_urls()
+    seen = set(supervisor_candidates)
+    for candidate in supervisor_base_candidates_from_env(
+        require_signal=False,
+        include_localhost=True,
+        include_default_loopback=True,
+    ):
+        if _is_local_url(candidate):
+            _append_candidate(supervisor_candidates, seen, candidate)
+
+    for supervisor_url in supervisor_candidates:
         sess = requests.Session()
         try:
             sess.trust_env = False
         except Exception:
             pass
-        resp = sess.get(supervisor_url + "/api/supervisor/public/update-status", timeout=0.5)
-        if int(resp.status_code) != 200:
-            return None
-        payload = resp.json()
-        if not isinstance(payload, dict):
-            return None
-        runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-        runtime_url = _normalize_url(runtime.get("runtime_url"))
-        if not runtime_url or not _is_local_url(runtime_url):
-            return None
-        if not bool(runtime.get("listener_running")):
-            return None
-        if runtime.get("runtime_api_ready") is False:
-            return None
-        return runtime_url
-    except Exception:
-        return None
+        try:
+            resp = sess.get(supervisor_url + "/api/supervisor/public/update-status", timeout=0.5)
+            if int(resp.status_code) != 200:
+                continue
+            payload = resp.json()
+            if not isinstance(payload, dict):
+                continue
+            runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+            runtime_url = _normalize_url(runtime.get("runtime_url"))
+            if not runtime_url or not _is_local_url(runtime_url):
+                continue
+            transition_role = str(runtime.get("transition_role") or "").strip().lower()
+            if transition_role == "candidate" or runtime.get("admin_mutation_allowed") is False:
+                continue
+            if not bool(runtime.get("listener_running")):
+                continue
+            if runtime.get("runtime_api_ready") is False:
+                continue
+            return runtime_url
+        except Exception:
+            continue
+    return None
 
 
 def _pidfile_control_urls() -> list[str]:

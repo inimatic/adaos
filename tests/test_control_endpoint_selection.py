@@ -162,6 +162,68 @@ def test_resolve_control_base_url_prefers_supervisor_public_runtime_url(monkeypa
     assert base == "http://127.0.0.1:8777"
 
 
+def test_supervisor_public_runtime_url_uses_default_topology_without_autostart_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(active_control, "_autostart_supervisor_urls", lambda: [])
+    monkeypatch.setattr(
+        active_control,
+        "supervisor_base_candidates_from_env",
+        lambda **_kwargs: ["http://127.0.0.1:8776"],
+    )
+
+    class _FakeSession:
+        trust_env = True
+
+        def get(self, url: str, timeout=None):
+            assert url == "http://127.0.0.1:8776/api/supervisor/public/update-status"
+            return _FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "runtime": {
+                        "runtime_url": "http://127.0.0.1:8778",
+                        "listener_running": True,
+                        "runtime_api_ready": True,
+                        "transition_role": "active",
+                    },
+                },
+            )
+
+    monkeypatch.setattr(active_control.requests, "Session", _FakeSession)
+
+    assert active_control._supervisor_public_runtime_url() == "http://127.0.0.1:8778"
+
+
+def test_supervisor_public_runtime_url_rejects_candidate_projection(monkeypatch) -> None:
+    monkeypatch.setattr(active_control, "_autostart_supervisor_urls", lambda: [])
+    monkeypatch.setattr(
+        active_control,
+        "supervisor_base_candidates_from_env",
+        lambda **_kwargs: ["http://127.0.0.1:8776"],
+    )
+
+    class _FakeSession:
+        trust_env = True
+
+        def get(self, url: str, timeout=None):
+            return _FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "runtime": {
+                        "runtime_url": "http://127.0.0.1:8777",
+                        "listener_running": True,
+                        "runtime_api_ready": True,
+                        "transition_role": "candidate",
+                        "admin_mutation_allowed": False,
+                    },
+                },
+            )
+
+    monkeypatch.setattr(active_control.requests, "Session", _FakeSession)
+
+    assert active_control._supervisor_public_runtime_url() is None
+
+
 def test_resolve_control_token_prefers_candidate_that_authenticates_with_local_control(monkeypatch) -> None:
     monkeypatch.setattr(
         active_control,
