@@ -143,6 +143,20 @@ def test_browser_and_member_helpers_use_expected_domains() -> None:
     assert member["severity"] == "degraded"
 
 
+def test_channel_incident_keeps_scope_distinct_from_state_transition() -> None:
+    recorded = incidents.record_channel_incident(
+        channel="route",
+        status="no_upstream",
+        summary="session frame arrived without an upstream",
+        details={"impact_scope": "session", "key_tag": "abc123"},
+        previous_status="ready",
+    )
+
+    assert recorded["class"] == "channel_incident"
+    assert recorded["latest_evidence"]["impact_scope"] == "session"
+    assert "session" in recorded["tags"]
+
+
 def test_yjs_thread_affinity_fault_is_degraded_and_specialized() -> None:
     exc = RuntimeError("y_py::y_map::YMap is unsendbale, but is dropped on another thread!")
 

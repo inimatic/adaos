@@ -1369,6 +1369,8 @@ def _print_reliability_summary(payload: dict[str, Any]) -> None:
                 f"diag.{name}: {stability.get('state') or 'unknown'} "
                 f"score={stability.get('score') if stability.get('score') is not None else '?'} "
                 f"recent_non_ready_5m={item.get('recent_non_ready_transitions_5m') or 0} "
+                f"incidents_5m={item.get('recent_incidents_5m') or 0} "
+                f"impacting_5m={item.get('recent_impacting_incidents_5m') or 0} "
                 f"last_class={item.get('last_incident_class') or '-'} "
                 f"top_5m={top_incident or '-'}"
             )

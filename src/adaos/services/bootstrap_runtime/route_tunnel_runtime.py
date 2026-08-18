@@ -1258,6 +1258,7 @@ class NatsRouteTunnelRuntime:
                         summary="hub route relay runtime reset",
                         details={
                             "reason": reason0,
+                            "impact_scope": "channel",
                             "closed_tunnels": closed_tunnels,
                             "closed_tunnels_completed": closed_tunnels_completed,
                             "dropped_pending": dropped_pending,
@@ -1315,6 +1316,7 @@ class NatsRouteTunnelRuntime:
                             details={
                                 "key_tag": _key_tag(key),
                                 "age_s": round(float(age), 3),
+                                "impact_scope": "session",
                             },
                         )
                     except Exception:
@@ -1685,6 +1687,7 @@ class NatsRouteTunnelRuntime:
                                 details={
                                     "t": t0,
                                     "key_tag": _key_tag(key),
+                                    "impact_scope": "session",
                                     "reply_subject": reply_subject,
                                     "err_type": type(e).__name__,
                                     "err": str(e),
@@ -3081,7 +3084,12 @@ class NatsRouteTunnelRuntime:
                                     note_route_incident(
                                         status="no_upstream",
                                         summary="hub route frame arrived while upstream is not connected",
-                                        details={"key_tag": _key_tag(key), "age_s": age_s, "t": "frame"},
+                                        details={
+                                            "key_tag": _key_tag(key),
+                                            "age_s": age_s,
+                                            "t": "frame",
+                                            "impact_scope": "session",
+                                        },
                                     )
                             except Exception:
                                 pass
@@ -3149,7 +3157,12 @@ class NatsRouteTunnelRuntime:
                                     note_route_incident(
                                         status="no_upstream",
                                         summary="hub route chunk arrived while upstream is not connected",
-                                        details={"key_tag": _key_tag(key), "age_s": age_s, "t": "chunk"},
+                                        details={
+                                            "key_tag": _key_tag(key),
+                                            "age_s": age_s,
+                                            "t": "chunk",
+                                            "impact_scope": "session",
+                                        },
                                     )
                             except Exception:
                                 pass
@@ -4351,6 +4364,7 @@ class NatsRouteTunnelRuntime:
                                     summary="hub route reply exceeded root proxy timeout",
                                     details={
                                         "path": http_path,
+                                        "impact_scope": "request",
                                         "method": http_method or "",
                                         "took_ms": round(took_ms, 1),
                                         "expected_timeout_ms": int(expected_timeout_ms),
@@ -4535,6 +4549,7 @@ class NatsRouteTunnelRuntime:
                             summary="hub route handler queue is full; dropping inbound route frame",
                             details={
                                 "key_tag": _key_tag(key0),
+                                "impact_scope": "channel",
                                 "lane": lane,
                                 "queue_size": int(target_queue.qsize()),
                                 "queue_max": int(target_queue.maxsize),

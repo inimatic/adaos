@@ -749,6 +749,8 @@ def _root_control_object(subject: CanonicalObject, runtime: dict[str, Any]) -> C
                 "readiness": readiness,
                 "recent_transitions_5m": diagnostics.get("recent_transitions_5m"),
                 "recent_non_ready_transitions_5m": diagnostics.get("recent_non_ready_transitions_5m"),
+                "recent_incidents_5m": diagnostics.get("recent_incidents_5m"),
+                "recent_impacting_incidents_5m": diagnostics.get("recent_impacting_incidents_5m"),
             }
         ),
         actual_state=compact_mapping(

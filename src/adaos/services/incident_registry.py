@@ -955,9 +955,11 @@ def record_channel_incident(
         domain = "hub_root"
     else:
         domain = f"channel:{channel_token}"
+    incident_details = dict(details or {})
+    impact_scope = _clean_token(incident_details.get("impact_scope"), fallback="channel")
     severity = "degraded" if str(status or "").lower() in {"down", "forced_close_no_upstream"} else "warning"
     return record_incident(
-        incident_class="channel_transition",
+        incident_class="channel_incident",
         signal=str(status or "non_ready").strip() or "non_ready",
         severity=severity,
         domain=domain,
@@ -968,10 +970,11 @@ def record_channel_incident(
             "channel": channel_token,
             "status": status,
             "previous_status": previous_status,
-            "details": details or {},
+            "impact_scope": impact_scope,
+            "details": incident_details,
         },
-        fingerprint_parts=("channel_transition", channel_token, status, summary),
-        tags=("transport", channel_token),
+        fingerprint_parts=("channel_incident", channel_token, status, summary, impact_scope),
+        tags=("transport", channel_token, impact_scope),
     )
 
 

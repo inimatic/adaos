@@ -519,6 +519,17 @@ Completed for observability scope.
 The model is visible in diagnostics, route/session incidents are now classified separately from root-control incidents, and transport/sidecar provenance is exposed in the runtime snapshot.
 The next step is protocol hardening, not more ad-hoc diagnostics.
 
+The 2026-08-18 `.30` loopback fault injection exposed a second observability
+boundary: one 853 ms runtime-to-sidecar NATS outage and one reconnect were
+expanded into eight apparent route non-ready records by three browser sessions
+finishing their own publish/no-upstream/forced-close cleanup. The runtime now
+stores state transitions and incidents as different event kinds, labels
+incident impact as channel, request, or session scoped, and exposes raw versus
+readiness-impacting counts. Session cleanup remains inspectable but does not
+restart the channel recovery hold. `RT-ROUTE-INCIDENT-SCOPE-001` retains the
+target-stand/browser/Root acceptance campaign; implementation evidence alone
+does not close it.
+
 ### Focus
 
 Make readiness and degradation visible before changing protocol ownership.
@@ -531,6 +542,8 @@ Make readiness and degradation visible before changing protocol ownership.
   and watchdog failures.
 - [x] `[must]` Separate `root_control` transport assessment from
   route/session incidents.
+- [x] `[must]` Separate channel state transitions from request/session incident
+  samples without dropping either class from operator diagnostics.
 - [x] `[must]` Expose provenance of current transport and current artifact
   source in diagnostics.
 - [ ] `[should]` Keep remote and direct hub diagnostics consistent when

@@ -316,7 +316,8 @@ def test_hub_reliability_marks_root_channel_unstable_after_reconnect_incident_wi
 
     diag = snapshot["runtime"]["channel_diagnostics"]["root_control"]
     assert snapshot["runtime"]["readiness_tree"]["root_control"]["status"] == "degraded"
-    assert diag["recent_non_ready_transitions_5m"] == 1
+    assert diag["recent_non_ready_transitions_5m"] == 0
+    assert diag["recent_impacting_incidents_5m"] == 1
     assert diag["stability"]["state"] in {"unstable", "flapping"}
     assert any(item["status"] == "reconnect" for item in diag["recent_history"])
 
@@ -403,7 +404,8 @@ def test_hub_reliability_recovers_ready_route_after_stable_probe_window(monkeypa
     route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
     assert route_diag["stability"]["state"] == "unstable"
     assert route_diag["recent_non_ready_transitions_5m"] == 0
-    assert route_diag["recent_non_ready_transitions_15m"] == 5
+    assert route_diag["recent_non_ready_transitions_15m"] == 0
+    assert route_diag["recent_impacting_incidents_15m"] == 5
     assert snapshot["runtime"]["readiness_tree"]["route"]["status"] == "ready"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
 
@@ -473,12 +475,89 @@ def test_hub_reliability_recovers_route_after_fresh_lightweight_probe(monkeypatc
 
     route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
     route_tree = snapshot["runtime"]["readiness_tree"]["route"]
-    assert route_diag["recent_non_ready_transitions_5m"] == 1
+    assert route_diag["recent_non_ready_transitions_5m"] == 0
+    assert route_diag["recent_impacting_incidents_5m"] == 1
     assert route_diag["stability"]["state"] in {"unstable", "flapping"}
     assert route_tree["status"] == "ready"
     assert route_tree["details"]["incident_recovery"] == "fresh_lightweight_route_probe"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transport_state"] == "ready"
     assert snapshot["runtime"]["connectivity"]["browser_control_route"]["transition_state"] == "ready"
+
+
+def test_session_route_incidents_remain_visible_without_amplifying_channel_transitions(monkeypatch) -> None:
+    _reset_state()
+    reliability = importlib.import_module("adaos.services.reliability")
+    clock = {"now": 1_774_017_000.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+    mark_route_ready(details={"subject": "route.to_hub.*"})
+    for idx, status in enumerate(("publish_fail", "no_upstream", "forced_close_no_upstream")):
+        clock["now"] += 1.0
+        note_route_incident(
+            status=status,
+            summary="session follow-up after a shared transport disconnect",
+            details={"key_tag": f"session-{idx}", "impact_scope": "session"},
+        )
+
+    snapshot = reliability_snapshot(
+        node_id="node-1",
+        subnet_id="sn_1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
+    assert route_diag["recent_transitions_5m"] == 1
+    assert route_diag["recent_non_ready_transitions_5m"] == 0
+    assert route_diag["recent_incidents_5m"] == 3
+    assert route_diag["recent_impacting_incidents_5m"] == 0
+    assert route_diag["last_impacting_incident_at"] is None
+    assert route_diag["stable_for_s"] == 3.0
+    assert route_diag["stability"]["state"] == "stable"
+    assert {item["class"] for item in route_diag["recent_incident_samples"]} == {
+        "publish_fail",
+        "no_upstream",
+        "forced_close_no_upstream",
+    }
+    assert all(item["impacts_readiness"] is False for item in route_diag["recent_incident_samples"])
+
+
+def test_channel_incident_restarts_recovery_hold_after_long_ready_period(monkeypatch) -> None:
+    _reset_state()
+    reliability = importlib.import_module("adaos.services.reliability")
+    clock = {"now": 1_774_017_000.0}
+    monkeypatch.setattr(reliability.time, "time", lambda: clock["now"])
+
+    mark_root_control_up(details={"server": "wss://api.inimatic.com/nats"})
+    mark_route_ready(details={"subject": "route.to_hub.*"})
+    clock["now"] += 3600.0
+    note_route_incident(
+        status="dispatch_queue_full",
+        summary="hub route handler queue is full",
+        details={"impact_scope": "channel", "queue_size": 128},
+    )
+
+    snapshot = reliability_snapshot(
+        node_id="node-1",
+        subnet_id="sn_1",
+        role="hub",
+        local_ready=True,
+        node_state="ready",
+        draining=False,
+        route_mode="hub",
+        connected_to_hub=None,
+    )
+
+    route_diag = snapshot["runtime"]["channel_diagnostics"]["route"]
+    assert route_diag["last_impacting_incident_at"] == clock["now"]
+    assert route_diag["stable_for_s"] == 0.0
+    assert route_diag["stability"]["state"] == "unstable"
+    assert snapshot["runtime"]["readiness_tree"]["route"]["status"] == "degraded"
 
 
 def test_hub_reliability_recovers_route_after_fresh_app_reply(monkeypatch) -> None:
@@ -4876,8 +4955,18 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
                         },
                     },
                     "channel_diagnostics": {
-                        "root_control": {"stability": {"state": "flapping", "score": 62}, "recent_non_ready_transitions_5m": 2},
-                        "route": {"stability": {"state": "degraded", "score": 71}, "recent_non_ready_transitions_5m": 1},
+                        "root_control": {
+                            "stability": {"state": "flapping", "score": 62},
+                            "recent_non_ready_transitions_5m": 2,
+                            "recent_incidents_5m": 4,
+                            "recent_impacting_incidents_5m": 1,
+                        },
+                        "route": {
+                            "stability": {"state": "degraded", "score": 71},
+                            "recent_non_ready_transitions_5m": 1,
+                            "recent_incidents_5m": 7,
+                            "recent_impacting_incidents_5m": 2,
+                        },
                     },
                     "degraded_matrix": {
                         "new_root_backed_member_admission": {"allowed": True},
@@ -5049,6 +5138,7 @@ def test_node_reliability_cli_prints_runtime_summary(monkeypatch) -> None:
     assert "root_control: ready" in result.output
     assert "integration.telegram: ready" in result.output
     assert "diag.root_control: flapping score=62 recent_non_ready_5m=2" in result.output
+    assert "incidents_5m=4 impacting_5m=1" in result.output
     assert "root_routed_browser_proxy: blocked" in result.output
     assert "connectivity.required_upstream_link: kind=hub_root transport=ready transition=ready" in result.output
     assert "state_sync: webspace=desktop transport=attached first_sync=complete semantic=degraded freshness=aging" in result.output

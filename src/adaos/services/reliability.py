@@ -1077,6 +1077,7 @@ def _record_channel_transition(
     history.append(
         {
             "ts": time.time(),
+            "event_kind": "transition",
             "previous_status": previous_status.value,
             "status": status.value,
             "summary": str(summary or ""),
@@ -1097,6 +1098,7 @@ def _record_channel_incident(
     history.append(
         {
             "ts": time.time(),
+            "event_kind": "incident",
             "previous_status": str(previous_status or ""),
             "status": str(status or ""),
             "summary": str(summary or ""),
@@ -1912,7 +1914,30 @@ def effective_channel_view(
     }
 
 
-def _history_count(entries: list[dict[str, Any]], *, within_s: float, now_ts: float, ready: bool | None = None) -> int:
+def _channel_history_event_kind(entry: dict[str, Any]) -> str:
+    explicit = str(entry.get("event_kind") or "").strip().lower()
+    if explicit in {"transition", "incident"}:
+        return explicit
+    status = str(entry.get("status") or "").strip().lower()
+    readiness_values = {item.value for item in ReadinessStatus}
+    return "transition" if status in readiness_values else "incident"
+
+
+def _channel_incident_impacts_readiness(entry: dict[str, Any]) -> bool:
+    if _channel_history_event_kind(entry) != "incident":
+        return False
+    details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
+    scope = str(details.get("impact_scope") or "channel").strip().lower()
+    return scope not in {"diagnostic", "request_only", "session"}
+
+
+def _history_count(
+    entries: list[dict[str, Any]],
+    *,
+    within_s: float,
+    now_ts: float,
+    ready: bool | None = None,
+) -> int:
     total = 0
     threshold = now_ts - max(0.0, float(within_s))
     for item in entries:
@@ -1921,6 +1946,8 @@ def _history_count(entries: list[dict[str, Any]], *, within_s: float, now_ts: fl
         except Exception:
             ts = 0.0
         if ts < threshold:
+            continue
+        if _channel_history_event_kind(item) != "transition":
             continue
         status = str(item.get("status") or "")
         if ready is None:
@@ -1932,8 +1959,32 @@ def _history_count(entries: list[dict[str, Any]], *, within_s: float, now_ts: fl
     return total
 
 
+def _incident_history_count(
+    entries: list[dict[str, Any]],
+    *,
+    within_s: float,
+    now_ts: float,
+    impacting_only: bool = False,
+) -> int:
+    threshold = now_ts - max(0.0, float(within_s))
+    total = 0
+    for item in entries:
+        try:
+            ts = float(item.get("ts") or 0.0)
+        except Exception:
+            ts = 0.0
+        if ts < threshold or _channel_history_event_kind(item) != "incident":
+            continue
+        if impacting_only and not _channel_incident_impacts_readiness(item):
+            continue
+        total += 1
+    return total
+
+
 def _classify_channel_incident(channel: str, entry: dict[str, Any]) -> str | None:
     if not isinstance(entry, dict):
+        return None
+    if _channel_history_event_kind(entry) != "incident":
         return None
     status = str(entry.get("status") or "").strip().lower()
     summary = str(entry.get("summary") or "").strip().lower()
@@ -2011,6 +2062,11 @@ def _recent_incident_samples(
                 "ts": item.get("ts"),
                 "status": item.get("status"),
                 "class": cls,
+                "impact_scope": str(
+                    (item.get("details") if isinstance(item.get("details"), dict) else {}).get("impact_scope")
+                    or "channel"
+                ),
+                "impacts_readiness": _channel_incident_impacts_readiness(item),
                 "summary": item.get("summary"),
                 "details": item.get("details") if isinstance(item.get("details"), dict) else {},
             }
@@ -2018,8 +2074,20 @@ def _recent_incident_samples(
     return samples[-max(1, int(limit)) :]
 
 
+def _last_incident_at(entries: list[dict[str, Any]], *, impacting_only: bool = False) -> float | None:
+    for item in reversed(entries):
+        if _channel_history_event_kind(item) != "incident":
+            continue
+        if impacting_only and not _channel_incident_impacts_readiness(item):
+            continue
+        return float(item.get("ts") or 0.0) or None
+    return None
+
+
 def _last_transition_at(entries: list[dict[str, Any]], *, ready: bool | None = None) -> float | None:
     for item in reversed(entries):
+        if _channel_history_event_kind(item) != "transition":
+            continue
         status = str(item.get("status") or "")
         if ready is None:
             return float(item.get("ts") or 0.0) or None
@@ -2042,6 +2110,8 @@ def _channel_stability_assessment(
     non_ready_5m: int,
     non_ready_15m: int,
     transitions_5m: int,
+    impacting_incidents_5m: int,
+    impacting_incidents_15m: int,
 ) -> dict[str, Any]:
     score = 100
     if status == ReadinessStatus.DOWN.value:
@@ -2054,23 +2124,34 @@ def _channel_stability_assessment(
     score -= min(30, non_ready_5m * 15)
     score -= min(15, non_ready_15m * 5)
     score -= min(10, max(0, transitions_5m - 1) * 2)
+    score -= min(20, impacting_incidents_5m * 10)
+    score -= min(10, impacting_incidents_15m * 2)
     score = max(0, min(100, score))
 
     if status == ReadinessStatus.DOWN.value:
         state = "down"
         reason = "channel is currently down"
-    elif non_ready_5m >= 2 or transitions_5m >= 4:
+    elif non_ready_5m >= 2 or transitions_5m >= 4 or impacting_incidents_5m >= 3:
         state = "flapping"
-        reason = f"{non_ready_5m} non-ready transitions in the last 5 minutes"
+        reason = (
+            f"{non_ready_5m} non-ready transitions and {impacting_incidents_5m} "
+            "channel-impacting incidents in the last 5 minutes"
+        )
     elif status == ReadinessStatus.DEGRADED.value:
         state = "degraded"
         reason = "channel is currently degraded"
-    elif non_ready_5m >= 1:
+    elif non_ready_5m >= 1 or impacting_incidents_5m >= 1:
         state = "unstable"
-        reason = f"{non_ready_5m} non-ready incidents in the last 5 minutes"
-    elif non_ready_15m >= 3:
+        reason = (
+            f"{non_ready_5m} non-ready transitions and {impacting_incidents_5m} "
+            "channel-impacting incidents in the last 5 minutes"
+        )
+    elif non_ready_15m >= 3 or impacting_incidents_15m >= 3:
         state = "unstable"
-        reason = f"{non_ready_15m} non-ready transitions in the last 15 minutes"
+        reason = (
+            f"{non_ready_15m} non-ready transitions and {impacting_incidents_15m} "
+            "channel-impacting incidents in the last 15 minutes"
+        )
     elif status == ReadinessStatus.READY.value:
         state = "stable"
         reason = "channel is ready and no recent flap threshold is exceeded"
@@ -2103,10 +2184,26 @@ def channel_diagnostics_snapshot() -> dict[str, Any]:
             }:
                 last_non_ready_at = signal.updated_at or None
             last_transition_at = _last_transition_at(history_entries, ready=None) or signal.updated_at or None
+            last_incident_at = _last_incident_at(history_entries)
+            last_impacting_incident_at = _last_incident_at(history_entries, impacting_only=True)
             non_ready_5m = _history_count(history_entries, within_s=300.0, now_ts=now_ts, ready=False)
             non_ready_15m = _history_count(history_entries, within_s=900.0, now_ts=now_ts, ready=False)
             ready_5m = _history_count(history_entries, within_s=300.0, now_ts=now_ts, ready=True)
             transitions_5m = _history_count(history_entries, within_s=300.0, now_ts=now_ts, ready=None)
+            incidents_5m = _incident_history_count(history_entries, within_s=300.0, now_ts=now_ts)
+            incidents_15m = _incident_history_count(history_entries, within_s=900.0, now_ts=now_ts)
+            impacting_incidents_5m = _incident_history_count(
+                history_entries,
+                within_s=300.0,
+                now_ts=now_ts,
+                impacting_only=True,
+            )
+            impacting_incidents_15m = _incident_history_count(
+                history_entries,
+                within_s=900.0,
+                now_ts=now_ts,
+                impacting_only=True,
+            )
             incident_classes_5m = _incident_class_counts(name, history_entries, within_s=300.0, now_ts=now_ts)
             incident_classes_15m = _incident_class_counts(name, history_entries, within_s=900.0, now_ts=now_ts)
             recent_incident_samples = _recent_incident_samples(name, history_entries, limit=6)
@@ -2116,6 +2213,8 @@ def channel_diagnostics_snapshot() -> dict[str, Any]:
                 non_ready_5m=non_ready_5m,
                 non_ready_15m=non_ready_15m,
                 transitions_5m=transitions_5m,
+                impacting_incidents_5m=impacting_incidents_5m,
+                impacting_incidents_15m=impacting_incidents_15m,
             )
             diagnostics[name] = {
                 "status": current_status,
@@ -2124,6 +2223,10 @@ def channel_diagnostics_snapshot() -> dict[str, Any]:
                 "status_age_s": _round_age(now_ts, signal.updated_at or None),
                 "last_transition_at": last_transition_at,
                 "last_transition_ago_s": _round_age(now_ts, last_transition_at),
+                "last_incident_at": last_incident_at,
+                "last_incident_ago_s": _round_age(now_ts, last_incident_at),
+                "last_impacting_incident_at": last_impacting_incident_at,
+                "last_impacting_incident_ago_s": _round_age(now_ts, last_impacting_incident_at),
                 "last_ready_at": last_ready_at,
                 "last_ready_ago_s": _round_age(now_ts, last_ready_at),
                 "last_non_ready_at": last_non_ready_at,
@@ -2132,16 +2235,36 @@ def channel_diagnostics_snapshot() -> dict[str, Any]:
                 "recent_non_ready_transitions_15m": non_ready_15m,
                 "recent_ready_transitions_5m": ready_5m,
                 "recent_transitions_5m": transitions_5m,
+                "recent_incidents_5m": incidents_5m,
+                "recent_incidents_15m": incidents_15m,
+                "recent_impacting_incidents_5m": impacting_incidents_5m,
+                "recent_impacting_incidents_15m": impacting_incidents_15m,
                 "incident_classes_5m": incident_classes_5m,
                 "incident_classes_15m": incident_classes_15m,
                 "last_incident_class": last_incident_class,
                 "total_non_ready_transitions": sum(
-                    1 for item in history_entries if str(item.get("status") or "") != ReadinessStatus.READY.value
+                    1
+                    for item in history_entries
+                    if _channel_history_event_kind(item) == "transition"
+                    and str(item.get("status") or "") != ReadinessStatus.READY.value
                 ),
                 "total_ready_transitions": sum(
-                    1 for item in history_entries if str(item.get("status") or "") == ReadinessStatus.READY.value
+                    1
+                    for item in history_entries
+                    if _channel_history_event_kind(item) == "transition"
+                    and str(item.get("status") or "") == ReadinessStatus.READY.value
                 ),
-                "stable_for_s": _round_age(now_ts, last_ready_at) if current_status == ReadinessStatus.READY.value else None,
+                "stable_for_s": _round_age(
+                    now_ts,
+                    max(
+                        ts
+                        for ts in (last_ready_at, last_impacting_incident_at)
+                        if isinstance(ts, (int, float))
+                    ),
+                )
+                if current_status == ReadinessStatus.READY.value
+                and any(isinstance(ts, (int, float)) for ts in (last_ready_at, last_impacting_incident_at))
+                else None,
                 "non_ready_for_s": _round_age(now_ts, last_non_ready_at)
                 if current_status not in {ReadinessStatus.READY.value, ReadinessStatus.UNKNOWN.value, ReadinessStatus.NOT_APPLICABLE.value}
                 else None,
@@ -2400,7 +2523,7 @@ def _route_semantic_probe_recovery(
     samples = diagnostics.get("recent_incident_samples")
     if isinstance(samples, list):
         for item in samples:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and item.get("impacts_readiness") is not False:
                 incident_times.append(_float_or_none(item.get("ts")))
     last_incident_at = max((ts for ts in incident_times if ts is not None), default=None)
     if last_incident_at is not None and probe_reply_at <= last_incident_at:
